@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Text-to-Speech implementation for Gnani Vachana
+"""Text-to-Speech implementation for Gnani Timbre
 
-This module provides a TTS implementation that uses the Gnani Vachana API,
+This module provides a TTS implementation that uses the Gnani API,
 supporting three synthesis modes via ``synthesize()``:
   - REST  (RESTChunkedStream) — single-request batch synthesis
   - SSE   (SSEChunkedStream)  — streaming via Server-Sent Events
@@ -30,11 +30,20 @@ import asyncio
 import base64
 import json
 import os
+import struct
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import aiohttp
 
+from gnani.tts.client import (  # type: ignore[import-untyped]
+    SUPPORTED_TTS_LANGUAGES,  # noqa: F401 — re-exported via livekit.plugins.gnani
+    TIMBRE_V20_VOICES,
+    TIMBRE_V25_VOICES,
+    _validate_model,
+    _validate_timbre_options,
+    _validate_voice,
+)
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -44,23 +53,33 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.misc import is_given
 
+from ._compat import ws_header_kwargs as _ws_header_kwargs
 from .log import logger
-from .models import (
-    DEFAULT_MODEL,
-    GnaniTTSBitrates,
-    GnaniTTSContainers,
-    GnaniTTSEncodings,
-    GnaniTTSLanguages,
-    GnaniTTSModels,
-    GnaniTTSVoices,
-)
+from .models import DEFAULT_MODEL
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
+GnaniTTSVoices = Literal[
+    "Pranav",
+    "Kaveri",
+    "Shubhra",
+    "Deepak",
+]
+"""See https://docs.gnani.ai/api/TTS/tts-sse#available-voices"""
+
+GnaniTTSEncodings = Literal["linear_pcm", "oggopus", "pcm_mulaw", "pcm_alaw"]
+GnaniTTSContainers = Literal["raw", "mp3", "wav", "mulaw", "alaw", "ogg"]
+GnaniTTSBitrates = Literal["32k", "64k", "96k", "128k", "192k"]
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
-SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
+
+_WAV_HEADER_SIZE = 44
+# Match RoomIO _ParticipantAudioOutput target frame size (sample_rate // 20).
+_STREAM_FRAME_MS = 50
 
 
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
@@ -79,10 +98,144 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
         )
 
 
+def _validate_tts_config(*, voice: str, model: str, language: str | None) -> None:
+    _validate_model(model)
+    _validate_timbre_options(model, language=language)
+    _validate_voice(voice, model)
+
+
+def _strip_wav_header(data: bytes) -> bytes:
+    """Strip a RIFF/WAV container if present, returning only PCM samples.
+
+    Gnani streaming sends the WAV header as the first chunk (often with zero
+    PCM bytes) and then raw PCM continuations without per-chunk headers. A
+    header-only first chunk must not be emitted as audio.
+    """
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return data
+
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk_id = data[offset : offset + 4]
+        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+        if chunk_id == b"data":
+            data_start = offset + 8
+            return data[data_start : data_start + chunk_size]
+        offset += 8 + chunk_size
+
+    if len(data) <= _WAV_HEADER_SIZE:
+        return b""
+    return data[_WAV_HEADER_SIZE:]
+
+
+class _Pcm16Aligner:
+    """Ensure emitted PCM chunks contain whole 16-bit samples."""
+
+    def __init__(self) -> None:
+        self._remainder = b""
+
+    def reset(self) -> None:
+        self._remainder = b""
+
+    def align(self, audio: bytes) -> bytes:
+        audio = self._remainder + audio
+        aligned_len = len(audio) - (len(audio) % 2)
+        self._remainder = audio[aligned_len:]
+        return audio[:aligned_len]
+
+
+class _TtsPcmProcessor:
+    """Strip WAV containers and align PCM for one streaming utterance."""
+
+    def __init__(self) -> None:
+        self._aligner = _Pcm16Aligner()
+        self._wav_pending = b""
+
+    def reset(self) -> None:
+        self._aligner.reset()
+        self._wav_pending = b""
+
+    def process(self, audio: bytes) -> bytes:
+        if self._wav_pending or (len(audio) >= 4 and audio[:4] == b"RIFF"):
+            buf = self._wav_pending + audio
+            self._wav_pending = b""
+
+            if buf[:4] == b"RIFF" and len(buf) < _WAV_HEADER_SIZE:
+                self._wav_pending = buf
+                return b""
+
+            pcm = _strip_wav_header(buf)
+            return self._aligner.align(pcm)
+
+        return self._aligner.align(audio)
+
+
+class _PcmCoalescer:
+    """Buffer PCM and push in stable frame-sized blocks matching AudioEmitter."""
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int,
+        num_channels: int,
+        sample_width: int = 2,
+        frame_ms: int = _STREAM_FRAME_MS,
+    ) -> None:
+        self._target_bytes = sample_rate * num_channels * sample_width * frame_ms // 1000
+        self._buffer = bytearray()
+
+    def push(self, pcm: bytes, output_emitter: tts.AudioEmitter) -> None:
+        if not pcm:
+            return
+        self._buffer.extend(pcm)
+        while len(self._buffer) >= self._target_bytes:
+            output_emitter.push(bytes(self._buffer[: self._target_bytes]))
+            del self._buffer[: self._target_bytes]
+
+    def flush(self, output_emitter: tts.AudioEmitter) -> None:
+        if self._buffer:
+            output_emitter.push(bytes(self._buffer))
+            self._buffer.clear()
+
+
+class _StreamingAudioPusher:
+    """Strip/align API audio, coalesce to steady frames, then push to AudioEmitter.
+
+    Other LiveKit TTS plugins (Deepgram, Cartesia) push raw PCM directly in
+    larger chunks. Gnani's API delivers many small bursts; coalescing here
+    avoids AudioEmitter flush_if_delayed resets that cause live volume pumping.
+    """
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int,
+        num_channels: int,
+    ) -> None:
+        self._processor = _TtsPcmProcessor()
+        self._coalescer = _PcmCoalescer(sample_rate=sample_rate, num_channels=num_channels)
+
+    def push(self, output_emitter: tts.AudioEmitter, audio: bytes) -> None:
+        pcm = self._processor.process(audio)
+        if pcm:
+            self._coalescer.push(pcm, output_emitter)
+
+    def finalize(self, output_emitter: tts.AudioEmitter) -> None:
+        self._coalescer.flush(output_emitter)
+
+
+def _process_and_push(
+    pusher: _StreamingAudioPusher,
+    output_emitter: tts.AudioEmitter,
+    audio: bytes,
+) -> None:
+    pusher.push(output_emitter, audio)
+
+
 @dataclass
 class GnaniTTSOptions:
     api_key: str
-    voice: str = "Pranav"
+    voice: str = "Nalini"
     model: str = DEFAULT_MODEL
     language: str | None = None
     sample_rate: int = 16000
@@ -96,30 +249,29 @@ class GnaniTTSOptions:
 
 
 class TTS(tts.TTS):
-    """Gnani Vachana Text-to-Speech implementation.
+    """Gnani Timbre Text-to-Speech implementation.
 
-    Provides text-to-speech functionality using Gnani's Vachana platform.
+    Provides text-to-speech functionality using Gnani's Timbre platform.
     Supports REST, SSE, and WebSocket synthesis modes.
 
     Args:
-        voice: Voice to use for synthesis
-            (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
-        model: TTS model name (default: timbre-v2.0; also: timbre-v2.5).
+        voice: Voice to use for synthesis (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
+        model: TTS model name (default: timbre-v2.5; also: timbre-v2.0).
         language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
         sample_rate: Audio output sample rate (8000-44100).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
-        base_url: Vachana API base URL.
+        base_url: Gnani API base URL.
         synthesize_method: Synthesis mode — "rest", "sse", or "websocket".
     """
 
     def __init__(
         self,
         *,
-        voice: GnaniTTSVoices | str = "Pranav",
-        model: GnaniTTSModels | str = DEFAULT_MODEL,
-        language: GnaniTTSLanguages | str | None = None,
+        voice: GnaniTTSVoices | str = "Nalini",
+        model: str = DEFAULT_MODEL,
+        language: str | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
@@ -149,6 +301,8 @@ class TTS(tts.TTS):
                 "Gnani API key is required. "
                 "Provide it directly or set GNANI_API_KEY environment variable."
             )
+
+        _validate_tts_config(voice=voice, model=model, language=language)
 
         self._opts = GnaniTTSOptions(
             api_key=self._api_key,
@@ -195,18 +349,37 @@ class TTS(tts.TTS):
     def update_options(
         self,
         *,
-        voice: GnaniTTSVoices | str | None = None,
-        model: GnaniTTSModels | str | None = None,
-        language: GnaniTTSLanguages | str | None = None,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
-        if voice is not None:
+        next_voice = voice if is_given(voice) else self._opts.voice
+        next_model = model if is_given(model) else self._opts.model
+
+        if is_given(language):
+            next_language = language
+        elif next_model != "timbre-v2.5" and self._opts.language is not None:
+            next_language = None
+        else:
+            next_language = self._opts.language
+
+        if is_given(voice) or is_given(model) or is_given(language):
+            _validate_tts_config(
+                voice=next_voice,
+                model=next_model,
+                language=next_language,
+            )
+
+        if is_given(voice):
             self._opts.voice = voice
-        if model is not None:
+        if is_given(model):
             self._opts.model = model
-        if language is not None:
+            if next_model != "timbre-v2.5":
+                self._opts.language = None
+        if is_given(language):
             self._opts.language = language
 
     async def aclose(self) -> None:
@@ -237,6 +410,13 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
     if opts.model == "timbre-v2.5" and opts.language is not None:
         payload["language"] = opts.language
     return payload
+
+
+def _streaming_payload_opts(opts: GnaniTTSOptions) -> GnaniTTSOptions:
+    """Streaming transports request raw PCM — no per-chunk WAV containers."""
+    if opts.container == "raw":
+        return opts
+    return replace(opts, container="raw")
 
 
 def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
@@ -326,10 +506,15 @@ class SSEChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
+        pcm_processor = _StreamingAudioPusher(
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+        )
+        stream_opts = _streaming_payload_opts(self._opts)
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/sse",
-                json=_build_payload(self._opts, self._input_text),
+                json=_build_payload(stream_opts, self._input_text),
                 headers=_build_headers(self._opts),
                 timeout=aiohttp.ClientTimeout(
                     total=self._conn_options.timeout,
@@ -350,7 +535,7 @@ class SSEChunkedStream(tts.ChunkedStream):
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
+                    mime_type=_mime_type(stream_opts),
                 )
 
                 buf = ""
@@ -358,15 +543,9 @@ class SSEChunkedStream(tts.ChunkedStream):
                     raw_line = raw_bytes.decode("utf-8").strip()
                     if not raw_line:
                         continue
-                    # Ignore SSE keep-alive comments (":") and non-data metadata
-                    # fields; appending them would corrupt the JSON accumulator
-                    # and drop the remaining audio for this request.
-                    if raw_line.startswith((":", "event:", "id:", "retry:")):
+                    if not raw_line.startswith("data:"):
                         continue
-                    if raw_line.startswith("data:"):
-                        raw_line = raw_line[5:].strip()
-                        if not raw_line:
-                            continue
+                    raw_line = raw_line[5:].strip()
 
                     buf += raw_line
                     try:
@@ -386,13 +565,22 @@ class SSEChunkedStream(tts.ChunkedStream):
                     if payload.get("is_final", False):
                         audio_b64 = payload.get("audio", "")
                         if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
+                            _process_and_push(
+                                pcm_processor,
+                                output_emitter,
+                                base64.b64decode(audio_b64),
+                            )
                         break
 
                     audio_b64 = payload.get("audio", "")
                     if audio_b64:
-                        output_emitter.push(base64.b64decode(audio_b64))
+                        _process_and_push(
+                            pcm_processor,
+                            output_emitter,
+                            base64.b64decode(audio_b64),
+                        )
 
+                pcm_processor.finalize(output_emitter)
                 output_emitter.flush()
 
         except asyncio.TimeoutError as e:
@@ -412,9 +600,8 @@ class WebSocketChunkedStream(tts.ChunkedStream):
     """WebSocket-based chunked TTS — wss://api.vachana.ai/api/v1/tts.
 
     Wraps the WebSocket endpoint into the ChunkedStream interface so that
-    ``synthesize()`` can use it when ``synthesize_method="websocket"``. Audio
-    bytes are pushed straight to the ``AudioEmitter``, whose built-in
-    ``AudioStreamDecoder`` decodes and re-frames them for LiveKit playback.
+    ``synthesize()`` can use it when ``synthesize_method="websocket"``.
+    Requests raw PCM from the API and coalesces frames for LiveKit playback.
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -436,28 +623,33 @@ class WebSocketChunkedStream(tts.ChunkedStream):
         import websockets
 
         request_id = utils.shortuuid()
+        pcm_processor = _StreamingAudioPusher(
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+        )
+        stream_opts = _streaming_payload_opts(self._opts)
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                additional_headers=_build_headers(self._opts),
+                **_ws_header_kwargs(_build_headers(self._opts)),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                request_body = _build_payload(self._opts, self._input_text)
+                request_body = _build_payload(stream_opts, self._input_text)
                 await ws.send(json.dumps(request_body))
 
                 output_emitter.initialize(
                     request_id=request_id,
                     sample_rate=self._tts.sample_rate,
                     num_channels=self._tts.num_channels,
-                    mime_type=_mime_type(self._opts),
+                    mime_type=_mime_type(stream_opts),
                 )
 
                 async for msg in ws:
                     if isinstance(msg, bytes):
-                        output_emitter.push(msg)
+                        _process_and_push(pcm_processor, output_emitter, msg)
                         continue
 
                     payload = json.loads(msg)
@@ -467,14 +659,22 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                         inner = payload.get("data", {})
                         audio_b64 = inner.get("audio", "")
                         if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
+                            _process_and_push(
+                                pcm_processor,
+                                output_emitter,
+                                base64.b64decode(audio_b64),
+                            )
 
                     elif msg_type == "complete":
                         inner = payload.get("data")
                         if inner is not None:
                             audio_b64 = inner.get("audio", "")
                             if audio_b64:
-                                output_emitter.push(base64.b64decode(audio_b64))
+                                _process_and_push(
+                                    pcm_processor,
+                                    output_emitter,
+                                    base64.b64decode(audio_b64),
+                                )
                         break
 
                     elif msg_type == "error":
@@ -486,6 +686,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                             body=error_msg,
                         )
 
+                pcm_processor.finalize(output_emitter)
                 output_emitter.flush()
 
         except websockets.exceptions.ConnectionClosed as e:
@@ -525,11 +726,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         import websockets
 
         request_id = utils.shortuuid()
+        stream_opts = _streaming_payload_opts(self._opts)
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type=_mime_type(self._opts),
+            mime_type=_mime_type(stream_opts),
             stream=True,
         )
 
@@ -547,23 +749,27 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
+        pcm_processor = _StreamingAudioPusher(
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+        )
         try:
             ws_url = self._build_ws_url()
             async with websockets.connect(
                 ws_url,
-                additional_headers=_build_headers(self._opts),
+                **_ws_header_kwargs(_build_headers(self._opts)),
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                request_body = _build_payload(self._opts, full_text)
+                request_body = _build_payload(stream_opts, full_text)
                 await ws.send(json.dumps(request_body))
 
                 self._mark_started()
 
                 async for msg in ws:
                     if isinstance(msg, bytes):
-                        output_emitter.push(msg)
+                        _process_and_push(pcm_processor, output_emitter, msg)
                         continue
 
                     payload = json.loads(msg)
@@ -573,14 +779,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                         inner = payload.get("data", {})
                         audio_b64 = inner.get("audio", "")
                         if audio_b64:
-                            output_emitter.push(base64.b64decode(audio_b64))
+                            _process_and_push(
+                                pcm_processor,
+                                output_emitter,
+                                base64.b64decode(audio_b64),
+                            )
 
                     elif msg_type == "complete":
                         inner = payload.get("data")
                         if inner is not None:
                             audio_b64 = inner.get("audio", "")
                             if audio_b64:
-                                output_emitter.push(base64.b64decode(audio_b64))
+                                _process_and_push(
+                                    pcm_processor,
+                                    output_emitter,
+                                    base64.b64decode(audio_b64),
+                                )
                         break
 
                     elif msg_type == "error":
@@ -600,12 +814,22 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             raise APIConnectionError(f"Gnani TTS WebSocket error: {e}") from e
-
-        # Only flush/close the segment on the success path. On error the
-        # per-attempt output_emitter is discarded before retry, so flushing or
-        # ending the segment here would only add an unnecessary final frame.
-        output_emitter.flush()
-        output_emitter.end_segment()
+        finally:
+            pcm_processor.finalize(output_emitter)
+            output_emitter.flush()
+            output_emitter.end_segment()
 
 
-__all__ = ["TTS", "SynthesizeStream"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "GnaniTTSBitrates",
+    "GnaniTTSContainers",
+    "GnaniTTSEncodings",
+    "GnaniTTSSynthesizeMethod",
+    "GnaniTTSVoices",
+    "SUPPORTED_TTS_LANGUAGES",
+    "TIMBRE_V20_VOICES",
+    "TIMBRE_V25_VOICES",
+    "TTS",
+    "SynthesizeStream",
+]
