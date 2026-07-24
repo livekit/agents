@@ -128,7 +128,7 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     response = await llm.chat(
         chat_ctx=eval_ctx,
         tools=[submit_verdict],
-        tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
+        tool_choice="required",
         conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
     ).collect()
