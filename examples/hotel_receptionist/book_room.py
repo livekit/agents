@@ -26,6 +26,8 @@ from livekit.agents.voice.agent import AgentTask
 _BOOK_ROOM_INSTRUCTIONS = """\
 You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
 
+This flow holds exactly ONE room - there is one stay and one room choice, and calling set_stay or choose_room again REPLACES the values, it never adds a second room. When the caller wants more than one room (a family booking two rooms, different checkout days), pick one room, carry it through confirm_booking, and let the receptionist start a fresh flow for the next room once this one has completed - never try to capture two stays in the same flow.
+
 Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave.
 
 Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick (ask about any preference they've hinted at, like a view) before calling choose_room. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.

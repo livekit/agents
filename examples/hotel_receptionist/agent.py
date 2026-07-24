@@ -201,7 +201,11 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("inworld/inworld-tts-2"),
-        max_tool_steps=5,
+        # A dense caller turn legitimately chains several recording tools before the
+        # reply (set_stay + choose_room + a dialog + confirm_booking); at 5 the cap
+        # was hit mid-booking-flow and the closing confirm_booking got suppressed,
+        # leaving the task wedged with nothing written.
+        max_tool_steps=8,
     )
 
     # Token-usage instrumentation: the inference gateway enforces a per-minute LLM

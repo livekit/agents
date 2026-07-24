@@ -1441,14 +1441,20 @@ class HotelDB:
             await self.on_change()
         return code
 
-    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> str:
+    async def dispatch_emergency(self, *, room: str, kind: str, situation: str) -> tuple[str, bool]:
+        """Returns (dispatch code, whether the room is in the hotel's inventory).
+
+        A room number the desk can't validate never blocks a life-safety dispatch -
+        staff is sent regardless and the room gets re-confirmed while they're moving.
+        """
         # A bad kind is an invalid argument, not a missing entity - keep it distinct
         # from the room's NotFound so the tool can't misreport it as a bad room number.
         if kind not in get_args(EmergencyKind):
             raise ValueError(
                 f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}"
             )
-        room_id = self._require_room(room)
+        room_id = self._normalize_room(room)
+        room_on_file = self._room_exists(room_id)
         code = _new_code("EMG-")
         with self.connection as conn:
             _insert(
@@ -1458,7 +1464,7 @@ class HotelDB:
             )
         if self.on_change:
             await self.on_change()
-        return code
+        return code, room_on_file
 
     async def room_conflict(self, *, booking_code: str) -> tuple[date, date] | None:
         """The overlap window if another confirmed booking holds this booking's room."""
@@ -1533,16 +1539,36 @@ class HotelDB:
             await self.on_change()
         return ConflictResolution(walk_partner=WALK_PARTNER_HOTEL, walk_return_date=return_date)
 
-    def _require_room(self, room: str) -> str:
-        """Normalize a spoken room number ("304") to its id and require it exists."""
+    @staticmethod
+    def _normalize_room(room: str) -> str:
+        """Normalize a spoken room number ("304") to its id."""
         room_id = room.strip().upper()
         if not room_id.startswith("RM_"):
             room_id = f"RM_{room_id}"
-        if not self.connection.execute(
-            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
-        ).fetchone():
+        return room_id
+
+    def _room_exists(self, room_id: str) -> bool:
+        return bool(
+            self.connection.execute(
+                "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
+            ).fetchone()
+        )
+
+    def _require_room(self, room: str) -> str:
+        """Normalize a spoken room number ("304") to its id and require it exists."""
+        room_id = self._normalize_room(room)
+        if not self._room_exists(room_id):
             raise NotFound(f"no such room: {room}")
         return room_id
+
+    def room_view(self, room_id: str) -> str:
+        """The view of a room in inventory ("city", "ocean", "garden", "interior")."""
+        row = self.connection.execute(
+            "SELECT room_view FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone()
+        if not row:
+            raise NotFound(f"no such room: {room_id}")
+        return str(row[0])
 
     async def take_guest_message(
         self,
@@ -1936,7 +1962,9 @@ CREATE TABLE IF NOT EXISTS airport_cars (
 CREATE TABLE IF NOT EXISTS emergency_dispatches (
     id        INTEGER PRIMARY KEY,
     code      TEXT    NOT NULL UNIQUE,
-    room_id   TEXT    NOT NULL REFERENCES hotel_rooms(id),
+    -- Deliberately NOT a foreign key: a panicked caller's room number may not
+    -- check out against inventory, and that never blocks a life-safety dispatch.
+    room_id   TEXT    NOT NULL,
     kind      TEXT    NOT NULL DEFAULT 'medical' CHECK (kind IN ('medical','fire','security')),
     situation TEXT    NOT NULL,
     status    TEXT    NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','resolved'))

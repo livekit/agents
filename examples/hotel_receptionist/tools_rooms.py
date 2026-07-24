@@ -296,6 +296,22 @@ class RoomToolsMixin:
     @function_tool
     async def start_booking_modification(self, ctx: RunContext[Userdata]) -> str:
         """Start the booking-modification flow for an existing reservation. Verifies the caller, then hands off to a focused task that lets them change the stay dates, room type, room view, extras, and party size on the booking - this is the path for a guest unhappy that their room's view or type doesn't match what they booked (it moves them to a matching room). Identity fields (name, email, phone) are NOT modifiable through this flow - record_followup with kind="identity_change" covers those, and a new card goes through start_card_update. NOT for cancellations: if the caller wants to cancel - even after asking for a change first - call cancel_room_booking directly instead."""
+        # Idempotency: after a modification completes, the model sometimes re-invokes
+        # this with no new caller input instead of relaying the result - re-opening the
+        # flow on the freshly-updated booking and looping through the same changes while
+        # the confirmation (and any refund) never reaches the caller. With no caller
+        # turn since the last modification there is nothing new to change: re-surface
+        # that outcome. A genuine second change is always preceded by the caller asking.
+        if (
+            ctx.userdata.caller_turns_at_last_modification >= 0
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_modification
+        ):
+            return (
+                "the modification already completed moments ago - do NOT re-open the flow. "
+                "Relay the outcome to the caller: "
+                f"{ctx.userdata.last_modification_message}"
+            )
         booking = await self._verified_booking(ctx)
         if booking.status != "confirmed":
             raise ToolError("that booking was cancelled - nothing to modify")
@@ -312,22 +328,29 @@ class RoomToolsMixin:
         # made no changes (it completes with `self._existing`); identity check
         # is the cleanest signal that the modify flow was a no-op.
         if updated is booking:
-            return (
+            msg = (
                 "Booking left unchanged | the modification flow is CLOSED - don't re-open it or "
                 "re-ask for dates. If the caller pivoted to something else (most often: they "
                 "decided to CANCEL instead), do that now with the right tool (cancel_room_booking)."
             )
-        delta = updated.total - booking.total
-        if delta == 0:
-            money = f"total stays at {speak_usd(updated.total)}"
         else:
-            direction = "added to" if delta > 0 else "refunded to"
-            money = f"new total is {speak_usd(updated.total)}; {speak_usd(abs(delta))} {direction} the card ending in {updated.card_last4}"
-        return (
-            f"Your booking is updated; {money}. "
-            "| modification complete - relay all of this information to the caller (what changed, "
-            "the new total, and any amount added or refunded); no further tool call is needed."
-        )
+            delta = updated.total - booking.total
+            if delta == 0:
+                money = f"total stays at {speak_usd(updated.total)}"
+            else:
+                direction = "added to" if delta > 0 else "refunded to"
+                money = f"new total is {speak_usd(updated.total)}; {speak_usd(abs(delta))} {direction} the card ending in {updated.card_last4}"
+            msg = (
+                f"Your booking is updated; {money}. "
+                "| modification complete - relay all of this information to the caller (what "
+                "changed, the new total, and any amount added or refunded); no further tool "
+                "call is needed."
+            )
+        # Remember the outcome + when it happened, so an immediate re-invocation (above)
+        # relays this instead of re-opening the flow on the just-updated booking.
+        ctx.userdata.last_modification_message = msg
+        ctx.userdata.caller_turns_at_last_modification = _count_caller_turns(self.session.history)
+        return msg
 
     @function_tool
     async def lookup_booking(self, ctx: RunContext[Userdata]) -> str:
