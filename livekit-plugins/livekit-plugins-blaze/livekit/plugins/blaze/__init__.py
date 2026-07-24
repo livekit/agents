@@ -17,7 +17,7 @@ Example:
     >>> # Or use shared configuration
     >>> config = blaze.BlazeConfig(
     ...     api_url="https://api.example.com",
-    ...     auth_token="my-token",
+    ...     api_token="my-token",
     ... )
     >>> stt = blaze.STT(config=config)
     >>> tts = blaze.TTS(config=config, speaker_id="custom-voice")
