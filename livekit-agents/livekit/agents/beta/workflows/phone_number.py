@@ -121,7 +121,14 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their phone number.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's phone number. First scan the conversation - if a number was "
+                "already given earlier, record it with update_phone_number and ask a short "
+                "confirmation question rather than collecting it from scratch. Only ask fresh "
+                "when the conversation has no number yet."
+            )
+        )
 
     def _build_update_phone_number_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance

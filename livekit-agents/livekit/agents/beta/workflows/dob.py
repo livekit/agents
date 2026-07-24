@@ -125,10 +125,19 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             self._tools.append(self._build_update_time_tool())
 
     async def on_enter(self) -> None:
-        prompt = "Ask the user to provide their date of birth."
+        wanted = "date of birth"
+        record_with = "update_dob"
         if self._include_time:
-            prompt = "Ask the user to provide their date of birth and, if they know it, their time of birth."
-        self.session.generate_reply(instructions=prompt)
+            wanted = "date of birth and, if they know it, their time of birth"
+            record_with = "update_dob (and update_time for the time of birth)"
+        self.session.generate_reply(
+            instructions=(
+                f"Get the user's {wanted}. First scan the conversation - if that was already "
+                f"given earlier, record it with {record_with} and ask a short confirmation "
+                "question rather than collecting it from scratch. Only ask fresh when the "
+                "conversation doesn't have it yet."
+            )
+        )
 
     def _build_update_dob_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
