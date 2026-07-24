@@ -840,13 +840,13 @@ class TestAMDClassifierReset:
     async def test_reset_can_listen_without_starting_turn_timers(self) -> None:
         clf = _make_classifier()
 
-        await clf.reset(start_timers=False)
+        await clf.reset(arm_turn_timers=False)
 
         assert clf.listening is True
         assert clf._detection_timeout_timer is None
         assert clf._no_speech_timer is None
 
-        clf.start_turn_timers()
+        clf.arm_turn_timers()
 
         assert clf._detection_timeout_timer is not None
         assert clf._no_speech_timer is not None

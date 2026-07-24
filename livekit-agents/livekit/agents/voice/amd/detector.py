@@ -146,7 +146,12 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             instance or an inference model string (e.g. ``"openai/gpt-4.1-mini"``).
             When omitted, AMD reuses the session's own LLM (``session.llm``).
         interrupt_on_machine: If ``True`` (default), interrupt any pending
-            agent speech immediately when a machine is detected.
+            agent speech immediately when a machine is detected and consume the
+            machine turn so the session does not also generate an automatic reply.
+            If ``False``, normal session reply handling remains active. When a
+            ``screening_message`` or ``voicemail_message`` is also configured, both
+            the normal reply and the configured message may be scheduled; their
+            relative playout order is not guaranteed.
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
         participant_identity: If set, AMD listens only to this participant's
@@ -556,9 +561,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 if current_verdict is None:
                     return
                 verdict = current_verdict
+                verdict.screening_detected = self._screening_detected
 
                 if verdict.category == AMDCategory.MACHINE_SCREENING:
                     self._screening_detected = True
+                    verdict.screening_detected = True
                     if self._interrupt_on_machine:
                         await self._session.interrupt(force=True)
                     if not is_given(self._screening_message):
@@ -567,12 +574,15 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                         # no-speech timeout.
                         self._finish(verdict, "not_played")
                         return
-                    await classifier.reset(start_timers=False)
+                    logger.info("playing screening message")
+                    await classifier.reset(arm_turn_timers=False)
+                    self._session._on_aec_warmup_expired()
                     playback = await self._play(self._screening_message, verdict)
                     if playback == "not_played":
                         self._finish(verdict, playback)
                         return
-                    classifier.start_turn_timers()
+                    logger.info("screening message: %s", playback)
+                    classifier.arm_turn_timers()
                     # remember the screening playback so a later human verdict reports it
                     self._last_playback = playback
                     continue
@@ -626,7 +636,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return None
         if isinstance(source, SpeechHandle):
             return source
-        return self._session.say(source)
+        return self._session.say(source, allow_interruptions=True)
 
     async def _play(
         self, message: NotGivenOr[_AMDMessage], prediction: AMDPredictionEvent

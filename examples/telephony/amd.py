@@ -52,10 +52,12 @@ async def entrypoint(ctx: JobContext):
     phone_number = os.getenv("SIP_PHONE_NUMBER")
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY")
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
+    # Use a participant that joins the room manually instead of creating a SIP call.
+    skip_sip = os.getenv("SKIP_SIP", "").lower() in {"1", "true", "yes"}
 
     # focus the session on the callee before AMD starts so audio recognition
     # doesn't push frames from any pre-existing participant into AMD's pipeline
-    if not session.room_io:
+    if not skip_sip and not session.room_io:
         raise RuntimeError(
             "session room_io is unavailable. Make sure you use dev or start commands"
         )
@@ -65,9 +67,15 @@ async def entrypoint(ctx: JobContext):
     async with AMD(
         session,
         participant_identity=participant_identity or NOT_GIVEN,
+        screening_message="This is a screening reply message, and it is a long message so you should be patient",
+        voicemail_message="This is a voice mail",
     ) as detector:
         # start running amd before the SIP participant joins to avoid audio loss
-        if phone_number and outbound_trunk_id and participant_identity:
+        participant: rtc.RemoteParticipant | None = None
+        if skip_sip:
+            logger.info("skipping SIP participant creation; waiting for a participant")
+            participant = await ctx.wait_for_participant(identity=participant_identity)
+        elif phone_number and outbound_trunk_id and participant_identity:
             logger.info(f"creating SIP participant for {participant_identity}")
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
@@ -79,6 +87,8 @@ async def entrypoint(ctx: JobContext):
                 )
             )
             participant = await ctx.wait_for_participant(identity=participant_identity)
+
+        if participant:
             logger.info(
                 "participant joined",
                 extra={
@@ -103,7 +113,7 @@ async def entrypoint(ctx: JobContext):
 
         elif result.category == "machine-ivr":
             logger.info(
-                "ivr menu detected, starting navigation",
+                "ivr menu detected, starting navigation automatically",
                 extra={"transcript": result.transcript},
             )
 
@@ -128,11 +138,14 @@ async def entrypoint(ctx: JobContext):
             ctx.shutdown("mailbox unavailable")
 
     async def hangup():
-        await ctx.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=ctx.room.name,
+        try:
+            await ctx.api.room.delete_room(
+                api.DeleteRoomRequest(
+                    room=ctx.room.name,
+                )
             )
-        )
+        except Exception as e:
+            logger.warning("room deletion failed: %s", e)
 
     ctx.add_shutdown_callback(hangup)
 

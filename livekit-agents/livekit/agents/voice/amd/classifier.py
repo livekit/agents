@@ -187,7 +187,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         if arm_no_speech_timer and self._no_speech_timer is None:
             self._arm_no_speech_timer()
 
-    def start_turn_timers(self) -> None:
+    def arm_turn_timers(self) -> None:
         """Start a fresh turn budget after message playout."""
         if self._closed or self._emitted or not self._listening:
             return
@@ -418,7 +418,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             # pick session stt when it arrives before AMD stt
             if self._source == "amd_stt" and source == "stt" and not self._amd_stt_seen:
                 logger.warning("amd: session STT won the transcript race, using session STT")
-                self._source = "stt"
+                self.switch_source("stt")
             else:
                 # ignore text from other sources if it is not faster
                 return
@@ -591,7 +591,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         """Switch which transcript source the classifier consumes (one-way fallback)."""
         self._source = source
 
-    async def reset(self, *, start_timers: bool = True) -> None:
+    async def reset(self, *, arm_turn_timers: bool = True) -> None:
         """Re-arm the classifier for the next detection turn.
 
         Cancels the current classification and timers, clears the per-turn state and
@@ -624,9 +624,9 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._amd_stt_seen = False
 
         self._listening = False
-        if start_timers:
+        if arm_turn_timers:
             self.start_detection_timer()
-        self.start_listening(arm_no_speech_timer=start_timers)
+        self.start_listening(arm_no_speech_timer=arm_turn_timers)
 
     async def close(self) -> None:
         if self._closed:
