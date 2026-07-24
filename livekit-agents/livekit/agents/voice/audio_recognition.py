@@ -1458,6 +1458,22 @@ class AudioRecognition:
             speech_start_time: float | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
+
+            # A late STT final transcript can arrive after the turn detector was
+            # already flushed for a committed turn. There is no prediction in flight,
+            # so continuing would commit a second turn with a null end_of_turn_probability
+            # and split one utterance into two turns (issue #6504). Genuinely skip here
+            # — as the log message states — leaving the transcript to fold into the next
+            # turn instead of shipping a fragment that bypassed turn detection.
+            if (
+                trigger == "stt"
+                and self._turn_detector_flushed
+                and self._turn_detector_prediction_fut is None
+                and isinstance(turn_detector, _StreamingTurnDetectorStream)
+            ):
+                self._on_missing_eot_prediction()
+                return
+
             user_turn_span = self._ensure_user_turn_span()
 
             end_of_turn_probability: float | None = None
