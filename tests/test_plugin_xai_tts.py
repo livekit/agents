@@ -118,3 +118,34 @@ async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest
     await tts.aclose()
 
     assert websockets[0].closed is True
+
+
+def test_sample_rate_defaults_to_24000() -> None:
+    tts = xai_tts.TTS(api_key="test-key")
+    assert tts.sample_rate == 24000
+    assert tts._opts.sample_rate == 24000  # pyright: ignore[reportPrivateUsage]
+
+
+def test_invalid_sample_rate_raises() -> None:
+    with pytest.raises(ValueError):
+        xai_tts.TTS(api_key="test-key", sample_rate=12345)
+
+
+@pytest.mark.asyncio
+async def test_sample_rate_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:
+            captured["url"] = url
+            return _FakeWebSocket()
+
+    tts = xai_tts.TTS(api_key="test-key", sample_rate=16000)
+    assert tts.sample_rate == 16000
+    assert tts._opts.sample_rate == 16000  # pyright: ignore[reportPrivateUsage]
+
+    monkeypatch.setattr(tts, "_ensure_session", lambda: _FakeSession())
+    await tts._connect_ws(1.0, tts._opts)  # pyright: ignore[reportPrivateUsage]
+    assert "sample_rate=16000" in captured["url"]
+
+    await tts.aclose()
