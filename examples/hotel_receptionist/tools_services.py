@@ -220,8 +220,8 @@ class ServicesToolsMixin:
 
         Args:
             kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
-            caller_name: Caller's name (ask if you don't already have it).
-            caller_phone: Caller's callback number - for an in-house guest, the room number works.
+            caller_name: The caller's actual name - ask for it if you don't already have it, for EVERY kind of followup. Never write a placeholder derived from context: no "Unknown", no "guest in 402", no "Guest in 202" - a room number identifies the room, not the person, and a followup is a note for a human about a person.
+            caller_phone: Caller's callback number - for an in-house guest, the room number works (for the phone only, never for the name).
             summary: One sentence describing what they want, with enough detail for a human to act on it.
         """
         code = await ctx.userdata.db.record_followup(
@@ -269,7 +269,10 @@ class ServicesToolsMixin:
         return (
             f"group inquiry recorded; reference {_speak_code(code)} | nothing is confirmed yet: "
             "tell the caller the group desk will call them back within two business days, "
-            "after credit review, to confirm the block."
+            "after credit review, to confirm the block. Then settle any question the caller "
+            "asked earlier that never got its answer - a group-rate question from the top of "
+            "the call still needs the provisional rate quoted from the group_bookings policy "
+            "before the call ends."
         )
 
     @function_tool
@@ -413,7 +416,7 @@ class ServicesToolsMixin:
         guest_name: str,
         guest_phone: str,
     ) -> str:
-        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Quote the chosen service's price and duration from the catalog BEFORE booking - a caller who named the service up front still hears both before you book, not only after. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
 
         Args:
             service: The spa service the caller picked.
@@ -437,8 +440,9 @@ class ServicesToolsMixin:
         return (
             f"{s.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')} at "
             f"{speak_time(at_time)}; reference {_speak_code(code)}. {s.duration_min} minutes, "
-            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, and "
-            "total to the caller; no further tool call is needed for this appointment."
+            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, "
+            f"duration ({s.duration_min} minutes), total, and reference to the caller; no "
+            "further tool call is needed for this appointment."
         )
 
     @function_tool
@@ -503,7 +507,7 @@ class ServicesToolsMixin:
             guest_phone: The caller's phone number, in case the florist needs to reach them.
             room: The destination room. Pass a numbered room or suite as its integer room number; pass the penthouse suite as "penthouse". If the caller says the delivery goes to a room or suite here - including for a guest who hasn't arrived yet - the destination IS that room: ask WHICH room or suite and pass it. Never guess; if you don't know where it goes, ask.
             recipient_name: Who it's for, ONLY when the caller cannot name a room or suite at all (no room assigned or known yet). Naming the recipient does not capture the destination - if the caller mentioned a room or suite, ask which one and use room instead.
-            delivery_instruction: A delivery preference. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" when the caller requests that handling. Match the caller's actual constraint: a deadline ("before she arrives around noon", "before checkout") is "before_noon_if_possible"; reserve "as_early_as_possible" for callers who want the earliest slot with no deadline. These are requests for the florist, not guaranteed delivery times. Omit if none.
+            delivery_instruction: A delivery preference - a handling constraint ADDITIONAL to the destination, never a restatement of it. When the destination is a named arriving guest (recipient_name), "hold it for my arrival" / "until she checks in" IS that destination - the florist already holds it - so omit this parameter; it is not a delivery instruction. Pass "as_early_as_possible", "before_noon_if_possible", or "leave_with_front_desk" only when the caller adds a real constraint the destination doesn't imply. Match the caller's actual constraint: a deadline ("before she arrives around noon", "before checkout") is "before_noon_if_possible"; reserve "as_early_as_possible" for callers who want the earliest slot with no deadline. These are requests for the florist, not guaranteed delivery times. Omit if none.
         """
         room_id, recipient = _florist_destination(room, recipient_name)
         try:
@@ -527,8 +531,9 @@ class ServicesToolsMixin:
         return (
             f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
-            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
-            "total to the caller - no further tool call is needed for this order."
+            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, the "
+            "total, AND the reference number to the caller - the reference is part of the "
+            "confirmation, not optional. No further tool call is needed for this order."
         )
 
     @function_tool
