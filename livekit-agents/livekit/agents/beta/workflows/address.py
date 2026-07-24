@@ -140,16 +140,19 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         # confirm tool is only injected after update_address is called,
         # preventing the LLM from hallucinating a confirmation without user input
         @function_tool()
-        async def confirm_address() -> None:
+        async def confirm_address() -> str | None:
             """Call after the user confirms the address is correct."""
             if address != self._current_address:
-                self.session.generate_reply(
-                    instructions="The address has changed since confirmation was requested, ask the user to confirm the updated address."
+                # stale closure: update_address ran again after this confirm tool
+                # was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The address has changed since confirmation was requested, "
+                    "ask the user to confirm the updated address."
                 )
-                return
 
             if not self.done():
                 self.complete(GetAddressResult(address=address))
+            return None
 
         return confirm_address
 

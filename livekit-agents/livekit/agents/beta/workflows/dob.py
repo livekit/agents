@@ -262,19 +262,18 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         captured_time = self._current_time
 
         @function_tool()
-        async def confirm_dob() -> None:
+        async def confirm_dob() -> str | None:
             """Call after the user confirms the date of birth is correct."""
             if captured_dob != self._current_dob or captured_time != self._current_time:
-                self.session.generate_reply(
-                    instructions="The date of birth has changed since confirmation was requested, ask the user to confirm the updated date."
+                # stale closure: update_dob/update_time ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The date of birth has changed since confirmation was requested, "
+                    "ask the user to confirm the updated date."
                 )
-                return
 
             if self._current_dob is None:
-                self.session.generate_reply(
-                    instructions="No date of birth was provided yet, ask the user to provide it."
-                )
-                return
+                return "No date of birth was provided yet, ask the user to provide it."
 
             if not self.done():
                 self.complete(
@@ -283,6 +282,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                         time_of_birth=self._current_time,
                     )
                 )
+            return None
 
         return confirm_dob
 
