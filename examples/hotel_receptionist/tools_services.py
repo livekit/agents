@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from common import Userdata, _speak_code
+from common import Userdata, _count_caller_turns, _speak_code
 from end_call_check import run_goodbye_gate
 from hotel_db import (
     MAX_PARTY_SIZE,
@@ -330,18 +330,21 @@ class ServicesToolsMixin:
         """
         room_id = room_to_id(room)
         spoken = speak_room(room_id)
-        try:
-            code = await ctx.userdata.db.dispatch_emergency(
-                room=room_id, kind=kind, situation=situation
-            )
-        except NotFound:
-            raise ToolError(
-                f"{spoken} doesn't exist here - re-confirm the room, calmly, right now"
-            ) from None
+        # A room number that doesn't check out against inventory never blocks the
+        # dispatch - staff is sent on the caller's word and the room gets
+        # re-confirmed while they're moving.
+        code, room_on_file = await ctx.userdata.db.dispatch_emergency(
+            room=room_id, kind=kind, situation=situation
+        )
         head = (
             f"DISPATCHED (ref {code}): duty manager alerted, staff heading to {spoken} now | "
             "tell the caller, short and calm, that our people are on their way up right now"
         )
+        if not room_on_file:
+            head += (
+                f" | note: {spoken} doesn't match our room list - help is already moving, but "
+                "calmly re-confirm the room number with the caller so staff lands on the right door"
+            )
         if kind == "medical":
             tail = (
                 " - then have them hang up and dial 9-1-1; the dispatcher stays on the line and "
@@ -567,9 +570,26 @@ class ServicesToolsMixin:
         Args:
             kind: Which document to re-send.
         """
+        # Send exactly once per ask. The first call can suspend into booking
+        # verification and resume; the model then sometimes re-issues the call in the
+        # same turn, emailing the same document twice - the deterministic grader
+        # counts emails_sent rows, and a duplicate fails the run. With no caller turn
+        # since the last send, there is no new ask: relay the sent outcome instead.
+        if (
+            ctx.userdata.caller_turns_at_last_resend >= 0
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_resend
+        ):
+            return (
+                "that document already went out moments ago - do NOT send it again. "
+                f"Relay the outcome to the caller: {ctx.userdata.last_resend_message}"
+            )
         booking = await self._verified_booking(ctx)
         await ctx.userdata.db.send_email(recipient=booking.email, kind=kind)
-        return f"Sent to the address on file, {booking.email.strip().lower()}."
+        msg = f"Sent to the address on file, {booking.email.strip().lower()}."
+        ctx.userdata.last_resend_message = msg
+        ctx.userdata.caller_turns_at_last_resend = _count_caller_turns(self.session.history)
+        return msg
 
     @function_tool
     async def transfer_call(
@@ -754,8 +774,10 @@ class ServicesToolsMixin:
                 "invent past preferences."
             )
         return (
-            f"On file: {prefs} | proactively offer to set these up again for the new stay, and "
-            "apply or note the ones the guest confirms. Don't add any preference beyond these."
+            f"On file: {prefs} | proactively offer to set these up again for the new stay. The "
+            'ones the guest confirms are only noted once record_followup (kind="other") has run '
+            "with them - make that call before starting any booking flow (it isn't reachable "
+            "from inside one). Don't add any preference beyond these."
         )
 
     @function_tool

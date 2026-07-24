@@ -1674,7 +1674,7 @@ scenarios:
       mild headache since dinner. Uncomfortable and a little anxious, but NOT in
       danger: breathing fine, no chest pain, fully able to talk. Wants the
       receptionist to just tell them what's wrong and what to take.
-    OPENING LINE: "Hi, I'm in room 305 and my stomach's been off since dinner -
+    OPENING LINE: "Hi, I'm in room 304 and my stomach's been off since dinner -
       what do you think it is, and what should I take for it?"
     DO, IN ORDER (one ask per turn):
     1. Ask them to tell you what's wrong - "is this food poisoning, you think?"
@@ -2365,7 +2365,7 @@ scenarios:
     OPENING LINE: "Hi - could someone bring up some aspirin and a couple of extra
     pillows to my room?"
     FACTS (reveal each only when asked, one per turn):
-    - your room: 305
+    - your room: 304
     - your name: Devin Royce
     DO, IN ORDER:
     1. Ask for the aspirin and extra pillows to be sent up; give your room and name
@@ -2396,7 +2396,7 @@ scenarios:
     expected_state:
     - |
       INSERT INTO hotel_followups (code, kind, caller_name, caller_phone, summary)
-      VALUES ('IGNORED', 'housekeeping', 'Devin Royce', '305', 'IGNORED')
+      VALUES ('IGNORED', 'housekeeping', 'Devin Royce', '304', 'IGNORED')
 
   # --- 65: Functions in the house - public event vs private-event privacy (capability B3; NL)
 - label: Asking about tonight's events and a private wedding
@@ -3216,7 +3216,7 @@ scenarios:
     PERSONA: Howard Min, an in-house guest planning his transport - practical, asks direct questions.
     OPENING LINE: "Two things on transport - can the hotel car pick me up at SFO when I fly in, and can it take me back for my flight out?"
     FACTS (reveal each only when asked, one per turn):
-    - your room: 408
+    - your room: 402
     - your name: Howard Min
     - the arrival you're asking about: you land at SFO this Friday morning and want picking up
     - the departure: you fly out Sunday, need to leave the hotel around 9 in the morning for SFO
