@@ -40,6 +40,11 @@ _turn_transcription_delay = _meter.create_histogram(
     unit="s",
     description="Time from end of speech to transcript available",
 )
+_turn_first_interim_delay = _meter.create_histogram(
+    "lk.agents.turn.first_interim_delay",
+    unit="s",
+    description="Time from speech onset to first interim transcript",
+)
 _turn_end_of_turn_delay = _meter.create_histogram(
     "lk.agents.turn.end_of_turn_delay",
     unit="s",
@@ -120,6 +125,8 @@ def _record_turn_metrics(report: MetricsReport) -> None:
         _turn_tts_ttfb.record(report["tts_node_ttfb"], attributes=tts_attrs)
     if "transcription_delay" in report:
         _turn_transcription_delay.record(report["transcription_delay"], attributes=stt_attrs)
+    if "first_interim_delay" in report:
+        _turn_first_interim_delay.record(report["first_interim_delay"], attributes=stt_attrs)
     if "end_of_turn_delay" in report:
         _turn_end_of_turn_delay.record(report["end_of_turn_delay"], attributes=stt_attrs)
     if "on_user_turn_completed_delay" in report:

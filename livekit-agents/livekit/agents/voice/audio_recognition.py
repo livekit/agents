@@ -63,6 +63,7 @@ class _EndOfTurnMetrics:
     stopped_speaking_at: float | None
     transcription_delay: float | None
     end_of_turn_delay: float | None
+    first_interim_delay: float | None
 
 
 @dataclass
@@ -82,6 +83,7 @@ def _compute_end_of_turn_metrics(
     last_speaking_time: float | None,
     last_final_transcript_time: float | None,
     now: float,
+    first_interim_time: float | None = None,
 ) -> _EndOfTurnMetrics:
     """Compute the end-of-turn timing metrics from the captured turn anchors.
 
@@ -107,6 +109,7 @@ def _compute_end_of_turn_metrics(
             stopped_speaking_at=None,
             transcription_delay=None,
             end_of_turn_delay=None,
+            first_interim_delay=None,
         )
 
     return _EndOfTurnMetrics(
@@ -114,6 +117,11 @@ def _compute_end_of_turn_metrics(
         stopped_speaking_at=last_speaking_time,
         transcription_delay=max(last_final_transcript_time - last_speaking_time, 0),
         end_of_turn_delay=max(now - last_speaking_time, 0),
+        first_interim_delay=(
+            max(first_interim_time - speech_start_time, 0)
+            if first_interim_time is not None
+            else None
+        ),
     )
 
 
@@ -271,6 +279,7 @@ class AudioRecognition:
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
+        self._first_interim_time: float | None = None
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -979,6 +988,7 @@ class AudioRecognition:
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
         self._speech_start_time = None
+        self._first_interim_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
@@ -1270,6 +1280,8 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+            if self._first_interim_time is None and self._speech_start_time is not None:
+                self._first_interim_time = time.time()
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
@@ -1648,6 +1660,7 @@ class AudioRecognition:
                 speech_start_time=speech_start_time,
                 last_speaking_time=last_speaking_time,
                 last_final_transcript_time=last_final_transcript_time,
+                first_interim_time=self._first_interim_time,
                 now=time.time(),
             )
             committed = self._hooks.on_end_of_turn(
@@ -1697,6 +1710,7 @@ class AudioRecognition:
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
                     self._speech_start_time = None
+                    self._first_interim_time = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
 

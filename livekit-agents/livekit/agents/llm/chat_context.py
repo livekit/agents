@@ -238,6 +238,12 @@ class MetricsReport(TypedDict, total=False):
     User `ChatMessage` only
     """
 
+    first_interim_delay: float
+    """Time from speech onset to the first interim transcript.
+
+    User `ChatMessage` only
+    """
+
     end_of_turn_delay: float
     """Amount of time between the end of speech and the decision to end the user's turn
 

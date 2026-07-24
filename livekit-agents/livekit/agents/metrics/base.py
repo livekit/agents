@@ -103,6 +103,8 @@ class EOUMetrics(_BaseMetrics):
     """Time taken to obtain the transcript after the end of the user's speech.
     Set to 0.0 if the end of speech was not detected.
     """
+    first_interim_delay: float
+    """Time from speech onset to the first interim transcript, or 0.0 when unavailable."""
 
     on_user_turn_completed_delay: float
     """Time taken to invoke the user's `Agent.on_user_turn_completed` callback."""
