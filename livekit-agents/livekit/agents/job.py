@@ -629,6 +629,16 @@ class JobContext:
             return fut
 
         async def _delete_room() -> None:
+            # Disconnect locally before issuing the server-side delete so the
+            # rust-sdk's connection-closed flag is set before the server closes
+            # the publisher data channels.  Without this the channels are torn
+            # down from the remote side while the local session is still
+            # "connected", which triggers spurious ERROR-level logs:
+            #   "publisher data channel '_reliable' closed unexpectedly"
+            try:
+                await self._room.disconnect()
+            except Exception:
+                logger.exception("error disconnecting room before delete; proceeding with delete")
             try:
                 await self.api.room.delete_room(
                     api.DeleteRoomRequest(room=room_name or self._room.name)
@@ -738,7 +748,7 @@ class JobContext:
         self._track_pending_task(task, name="transfer_sip_participant")
         return task
 
-    def shutdown(self, reason: str = "user requested") -> None:
+    def shutdown(self, reason: str = "") -> None:
         self._on_shutdown(reason)
 
     def add_participant_entrypoint(
