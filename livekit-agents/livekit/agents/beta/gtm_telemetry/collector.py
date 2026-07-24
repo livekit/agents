@@ -196,6 +196,8 @@ class PostCallTelemetryCollector:
             await asyncio.wait_for(asyncio.shield(self._flush_task), timeout=timeout)
         except asyncio.TimeoutError:
             self._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._flush_task
             logger.warning("timed out waiting for the post-call report flush")
         except asyncio.CancelledError:
             logger.warning("post-call report flush was cancelled before completing")

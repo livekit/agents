@@ -309,7 +309,8 @@ async def test_metrics_aggregation() -> None:
 
 
 async def test_metrics_none_when_no_data() -> None:
-    """Speech durations and avg_llm_ttft_ms are None when no data was observed."""
+    """Speech durations and avg_llm_ttft_ms are None when no data was observed.
+    Also verifies empty-session edge case: zero turns, tools, and failures."""
     session = AgentSession()
     collector = PostCallTelemetryCollector(session)
     collector.attach()
@@ -318,6 +319,10 @@ async def test_metrics_none_when_no_data() -> None:
         assert report.metrics.user_speech_duration_seconds is None
         assert report.metrics.agent_speech_duration_seconds is None
         assert report.metrics.avg_llm_ttft_ms is None
+        assert len(report.turns) == 0
+        assert len(report.tool_invocations) == 0
+        assert report.metrics.total_tool_calls == 0
+        assert report.metrics.failed_tool_calls == 0
     finally:
         await collector.aclose()
 
@@ -579,3 +584,69 @@ async def test_end_to_end_fake_session() -> None:
         await collector.aclose()
         await http_session.close()
         await server.close()
+
+
+async def test_webhook_no_follow_redirect() -> None:
+    """Dispatcher does not follow 3xx redirects — treats them as a non-retryable failure."""
+    call_count = 0
+
+    async def handler(request: web.Request) -> web.Response:
+        nonlocal call_count
+        call_count += 1
+        return web.Response(status=302, headers={"Location": "/login"})
+
+    async with _webhook_server(handler) as (url, http_session):
+        dispatcher = WebhookDispatcher(url, http_session=http_session)
+        result = await dispatcher.dispatch(PostCallReport(created_at=1.0))
+
+    assert result is False
+    assert call_count == 1
+
+
+async def test_concurrent_tool_calls_same_timestamp() -> None:
+    """Two tool call_ids started at the same timestamp and completed in reverse
+    order — each result/duration stays associated with the correct call_id."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    try:
+        fc_a = FunctionCall(call_id="a", name="tool_a", arguments='{"x": 1}', created_at=50.0)
+        fc_b = FunctionCall(call_id="b", name="tool_b", arguments='{"y": 2}', created_at=50.0)
+
+        # Both start at the same timestamp
+        collector._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=fc_a), created_at=50.0)
+        )
+        collector._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=fc_b), created_at=50.0)
+        )
+
+        # Complete in reverse order: b finishes first, then a
+        collector._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="b", call_id="b", status="done", message="result_b"),
+                created_at=50.3,
+            )
+        )
+        collector._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="a", call_id="a", status="done", message="result_a"),
+                created_at=50.7,
+            )
+        )
+
+        report = collector.generate_report()
+        assert len(report.tool_invocations) == 2
+
+        rec_a = next(r for r in report.tool_invocations if r.call_id == "a")
+        rec_b = next(r for r in report.tool_invocations if r.call_id == "b")
+
+        assert rec_a.result == "result_a"
+        assert rec_a.duration_ms == pytest.approx(700.0)
+        assert rec_a.arguments == {"x": 1}
+
+        assert rec_b.result == "result_b"
+        assert rec_b.duration_ms == pytest.approx(300.0)
+        assert rec_b.arguments == {"y": 2}
+    finally:
+        await collector.aclose()

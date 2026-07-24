@@ -92,9 +92,17 @@ class WebhookDispatcher:
                     data=body,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=self._timeout),
+                    allow_redirects=False,
                 ) as resp:
                     if 200 <= resp.status < 300:
                         return True
+
+                    if 300 <= resp.status < 400:
+                        logger.warning(
+                            "post-call report webhook returned redirect %d, not retrying",
+                            resp.status,
+                        )
+                        return False
 
                     if 400 <= resp.status < 500:
                         logger.warning(

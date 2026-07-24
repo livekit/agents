@@ -29,8 +29,9 @@ logger = logging.getLogger("gtm-telemetry-agent")
 
 load_dotenv()
 
-# Module-level registry keyed by room name so the on_session_end hook can find
-# the collector for the closing session.
+# Module-level registry keyed by job ID so the on_session_end hook can find
+# the collector for the closing session. Using job ID (not room name) avoids
+# collisions when two overlapping jobs share the same room under threaded execution.
 _collectors: dict[str, PostCallTelemetryCollector] = {}
 
 
@@ -56,7 +57,7 @@ class SalesAgent(Agent):
 
 async def on_session_end(ctx: JobContext) -> None:
     """Flush the collector and print CRM adapter outputs."""
-    collector = _collectors.pop(ctx.room.name, None)
+    collector = _collectors.pop(ctx.job.id, None)
     if collector is None:
         return
 
@@ -100,8 +101,8 @@ async def gtm_agent(ctx: JobContext) -> None:
     )
     collector.attach()
 
-    # Store so on_session_end can find it
-    _collectors[ctx.room.name] = collector
+    # Store so on_session_end can find it (keyed by job ID for thread safety)
+    _collectors[ctx.job.id] = collector
 
     await session.start(agent=SalesAgent(), room=ctx.room)
 
