@@ -564,6 +564,73 @@ def test_convert_messages_skips_system_and_developer() -> None:
     assert messages == [{"role": "user", "content": "Xin chào"}]
 
 
+def test_convert_messages_system_only_returns_empty_list() -> None:
+    """Agent-first turns may only have system/developer; those are omitted."""
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="system", content="You are a helpful receptionist.")
+    chat_ctx.add_message(role="developer", content="Greet the user first.")
+
+    messages = _make_stream(chat_ctx)._convert_messages()
+
+    assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_llm_run_posts_empty_messages_for_agent_first_turn() -> None:
+    """generate_reply with only system/developer must still POST (agents-js parity)."""
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="system", content="You greet the caller first.")
+
+    captured: dict = {}
+
+    class _StreamResponse:
+        status_code = 200
+
+        async def aiter_lines(self):
+            yield 'data: {"content": "Xin chào!"}'
+            yield "data: [DONE]"
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class _StreamCM:
+        async def __aenter__(self) -> _StreamResponse:
+            return _StreamResponse()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    def stream_mock(
+        method: str,
+        url: str,
+        *,
+        json: dict | None = None,
+        headers: dict | None = None,
+        timeout: object = None,
+    ) -> _StreamCM:
+        captured["method"] = method
+        captured["json"] = json
+        return _StreamCM()
+
+    llm_inst = _make_llm()
+    llm_inst._client.stream = stream_mock  # type: ignore[method-assign]
+    stream = LLMStream(
+        llm_inst,
+        chat_ctx=chat_ctx,
+        tools=[],
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+
+    try:
+        chunks = [chunk async for chunk in stream]
+        assert captured["method"] == "POST"
+        assert captured["json"] == {"messages": []}
+        assert any(c.delta and c.delta.content == "Xin chào!" for c in chunks)
+    finally:
+        await stream.aclose()
+        await llm_inst.aclose()
+
+
 def test_convert_messages_maps_assistant_and_strips_img_tags() -> None:
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="assistant", content="Hello <img>chart</img> world.")

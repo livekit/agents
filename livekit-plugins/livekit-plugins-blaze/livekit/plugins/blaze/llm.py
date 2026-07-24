@@ -294,8 +294,15 @@ class LLMStream(llm.LLMStream):
 
         messages = self._convert_messages()
         if not messages:
-            logger.warning("[%s] No messages to send to chatbot", request_id)
-            return
+            # Agent-speaks-first: chat ctx may only have system/developer instructions.
+            # Those are intentionally omitted (Blaze loads the voicebot prompt server-side).
+            # Still POST with an empty message list so the model can produce a greeting,
+            # matching agents-js blaze LLM behavior.
+            logger.info(
+                "[%s] No user/assistant messages in chat context; "
+                "sending empty message list for agent-first turn",
+                request_id,
+            )
 
         blaze = self._blaze_llm
         query_params: dict[str, str] = {
