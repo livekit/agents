@@ -64,6 +64,7 @@ SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
 ]
+FishAudioModels = Literal["fishaudio/asr-1",]
 InworldModels = Literal["inworld/inworld-stt-1",]
 
 
@@ -172,6 +173,14 @@ class InworldOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
     prompts: list[str]
     vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class FishAudioOptions(TypedDict, total=False):
+    # Fish ASR is batch-only; ignore_timestamps maps to /v1/asr. Default True
+    # (Fish server default). Set False to request precise timestamps (adds
+    # latency on clips under 30s). The gateway forwards only the joined
+    # transcript today, so this mainly affects upstream latency.
+    ignore_timestamps: bool
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -287,16 +296,20 @@ def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics = (
-        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    # Models that do not endpoint server-side need client VAD to drive
+    # `session.finalize` (Speechmatics external mode; Fish Audio batch ASR).
+    needs_client_vad = (
+        is_given(model)
+        and isinstance(model, str)
+        and (model.startswith("speechmatics/") or model.startswith("fishaudio/"))
     )
-    if vad_instance is not None and not is_speechmatics:
+    if vad_instance is not None and not needs_client_vad:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics and vad_instance is None:
+    if needs_client_vad and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -326,6 +339,7 @@ STTModels = (
     | ElevenlabsModels
     | XaiModels
     | SpeechmaticsModels
+    | FishAudioModels
     | InworldModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
@@ -474,6 +488,24 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: FishAudioModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[FishAudioOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: InworldModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -525,6 +557,7 @@ class STT(stt.STT):
             | ElevenlabsOptions
             | XaiOptions
             | SpeechmaticsOptions
+            | FishAudioOptions
             | InworldOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
@@ -548,7 +581,8 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to Speechmatics models.
+                gateway on end of speech. Auto-loaded for models that do not endpoint
+                server-side (Speechmatics, Fish Audio). Ignored for other models.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
