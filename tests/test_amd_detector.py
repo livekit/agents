@@ -30,6 +30,22 @@ class _FakeHandle:
         return self._interrupted
 
 
+class _BlockingHandle(_FakeHandle):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def wait_for_playout(self) -> None:
+        self.started.set()
+        await self.release.wait()
+
+
+class _FailingHandle(_FakeHandle):
+    async def wait_for_playout(self) -> None:
+        raise RuntimeError("playout failed")
+
+
 class _FakeActivity:
     def __init__(self) -> None:
         self.resumed = 0
@@ -67,15 +83,21 @@ class _FakeClassifier:
         self._verdict_ready = asyncio.Event()
         self._verdict_result: AMDPredictionEvent | None = None
         self.reset_count = 0
+        self.reset_start_timers: list[bool] = []
+        self.start_turn_timers_count = 0
         self.ended = False
 
-    async def reset(self) -> None:
+    async def reset(self, *, start_timers: bool = True) -> None:
         self.reset_count += 1
+        self.reset_start_timers.append(start_timers)
         self._verdict_result = None
         self._verdict_ready = asyncio.Event()
 
     def end_input(self) -> None:
         self.ended = True
+
+    def start_turn_timers(self) -> None:
+        self.start_turn_timers_count += 1
 
 
 def _verdict(category: AMDCategory, transcript: str = "greeting") -> AMDPredictionEvent:
@@ -93,11 +115,13 @@ def _make_detector(
     *,
     screening_message: object = "this is alex",
     voicemail_message: object = "leave a message",
+    ivr_detection: bool = True,
 ) -> AMD:
     detector = AMD(
         session,  # type: ignore[arg-type]
         screening_message=screening_message,  # type: ignore[arg-type]
         voicemail_message=voicemail_message,  # type: ignore[arg-type]
+        ivr_detection=ivr_detection,
         suppress_compatibility_warning=True,
     )
     return detector
@@ -196,20 +220,54 @@ async def test_screening_message_interrupted_is_reported() -> None:
     assert result.message_playback == "interrupted"
 
 
-async def test_ivr_navigates_and_continues() -> None:
+async def test_screening_rearms_classifier_before_playback_finishes() -> None:
+    session = _FakeSession()
+    handle = _BlockingHandle()
+    session._next_handle = handle
+    detector = _make_detector(session)
+    clf = _FakeClassifier()
+    detector._classifier = clf  # type: ignore[assignment]
+
+    loop = asyncio.create_task(detector._detection_loop())
+    clf._verdict_result = _verdict(AMDCategory.MACHINE_SCREENING)
+    clf._verdict_ready.set()
+
+    await asyncio.wait_for(handle.started.wait(), timeout=1.0)
+    assert clf.reset_count == 1
+    assert clf.reset_start_timers == [False]
+
+    clf._verdict_result = _verdict(AMDCategory.HUMAN)
+    clf._verdict_ready.set()
+    handle.release.set()
+
+    await asyncio.wait_for(detector._terminal_ready.wait(), timeout=1.0)
+    await asyncio.wait_for(loop, timeout=1.0)
+    assert detector._result is not None
+    assert detector._result.category == AMDCategory.HUMAN
+
+
+async def test_ivr_navigates_and_returns_machine_ivr() -> None:
     session = _FakeSession()
     detector = _make_detector(session)
     clf = _FakeClassifier()
 
-    result = await _drive(
-        detector,
-        clf,
-        [_verdict(AMDCategory.MACHINE_IVR, "press 1"), _verdict(AMDCategory.HUMAN)],
-    )
+    result = await _drive(detector, clf, [_verdict(AMDCategory.MACHINE_IVR, "press 1")])
 
     assert session.ivr_calls == ["press 1"]
-    assert session.said == []  # no predefined message for ivr
-    assert result.category == AMDCategory.HUMAN
+    assert clf.reset_count == 0
+    assert result.category == AMDCategory.MACHINE_IVR
+
+
+async def test_ivr_is_terminal_when_navigation_is_disabled() -> None:
+    session = _FakeSession()
+    detector = _make_detector(session, ivr_detection=False)
+    clf = _FakeClassifier()
+
+    result = await _drive(detector, clf, [_verdict(AMDCategory.MACHINE_IVR, "press 1")])
+
+    assert session.ivr_calls == []
+    assert clf.reset_count == 0
+    assert result.category == AMDCategory.MACHINE_IVR
 
 
 async def test_screening_without_message_is_terminal() -> None:
@@ -225,6 +283,30 @@ async def test_screening_without_message_is_terminal() -> None:
     assert result.category == AMDCategory.MACHINE_SCREENING
     assert result.screening_detected is True
     assert result.message_playback == "not_played"
+
+
+async def test_screening_callback_returning_none_is_terminal() -> None:
+    session = _FakeSession()
+    detector = _make_detector(session, screening_message=lambda _: None)
+    clf = _FakeClassifier()
+
+    result = await _drive(detector, clf, [_verdict(AMDCategory.MACHINE_SCREENING)])
+
+    assert session.said == []
+    assert result.category == AMDCategory.MACHINE_SCREENING
+    assert result.message_playback == "not_played"
+
+
+async def test_screening_playout_failure_preserves_screening_verdict() -> None:
+    session = _FakeSession()
+    session._next_handle = _FailingHandle()
+    detector = _make_detector(session)
+    clf = _FakeClassifier()
+
+    result = await _drive(detector, clf, [_verdict(AMDCategory.MACHINE_SCREENING)])
+
+    assert result.category == AMDCategory.MACHINE_SCREENING
+    assert result.reason == "test"
 
 
 async def test_loop_failure_releases_execute() -> None:

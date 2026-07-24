@@ -14,6 +14,7 @@ from livekit.agents.metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from livekit.agents.voice.amd import AMDCategory, AMDPredictionEvent
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -478,6 +479,38 @@ class TestSessionHostEvents:
         assert msg.event.session_usage_updated.usage.model_usage[0].llm.provider == "openai"
 
         await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_unsupported_screening_category_is_remote_unknown(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_amd_prediction(
+            AMDPredictionEvent(
+                speech_duration=1.0,
+                category=AMDCategory.MACHINE_SCREENING,
+                reason="llm",
+                transcript="state your name",
+                delay=0.1,
+                screening_detected=True,
+                message_playback="played",
+            )
+        )
+        await asyncio.sleep(0.1)
+
+        prediction = transport.sent[0].event.amd_prediction
+        await host.aclose()
+
+        assert prediction.category == agent_pb.AMD_UNKNOWN
+        assert set(prediction.DESCRIPTOR.fields_by_name) == {
+            "speech_duration",
+            "category",
+            "reason",
+            "transcript",
+            "delay",
+        }
 
 
 # ---------------------------------------------------------------------------
