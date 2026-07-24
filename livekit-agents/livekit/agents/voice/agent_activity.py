@@ -4001,11 +4001,16 @@ class AgentActivity(RecognitionHooks):
         if len(tool_output.output) > 0:
             speech_handle._num_steps += 1
 
+            response_had_audio = started_speaking_at is not None and any(
+                entry.out.played != "skipped" for entry in message_outputs
+            )
+
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
             generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
+            fnc_executed_ev._response_had_audio = response_had_audio
             new_agent_task: Agent | None = None
             ignore_task_switch = False
 
@@ -4098,9 +4103,11 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
+            skip_for_audio = response_had_audio and self._session._tool_reply_after_audio == "skip"
             if (
                 fnc_executed_ev._reply_required
                 and not self._rt_session.capabilities.auto_tool_reply_generation
+                and not skip_for_audio
             ):
                 self._rt_session.interrupt()
 
