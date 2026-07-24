@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions, inference
 from livekit.agents.llm import RealtimeModelFallbackAdapter
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.turn import TurnDetectionMode
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -137,6 +140,98 @@ def test_no_client_trigger_keeps_server_side_td() -> None:
     activity = _activity(session)
 
     assert activity._rt_turn_detection_enabled is True
+
+
+def _rt_resync_warned(caplog: pytest.LogCaptureFixture) -> bool:
+    # match the flip warning specifically, not the generic _validate_turn_detection warnings
+    return any(
+        r.levelno == logging.WARNING and "resolved at session start" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def _change_turn_detection(
+    session: AgentSession, activity: AgentActivity, turn_detection: TurnDetectionMode | None
+) -> None:
+    # drive the real entry point: session.update_options updates the session-owned turn detection
+    # state, then notifies the activity (which re-resolves)
+    session._activity = activity
+    session.update_options(turn_detection=turn_detection)
+
+
+def test_update_options_warns_when_runtime_change_would_disable_server_td(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # server-side TD is on at start; switching to a client-side mode would turn it off, but the
+    # realtime session is resolved at session start and won't re-sync — warn (PR #6495)
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
+        vad=FakeVAD(fake_user_speeches=[]),
+    )
+    activity = _activity(session)
+    assert activity._rt_turn_detection_enabled is True
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _change_turn_detection(session, activity, "manual")
+
+    assert _rt_resync_warned(caplog)
+
+
+def test_update_options_warns_when_runtime_change_would_enable_server_td(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # server-side TD is off at start (client-side VAD); switching to realtime_llm would turn it
+    # back on, which also won't re-sync at runtime — warn (PR #6495)
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(turn_detection="vad"),
+    )
+    activity = _activity(session)
+    assert activity._rt_turn_detection_enabled is False
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _change_turn_detection(session, activity, "realtime_llm")
+
+    assert _rt_resync_warned(caplog)
+
+
+def test_update_options_no_warn_when_reverting_to_automatic(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # reverting to None re-selects automatically rather than pinning an explicit client mode; even
+    # though automatic could re-enable server-side TD, we don't warn for it (PR #6495)
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(turn_detection="vad"),
+    )
+    activity = _activity(session)
+    assert activity._rt_turn_detection_enabled is False
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _change_turn_detection(session, activity, None)
+
+    assert not _rt_resync_warned(caplog)
+
+
+def test_update_options_no_warn_when_server_td_state_unchanged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # server-side TD is off at start; switching between two client-side modes keeps it off, so
+    # there's nothing to re-sync — no warning
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(turn_detection="vad"),
+    )
+    activity = _activity(session)
+    assert activity._rt_turn_detection_enabled is False
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _change_turn_detection(session, activity, "manual")
+
+    assert not _rt_resync_warned(caplog)
 
 
 def test_realtime_llm_mode_is_not_a_trigger() -> None:

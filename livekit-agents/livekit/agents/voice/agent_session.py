@@ -1228,6 +1228,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if is_given(turn_detection):
             self._turn_detection = turn_detection
+            self._turn_detection_explicit = turn_detection is not None
 
         if self._activity is not None:
             self._activity.update_options(

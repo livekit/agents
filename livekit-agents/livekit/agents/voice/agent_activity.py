@@ -223,6 +223,15 @@ class AgentActivity(RecognitionHooks):
 
         # session-scoped truth read by every server-side turn-detection check below
         self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and not self._rt_turn_detection_enabled
+            and self.llm.capabilities.turn_detection
+        ):
+            logger.info(
+                "client-side turn-taking is configured, disabling realtime server-side "
+                "turn detection."
+            )
 
         if self._rt_turn_detection_enabled and not self.allow_interruptions:
             raise ValueError(
@@ -304,10 +313,6 @@ class AgentActivity(RecognitionHooks):
             or is_given(self._agent.interruption_detection)
             or is_given(self._session.interruption_detection)
         ):
-            logger.info(
-                "client-side turn detection or interruption detection is enabled, "
-                "disabling realtime server-side turn detection."
-            )
             return False
         return True
 
@@ -592,6 +597,21 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
         if utils.is_given(turn_detection):
+            # a realtime model's server-side turn detection is resolved once at session start;
+            # runtime re-sync isn't supported yet, so warn when an explicit change would flip it.
+            if (
+                isinstance(self.llm, llm.RealtimeModel)
+                and self.llm.capabilities.can_disable_turn_detection
+                and turn_detection is not None
+                and self._resolve_rt_turn_detection_enabled() != self._rt_turn_detection_enabled
+            ):
+                logger.warning(
+                    "changing turn_detection at runtime does not update a realtime model's "
+                    "server-side turn detection (resolved at session start); it stays %s "
+                    "for this session.",
+                    "enabled" if self._rt_turn_detection_enabled else "disabled",
+                )
+
             turn_detection = self._validate_turn_detection(turn_detection)
 
             if (
