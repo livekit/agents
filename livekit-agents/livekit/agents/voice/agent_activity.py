@@ -160,6 +160,11 @@ class _PausedSpeechInfo:
     handle: SpeechHandle
     agent_state: AgentState
     timeout: float
+    transcript_seen: bool = False
+    """a non-empty user transcript arrived after the pause: the barge-in is a
+    real turn and the paused speech must never resume over it"""
+    speech_duration: float = 0.0
+    """duration of the last VAD speech segment that (re)triggered the pause"""
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -185,6 +190,7 @@ class AgentActivity(RecognitionHooks):
         # for false interruption handling
         self._paused_speech: _PausedSpeechInfo | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
+        self._pause_watchdog_timer: asyncio.TimerHandle | None = None
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
         self._stt_eos_received: bool = False
@@ -546,11 +552,13 @@ class AgentActivity(RecognitionHooks):
         if utils.is_given(turn_detection):
             turn_detection = self._validate_turn_detection(turn_detection)
 
-            if (
-                self._turn_detection == "manual" or turn_detection == "manual"
-            ) and self._false_interruption_timer is not None:
-                self._false_interruption_timer.cancel()
-                self._false_interruption_timer = None
+            if self._turn_detection == "manual" or turn_detection == "manual":
+                if self._false_interruption_timer is not None:
+                    self._false_interruption_timer.cancel()
+                    self._false_interruption_timer = None
+                if self._pause_watchdog_timer is not None:
+                    self._pause_watchdog_timer.cancel()
+                    self._pause_watchdog_timer = None
 
             self._turn_detection = turn_detection
             self._default_interruption_by_audio_activity_enabled = self._turn_detection not in (
@@ -1629,12 +1637,7 @@ class AgentActivity(RecognitionHooks):
 
                 if self._paused_speech and self._paused_speech.handle is self._current_speech:
                     # clear paused speech after generation done
-                    self._paused_speech = None
-                    if self._false_interruption_timer is not None:
-                        self._false_interruption_timer.cancel()
-                        self._false_interruption_timer = None
-                    if (audio_output := self._session.output.audio) and audio_output.can_pause:
-                        audio_output.resume()
+                    self._release_paused_speech(resume_output=True)
                 self._current_speech = None
                 last_playout_ts = time.time()
 
@@ -1988,6 +1991,11 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
 
+        if self._pause_watchdog_timer:
+            # same for the pause watchdog: it is re-armed on end of speech
+            self._pause_watchdog_timer.cancel()
+            self._pause_watchdog_timer = None
+
         if (
             self._session.agent_state != "speaking"
             and self._pause_enabled()
@@ -2026,7 +2034,22 @@ class AgentActivity(RecognitionHooks):
         self._user_silence_event.set()
 
         if self._paused_speech:
-            self._start_false_interruption_timer(self._paused_speech.timeout)
+            if ev is not None:
+                self._paused_speech.speech_duration = ev.speech_duration
+
+            max_noise_duration = self._session.options.interruption[
+                "false_interruption_max_speech_duration"
+            ]
+            noise_like = not self._paused_speech.transcript_seen and (
+                ev is None or ev.speech_duration <= max_noise_duration
+            )
+            if noise_like:
+                self._start_false_interruption_timer(self._paused_speech.timeout)
+            else:
+                # the barge-in looks like real speech whose transcript is still in
+                # flight: never resume stale audio over it; the watchdog bounds the
+                # pause in case the final transcript never arrives
+                self._start_pause_watchdog()
 
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None:
         if self._turn_detection in ("manual", "realtime_llm"):
@@ -2095,14 +2118,16 @@ class AgentActivity(RecognitionHooks):
         ):
             self._interrupt_by_audio_activity()
 
-            if (
-                speaking is False
-                and self._paused_speech
-                and (timeout := self._session.options.interruption["false_interruption_timeout"])
-                is not None
-            ):
-                # schedule a resume timer if interrupted after end_of_speech
-                self._start_false_interruption_timer(timeout)
+            if self._paused_speech:
+                # user words are in flight for this barge-in: it is a real turn, so
+                # the paused speech must never resume over it. Wait for the final
+                # transcript (or the watchdog) instead of arming a resume timer.
+                self._paused_speech.transcript_seen = True
+                if self._false_interruption_timer is not None:
+                    self._false_interruption_timer.cancel()
+                    self._false_interruption_timer = None
+                if speaking is False:
+                    self._start_pause_watchdog()
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -2127,14 +2152,8 @@ class AgentActivity(RecognitionHooks):
         ):
             self._interrupt_by_audio_activity()
 
-            if (
-                speaking is False
-                and self._paused_speech
-                and (timeout := self._session.options.interruption["false_interruption_timeout"])
-                is not None
-            ):
-                # schedule a resume timer if interrupted after end_of_speech
-                self._start_false_interruption_timer(timeout)
+            if ev.alternatives[0].text and self._paused_speech:
+                self._paused_speech.transcript_seen = True
 
         self._cancel_speech_pause_task = asyncio.create_task(
             self._cancel_speech_pause(old_task=self._cancel_speech_pause_task)
@@ -4156,16 +4175,49 @@ class AgentActivity(RecognitionHooks):
             and self._session.output.audio.can_pause
         )
 
+    def _release_paused_speech(self, *, resume_output: bool) -> None:
+        """Single exit point for the pause bookkeeping.
+
+        Maintains the invariant that the shared audio output is never left
+        paused without an owning ``_PausedSpeechInfo``. ``resume_output=False``
+        is only for callers that already resumed the output themselves.
+        """
+        self._paused_speech = None
+        if self._false_interruption_timer is not None:
+            self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
+        if self._pause_watchdog_timer is not None:
+            self._pause_watchdog_timer.cancel()
+            self._pause_watchdog_timer = None
+
+        if (
+            resume_output
+            and self._session.options.interruption["resume_false_interruption"]
+            and (audio_output := self._session.output.audio) is not None
+            and audio_output.can_pause
+        ):
+            audio_output.resume()
+
     def _start_false_interruption_timer(self, timeout: float) -> None:
         if self._false_interruption_timer is not None:
             self._false_interruption_timer.cancel()
 
         def _on_false_interruption() -> None:
+            self._false_interruption_timer = None
+
             if self._paused_speech is None or (
                 self._current_speech and self._current_speech is not self._paused_speech.handle
             ):
-                # already new speech is scheduled, do nothing
-                self._paused_speech = None
+                # a new speech already took over; drop the stale pause but never
+                # leave the shared audio output paused without an owner
+                self._release_paused_speech(resume_output=True)
+                return
+
+            if self._paused_speech.transcript_seen:
+                # user words are in flight for this barge-in; never resume stale
+                # audio over a pending user turn (evidence normally arms the
+                # watchdog instead of this timer, this is a safety net)
+                self._start_pause_watchdog()
                 return
 
             resumed = False
@@ -4191,11 +4243,43 @@ class AgentActivity(RecognitionHooks):
                 "agent_false_interruption", AgentFalseInterruptionEvent(resumed=resumed)
             )
 
-            self._paused_speech = None
-            self._false_interruption_timer = None
+            # when not resumed (e.g. the paused speech completed while paused),
+            # releasing still resumes the output so it never stays paused
+            self._release_paused_speech(resume_output=not resumed)
 
         self._false_interruption_timer = self._session._loop.call_later(
             timeout, _on_false_interruption
+        )
+
+    def _start_pause_watchdog(self) -> None:
+        """Bound a pause held for a pending user turn.
+
+        Armed instead of the false-interruption resume timer once the barge-in
+        shows evidence of real speech (long VAD segment or a non-empty
+        transcript). If the turn's final transcript never arrives, the paused
+        speech is interrupted — stale audio is never resumed over the user.
+        """
+        if self._pause_watchdog_timer is not None:
+            self._pause_watchdog_timer.cancel()
+
+        def _on_watchdog() -> None:
+            self._pause_watchdog_timer = None
+
+            if self._paused_speech is None or (
+                self._current_speech and self._current_speech is not self._paused_speech.handle
+            ):
+                self._release_paused_speech(resume_output=True)
+                return
+
+            self._session.emit(
+                "agent_false_interruption", AgentFalseInterruptionEvent(resumed=False)
+            )
+            self._cancel_speech_pause_task = asyncio.create_task(
+                self._cancel_speech_pause(old_task=self._cancel_speech_pause_task)
+            )
+
+        self._pause_watchdog_timer = self._session._loop.call_later(
+            self._session.options.endpointing["max_delay"], _on_watchdog
         )
 
     async def _cancel_speech_pause(
@@ -4210,31 +4294,22 @@ class AgentActivity(RecognitionHooks):
                 # the paused speech had no active generation (race condition).
                 logger.debug("previous _cancel_speech_pause task failed, ignoring")
 
-        if self._false_interruption_timer is not None:
-            self._false_interruption_timer.cancel()
-            self._false_interruption_timer = None
-
-        if not self._paused_speech:
-            return
-
         if (
-            interrupt
-            and not self._paused_speech.handle.interrupted
-            and self._paused_speech.handle.allow_interruptions
+            (paused := self._paused_speech) is not None
+            and interrupt
+            and not paused.handle.interrupted
+            and paused.handle.allow_interruptions
         ):
-            self._paused_speech.handle.interrupt()
+            paused.handle.interrupt()
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never
             # authorized won't have an active generation future.
-            if self._paused_speech.handle._generations:
-                await self._paused_speech.handle._wait_for_generation()
-        self._paused_speech = None
+            if paused.handle._generations:
+                await paused.handle._wait_for_generation()
 
-        if (
-            self._session.options.interruption["resume_false_interruption"]
-            and self._session.output.audio
-        ):
-            self._session.output.audio.resume()
+        # release even when no pause is tracked: repairs an ownerless pause so a
+        # new user turn never starts against a paused output
+        self._release_paused_speech(resume_output=True)
 
     def _disable_vad_interruption_soon(self) -> None:
         """Disable VAD interruption after the backchannel boundary expires."""
