@@ -16,6 +16,7 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import inference, llm, stt, tts, utils, vad
+from .._exceptions import APIError
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
@@ -3505,7 +3506,9 @@ class AgentActivity(RecognitionHooks):
         if text is not None:
             try:
                 generation_ev = await self._rt_session.say(text)
-            except llm.RealtimeError as e:
+            except (llm.RealtimeError, APIError) as e:
+                # symmetric with the generate_reply await below: a transient reconnect
+                # discard (retryable APIError) must also land on the SpeechHandle
                 logger.error("failed to say text: %s", str(e))
                 speech_handle._mark_done(error=e)
                 return
@@ -3577,7 +3580,10 @@ class AgentActivity(RecognitionHooks):
 
             try:
                 generation_ev = await generate_reply_fut
-            except llm.RealtimeError as e:
+            except (llm.RealtimeError, APIError) as e:
+                # RealtimeError: terminal (session closed / timeout); APIError: transient
+                # discard on reconnect (retryable=True). Both land on the SpeechHandle via
+                # exception() so the app can decide whether to re-prompt.
                 logger.error(
                     "failed to generate a reply%s: %s",
                     " after tool execution" if tool_reply else "",

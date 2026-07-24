@@ -883,6 +883,13 @@ class RealtimeSession(
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
+    def _fail_pending_response_futures(self, error: Exception) -> None:
+        """Fail and clear every pending generate_reply future with ``error``."""
+        for fut in self._response_created_futures.values():
+            if not fut.done():
+                fut.set_exception(error)
+        self._response_created_futures.clear()
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         num_retries: int = 0
@@ -938,12 +945,14 @@ class RealtimeSession(
                     ),
                 ) from e
 
-            for fut in self._response_created_futures.values():
-                if not fut.done():
-                    fut.set_exception(
-                        llm.RealtimeError("pending response discarded due to session reconnection")
-                    )
-            self._response_created_futures.clear()
+            # the socket dropped and reconnected; the pending reply was never created, but
+            # re-prompting is sensible once the new session is up, so surface it as a
+            # retryable APIConnectionError (retryable=True) rather than a bare RealtimeError
+            self._fail_pending_response_futures(
+                APIConnectionError(
+                    message="pending response discarded due to session reconnection",
+                )
+            )
             self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
 
@@ -992,10 +1001,10 @@ class RealtimeSession(
             # generate_reply futures so consumers don't hang and callers don't wait
             # out their timeout
             self._close_current_generation("session closed")
-            for fut in self._response_created_futures.values():
-                if not fut.done():
-                    fut.set_exception(llm.RealtimeError("realtime session closed"))
-            self._response_created_futures.clear()
+            # the session is gone for good (fatal error / retries exhausted / close); nothing
+            # to retry against, so this stays a terminal RealtimeError, not the retryable
+            # APIConnectionError used on reconnect
+            self._fail_pending_response_futures(llm.RealtimeError("realtime session closed"))
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents"}
