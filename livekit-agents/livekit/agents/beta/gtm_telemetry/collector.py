@@ -115,7 +115,7 @@ class PostCallTelemetryCollector:
 
         self._turns: list[TranscriptTurn] = []
         self._pending_tools: dict[str, ToolInvocationRecord] = {}
-        self._tools: list[ToolInvocationRecord] = []
+        self._completed_tools: dict[str, ToolInvocationRecord] = {}
         self._llm_ttfts: list[float] = []
         self._stt_audio_s: float | None = None
         self._tts_audio_s: float | None = None
@@ -148,9 +148,8 @@ class PostCallTelemetryCollector:
             self._session.off("metrics_collected", self._on_metrics_collected)
             self._session.off("close", self._on_close)
 
-        if self._flush_task is not None and not self._flush_task.done():
-            self._flush_task.cancel()
         if self._flush_task is not None:
+            self._flush_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_task
 
@@ -160,11 +159,11 @@ class PostCallTelemetryCollector:
             raise RuntimeError("collector not attached — call attach() first")
 
         end = self._close_event.created_at if self._close_event else time.time()
-        all_tools = [*self._tools, *self._pending_tools.values()]
+        all_tools = [*self._completed_tools.values(), *self._pending_tools.values()]
         metrics = CallMetrics(
             total_duration_seconds=end - self._started_at,
-            user_speech_duration_seconds=self._user_speech_s(),
-            agent_speech_duration_seconds=self._agent_speech_s(),
+            user_speech_duration_seconds=self._speech_duration_s(self._stt_audio_s, STTModelUsage),
+            agent_speech_duration_seconds=self._speech_duration_s(self._tts_audio_s, TTSModelUsage),
             total_tool_calls=len(all_tools),
             failed_tool_calls=sum(1 for t in all_tools if t.status in ("error", "cancelled")),
             avg_llm_ttft_ms=(
@@ -247,7 +246,7 @@ class PostCallTelemetryCollector:
                     rec.result = update.message
                 else:  # error / cancelled
                     rec.error = update.message
-            self._tools.append(rec)
+            self._completed_tools[rec.call_id] = rec
 
     def _on_function_tools_executed(self, ev: FunctionToolsExecutedEvent) -> None:
         for fc, out in ev.zipped():
@@ -264,7 +263,8 @@ class PostCallTelemetryCollector:
             else:
                 # never reached the executor (unknown tool, malformed arguments,
                 # rejected duplicate) — no lifecycle events, record untimed
-                self._tools.append(self._untimed_record(fc, out))
+                rec = self._untimed_record(fc, out)
+                self._completed_tools[rec.call_id] = rec
 
     def _on_metrics_collected(self, ev: MetricsCollectedEvent) -> None:
         m = ev.metrics
@@ -286,13 +286,7 @@ class PostCallTelemetryCollector:
     # -- internals --
 
     def _find_record(self, call_id: str) -> ToolInvocationRecord | None:
-        rec = self._pending_tools.get(call_id)
-        if rec is not None:
-            return rec
-        for candidate in self._tools:
-            if candidate.call_id == call_id:
-                return candidate
-        return None
+        return self._pending_tools.get(call_id) or self._completed_tools.get(call_id)
 
     def _untimed_record(
         self, fc: FunctionCall, out: FunctionCallOutput | None
@@ -318,18 +312,12 @@ class PostCallTelemetryCollector:
             duration_ms=None,
         )
 
-    def _user_speech_s(self) -> float | None:
-        if self._stt_audio_s is not None:
-            return self._stt_audio_s
-        usages = [u for u in self._session.usage.model_usage if isinstance(u, STTModelUsage)]
-        if usages:
-            return sum(u.audio_duration for u in usages)
-        return None
-
-    def _agent_speech_s(self) -> float | None:
-        if self._tts_audio_s is not None:
-            return self._tts_audio_s
-        usages = [u for u in self._session.usage.model_usage if isinstance(u, TTSModelUsage)]
+    def _speech_duration_s(
+        self, cached: float | None, usage_type: type[STTModelUsage] | type[TTSModelUsage]
+    ) -> float | None:
+        if cached is not None:
+            return cached
+        usages = [u for u in self._session.usage.model_usage if isinstance(u, usage_type)]
         if usages:
             return sum(u.audio_duration for u in usages)
         return None
