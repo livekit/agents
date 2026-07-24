@@ -45,6 +45,14 @@ _turn_first_interim_delay = _meter.create_histogram(
     unit="s",
     description="Time from speech onset to first interim transcript",
 )
+_turn_first_interim_received = _meter.create_counter(
+    "lk.agents.turn.first_interim_received",
+    description="Number of utterances that produced a first interim transcript",
+)
+_turn_first_interim_absent = _meter.create_counter(
+    "lk.agents.turn.first_interim_absent",
+    description="Number of completed utterances without an interim transcript",
+)
 _turn_end_of_turn_delay = _meter.create_histogram(
     "lk.agents.turn.end_of_turn_delay",
     unit="s",
@@ -127,6 +135,10 @@ def _record_turn_metrics(report: MetricsReport) -> None:
         _turn_transcription_delay.record(report["transcription_delay"], attributes=stt_attrs)
     if "first_interim_delay" in report:
         _turn_first_interim_delay.record(report["first_interim_delay"], attributes=stt_attrs)
+    if report.get("first_interim_status") == "received":
+        _turn_first_interim_received.add(1, attributes=stt_attrs)
+    elif report.get("first_interim_status") == "absent":
+        _turn_first_interim_absent.add(1, attributes=stt_attrs)
     if "end_of_turn_delay" in report:
         _turn_end_of_turn_delay.record(report["end_of_turn_delay"], attributes=stt_attrs)
     if "on_user_turn_completed_delay" in report:

@@ -2443,9 +2443,11 @@ class AgentActivity(RecognitionHooks):
             timestamp=time.time(),
             end_of_utterance_delay=info.metrics.end_of_turn_delay or 0.0,
             transcription_delay=info.metrics.transcription_delay or 0.0,
-            first_interim_delay=info.metrics.first_interim_delay or 0.0,
+            first_interim_delay=info.metrics.first_interim_delay,
+            first_interim_status=info.metrics.first_interim_status,
             on_user_turn_completed_delay=on_user_turn_completed_delay,
             speech_id=speech_handle.id,
+            utterance_id=info.metrics.utterance_id,
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
@@ -4313,6 +4315,9 @@ class AgentActivity(RecognitionHooks):
 
         if info.metrics.first_interim_delay is not None:
             metrics_report["first_interim_delay"] = info.metrics.first_interim_delay
+
+        if info.metrics.first_interim_status is not None:
+            metrics_report["first_interim_status"] = info.metrics.first_interim_status
 
         if info.metrics.end_of_turn_delay is not None:
             metrics_report["end_of_turn_delay"] = info.metrics.end_of_turn_delay

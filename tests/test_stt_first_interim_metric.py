@@ -16,6 +16,7 @@ def test_first_interim_delay_uses_speech_onset() -> None:
         now=15.0,
     )
     assert metrics.first_interim_delay == pytest.approx(0.25)
+    assert metrics.first_interim_status == "received"
 
 
 def test_first_interim_delay_is_unavailable_without_interim() -> None:
@@ -27,3 +28,4 @@ def test_first_interim_delay_is_unavailable_without_interim() -> None:
         now=15.0,
     )
     assert metrics.first_interim_delay is None
+    assert metrics.first_interim_status == "absent"
