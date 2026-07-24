@@ -130,9 +130,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     AMD auto-plays ``screening_message`` and keeps listening for the next greeting; when a
     voicemail is detected it auto-plays ``voicemail_message``. If no ``screening_message``
     was provided, ``machine-screening`` is returned as the terminal verdict (AMD can't
-    advance the prompt). Otherwise only the terminal verdict (``human`` / ``machine-vm`` /
-    ``machine-unavailable`` / ``uncertain``) is surfaced — ``execute()`` returns it once,
-    carrying ``screening_detected`` and ``message_playback``.
+    advance the prompt). Otherwise only the terminal verdict (``human`` / ``machine-ivr`` /
+    ``machine-vm`` / ``machine-unavailable`` / ``uncertain``) is surfaced — ``execute()``
+    returns it once, carrying ``screening_detected`` and ``message_playback``.
 
     The recommended pattern is the async context manager::
 
@@ -160,7 +160,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             AMD-tuned model.
         screening_message: Response played when a ``machine-screening`` prompt is
             detected. A literal string (spoken via ``session.say``) or a callable
-            ``(prediction) -> SpeechHandle | str | None`` (return ``None`` to skip).
+            ``(prediction) -> SpeechHandle | str | None`` (return ``None`` to skip
+            playout and return the screening verdict).
             When omitted, a ``machine-screening`` prompt is returned as the terminal
             verdict instead of being responded to.
         voicemail_message: Message played when a voicemail is detected. Same shape as
@@ -254,9 +255,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         """Run AMD and return the terminal result.
 
         While executing, speech playout authorization is locked (except while AMD plays a
-        screening / voicemail message). Screening and IVR turns are driven internally; this
-        returns once a terminal verdict (``human`` / ``machine-vm`` / ``machine-unavailable``
-        / ``uncertain``) is reached, then resumes authorization so the agent can speak.
+        screening / voicemail message). Screening turns are driven internally; IVR
+        navigation is started when enabled, then ``machine-ivr`` is returned. Authorization
+        resumes when a terminal verdict is reached so the agent can speak.
         """
         await self._terminal_ready.wait()
 
@@ -547,24 +548,23 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         """Drive screening turns internally and surface a single terminal verdict.
 
         ``machine-screening`` plays ``screening_message`` and keeps listening (but is
-        terminal when no ``screening_message`` was supplied — there's no way to advance the
-        prompt); ``machine-ivr`` starts IVR navigation and keeps listening. Every other
-        category (``human`` / ``machine-vm`` / ``machine-unavailable`` / ``uncertain``) is
-        terminal — a voicemail additionally plays ``voicemail_message`` before finishing.
-        Only the continue paths need an active prompt/menu to recur, so the loop terminates
-        without a turn cap.
+        terminal when no message is played — there's no way to advance the prompt).
+        ``machine-ivr`` starts IVR navigation when enabled and is terminal. A voicemail
+        additionally plays ``voicemail_message`` before finishing.
         """
         classifier = self._classifier
         if classifier is None:
             return
+        current_verdict: AMDPredictionEvent | None = None
         try:
             while not self._closed:
                 await classifier._verdict_ready.wait()
                 if self._closed:
                     return
-                verdict = classifier._verdict_result
-                if verdict is None:
+                current_verdict = classifier._verdict_result
+                if current_verdict is None:
                     return
+                verdict = current_verdict
 
                 if verdict.category == AMDCategory.MACHINE_SCREENING:
                     self._screening_detected = True
@@ -576,9 +576,14 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                         # no-speech timeout.
                         self._finish(verdict, "not_played")
                         return
+                    await classifier.reset(start_timers=False)
+                    playback = await self._play(self._screening_message, verdict)
+                    if playback == "not_played":
+                        self._finish(verdict, playback)
+                        return
+                    classifier.start_turn_timers()
                     # remember the screening playback so a later human verdict reports it
-                    self._last_playback = await self._play(self._screening_message, verdict)
-                    await classifier.reset()
+                    self._last_playback = playback
                     continue
 
                 if verdict.category == AMDCategory.MACHINE_IVR:
@@ -586,8 +591,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                         await self._session.interrupt(force=True)
                     if self._ivr_detection:
                         await self._session._start_ivr_detection(transcript=verdict.transcript)
-                    await classifier.reset()
-                    continue
+                    self._finish(verdict, self._last_playback)
+                    return
 
                 # terminal verdict
                 if verdict.is_machine and self._interrupt_on_machine:
@@ -606,12 +611,16 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             logger.exception("amd detection loop failed")
             # always release execute(): a hang is worse than surfacing an error verdict.
             if not self._terminal_ready.is_set():
-                verdict = classifier._verdict_result or AMDPredictionEvent(
-                    speech_duration=0.0,
-                    category=AMDCategory.UNCERTAIN,
-                    reason="detection_error",
-                    transcript="",
-                    delay=0.0,
+                verdict = (
+                    classifier._verdict_result
+                    or current_verdict
+                    or AMDPredictionEvent(
+                        speech_duration=0.0,
+                        category=AMDCategory.UNCERTAIN,
+                        reason="detection_error",
+                        transcript="",
+                        delay=0.0,
+                    )
                 )
                 self._finish(verdict, self._last_playback)
 

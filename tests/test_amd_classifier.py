@@ -930,6 +930,7 @@ class TestAMDClassifier:
         assert results[0].reason == "participant_missing"
         assert clf._verdict_ready.is_set()
 
+
 class TestAMDClassifierReset:
     """reset() re-arms the classifier for the next internal screening turn."""
 
@@ -973,6 +974,36 @@ class TestAMDClassifierReset:
         await asyncio.sleep(0.4)
         clf.on_end_of_turn()
         assert len(results) == 2
+
+        await clf.close()
+
+    async def test_reset_replaces_the_input_channel(self) -> None:
+        clf = _make_classifier()
+        clf.start_listening()
+        old_input_ch = clf._input_ch
+        old_input_ch.send_nowait("stale transcript")
+
+        await clf.reset()
+
+        assert old_input_ch.closed is True
+        assert clf._input_ch is not old_input_ch
+        assert clf._input_ch.closed is False
+
+        await clf.close()
+
+    async def test_reset_can_listen_without_starting_turn_timers(self) -> None:
+        clf = _make_classifier()
+
+        await clf.reset(start_timers=False)
+
+        assert clf.listening is True
+        assert clf._detection_timeout_timer is None
+        assert clf._no_speech_timer is None
+
+        clf.start_turn_timers()
+
+        assert clf._detection_timeout_timer is not None
+        assert clf._no_speech_timer is not None
 
         await clf.close()
 
