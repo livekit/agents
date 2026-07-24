@@ -56,7 +56,10 @@ class RestaurantToolsMixin:
         except RestaurantReservationNotCreatedError:
             return (
                 "No reservation was created because a phone number is required. "
-                "| tell the caller the table is not reserved; do not use success wording"
+                "| tell the caller the table is not reserved; do not use success wording. "
+                "If they ask to hold the table or make an exception without a number: say "
+                "no table is held and invite them to call back with one - do not offer to "
+                "connect or transfer them to the restaurant."
             )
         return (
             f"You're set for {speak_time(reservation.time)} on "
