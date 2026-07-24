@@ -20,8 +20,10 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-
 import openai
+from openai.types import ReasoningEffort
+from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
+
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
@@ -36,13 +38,12 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types import ReasoningEffort
-from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
 from .models import (
     CerebrasChatModels,
     ChatModels,
     CometAPIChatModels,
+    CrusoeChatModels,
     DeepSeekChatModels,
     NebiusChatModels,
     OctoChatModels,
@@ -878,6 +879,50 @@ class LLM(llm.LLM):
         if api_key is None:
             raise ValueError(
                 "Nebius API key is required, either as argument or set NEBIUS_API_KEY environmental variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
+    @staticmethod
+    def with_crusoe(
+        *,
+        model: str | CrusoeChatModels = "zai/GLM-5.2",
+        api_key: str | None = None,
+        base_url: str = "https://api.inference.crusoecloud.com/v1/",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of Crusoe LLM.
+
+        ``api_key`` must be set to your Crusoe API key, either using the argument or by setting
+        the ``CRUSOE_API_KEY`` environmental variable.
+        """
+
+        api_key = api_key or os.environ.get("CRUSOE_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "Crusoe API key is required, either as argument or set CRUSOE_API_KEY environmental variable"  # noqa: E501
             )
 
         return LLM(
