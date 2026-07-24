@@ -91,7 +91,6 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
-    from .presets import Preset
     from .transcription.text_transforms import TextTransforms
 
 
@@ -154,23 +153,70 @@ class SessionConnectOptions:
     """Maximum number of consecutive unrecoverable errors from stt, llm, or tts."""
 
 
+class NonverbalOptions(TypedDict, total=False):
+    """Non-verbal vocalizations the TTS may produce (sounds that aren't words).
+
+    Omitted keys default to off, and together the keys cover every sound the
+    providers offer — a sound whose key is off is never advertised to the LLM.
+    Each key may later widen to ``bool | <Sound>Options`` (e.g.
+    ``laughing: bool | LaughingOptions``) for per-sound control without
+    breaking existing callers.
+    """
+
+    laughing: bool
+    """laugh, chuckle, giggle — and laugh-speak delivery"""
+    breathing: bool
+    """audible breath, inhale, exhale"""
+    sighing: bool
+    crying: bool
+    vocalizing: bool
+    """non-lexical voiced sounds — humming a tune, sing-song or sung delivery"""
+    mouth_sounds: bool
+    """tsk, tongue-click, lip-smack"""
+    reflex_sounds: bool
+    """cough, clearing the throat, yawn"""
+
+
+SpeechSteeringPreset = Literal["formal", "casual"]
+
+
+class SpeechSteeringOptions(TypedDict, total=False):
+    """Steers verbal delivery and non-verbal sounds in generated speech.
+
+    Without ``preset``, this dict is the complete spec and ``nonverbal_sounds``
+    is atomic: passing it replaces the default value entirely rather than
+    merging field-by-field.
+    """
+
+    preset: SpeechSteeringPreset
+    """Base preset; the other keys become sparse overrides merged onto it
+    (``nonverbal_sounds`` merges field-by-field)."""
+    disfluencies: bool
+    """Filler words such as "um" / "uh". On by default
+    (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out."""
+    nonverbal_sounds: NonverbalOptions
+    pace: Literal["slow", "normal", "fast"]
+
+
+DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(disfluencies=True)
+
+
 class ExpressiveOptions(TypedDict, total=False):
     """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
 
-    - ``{"preset": Preset.CASUAL}`` — a domain preset, resolved to the active
-      TTS provider's tuned tags (see ``voice.presets``).
-    - ``{"preset": ..., "tts_instructions_append": "..."}`` — a preset plus your own
-      rules appended after it resolves.
+    - ``{"speech_steering": {...}}`` — steer delivery and non-verbal sounds on top of
+      the provider-agnostic default instructions.
     - ``{"tts_instructions_template": "..."}`` — a fully custom prompt.
+    - ``{"tts_instructions_append": "..."}`` — your own rules appended to the template.
 
-    Any explicit template overrides the corresponding part of the resolved preset; unset
-    parts fall back to the resolved preset (or the provider-agnostic default).
+    Any explicit template overrides the default; unset parts fall back to the
+    provider-agnostic default.
     """
 
-    preset: Preset
+    speech_steering: SpeechSteeringOptions
     tts_instructions_template: Instructions | str
     tts_instructions_append: str
 
@@ -181,7 +227,68 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
         "Use them when appropriate to make your speech more expressive and natural:\n\n"
         "{tts.markup.llm_instructions}"
     ),
+    speech_steering=DEFAULT_SPEECH_STEERING_OPTIONS,
 )
+
+
+def _append_instructions(template: Instructions | str, extra: str) -> Instructions:
+    # concatenate the *raw* template text so any {placeholders} survive until render()
+    if isinstance(template, Instructions):
+        return Instructions(
+            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+        )
+    return Instructions(template + "\n\n" + extra)
+
+
+def _resolve_speech_steering(steering: SpeechSteeringOptions) -> SpeechSteeringOptions:
+    """Resolve a ``preset`` reference; the returned dict never contains ``preset``."""
+    if (name := steering.get("preset")) is None:
+        return steering
+    from .presets import _BY_NAME
+
+    base = _BY_NAME.get(name)
+    if base is None:
+        raise ValueError(f"unknown speech steering preset {name!r}, available: {sorted(_BY_NAME)}")
+    merged: SpeechSteeringOptions = {**base, **steering}
+    merged.pop("preset", None)
+    base_sounds = base.get("nonverbal_sounds")
+    override_sounds = steering.get("nonverbal_sounds")
+    if base_sounds is not None and override_sounds is not None:
+        merged["nonverbal_sounds"] = {**base_sounds, **override_sounds}
+    return merged
+
+
+def resolve_expressive_options(
+    expr: ExpressiveOptions, *, provider_key: str, default: ExpressiveOptions
+) -> ExpressiveOptions:
+    """Resolve a user ``ExpressiveOptions`` to a concrete options dict for a provider.
+
+    Starts from ``default``, renders ``speech_steering`` into per-provider delivery
+    guidelines appended to the template, then applies any explicit
+    ``tts_instructions_template`` override and ``tts_instructions_append`` (last, so
+    the user's free-form rules always win). Steering fields the user's
+    (preset-resolved) steering doesn't set fall back to ``default``'s
+    ``speech_steering``, so an explicit value — from the user or a preset — always
+    wins over a default. The returned dict always has ``tts_instructions_template``
+    and ``speech_steering`` (never ``tts_instructions_append``); ``speech_steering``
+    passes through so injection can filter the advertised markup vocabulary
+    (``Markup.llm_instructions``) with it.
+    """
+    from ..tts import _provider_format
+
+    tts_tmpl = expr.get("tts_instructions_template", default["tts_instructions_template"])
+
+    steering: SpeechSteeringOptions = {
+        **default.get("speech_steering", {}),
+        **_resolve_speech_steering(expr.get("speech_steering") or {}),
+    }
+    if fragment := _provider_format.steering_instructions(provider_key, steering):
+        tts_tmpl = _append_instructions(tts_tmpl, fragment)
+
+    if append := expr.get("tts_instructions_append"):
+        tts_tmpl = _append_instructions(tts_tmpl, append)
+
+    return {"tts_instructions_template": tts_tmpl, "speech_steering": steering}
 
 
 @dataclass

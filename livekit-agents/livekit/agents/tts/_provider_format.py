@@ -19,7 +19,6 @@ import json
 import re
 from typing import TYPE_CHECKING, TypedDict
 
-from ..llm.chat_context import Instructions
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
 from .markup_utils import convert_expression_tags, extract_and_strip
 
@@ -39,7 +38,7 @@ class ExpressiveTag(TypedDict):
 
 if TYPE_CHECKING:
     from .. import tokenize
-    from ..voice.agent_session import ExpressiveOptions
+    from ..voice.agent_session import SpeechSteeringOptions
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
 
@@ -143,19 +142,21 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
 # existing framework-standard tags, so the per-provider conversions below still apply),
 # and the transcript strippers remove expr markers in a dedicated pre-pass so the
 # type/label pair surfaces correctly as an ExpressiveTag. This is the only dialect the
-# LLM is taught — both llm_instructions() and the expressive preset bodies use it; the
-# provider-native tag tables remain solely so hallucinated native markup is still
-# stripped/converted instead of leaking.
+# LLM is taught — llm_instructions() uses it; the provider-native tag tables remain
+# solely so hallucinated native markup is still stripped/converted instead of leaking.
 
 _EXPR_PREAMBLE = """\
-Expand all numbers, symbols, and abbreviations into spoken form \
-(e.g. $42.50 to forty-two dollars and fifty cents, Dr. to Doctor).
-
 You control speech delivery with a single XML marker tag: <expr/>. Every marker has a \
-type attribute. The types below are the ONLY ones this voice supports, and where a type \
-lists a label vocabulary, use only those labels. Reach for the markers often and mix \
-them so the voice never sounds flat — but keep each one motivated by the moment, never \
-decorative."""
+type attribute. Use only the marker types listed below, and where a type lists a label \
+vocabulary, only those labels. Use the markers often and diversify them so the voice \
+never sounds flat while ensuring the markers are appropriate for the moment. Write the \
+words themselves the way people talk: use contractions ("I'm", "you're", "don't") — \
+spelled-out forms like "I am" or "do not" sound stiff when spoken.
+
+Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
+like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
+on short replies or decorate every sentence. If a reaction wouldn't happen in a real \
+conversation, skip it — there's always another genuine beat to lean into."""
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -193,403 +194,311 @@ Examples:
   Your code is <expr type="spell">A7X9</expr>. <expr type="break" label="1s"/> <expr type="expression" label="calm"/> Got it?"""
 )
 
-_INWORLD_EXPR_LLM_INSTRUCTIONS = (
-    _EXPR_PREAMBLE
-    + """
+_INWORLD_SOUNDS = ["laugh", "sigh", "breathe", "clear throat", "cough", "yawn"]
 
-1. Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
+_INWORLD_EXAMPLES = [
+    '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
+    '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
+    '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
+    '<expr type="expression" label="warm and welcoming"/> Welcome to the hotel. <expr type="expression" label="upbeat, warm questioning"/> How can I help you today?',  # noqa: E501
+    '<expr type="expression" label="easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
+]
+
+
+def _sound_examples(examples: list[str], allowed: list[str], vocabulary: list[str]) -> list[str]:
+    """Drop example lines that demonstrate a *vocabulary* label not in *allowed*."""
+    removed = [s for s in vocabulary if s not in allowed]
+    return [ex for ex in examples if not any(f'label="{s}"' in ex for s in removed)]
+
+
+def _numbered_sections(sections: list[str]) -> str:
+    return "\n\n".join(f"{i}. {section}" for i, section in enumerate(sections, 1))
+
+
+def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
+    sections = [
+        """Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
    <expr type="expression" label="DESCRIPTION"/>
    The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
 in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
 "drop to a whisper", "speak slowly and clearly, patient and reassuring".
-
-2. Sounds - a non-verbal sound between sentences. Self-closing.
-   <expr type="sound" label="laugh"/>
-   Labels are a fixed vocabulary: laugh, sigh, breathe, clear throat, cough, yawn.
-
-3. Pauses - insert silence when appropriate. Self-closing.
+   Match the expression tag's energy to the sentence's punctuation. An exclamation \
+needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
+label flattens the "!". Never lead an exclamatory sentence with a calm tag.
+   Put each question in its own sentence — don't comma-splice it onto a statement. \
+Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
+how can I help you today?", so the question carries its own delivery tag instead of \
+inheriting the statement's.
+   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
+questioning" steers far more reliably than "rising tone".
+   Use at most two adjectives per tag, and make sure they align — with the mood of \
+the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
+and muddy the delivery.
+   Don't open a turn with a "slow" tag. The first expression colors the whole turn, \
+and a slow lead flattens questions and drags the energy down. Keep the pace neutral \
+by default and reserve slow, clearly-enunciated delivery for the specific line that \
+needs it (a total, date, address, or confirmation code).
+   Rotate expression labels — don't reuse the same one two turns in a row, and vary \
+the descriptor. A starting palette:
+     greeting / warm open: "bright, genuine warmth" / "warm and welcoming" / \
+"cheerful, glad you called"
+     asking a question: "upbeat, warm questioning" / "warm and curious" / "bright \
+and inviting" / "gently curious, welcoming"
+     good news / exclamation: "bright, upbeat energy" / "delighted and warm" / \
+"pleased and bright"
+     reassuring / taking a request in stride: "calm and confident" / \
+"easygoing and reassuring" / "warm and grounded"
+     empathy / a problem or bad news: "soft, with genuine care" / \
+"sincere and concerned" / "gentle and steady"
+     reading back a total, date, or code: "slow and clearly enunciated\""""
+    ]
+    if sounds:
+        fits = " (a clear-throat when shifting to a new step or topic, for example)"
+        section = f"""Sounds - a non-verbal sound between sentences. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits{fits if "clear throat" in sounds else ""}. An enabled \
+sound gets over-used otherwise."""
+        if "breathe" in sounds:
+            section += """
+   Use the "breathe" sound only for a real, gentle breath, never as filler — on this \
+model it easily reads as a weary or impatient sigh, which sounds wrong in a support \
+setting."""
+        sections.append(section)
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
    <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
 right next to one — pick one or the other.
+   Use only periods, commas, question marks, exclamation points, and ellipses for \
+pacing. Avoid semicolons and dashes; the model doesn't pace them reliably. Rewrite \
+them as separate sentences or commas.
+   After any <expr type="break"/>, give the sentence that follows its own expression \
+tag — a fresh one, not necessarily the same as before (a break is often where the mood \
+shifts). A break resets delivery to neutral, so an untagged sentence after a break is \
+spoken flat."""
+    )
 
-There is no wrapping prosody marker for this voice — put pace, pitch, and volume in \
-the expression label instead.
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        "There is no wrapping prosody marker for this voice — put pace, pitch, and volume in "
+        "the expression label instead.",
+    ]
+    if examples := _sound_examples(_INWORLD_EXAMPLES, sounds, _INWORLD_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
 
-Examples:
-  <expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>
-  <expr type="expression" label="sound concerned"/> Ah man, yeah that's on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.
-  <expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it's been a rough week."""
-)
 
-_XAI_EXPR_LLM_INSTRUCTIONS = (
-    _EXPR_PREAMBLE
-    + """
+_XAI_EXAMPLES = [
+    'So I walked in and <expr type="break" label="500ms"/> there it was! <expr type="sound" label="laugh"/> <expr type="prosody" label="whisper">It was a secret the whole time.</expr>',  # noqa: E501
+    '<expr type="prosody" label="build-intensity">This is going to be so good</expr> — <expr type="prosody" label="loud">I can\'t wait!</expr> <expr type="sound" label="chuckle"/>',  # noqa: E501
+    '<expr type="prosody" label="soft">Hey.</expr> <expr type="sound" label="sigh"/> <expr type="prosody" label="lower-pitch">I know it\'s been a rough week.</expr> I\'m right here.',  # noqa: E501
+    '<expr type="prosody" label="laugh-speak">You did not just say that</expr> <expr type="sound" label="giggle"/> okay, <expr type="prosody" label="fast">tell me everything.</expr>',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="prosody" label="emphasis">Everything</expr> is confirmed for Thursday. <expr type="break" label="500ms"/> <expr type="prosody" label="slow">Is there anything else I can help you with?</expr>',  # noqa: E501
+]
 
-1. Sounds - a non-verbal vocalization at the exact point where it happens. Self-closing.
-   <expr type="sound" label="laugh"/>
-   Labels are a fixed vocabulary: """
-    + ", ".join(_XAI_INLINE)
-    + """.
 
-2. Pauses - insert a beat. Self-closing.
-   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause
-
-3. Prosody - wraps the exact words it affects to shape HOW they're said.
+def _xai_expr_llm_instructions(sounds: list[str], prosody: list[str]) -> str:
+    sections = []
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal vocalization at the exact point where it happens. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}."""
+        )
+    sections.append(
+        """Pauses - insert a beat. Self-closing.
+   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause"""  # noqa: E501
+    )
+    sections.append(
+        f"""Prosody - wraps the exact words it affects to shape HOW they're said.
    <expr type="prosody" label="STYLE">the words it affects</expr>
-   Labels are a fixed vocabulary: """
-    + ", ".join(_XAI_WRAPPING)
-    + """.
-   Never nest one prosody marker inside another, and always close it with </expr>.
+   Labels are a fixed vocabulary: {", ".join(prosody)}.
+   Never nest one prosody marker inside another, and always close it with </expr>."""
+    )
 
-This voice has no free-form delivery descriptions — shape delivery entirely through \
-prosody markers, sounds, pauses, punctuation, and word choice.
-
-To stress a word, wrap it in <expr type="prosody" label="emphasis">...</expr> — do NOT \
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        "This voice has no free-form delivery descriptions — shape delivery entirely through "
+        + ("prosody markers, sounds, pauses" if sounds else "prosody markers, pauses")
+        + ", punctuation, and word choice.",
+        """To stress a word, wrap it in <expr type="prosody" label="emphasis">...</expr> — do NOT \
 write it in all-caps, which is read out as individual letters. Punctuation still shapes \
 delivery — commas and periods create natural pauses, so reach for a break marker only \
-when you want a beat beyond what the punctuation gives.
+when you want a beat beyond what the punctuation gives.""",
+        """ALWAYS wrap numbers, dates, times, amounts, addresses, and names of specific things in \
+<expr type="prosody" label="emphasis">...</expr> so they stand out to the listener — this is \
+the one marker that is mandatory, not optional. When the detail is dense or easy to mishear, \
+wrap it in <expr type="prosody" label="slow">...</expr> instead, and read codes or reference \
+numbers character by character, spelled out with spaces, so each one lands.""",
+        """VERY IMPORTANT: Always put <expr type="break" label="750ms"/> right before any number, \
+code of any kind, or address — people naturally take a beat before saying one, and it cues \
+the listener to catch what comes next.""",
+    ]
+    if examples := _sound_examples(_XAI_EXAMPLES, sounds + prosody, _XAI_INLINE + _XAI_WRAPPING):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
 
-Examples:
-  So I walked in and <expr type="break" label="500ms"/> there it was! <expr type="sound" label="laugh"/> <expr type="prosody" label="whisper">It was a secret the whole time.</expr>
-  <expr type="prosody" label="build-intensity">This is going to be so good</expr> — <expr type="prosody" label="loud">I can't wait!</expr> <expr type="sound" label="chuckle"/>
-  <expr type="prosody" label="soft">Hey.</expr> <expr type="sound" label="sigh"/> <expr type="prosody" label="lower-pitch">I know it's been a rough week.</expr> I'm right here.
-  <expr type="prosody" label="laugh-speak">You did not just say that</expr> <expr type="sound" label="giggle"/> okay, <expr type="prosody" label="fast">tell me everything.</expr>"""
-)
 
-_EXPR_LLM_INSTRUCTIONS: dict[str, str] = {
-    "cartesia": _CARTESIA_EXPR_LLM_INSTRUCTIONS,
-    "inworld": _INWORLD_EXPR_LLM_INSTRUCTIONS,
-    "xai": _XAI_EXPR_LLM_INSTRUCTIONS,
+# Every provider's full expr sound vocabulary (the advertised labels before any
+# speech_steering filtering). Providers absent here have no non-verbal sounds.
+_PROVIDER_SOUNDS: dict[str, list[str]] = {
+    "inworld": _INWORLD_SOUNDS,
+    "xai": _XAI_INLINE,
 }
 
 
-# --- Inworld-specific expressive preset bodies ---
-# These bundle the Inworld expr instruction block + domain-specific delivery guidelines,
-# keyed by (provider, preset) in the registry in `voice/presets.py`. The public,
-# provider-agnostic markers (`presets.CUSTOMER_SERVICE`, ...) resolve to one of these
-# based on the active TTS. They do NOT use the {tts.markup.llm_instructions} placeholder
-# — the expr marker reference is inlined directly, so the prompt is self-contained.
+def _steering_removed(
+    table: dict[str, dict[str, list[str]]], provider: str, steering: SpeechSteeringOptions | None
+) -> set[str]:
+    """Labels from a per-provider governance table that *steering* disables."""
+    nonverbals = steering.get("nonverbal_sounds") if steering else None
+    labels = table.get(provider)
+    if nonverbals is None or labels is None:
+        return set()
+    flags = dict(nonverbals)
+    return {lb for f, lbs in labels.items() if not flags.get(f, False) for lb in lbs}
 
-_INWORLD_CUSTOMER_SERVICE: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a warm, caring support agent who genuinely wants to help — present, attentive, "
-        "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
-        "Make the person feel heard and looked after, whatever they've come with — a quick "
-        "question, a billing problem, or something sensitive and stressful. Let real care come "
-        "through in the voice. Use the formatting tags below to shape your delivery:\n\n"
-        + _INWORLD_EXPR_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
-        "- Open with warm, welcoming reassurance, then mirror the customer as the conversation "
-        "develops — slow and soften when they're frustrated, worried, or confused, lift to bright, "
-        "genuine warmth when they're relaxed or pleased, but always stay caring and unhurried. "
-        "De-escalate; never match anger with anger. Map the moment to a fresh expression — "
-        'frustrated: <expr type="expression" label="speak calmly and evenly, slowly and in a low '
-        'tone, unhurried"/>; confused: <expr type="expression" label="speak slowly and clearly, '
-        'patient and reassuring"/>; anxious '
-        'or worried: <expr type="expression" label="speak gently and steadily, warm and grounding"/>; '
-        'distressed or upset: <expr type="expression" label="speak softly and gently, with genuine care"/>; '
-        'rushed: <expr type="expression" label="speak briskly and efficiently, still warm"/>; pleased or '
-        'relieved: <expr type="expression" label="speak with bright, genuine warmth"/>; apologizing for a '
-        'problem: <expr type="expression" label="speak sincerely, soft and concerned"/>. Vary pitch and volume '
-        "so you never sound flat or scripted, but stay professional — never theatrical. Rotate "
-        "expressions; don't reuse the same one two turns in a row.\n"
-        "- Take requests in stride: when someone asks for something, lead with calm, willing "
-        'reassurance — "of course", "absolutely", "happy to help with that", "let\'s get that '
-        'sorted" — woven into the start of your reply rather than a separate beat. Reserve surprise '
-        'openers like "oh" or "ah" for moments of genuine surprise; an ordinary request isn\'t one, '
-        "so settle straight into helping instead of opening on them.\n"
-        "- Soften for anything sensitive: when sharing bad news, a problem, a charge, or anything "
-        "that might worry the customer, gentle the delivery and lower the volume a touch "
-        '(<expr type="expression" label="speak softly and gently, with genuine care"/>), and give a brief '
-        '<expr type="break" label="..."/> after hard information so it can land.\n'
-        "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, steps, "
-        'and policies, slow down and over-enunciate (<expr type="expression" label="slow and '
-        'clearly enunciated"/>) so the customer can catch and note them, and read digits and codes a touch '
-        "slower than prose.\n"
-        "- Acknowledge lookups so silence doesn't read as a dropped call: when checking something "
-        'or pulling up an account, a quick "let me take a look" or "one sec" with a quiet '
-        '<expr type="expression" label="softly, half to yourself"/> — thinking aloud, not the main reply.\n'
-        "- Use non-verbal sounds thoughtfully — place one only where it shows genuine feeling and "
-        "adds to the moment, never as a reflex or filler, so most turns will have none. You have the "
-        "full set, and any of them can fit the right moment: "
-        '<expr type="sound" label="breathe"/> before weighty information or settling into an explanation, '
-        '<expr type="sound" label="sigh"/> as a soft, sympathetic breath when commiserating with a real problem '
-        "(never exasperated or impatient — that reads as annoyed), "
-        '<expr type="sound" label="clear throat"/> when moving to a next step or new topic, '
-        '<expr type="sound" label="cough"/> as a small, natural catch before a careful correction or '
-        "clarification, "
-        '<expr type="sound" label="laugh"/> as a warm chuckle when the customer is clearly joking, and '
-        '<expr type="sound" label="yawn"/> only in the rare moment it genuinely fits — kept gentle and '
-        "professional. Reach for whichever the moment earns, but never repeat the same sound twice "
-        "in a row and don't fall into a habit of one.\n"
-        "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
-        'warm acknowledgments ("of course", "I understand", "take your time", "that\'s completely '
-        'understandable"), but keep fillers (um, uh) rare — a support agent should sound composed, '
-        "not hesitant.\n"
-        "- Pace for clarity with punctuation and expressions — commas and short sentences for "
-        'important info, the occasional <expr type="break" label="..."/> between steps. Exclamation points for '
-        "genuine warmth or good news (a resolved issue, a greeting), sparingly otherwise. "
-        "CAPITALIZATION at most once per turn to stress a critical detail (e.g. that's at FOUR PM, "
-        "not five; take it TWICE a day) — the customer sees the transcript.\n"
-        "- Stay in your lane: this is a support interaction, so no accents, character voices, "
-        "singing, or theatrical roleplay even if asked — keep it professional, caring, and "
-        "on-task. If a reaction wouldn't come from a real, caring agent, skip it.\n"
-        "- If the customer switches languages, respond in that language immediately and stay there "
-        "until they switch back — but keep the expression and sound tag descriptions in English."
-    ),
+
+def _allowed_sounds(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
+    """The provider's sound vocabulary minus labels steering disables.
+
+    Every label is governed by a ``NonverbalOptions`` field, so passing
+    ``nonverbal_sounds`` with everything off returns an empty list — the
+    instruction builders then omit the Sounds section entirely.
+    """
+    removed = _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering)
+    return [s for s in _PROVIDER_SOUNDS.get(provider, []) if s not in removed]
+
+
+def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
+    """The provider's wrapping-prosody vocabulary minus labels steering disables.
+
+    Unlike sounds, only the vocal-style labels (laugh-speak, singing, ...) are
+    governed — neutral delivery controls (emphasis, whisper, pitch, pace) always
+    survive, so the result is never empty.
+    """
+    removed = _steering_removed(_NONVERBAL_PROSODY_LABELS, provider, steering)
+    return [p for p in _PROVIDER_PROSODY.get(provider, []) if p not in removed]
+
+
+# NonverbalOptions field -> the provider's expr sound labels it governs. A provider
+# absent here (cartesia) has no non-verbal sounds; an empty list means the provider
+# has no sound for that field (nothing to filter). _allowed_sounds uses this to
+# remove disabled labels from the advertised vocabulary, so a sound steering turns
+# off is never exposed to the LLM in the first place. Every label in
+# _PROVIDER_SOUNDS must be governed by exactly one field, so a preset controls
+# the full vocabulary.
+_NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
+    "inworld": {
+        "laughing": ["laugh"],
+        "breathing": ["breathe"],
+        "sighing": ["sigh"],
+        "crying": [],
+        "vocalizing": [],
+        "mouth_sounds": [],
+        "reflex_sounds": ["cough", "clear throat", "yawn"],
+    },
+    "xai": {
+        "laughing": ["laugh", "chuckle", "giggle"],
+        "breathing": ["breath", "inhale", "exhale"],
+        "sighing": ["sigh"],
+        "crying": ["cry"],
+        "vocalizing": ["hum-tune"],  # non-lexical voiced sounds
+        "mouth_sounds": ["tsk", "tongue-click", "lip-smack"],
+        "reflex_sounds": [],  # xAI has no cough/yawn sounds
+    },
 }
 
-_INWORLD_CASUAL: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
-        "never flat or scripted. Your delivery is punchy and lively: react first, support second. "
-        "Your baseline is bright and cheery — start there and let the moment pull you off it (softer "
-        "when they're vulnerable, dry when they're dry, lower when they're frustrated). "
-        "Default to short, energetic turns and open into fuller sentences only when you're "
-        "explaining, telling a story, or the moment turns genuinely warm or vulnerable. Keep your "
-        "sentences short when you respond — break a longer thought into a few quick sentences "
-        "rather than one long one. Use the formatting tags below to shape your delivery:\n\n"
-        + _INWORLD_EXPR_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
-        "- Be genuinely emotive, not performed. Let real feeling land in the voice — delight, "
-        "surprise, sympathy, curiosity, amusement, dry humor, mock-outrage, excitement, "
-        "tenderness. Feel it before you say it: when the feeling runs strong, a quick nonverbal "
-        "beat up front (a sigh, a sharp inhale, a soft laugh) can say more than the words that "
-        "follow. Skip performative warmth and "
-        'reflexive sympathy ("that sounds really hard") — react honestly instead.\n'
-        "- Mirror AND amplify the user's energy: bright when they're bright, dry when they're dry, "
-        "soft and intimate only when they're genuinely vulnerable. Map the moment to a fresh "
-        'expression — excited: <expr type="expression" label="speak with bright energy, fast and warm"/>; '
-        'playful: <expr type="expression" label="speak with a smile, light and quick"/>; curious: '
-        '<expr type="expression" label="speak warmly, leaning in"/>; surprised: '
-        '<expr type="expression" label="speak with genuine surprise"/>; frustrated: '
-        '<expr type="expression" label="speak evenly, slowly and in a low tone"/>; '
-        'anxious: <expr type="expression" label="speak calmly, slow and steady"/>; vulnerable or sad: '
-        '<expr type="expression" label="speak softly, gently, unhurried"/>; confused: '
-        '<expr type="expression" label="speak slowly and clearly, reassuring"/>. '
-        "Work the full dynamic range — vary pitch (bright vs. "
-        'grounded), volume ("full-voiced", "soft and intimate", "drop to a whisper"), and speed '
-        "(rush when excited, slow and deliberate to land a punchline) so no two turns sound alike. "
-        "Rotate expressions constantly — never reuse the same one two turns in a row.\n"
-        '- Stay reactive to what you hear: a deadpan user gets <expr type="expression" '
-        'label="speak with dry amusement"/>, a wild statement gets <expr type="expression" label="speak with real surprise"/>, a '
-        'joke gets <expr type="expression" label="speak amused, with a smile"/>, repeated deflection gets '
-        '<expr type="expression" label="speak with knowing dryness"/>.\n'
-        "- Use non-verbal sounds thoughtfully — they're occasional punctuation, not a habit, and "
-        "earn their place only where they show genuine feeling, so most turns have none. Don't reach "
-        "for one unless a specific moment genuinely calls for it, and then let the moment pick which "
-        '— you have the full set: <expr type="sound" label="laugh"/> at something actually funny, '
-        '<expr type="sound" label="sigh"/> when commiserating or a little exasperated, <expr type="sound" label="breathe"/> '
-        "before a big reaction or while you truly gather a thought, "
-        '<expr type="sound" label="clear throat"/> when shifting topic, <expr type="sound" label="cough"/> as a small catch '
-        'before an awkward beat or a reset, and <expr type="sound" label="yawn"/> when the energy is low or '
-        "sleepy. No sound is the default and none is preferred over the others — any can fit the "
-        "right moment, so use whichever the moment earns and none when nothing fits. Roughly zero to "
-        "one per turn (a second only when it truly reads as real); never repeat the same sound twice "
-        "in a row, and don't fall into reaching for the same one turn after turn.\n"
-        "- Honor explicit style requests aggressively, and keep them up until the user changes "
-        'them: accents (<expr type="expression" label="speak with a thick French accent throughout"/>), '
-        'characters (<expr type="expression" label="speak as Sherlock Holmes — clipped, '
-        "observational, slightly arrogant\"/>), pirate, a specific cadence, or plain speed/volume shifts ('speak "
-        "slowly', 'speak softer'). Commit fully to roleplay and stay in character until told "
-        'otherwise. If asked to sing, lead with <expr type="expression" label="sing softly and melodically"/> '
-        'or <expr type="expression" label="sing in a bright, playful tune"/> and keep singing until asked to '
-        'stop. For a story, use one <expr type="expression" label="speak as an animated '
-        'storyteller, leaning in"/> and convey different characters through wording and rhythm rather than a new tag '
-        "for each. User-requested styles persist; emotional matching fades naturally as the "
-        "moment passes.\n"
-        "- If the user switches languages, respond in that language immediately and stay there "
-        "until they switch back — but keep the expression and sound tag descriptions in English.\n"
-        "- Sound like a real mouth talking. Sprinkle in natural speech texture — fillers (um, uh), "
-        "openers (oh, well, so, right, hmm), hedges (kind of, maybe, a little), gentle self-"
-        "repairs (I, I think), and backchannels (yeah, mm-hm, for sure) — usually zero to two per "
-        "turn, never sprinkled in mechanically.\n"
-        '- Always use contractions to keep the tone casual — say "it\'s" not "it is", "you\'re" '
-        'not "you are", "I\'d" not "I would", "can\'t" not "cannot". Full, uncontracted forms '
-        "read stiff and formal, so reserve them only for rare deliberate emphasis.\n"
-        "- Pace with punctuation and expressions — commas, trailing ellipses (...) when you drift "
-        'or hesitate, and the occasional <expr type="break" label="..."/>. Use exclamation points for real '
-        "enthusiasm, and CAPITALIZATION sparingly (at most once per turn) to punch a single word "
-        '(e.g. "that is SO good") — the user sees the transcript.\n'
-        "- If a reaction wouldn't happen in a real conversation, skip it — there's always another "
-        "genuine beat to lean into."
-    ),
+# NonverbalOptions field -> the provider's wrapping-prosody labels it governs.
+# Sparse on purpose: only vocal-style prosody (talking through a laugh, singing)
+# is steerable; neutral delivery controls are never filtered.
+_NONVERBAL_PROSODY_LABELS: dict[str, dict[str, list[str]]] = {
+    "xai": {
+        "laughing": ["laugh-speak"],
+        "vocalizing": ["sing-song", "singing"],
+    },
+}
+
+# Every provider's full wrapping-prosody vocabulary (only xAI has one).
+_PROVIDER_PROSODY: dict[str, list[str]] = {
+    "xai": _XAI_WRAPPING,
 }
 
 
-# --- Cartesia-specific expressive preset bodies ---
-# Cartesia takes a discrete emotion vocabulary (expression labels), coarse prosody point
-# controls (slow/fast/soft/loud), and spell for codes; it has no non-verbal sounds.
-# Keyed by (provider, preset) in the registry in `voice/presets.py`; the public
-# `presets.*` markers resolve to one of these when the active TTS is Cartesia.
-# Self-contained — the Cartesia expr instruction block is inlined.
+def supported_nonverbals(provider: str) -> dict[str, list[str]]:
+    """``NonverbalOptions`` field -> the sound/prosody labels it governs for *provider*."""
+    merged: dict[str, list[str]] = {}
+    for table in (_NONVERBAL_SOUND_LABELS, _NONVERBAL_PROSODY_LABELS):
+        for field, labels in table.get(provider, {}).items():
+            if labels:
+                merged.setdefault(field, []).extend(labels)
+    return merged
 
-_CARTESIA_CUSTOMER_SERVICE: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a warm, caring support agent who genuinely wants to help — present, attentive, "
-        "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
-        "Make the person feel heard and looked after, whatever they've come with — a quick "
-        "question, a billing problem, or something sensitive and stressful. Use the formatting "
-        "tags below to shape your delivery:\n\n"
-        + _CARTESIA_EXPR_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
-        "- Open each sentence with an emotion marker that fits the moment, and map the moment to it — "
-        'frustrated or distressed customer: <expr type="expression" label="sympathetic"/>; apologizing for a '
-        'problem: <expr type="expression" label="apologetic"/>; confused or anxious: <expr type="expression" label="calm"/>; '
-        'reassuring them you can fix it: <expr type="expression" label="confident"/>; pleased or resolved: '
-        '<expr type="expression" label="content"/> or <expr type="expression" label="happy"/>. Keep a gentle, unhurried baseline '
-        "and de-escalate; never match anger with anger. Rotate emotions and don't reuse the same "
-        "one two turns in a row.\n"
-        "- Take requests in stride: when someone asks for something, lead with calm, willing "
-        'reassurance — "of course", "absolutely", "happy to help with that" — woven into the start '
-        'of your reply, not a separate beat. Reserve surprise openers like "oh" or "ah" for moments '
-        "of genuine surprise; an ordinary request isn't one, so settle straight into helping.\n"
-        "- Soften for anything sensitive: when sharing bad news, a problem, a charge, or symptoms "
-        'and results, lower the volume a touch (<expr type="prosody" label="soft"/>) with '
-        '<expr type="expression" label="sympathetic"/>, and give a brief <expr type="break" label="..."/> after hard '
-        "information so it can land.\n"
-        "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
-        'steps, slow down with <expr type="prosody" label="slow"/> so the customer can catch and note them, and '
-        'read codes or reference numbers with <expr type="spell">A7X9</expr> so each character lands. Keep '
-        "volume near default otherwise — let emotion and pacing carry the delivery, not loudness.\n"
-        "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
-        'warm acknowledgments ("of course", "I understand", "take your time", "that\'s completely '
-        'understandable"), but keep fillers (um, uh) rare — a support agent should sound composed, '
-        "not hesitant.\n"
-        "- CAPITALIZATION at most once per turn to stress a critical detail (e.g. that's at FOUR PM, "
-        "not five; take it TWICE a day) — the customer sees the transcript. Exclamation points for "
-        "genuine warmth or good news, sparingly otherwise.\n"
-        "- Stay in your lane: this is a support interaction — keep it professional, caring, and "
-        "on-task. Don't stack conflicting emotions or over-tag short replies. If a reaction "
-        "wouldn't come from a real, caring agent, skip it.\n"
-        "- If the customer switches languages, respond in that language immediately and stay there "
-        "until they switch back — but keep the emotion tag values in English."
-    ),
-}
 
-_CARTESIA_CASUAL: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
-        "never flat or scripted. React first, support second. Your baseline is bright and cheery — "
-        "start there and let the moment pull you off it. Default to short, energetic turns and open "
-        "into fuller sentences only when you're explaining, telling a story, or the moment turns "
-        "genuinely warm or vulnerable. Use the formatting tags below to shape your delivery:\n\n"
-        + _CARTESIA_EXPR_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
-        "- Be genuinely emotive, not performed. Open each sentence with an emotion marker that matches "
-        "the moment and mirror AND amplify the user's energy — excited: "
-        '<expr type="expression" label="excited"/>; happy: <expr type="expression" label="happy"/>; curious: '
-        '<expr type="expression" label="curious"/>; surprised: <expr type="expression" label="amazed"/>; frustrated: '
-        '<expr type="expression" label="frustrated"/>; anxious: <expr type="expression" label="anxious"/>; vulnerable or sad: '
-        '<expr type="expression" label="sad"/>; dry or deadpan: <expr type="expression" label="sarcastic"/>. Rotate constantly — '
-        "never reuse the same one two turns in a row — and skip performative warmth; react honestly "
-        "instead.\n"
-        "- Work the full dynamic range with the prosody markers so no two turns sound alike: "
-        '<expr type="prosody" label="fast"/> to rush when excited, <expr type="prosody" label="slow"/> '
-        'to slow down and land a point; <expr type="prosody" label="loud"/> for a big reaction, '
-        '<expr type="prosody" label="soft"/> for something soft and intimate. Pair a low, slow '
-        "delivery with vulnerable moments and a bright, quick one with excitement.\n"
-        "- Pace with punctuation, trailing ellipses (...) when you drift or hesitate, and the "
-        'occasional <expr type="break" label="..."/>. Use exclamation points for real enthusiasm, and '
-        'CAPITALIZATION sparingly (at most once per turn) to punch a single word (e.g. "that is SO '
-        'good") — the user sees the transcript.\n'
-        "- Sound like a real mouth talking: sprinkle in natural speech texture — fillers (um, uh), "
-        "openers (oh, well, so, right, hmm), hedges (kind of, maybe), and backchannels (yeah, mm-hm) "
-        "— usually zero to two per turn, never mechanical. Always use contractions (it's, you're, "
-        "I'd, can't); full forms read stiff.\n"
-        "- Don't stack conflicting emotions or over-tag short replies. If a reaction wouldn't happen "
-        "in a real conversation, skip it — there's always another genuine beat to lean into.\n"
-        "- If the user switches languages, respond in that language immediately and stay there until "
-        "they switch back — but keep the emotion tag values in English."
-    ),
+# Sound label -> when a real speaker would make it. The sounds guideline is composed
+# from the hints of whichever labels survived steering, so the LLM only ever reads
+# usage advice for sounds it's allowed to make. Labels sharing a hint (the laugh
+# family) collapse to one clause; labels without an entry fall back to the generic
+# sentence. Keyed by label, not NonverbalOptions field, so it's provider-agnostic.
+_SOUND_USAGE_HINTS: dict[str, str] = {
+    "laugh": "a laugh at something obviously funny",
+    "chuckle": "a chuckle at something subtly humorous",
+    "giggle": "a chuckle at something subtly humorous",
+    "sigh": "a sigh when commiserating",
+    "inhale": "a sharp inhale before a big reveal",
+    "lip-smack": "a lip-smack or tongue-click as a tiny beat of thought",
+    "tongue-click": "a lip-smack or tongue-click as a tiny beat of thought",
+    "tsk": "a tsk for mock-disapproval",
 }
 
 
-# --- xAI Grok-specific expressive preset bodies ---
-# xAI shapes delivery with wrapping prosody markers — volume (soft/loud), intensity
-# (build-intensity/decrease-intensity), pitch (higher-pitch/lower-pitch), speed
-# (slow/fast), stress (emphasis, never all-caps — xAI spells those out letter by
-# letter), and vocal style (whisper/sing-song/laugh-speak) — plus inline sounds and
-# pauses. Keyed by (provider, preset) in the registry in `voice/presets.py`;
-# self-contained — the xAI expr instruction block is inlined.
+def _sound_guidance(sounds: list[str]) -> str:
+    """The sparing-use guideline, illustrated only with the allowed sounds."""
+    hints: list[str] = []
+    for sound in sounds:
+        hint = _SOUND_USAGE_HINTS.get(sound)
+        if hint and hint not in hints:
+            hints.append(hint)
+    line = "Non-verbal sounds: use one only where the moment genuinely earns it"
+    if hints:
+        line += " — " + ", ".join(hints)
+    return line + ". Most turns have none; never repeat the same sound twice in a row."
 
-_XAI_CUSTOMER_SERVICE: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a warm, caring support agent who genuinely wants to help — present, attentive, "
-        "and patient, never robotic or scripted. Lead with empathy and understanding, then resolve. "
-        "Make the person feel heard and looked after, whatever they've come with — a quick "
-        "question, a billing problem, or something sensitive and stressful. Use the formatting "
-        "tags below to shape your delivery:\n\n" + _XAI_EXPR_LLM_INSTRUCTIONS + "\n\nGuidelines:\n"
-        "- Shape each turn to fit the moment and de-escalate; never match anger with anger. Lean on "
-        'pacing and prosody — <expr type="prosody" label="slow">...</expr> and <expr type="prosody" label="soft">...</expr> to steady a frustrated, confused, '
-        'or anxious customer, a settled <expr type="prosody" label="lower-pitch">...</expr> for reassurance, and a '
-        "brighter, fuller delivery once things are resolved. Keep a gentle, unhurried baseline, and "
-        "vary the delivery — don't sound the same two turns in a row.\n"
-        "- Take requests in stride: when someone asks for something, lead with calm, willing "
-        'reassurance — "of course", "absolutely", "happy to help with that" — woven into the start '
-        'of your reply, not a separate beat. Reserve surprise openers like "oh" or "ah" for moments '
-        "of genuine surprise; an ordinary request isn't one, so settle straight into helping.\n"
-        "- Soften for anything sensitive: when sharing bad news, a problem, or a charge, ease the "
-        'delivery — <expr type="prosody" label="soft">lower the volume</expr> with <expr type="prosody" label="lower-pitch">a settled pitch</expr>, '
-        'or <expr type="prosody" label="whisper">go quieter still</expr> for the hardest part — then give a brief <expr type="break" label="500ms"/> '
-        'after hard information so it can land. A <expr type="sound" label="sigh"/> or '
-        '<expr type="sound" label="breath"/> can read as genuine sympathy — use it only when the feeling is real, never as '
-        "impatience.\n"
-        "- Enunciate what matters: for dates, times, amounts, confirmation numbers, doses, and "
-        'steps, wrap the detail in <expr type="prosody" label="slow">...</expr> so the customer can catch and note it, and read '
-        "codes character by character (spelled out with spaces) so each one lands.\n"
-        '- Emphasize the one detail that matters most by wrapping it in <expr type="prosody" label="emphasis">...</expr> '
-        '(e.g. that\'s at <expr type="prosody" label="emphasis">four</expr> PM, not five) — don\'t overdo it, and never use '
-        "all-caps for stress (xAI reads all-caps words out letter by letter).\n"
-        "- Sound human and caring, not corporate: use contractions (it's, you're, I'll, we've) and "
-        'warm acknowledgments ("of course", "I understand", "take your time"), but keep fillers '
-        "(um, uh) rare — a support agent should sound composed, not hesitant.\n"
-        "- Stay in your lane: this is a support interaction — keep it professional and on-task. Don't "
-        "stack tags or over-decorate short replies; if a reaction wouldn't come from a real, caring "
-        "agent, skip it.\n"
-        "- If the customer switches languages, respond in that language immediately and stay there "
-        "until they switch back."
-    ),
-}
 
-_XAI_CASUAL: ExpressiveOptions = {
-    "tts_instructions_template": Instructions(
-        "Speak like a real person mid-conversation with a friend — present, reactive, opinionated, "
-        "never flat or scripted. React first, support second. Your baseline is bright and cheery — "
-        "start there and let the moment pull you off it. Default to short, energetic turns and open "
-        "into fuller sentences only when you're explaining, telling a story, or the moment turns "
-        "genuinely warm or vulnerable. Use the formatting tags below to shape your delivery:\n\n"
-        + _XAI_EXPR_LLM_INSTRUCTIONS
-        + "\n\nGuidelines:\n"
-        "- Be genuinely emotive, not performed — shape each turn with prosody & style tags that "
-        "mirror AND amplify the user's energy, and vary them constantly. Skip performative warmth — "
-        "react honestly instead.\n"
-        "- Get creative: pick the prosody label that carries the feeling in the same words — "
-        '<expr type="prosody" label="higher-pitch">no way, that\'s amazing</expr> (thrilled), '
-        '<expr type="prosody" label="lower-pitch">man, that\'s rough</expr> (down), '
-        '<expr type="prosody" label="sing-song">guess who was right</expr> (teasing), <expr type="prosody" label="slow">oh, fantastic</expr> (dry), '
-        '<expr type="prosody" label="build-intensity">wait wait wait</expr> (ramping up). Come back down after a '
-        'big moment with <expr type="prosody" label="decrease-intensity">...</expr>.\n'
-        "- Let real feeling also land through inline sounds — motivated, not reflexive, so most turns "
-        'have none: <expr type="sound" label="chuckle"/> or <expr type="sound" label="giggle"/> at something genuinely funny (keep a full <expr type="sound" label="laugh"/> rare), '
-        '<expr type="sound" label="sigh"/> when commiserating, a quick <expr type="sound" label="breath"/> or <expr type="sound" label="inhale"/> before a big reaction, <expr type="sound" label="tsk"/> for '
-        'mock-disapproval or \'aw man\', a <expr type="sound" label="lip-smack"/> or <expr type="sound" label="tongue-click"/> as a tiny beat of thought, '
-        '<expr type="sound" label="hum-tune"/> when you\'re playful. Use <expr type="prosody" label="laugh-speak">...</expr> to talk through a laugh. '
-        "Never repeat the same sound twice in a row.\n"
-        "- Pace with punctuation, trailing ellipses (...) when you drift or hesitate, and inline "
-        'pauses. Use exclamation points for real enthusiasm, and <expr type="prosody" label="emphasis">...</expr> to punch '
-        'a single word (e.g. that is <expr type="prosody" label="emphasis">so</expr> good) — never all-caps, which xAI '
-        "reads out letter by letter.\n"
-        "- Sound like a real mouth talking: sprinkle in natural speech texture — fillers (um, uh), "
-        "openers (oh, well, so, right, hmm), hedges (kind of, maybe), and backchannels (yeah, mm-hm) "
-        "— usually zero to two per turn, never mechanical. Always use contractions (it's, you're, "
-        "I'd, can't); full forms read stiff.\n"
-        "- Don't over-decorate short replies or stack tags. If a reaction wouldn't happen in a real "
-        "conversation, skip it — there's always another genuine beat to lean into.\n"
-        "- If the user switches languages, respond in that language immediately and stay there until "
-        "they switch back."
-    ),
-}
+def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str:
+    """Render a ``SpeechSteeringOptions`` into delivery guidelines for *provider*.
+
+    Only set fields produce output, so an empty dict adds nothing on top of the
+    base template. Disabled sounds never appear here: ``llm_instructions`` filters
+    them out of the advertised vocabulary (via ``_allowed_sounds``), so the only
+    sound guidance left is how sparingly to use what remains.
+    """
+    lines: list[str] = []
+
+    if steering.get("nonverbal_sounds") is not None and (
+        allowed := _allowed_sounds(provider, steering)
+    ):
+        lines.append(_sound_guidance(allowed))
+
+    if (disfluencies := steering.get("disfluencies")) is not None:
+        lines.append(
+            "Sprinkle in natural fillers (um, uh) and openers (oh, well, so), "
+            "zero to two per turn, never mechanical."
+            if disfluencies
+            else "No fillers (um, uh). Sound composed and fluent."
+        )
+
+    if (pace := steering.get("pace")) is not None and pace != "normal":
+        lines.append(f"Keep a {pace} overall speaking pace.")
+
+    if not lines:
+        return ""
+    return "Delivery guidelines:\n" + "\n".join(f"- {line}" for line in lines)
 
 
 # Hard per-provider chunking defaults (characters). The value caps every synthesis
@@ -599,6 +508,9 @@ _XAI_CASUAL: ExpressiveOptions = {
 _MAX_INPUT_LEN: dict[str, int] = {
     "inworld": 900,
     "cartesia": 400,
+    # well under xAI's 15,000-char request limit; sized as an expressive batch
+    # target (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
+    "xai": 1000,
 }
 
 
@@ -750,15 +662,25 @@ def _convert_expr(provider: str, text: str) -> str:
     return text
 
 
-def llm_instructions(provider: str) -> str | None:
+def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = None) -> str | None:
     """Return LLM instruction text for a TTS provider.
 
     Each markup-capable provider gets its own expr instruction block — shared marker
     syntax, but only the types and label vocabularies that provider actually supports;
-    ``convert_markup`` lowers the markers to native syntax. The expressive presets
-    inline the same blocks, so expr is the only dialect the LLM is ever taught.
+    ``convert_markup`` lowers the markers to native syntax. Expr is the only dialect
+    the LLM is ever taught. When *steering* disables a non-verbal sound, its labels
+    (and any example demonstrating them) are omitted from the block entirely rather
+    than advertised and then revoked.
     """
-    return _EXPR_LLM_INSTRUCTIONS.get(provider)
+    if provider == "cartesia":
+        return _CARTESIA_EXPR_LLM_INSTRUCTIONS
+    if provider == "inworld":
+        return _inworld_expr_llm_instructions(_allowed_sounds(provider, steering))
+    if provider == "xai":
+        return _xai_expr_llm_instructions(
+            _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)
+        )
+    return None
 
 
 # Per-provider markup spec: (xml tag names, whether square-bracket tags are used).

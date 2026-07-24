@@ -6,7 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -29,6 +29,7 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
     from ._provider_format import ExpressiveTag
 
@@ -55,6 +56,16 @@ class TTSCapabilities:
     """Whether this TTS supports streaming (generally using websockets)"""
     aligned_transcript: bool = False
     """Whether this TTS supports aligned transcripts with word timestamps"""
+
+
+@dataclass
+class MarkupCapabilities:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    expressive: bool = False
+    """Whether this TTS declares an expressive markup dialect"""
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
 
 
 class TTSError(BaseModel):
@@ -94,15 +105,28 @@ class TTS(
             """
             return ""
 
-        def llm_instructions(self) -> str | None:
+        @property
+        def capabilities(self) -> MarkupCapabilities:
+            """The queryable markup capabilities matrix for this voice."""
+            from ._provider_format import llm_instructions, supported_nonverbals
+
+            key = self._provider_key()
+            return MarkupCapabilities(
+                expressive=llm_instructions(key) is not None,
+                nonverbals=supported_nonverbals(key),
+            )
+
+        def llm_instructions(self, steering: SpeechSteeringOptions | None = None) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
             The framework injects this into the LLM system prompt when
             ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            When *steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key())
+            return llm_instructions(self._provider_key(), steering)
 
         def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
             """Strip markup and collect the stripped tags in one pass."""
