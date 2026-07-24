@@ -11,7 +11,7 @@ error (observable via SpeechHandle.exception()) without crashing the turn task.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -53,15 +53,37 @@ class _FakeActivity(SimpleNamespace):
             ),
             _realtime_generation_task=_realtime_generation_task,
             generation_calls=generation_calls,
+            _realtime_preemptive_cleanup=None,
+            _realtime_preemptive_remote_items=[],
+            _realtime_preemptive_user_item_ids=set(),
+        )
+        # bind the real gating helpers so the reply task exercises the actual logic
+        self._wait_for_speech_authorization = MethodType(
+            AgentActivity._wait_for_speech_authorization, self
+        )
+        self._wait_for_realtime_session_idle = MethodType(
+            AgentActivity._wait_for_realtime_session_idle, self
+        )
+        self._wait_for_active_response_cleared = MethodType(
+            AgentActivity._wait_for_active_response_cleared, self
+        )
+        self._rollback_preemptive_realtime_generation = MethodType(
+            AgentActivity._rollback_preemptive_realtime_generation, self
+        )
+        self._create_speech_task = lambda coro, speech_handle=None, name=None: asyncio.create_task(
+            coro, name=name
         )
 
 
-def _run_reply_task(activity: _FakeActivity, speech_handle: SpeechHandle) -> asyncio.Task[None]:
+def _run_reply_task(
+    activity: _FakeActivity, speech_handle: SpeechHandle, *, preemptive: bool = False
+) -> asyncio.Task[None]:
     coro = AgentActivity._realtime_reply_task(
         cast(AgentActivity, activity),
         speech_handle=speech_handle,
         model_settings=ModelSettings(),
-        user_input="hello",
+        user_message=llm.ChatMessage(role="user", content=["hello"]),
+        preemptive=preemptive,
     )
     return asyncio.create_task(coro)
 

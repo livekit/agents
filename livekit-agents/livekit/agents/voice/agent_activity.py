@@ -102,6 +102,12 @@ if TYPE_CHECKING:
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
+
+# Upper bound on how long a preemptive realtime generation may stay parked awaiting the turn's
+# resolution. Sized to outlast the slowest legitimate end-of-turn (endpointing max_delay plus
+# transcript timeouts); expiry rolls the speculation back and the turn falls back to a normal
+# generation at end-of-turn.
+PREEMPTIVE_GENERATION_TTL = 10.0
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
@@ -198,6 +204,20 @@ class AgentActivity(RecognitionHooks):
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
+        # resolves when the current realtime preemptive generation no longer holds any server
+        # state: set when the speculation starts, resolved on adoption or once its rollback has
+        # cancelled the response and restored the chat context. Later reply tasks (including a
+        # superseding speculation) wait on it so they never run against a dirty session.
+        self._realtime_preemptive_cleanup: asyncio.Future[None] | None = None
+        # remote items created by the in-flight speculation (the pushed user message ack and the
+        # speculative response), held back from the local history until the speculation resolves:
+        # replayed on adoption, deleted server-side on rollback
+        self._realtime_preemptive_remote_items: list[llm.RemoteItemAddedEvent] = []
+        # ids of user messages pushed by in-flight speculations. Kept separately from
+        # _preemptive_generation (whose lifetime ends at adoption/invalidation, before the
+        # rollback completes) so a late server ack for the pushed message is still recognized
+        # as speculation-owned by _on_remote_item_added.
+        self._realtime_preemptive_user_item_ids: set[str] = set()
         self._preemptive_generation_count: int = 0
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
@@ -1084,6 +1104,9 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        # a parked preemptive speech task would never be authorized while scheduling is paused;
+        # cancel it (its rollback wakes and finishes the task) or the pause would wait forever
+        self._cancel_preemptive_generation()
         if blocked_tasks:
             self._add_drain_blocked_tasks(blocked_tasks)
         self._wake_up_scheduling_task()
@@ -1338,6 +1361,10 @@ class AgentActivity(RecognitionHooks):
             )
             allow_interruptions = NOT_GIVEN
 
+        if isinstance(self.llm, llm.RealtimeModel):
+            # an explicit say() supersedes any pending speculation (see _generate_reply)
+            self._cancel_preemptive_generation()
+
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
@@ -1395,6 +1422,7 @@ class AgentActivity(RecognitionHooks):
         tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
+        preemptive: bool = False,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
         if (
@@ -1410,6 +1438,12 @@ class AgentActivity(RecognitionHooks):
 
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
+
+        if not preemptive and isinstance(self.llm, llm.RealtimeModel):
+            # an explicit generation supersedes any pending speculation: cancel it so this reply
+            # doesn't collide with the speculative response (single-active-response APIs) or
+            # wait out the cleanup timeout on a speculation nothing else would resolve
+            self._cancel_preemptive_generation()
 
         task = asyncio.current_task()
         if not is_given(tool_choice) and task is not None:
@@ -1451,13 +1485,13 @@ class AgentActivity(RecognitionHooks):
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
-                    # TODO(theomonnom): support llm.ChatMessage for the realtime model
-                    user_input=user_message.raw_text_content if user_message else None,
+                    user_message=user_message if user_message else None,
                     instructions=self._render_realtime_instructions(instructions)
                     if instructions
                     else None,
                     tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
+                    preemptive=preemptive,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.realtime_reply",
@@ -1544,6 +1578,9 @@ class AgentActivity(RecognitionHooks):
         return future
 
     def clear_user_turn(self) -> None:
+        # the cleared turn's end-of-turn will never arrive; drop any speculation on it
+        self._cancel_preemptive_generation()
+
         if self._audio_recognition:
             self._audio_recognition._clear_user_turn()
 
@@ -1554,6 +1591,10 @@ class AgentActivity(RecognitionHooks):
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
     ) -> asyncio.Future[str]:
         if self._rt_session is not None:
+            # the committed turn is handled here; a pending speculation is doomed (the flushed
+            # end-of-turn arrives with skip_reply), so cancel it now rather than letting the
+            # reply below race its rollback
+            self._cancel_preemptive_generation()
             # commit audio buffer and conditionally trigger response generation
             self._rt_session.commit_audio()
             if not skip_reply:
@@ -1757,6 +1798,22 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
+        if (cleanup := self._realtime_preemptive_cleanup) is not None and not cleanup.done():
+            # a speculative (preemptive) generation is in flight: its items (the eagerly pushed
+            # user message and the speculative response output) must not reach the local history
+            # yet -- they would mutate the chat context mid-turn and invalidate the preemptive
+            # match. They are replayed on adoption and deleted server-side on rollback. Items
+            # NOT created by the speculation (e.g. the committed turn audio acked during a
+            # rollback, which the fallback generation replies to) apply normally.
+            is_other_user_item = (
+                ev.item.type == "message"
+                and ev.item.role == "user"
+                and ev.item.id not in self._realtime_preemptive_user_item_ids
+            )
+            if not is_other_user_item:
+                self._realtime_preemptive_remote_items.append(ev)
+                return
+
         # add the remote item to the local chat context as a placeholder
         local_chat_ctx = self._agent._chat_ctx
         if local_chat_ctx.get_by_id(ev.item.id) is not None:
@@ -2140,6 +2197,31 @@ class AgentActivity(RecognitionHooks):
             self._cancel_speech_pause(old_task=self._cancel_speech_pause_task)
         )
 
+    def _can_preemptively_generate(self) -> bool:
+        """Whether a preemptive generation may start right now for the current LLM."""
+        if isinstance(self.llm, llm.LLM):
+            return True
+
+        if isinstance(self.llm, llm.RealtimeModel):
+            caps = self.llm.capabilities
+            # the speculative reply is generated from the eager text transcript, so the session
+            # must accept context edits and must not run server-side turn detection (it would
+            # generate its own replies). Text-only output keeps the turn's input modality
+            # consistent: adopted turns reply to the pushed transcript, never to committed
+            # audio, so a model that also speaks from its own audio context is excluded.
+            if caps.turn_detection or not caps.mutable_chat_context or caps.audio_output:
+                return False
+            if self._rt_session is None:
+                return False
+            # most realtime APIs allow a single active response per session: don't start a
+            # speculative response while one is still in flight (e.g. the opening greeting the
+            # user talked over); the normal interrupt -> generate path handles this turn instead
+            if self._rt_session.has_active_generation:
+                return False
+            return True
+
+        return False
+
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None:
         preemptive_opts = self.preemptive_generation_opts
         if (
@@ -2147,7 +2229,7 @@ class AgentActivity(RecognitionHooks):
             or self._scheduling_paused
             or self._new_turns_blocked
             or (self._current_speech is not None and not self._current_speech.interrupted)
-            or not isinstance(self.llm, llm.LLM)
+            or not self._can_preemptively_generate()
         ):
             return
 
@@ -2176,6 +2258,7 @@ class AgentActivity(RecognitionHooks):
             user_message=user_message,
             chat_ctx=chat_ctx,
             schedule_speech=False,
+            preemptive=True,
             input_details=InputDetails(modality="audio"),
         )
 
@@ -2310,110 +2393,164 @@ class AgentActivity(RecognitionHooks):
         if user_message is not None:
             user_message.metrics = metrics_report
 
+        audio_commit_deferred = False
         if isinstance(self.llm, llm.RealtimeModel):
             if self.llm.capabilities.turn_detection:
                 return
 
             if self._rt_session is not None:
                 if info.skip_reply:
+                    if self._preemptive_generation is not None:
+                        # drop the pending speculation (e.g. commit_user_turn() forces
+                        # skip_reply for realtime): cancelling wakes the parked reply task,
+                        # whose rollback clears the speculative server state and resolves the
+                        # cleanup future so later replies aren't blocked on it
+                        self._cancel_preemptive_generation()
                     if info.new_transcript != "":
                         # only add user message to chat context if reply should be skipped
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
                     return
-                self._rt_session.commit_audio()
+                if self._preemptive_generation is None:
+                    self._rt_session.commit_audio()
+                else:
+                    # the audio commit is deferred until the preemptive generation is resolved:
+                    # the buffer is cleared if the speculative reply (generated from the pushed
+                    # transcript) is adopted, or committed before the fallback generation if
+                    # the speculation is invalidated. The finally below resolves the deferral
+                    # on every early exit (StopResponse, errors, pause) so the buffered audio
+                    # can never leak into a later turn's commit.
+                    audio_commit_deferred = True
 
-        if info.skip_reply:
-            if info.new_transcript != "":
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
-            return
+        try:
+            if info.skip_reply:
+                if info.new_transcript != "":
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
+                return
 
-        if (current_speech := self._current_speech) is not None:
-            if not current_speech.allow_interruptions:
+            if (current_speech := self._current_speech) is not None:
+                if not current_speech.allow_interruptions:
+                    logger.warning(
+                        "skipping reply to user input, current speech generation cannot be interrupted",  # noqa: E501
+                        extra={"user_input": info.new_transcript},
+                    )
+                    return
+                await self._cancel_speech_pause(self._cancel_speech_pause_task)
+
+                await current_speech.interrupt()
+
+                if self._rt_session is not None and self._preemptive_generation is None:
+                    # don't cancel the in-flight speculative response (the active response is
+                    # the speculation, not the interrupted speech); if the speculation is
+                    # invalidated below, its rollback interrupts it instead
+                    self._rt_session.interrupt()
+
+            if self._scheduling_paused or self._new_turns_blocked:
                 logger.warning(
-                    "skipping reply to user input, current speech generation cannot be interrupted",
+                    "skipping on_user_turn_completed, speech scheduling is paused",
                     extra={"user_input": info.new_transcript},
                 )
+                if self._session._closing:
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
                 return
-            await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
-            await current_speech.interrupt()
-
-            if self._rt_session is not None:
-                self._rt_session.interrupt()
-
-        if self._scheduling_paused or self._new_turns_blocked:
-            logger.warning(
-                "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
-            )
-            if self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
-            return
-
-        # create a temporary mutable chat context to pass to on_user_turn_completed
-        # the user can edit it for the current generation, but changes will not be kept inside the
-        # Agent.chat_ctx
-        temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
-        start_time = time.perf_counter()
-        try:
-            await self._agent.on_user_turn_completed(
-                temp_mutable_chat_ctx, new_message=user_message
-            )
-        except StopResponse:
-            return  # ignore this turn
-        except Exception:
-            logger.exception("error occurred during on_user_turn_completed")
-            return
-
-        on_user_turn_completed_delay = time.perf_counter() - start_time
-        metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
-
-        if isinstance(self.llm, llm.RealtimeModel):
-            # ignore stt transcription for realtime model
-            user_message = None  # type: ignore
-        elif self.llm is None:
-            return  # skip response if no llm is set
-
-        if self._scheduling_paused or self._new_turns_blocked:
-            logger.warning(
-                "skipping reply to user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
-            )
-            if user_message and self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
-            return
-
-        speech_handle: SpeechHandle | None = None
-        if preemptive := self._preemptive_generation:
-            # make sure the on_user_turn_completed didn't change some request parameters
-            # otherwise invalidate the preemptive generation
-            if (
-                preemptive.info.new_transcript == user_message.raw_text_content
-                and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
-                and preemptive.tools == self.tools
-                and preemptive.tool_choice == self._tool_choice
-            ):
-                speech_handle = preemptive.speech_handle
-
-                # preemptive generation is using another ChatMessage created outside of the on_end_of_turn callback,
-                # inject the metrics here.
-                preemptive.user_message.metrics = metrics_report
-                self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
-                logger.debug(
-                    "using preemptive generation",
-                    extra={"preemptive_lead_time": time.time() - preemptive.created_at},
+            # create a temporary mutable chat context to pass to on_user_turn_completed
+            # the user can edit it for the current generation, but changes will not be kept inside
+            # the Agent.chat_ctx
+            temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
+            start_time = time.perf_counter()
+            try:
+                await self._agent.on_user_turn_completed(
+                    temp_mutable_chat_ctx, new_message=user_message
                 )
-            else:
+            except StopResponse:
+                return  # ignore this turn
+            except Exception:
+                logger.exception("error occurred during on_user_turn_completed")
+                return
+
+            on_user_turn_completed_delay = time.perf_counter() - start_time
+            metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
+
+            # capture the (possibly user-edited) transcript for the preemptive match below,
+            # before the realtime branch drops its reference to the message
+            adoption_transcript = user_message.raw_text_content
+            if isinstance(self.llm, llm.RealtimeModel):
+                # ignore stt transcription for realtime model
+                user_message = None  # type: ignore
+            elif self.llm is None:
+                return  # skip response if no llm is set
+
+            if self._scheduling_paused or self._new_turns_blocked:
                 logger.warning(
-                    "preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
+                    "skipping reply to user input, speech scheduling is paused",
+                    extra={"user_input": info.new_transcript},
                 )
-                preemptive.speech_handle._cancel()
+                if user_message and self._session._closing:
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
+                return
 
-            self._preemptive_generation = None
+            speech_handle: SpeechHandle | None = None
+            if preemptive := self._preemptive_generation:
+                # make sure the on_user_turn_completed didn't change some request parameters
+                # otherwise invalidate the preemptive generation
+                if (
+                    preemptive.info.new_transcript == adoption_transcript
+                    and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
+                    and preemptive.tools == self.tools
+                    and preemptive.tool_choice == self._tool_choice
+                    # the speculative generation may have already failed (e.g. the realtime
+                    # generate_reply was rejected); fall back to a normal generation instead of
+                    # scheduling a dead speech
+                    and not preemptive.speech_handle.done()
+                ):
+                    speech_handle = preemptive.speech_handle
+
+                    # preemptive generation is using another ChatMessage created outside of the on_end_of_turn callback,  # noqa: E501
+                    # inject the metrics here.
+                    preemptive.user_message.metrics = metrics_report
+                    if audio_commit_deferred:
+                        assert self._rt_session is not None
+                        # the speculative reply was generated from the pushed transcript; drop
+                        # the buffered turn audio so it can't leak into the next turn's commit
+                        self._rt_session.clear_audio()
+                        audio_commit_deferred = False
+                    self._schedule_speech(
+                        speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL
+                    )
+                    logger.debug(
+                        "using preemptive generation",
+                        extra={"preemptive_lead_time": time.time() - preemptive.created_at},
+                    )
+                else:
+                    if preemptive.speech_handle.done():
+                        logger.warning(
+                            "preemptive generation failed before the turn was confirmed; falling back to a normal generation",  # noqa: E501
+                        )
+                    else:
+                        logger.warning(
+                            "preemptive generation enabled but the transcript, chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
+                        )
+                    preemptive.speech_handle._cancel()
+                    if audio_commit_deferred:
+                        assert self._rt_session is not None
+                        # commit the real turn audio for the fallback generation below
+                        self._rt_session.commit_audio()
+                        audio_commit_deferred = False
+
+                self._preemptive_generation = None
+        finally:
+            if audio_commit_deferred:
+                # early exit while the speculation was still pending (StopResponse, errors,
+                # pause, or an external cancel that already cleared the record): drop the stale
+                # speculation (its reply task rolls back the server state) and commit the turn
+                # audio, matching the non-preemptive behavior above
+                self._cancel_preemptive_generation()
+                if self._rt_session is not None:
+                    self._rt_session.commit_audio()
 
         if speech_handle is None:
             # Ensure the new message is passed to generate_reply
@@ -3477,20 +3614,8 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-    @utils.log_exceptions(logger=logger)
-    async def _realtime_reply_task(
-        self,
-        *,
-        speech_handle: SpeechHandle,
-        model_settings: ModelSettings,
-        tools: list[llm.Tool | llm.Toolset] | None = None,
-        user_input: str | None = None,
-        instructions: str | None = None,
-        tool_reply: bool = False,
-        text: str | AsyncIterable[str] | None = None,
-    ) -> None:
-        assert self._rt_session is not None, "rt_session is not available"
-        # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
+    async def _wait_for_speech_authorization(self, speech_handle: SpeechHandle) -> bool:
+        """Wait until the speech is authorized to play out; False if it was interrupted first."""
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
@@ -3500,9 +3625,131 @@ class AgentActivity(RecognitionHooks):
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
-            return
+            return False
+        return True
+
+    async def _wait_for_active_response_cleared(self, timeout: float = 3.0) -> None:
+        """Wait for the server to release the active response.
+
+        ``RealtimeSession.interrupt()`` (and cancelling a pending ``generate_reply``) only
+        *requests* the cancellation; on single-active-response APIs the response stays active
+        until the server acks it, and creating a new response before that is rejected (e.g.
+        OpenAI's ``conversation_already_has_active_response``). No-op for plugins that don't
+        report ``has_active_generation``.
+        """
+        assert self._rt_session is not None, "rt_session is not available"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self._rt_session.has_active_generation:
+            if loop.time() >= deadline:
+                logger.warning(
+                    "timed out waiting for the active realtime response to clear",
+                    extra={"timeout": timeout},
+                )
+                return
+            await asyncio.sleep(0.01)
+
+    async def _wait_for_realtime_session_idle(self, timeout: float = 3.0) -> None:
+        """Wait until the realtime session is safe to generate on.
+
+        Waits for a pending preemptive generation to be adopted or fully rolled back (see
+        ``_rollback_preemptive_realtime_generation``), then for the server to release the
+        active response. Must not be used by the rollback itself: the cleanup future is the
+        rollback's own completion signal.
+        """
+        if (cleanup := self._realtime_preemptive_cleanup) is not None and not cleanup.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(cleanup), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning("timed out waiting for the preemptive generation cleanup")
+
+        await self._wait_for_active_response_cleared(timeout)
+
+    @utils.log_exceptions(logger=logger)
+    async def _rollback_preemptive_realtime_generation(
+        self,
+        cleanup_fut: asyncio.Future[None],
+        generate_reply_fut: asyncio.Future[llm.GenerationCreatedEvent] | None,
+        user_message_id: str | None,
+    ) -> None:
+        """Cancel a speculative realtime response and remove its items from the server context.
+
+        The rollback must leave the session as if the speculation never happened, without
+        disturbing anything else that reached the session in the meantime (e.g. the committed
+        turn audio for the fallback generation): only the items the speculation created -- the
+        eagerly pushed user message and the speculative response items (tracked in
+        ``_realtime_preemptive_remote_items``) -- are removed. The cancelled response is awaited
+        so the follow-up generation doesn't collide with it. Resolving ``cleanup_fut`` (in all
+        cases) is what unblocks the follow-up generation.
+        """
+        original_user_message_id = user_message_id
+        try:
+            assert self._rt_session is not None, "rt_session is not available"
+            if generate_reply_fut is not None:
+                if not generate_reply_fut.done():
+                    # cancel the pending generation; the plugin emits response.cancel
+                    generate_reply_fut.cancel()
+                elif not generate_reply_fut.cancelled() and generate_reply_fut.exception() is None:
+                    # the response was already created; cancel it server-side
+                    self._rt_session.interrupt()
+
+            await self._wait_for_active_response_cleared()
+
+            # two passes: acks for the speculation's items can still arrive while the first
+            # removal round-trips (e.g. the cancelled response's item created just before the
+            # cancel took effect)
+            for _ in range(2):
+                remove_ids = {ev.item.id for ev in self._realtime_preemptive_remote_items}
+                self._realtime_preemptive_remote_items.clear()
+                if user_message_id is not None:
+                    remove_ids.add(user_message_id)
+                if not remove_ids:
+                    break
+                restore_ctx = self._rt_session.chat_ctx.copy()
+                restore_ctx.items = [i for i in restore_ctx.items if i.id not in remove_ids]
+                try:
+                    await self._rt_session.update_chat_ctx(restore_ctx)
+                except Exception:
+                    logger.warning(
+                        "failed to remove the speculative items after the preemptive rollback",
+                        exc_info=True,
+                    )
+                    break
+                user_message_id = None
+                if not self._realtime_preemptive_remote_items:
+                    break
+        finally:
+            if original_user_message_id is not None:
+                self._realtime_preemptive_user_item_ids.discard(original_user_message_id)
+            if not cleanup_fut.done():
+                cleanup_fut.set_result(None)
+
+    @utils.log_exceptions(logger=logger)
+    async def _realtime_reply_task(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        model_settings: ModelSettings,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
+        user_message: llm.ChatMessage | None = None,
+        instructions: str | None = None,
+        tool_reply: bool = False,
+        text: str | AsyncIterable[str] | None = None,
+        preemptive: bool = False,
+    ) -> None:
+        assert self._rt_session is not None, "rt_session is not available"
+        # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
+        if not preemptive:
+            # a preemptive (speculative) reply starts generating before the user turn is
+            # confirmed: the authorization gate moves after rt_session.generate_reply so the
+            # server streams the response eagerly, while playout stays gated on authorization
+            if not await self._wait_for_speech_authorization(speech_handle):
+                return
 
         if text is not None:
+            # don't create a response while a speculation rollback or another response is
+            # still clearing (single-active-response APIs)
+            await self._wait_for_realtime_session_idle()
             try:
                 generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
@@ -3517,96 +3764,248 @@ class AgentActivity(RecognitionHooks):
             )
             return
 
-        if user_input is not None:
-            chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
-            try:
-                await self._rt_session.update_chat_ctx(chat_ctx)
-            except llm.RealtimeError as e:
-                # the push is best-effort (the items were sent; only the ack timed out),
-                # so still generate the reply rather than dropping the whole turn
-                logger.warning(
-                    "failed to update the chat context before generating the reply",
-                    extra={"error": str(e)},
-                )
-            except Exception as e:
-                logger.exception("failed to update the chat context before generating the reply")
-                speech_handle._mark_done(error=e)
-                return
-            self._agent._chat_ctx._upsert_item(msg)
-            self._session._conversation_item_added(msg)
+        pending_user_message: llm.ChatMessage | None = None
+        generate_reply_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        prev_cleanup: asyncio.Future[None] | None = None
+        cleanup_fut: asyncio.Future[None] | None = None
+        # True while this task owns speculative server state (a pushed user item and/or a
+        # speculative response) that must be rolled back on any exit other than adoption
+        speculation_active = False
 
-        # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools)
-        turn_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
-        tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
-        on_enter_ignored = self._on_enter_ignored_tools(tool_ctx)
-        if tools is not None or on_enter_ignored:
-            tool_ctx._exclude(on_enter_ignored)
-            turn_tools = tool_ctx.flatten()
+        if preemptive:
+            # Publish this speculation's cleanup future *before* touching the session and chain
+            # behind the previous one: a superseding speculation must never push until the
+            # superseded one has fully rolled back, and every follow-up reply task waits on
+            # this future (resolved on adoption, or by the rollback when interrupted).
+            prev_cleanup = self._realtime_preemptive_cleanup
+            cleanup_fut = asyncio.get_running_loop().create_future()
+            self._realtime_preemptive_cleanup = cleanup_fut
+            speculation_active = True
 
-        ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
-        ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
+        def _schedule_rollback() -> asyncio.Task[Any]:
+            # run the rollback as its own tracked task (not linked to speech_handle, so the
+            # interruption watchdog can't cancel it); resolving cleanup_fut is what unblocks
+            # the follow-up generation for the confirmed turn
+            assert cleanup_fut is not None
+            return self._create_speech_task(
+                self._rollback_preemptive_realtime_generation(
+                    cleanup_fut,
+                    generate_reply_fut,
+                    user_message.id if user_message is not None else None,
+                ),
+                name="AgentActivity.preemptive_rollback",
+            )
+
         try:
-            if not (
-                per_response_tool_choice
-                := self._rt_session.realtime_model.capabilities.per_response_tool_choice
-            ):
-                # update the tool and tool choice at the session level if they are specified
-                if (
-                    is_given(model_settings.tool_choice)
-                    and model_settings.tool_choice != self._tool_choice
-                ):
-                    ori_tool_choice = self._tool_choice
-                    self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+            # never generate on a session with a pending speculation or an active response
+            if preemptive:
+                # (_wait_for_realtime_session_idle would wait on our own cleanup future here)
+                if prev_cleanup is not None and not prev_cleanup.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(prev_cleanup), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("timed out waiting for the previous preemptive cleanup")
+                await self._wait_for_active_response_cleared()
 
-                if is_given(turn_tools):
-                    ori_tools = self._rt_session.tools.flatten()
-                    await self._rt_session.update_tools(turn_tools)
+                if speech_handle.interrupted:
+                    # superseded or cancelled while waiting: nothing was pushed yet, so the
+                    # rollback only needs to resolve the cleanup future
+                    speculation_active = False
+                    await asyncio.shield(_schedule_rollback())
+                    return
 
-            generate_reply_fut = self._rt_session.generate_reply(
-                instructions=instructions or NOT_GIVEN,
-                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
-                tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
-            )
-            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
-            if speech_handle.interrupted:
-                # cancel the pending generation; the plugin emits response.cancel
-                if not generate_reply_fut.done():
-                    generate_reply_fut.cancel()
-                return
+                # items created by this speculation are held back from the local history until
+                # adoption (see _on_remote_item_added); start from a clean slate
+                self._realtime_preemptive_remote_items.clear()
 
-            try:
-                generation_ev = await generate_reply_fut
-            except llm.RealtimeError as e:
-                logger.error(
-                    "failed to generate a reply%s: %s",
-                    " after tool execution" if tool_reply else "",
-                    str(e),
+                # A speculation is only resolved by a subsequent event (end of turn, supersession,
+                # interruption, ...). If the user vanishes mid-utterance no such event ever
+                # arrives, so bound the parked state: cancelling wakes the task and its rollback
+                # resolves the cleanup future that later replies wait on.
+                assert cleanup_fut is not None
+
+                def _speculation_ttl() -> None:
+                    assert cleanup_fut is not None
+                    if not cleanup_fut.done() and not speech_handle.done():
+                        logger.warning(
+                            "preemptive generation expired before the turn resolved; rolling back"
+                        )
+                        speech_handle._cancel()
+
+                ttl_handle = asyncio.get_running_loop().call_later(
+                    PREEMPTIVE_GENERATION_TTL, _speculation_ttl
                 )
-                speech_handle._mark_done(error=e)
-                self._session._update_agent_state("listening")
-                return
+                cleanup_fut.add_done_callback(lambda _: ttl_handle.cancel())
+            else:
+                await self._wait_for_realtime_session_idle()
 
-            # _realtime_generation_task will clear the authorization
-            await self._realtime_generation_task(
-                speech_handle=speech_handle,
-                generation_ev=generation_ev,
-                model_settings=model_settings,
-                instructions=instructions,
-            )
-        finally:
-            # reset tool_choice and tools
-            if is_given(ori_tool_choice):
+            if user_message is not None:
+                if preemptive:
+                    self._realtime_preemptive_user_item_ids.add(user_message.id)
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.insert(user_message)
                 try:
-                    self._rt_session.update_options(tool_choice=ori_tool_choice)
-                except Exception:
-                    logger.exception("failed to reset tool_choice")
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    # the push is best-effort (the items were sent; only the ack timed out),
+                    # so still generate the reply rather than dropping the whole turn
+                    logger.warning(
+                        "failed to update the chat context before generating the reply",
+                        extra={"error": str(e)},
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "failed to update the chat context before generating the reply"
+                    )
+                    speech_handle._mark_done(error=e)
+                    if speculation_active:
+                        # the item may have reached the server; restore before the fallback
+                        speculation_active = False
+                        _schedule_rollback()
+                    return
+                if preemptive:
+                    # the turn isn't confirmed yet: defer the local history commit and the
+                    # conversation_item_added event until this speech is adopted (authorized)
+                    pending_user_message = user_message
+                else:
+                    self._agent._chat_ctx._upsert_item(user_message)
+                    self._session._conversation_item_added(user_message)
 
-            if is_given(ori_tools):
+            # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools)
+            turn_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
+            tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
+            on_enter_ignored = self._on_enter_ignored_tools(tool_ctx)
+            if tools is not None or on_enter_ignored:
+                tool_ctx._exclude(on_enter_ignored)
+                turn_tools = tool_ctx.flatten()
+
+            ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+            ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
+            try:
+                if not (
+                    per_response_tool_choice
+                    := self._rt_session.realtime_model.capabilities.per_response_tool_choice
+                ):
+                    # update the tool and tool choice at the session level if they are specified
+                    if (
+                        is_given(model_settings.tool_choice)
+                        and model_settings.tool_choice != self._tool_choice
+                    ):
+                        ori_tool_choice = self._tool_choice
+                        self._rt_session.update_options(tool_choice=model_settings.tool_choice)
+
+                    if is_given(turn_tools):
+                        ori_tools = self._rt_session.tools.flatten()
+                        await self._rt_session.update_tools(turn_tools)
+
+                generate_reply_fut = self._rt_session.generate_reply(
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
+                    tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
+                )
+
+                if preemptive:
+                    # a speculative generation that fails before adoption must be observed here:
+                    # this task is parked below waiting for authorization and can't see it.
+                    # _cancel() wakes the wait (running the rollback) and _mark_done() records
+                    # the error and makes the adoption check in _user_turn_completed_task fall
+                    # back to a normal generation instead of scheduling a dead speech.
+                    def _fail_speculation_early(f: asyncio.Future[Any]) -> None:
+                        assert cleanup_fut is not None
+                        if cleanup_fut.done() or speech_handle.scheduled:
+                            # already adopted (scheduling is decided synchronously with the
+                            # adoption check, before the cleanup future resolves) or rolled
+                            # back: failures follow the normal post-generation error handling
+                            return
+                        if not f.cancelled() and (exc := f.exception()) is not None:
+                            logger.warning(
+                                "speculative realtime generation failed before adoption",
+                                extra={"error": str(exc)},
+                            )
+                            speech_handle._cancel()
+                            speech_handle._mark_done(error=exc)
+
+                    generate_reply_fut.add_done_callback(_fail_speculation_early)
+
+                    # the speculative response is now generating server-side (this is the head
+                    # start); hold playout and the history commit until the user turn is
+                    # confirmed and this speech is scheduled (see _user_turn_completed_task)
+                    if not await self._wait_for_speech_authorization(speech_handle):
+                        # invalidated or superseded: undo the speculation before the follow-up
+                        # (non-speculative) generation for the confirmed turn runs; shield so
+                        # the rollback completes even if this task is cancelled while waiting
+                        speculation_active = False
+                        await asyncio.shield(_schedule_rollback())
+                        return
+
+                    # adopted: the speculation no longer needs a rollback; unblock any reply
+                    # task waiting on the cleanup future
+                    speculation_active = False
+                    assert cleanup_fut is not None
+                    if not cleanup_fut.done():
+                        cleanup_fut.set_result(None)
+
+                    if pending_user_message is not None:
+                        # the turn is confirmed: commit the user message to the local history
+                        self._agent._chat_ctx._upsert_item(pending_user_message)
+                        self._session._conversation_item_added(pending_user_message)
+                        self._realtime_preemptive_user_item_ids.discard(pending_user_message.id)
+
+                    # replay the remote items held back during the speculation (the response
+                    # placeholders); the cleanup future is resolved, so they apply normally
+                    held_back = self._realtime_preemptive_remote_items[:]
+                    self._realtime_preemptive_remote_items.clear()
+                    for held_ev in held_back:
+                        self._on_remote_item_added(held_ev)
+
+                await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+                if speech_handle.interrupted:
+                    # cancel the pending generation; the plugin emits response.cancel
+                    if not generate_reply_fut.done():
+                        generate_reply_fut.cancel()
+                    return
+
                 try:
-                    await self._rt_session.update_tools(ori_tools)
-                except Exception:
-                    logger.exception("failed to reset tools")
+                    generation_ev = await generate_reply_fut
+                except llm.RealtimeError as e:
+                    logger.error(
+                        "failed to generate a reply%s: %s",
+                        " after tool execution" if tool_reply else "",
+                        str(e),
+                    )
+                    speech_handle._mark_done(error=e)
+                    self._session._update_agent_state("listening")
+                    return
+
+                # _realtime_generation_task will clear the authorization
+                await self._realtime_generation_task(
+                    speech_handle=speech_handle,
+                    generation_ev=generation_ev,
+                    model_settings=model_settings,
+                    instructions=instructions,
+                )
+            finally:
+                # reset tool_choice and tools
+                if is_given(ori_tool_choice):
+                    try:
+                        self._rt_session.update_options(tool_choice=ori_tool_choice)
+                    except Exception:
+                        logger.exception("failed to reset tool_choice")
+
+                if is_given(ori_tools):
+                    try:
+                        await self._rt_session.update_tools(ori_tools)
+                    except Exception:
+                        logger.exception("failed to reset tools")
+        except BaseException:
+            if speculation_active:
+                # any unwind (task cancellation, unexpected error) while speculative server
+                # state exists must still roll it back and resolve the cleanup future
+                speculation_active = False
+                _schedule_rollback()
+            raise
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
