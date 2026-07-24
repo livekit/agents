@@ -3041,7 +3041,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "spatius", extras = ["opus"], specifier = ">=1.0.3" },
+    { name = "spatius", extras = ["opus"], specifier = ">=1.0.4" },
 ]
 
 [[package]]
@@ -3049,10 +3049,14 @@ name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs"] },
+    { name = "speechify-api" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "speechify-api", specifier = ">=3.0.1" },
+]
 
 [[package]]
 name = "livekit-plugins-speechmatics"
@@ -3918,10 +3922,13 @@ numpy = [
 ]
 
 [[package]]
-name = "opuslib"
-version = "3.0.1"
+name = "opuslib-next"
+version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/46/55/826befabb29fd3902bad6d6d7308790894c7ad4d73f051728a0c53d37cd7/opuslib-3.0.1.tar.gz", hash = "sha256:2cb045e5b03e7fc50dfefe431e3404dddddbd8f5961c10c51e32dfb69a044c97", size = 8550, upload-time = "2018-01-16T06:04:42.184Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/54/f0528115c40a3a6e14d9c3f24bb2f2c418dce248dffa1ccd21dd58b3d483/opuslib_next-1.3.0.tar.gz", hash = "sha256:0fe7350ec2e524380cca69700705abe6e2545b824f921a32f36c8c98f35b8527", size = 54800, upload-time = "2026-06-15T03:08:33.935Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/75/5e3d7c884f239cb4014666a71bc7c2bf03fbaa7a00940838df90072180c3/opuslib_next-1.3.0-py3-none-any.whl", hash = "sha256:3025e961d8fe73874801dfba7ef85fc71f1d82f76fd5363806558338547deaa5", size = 21432, upload-time = "2026-06-15T03:08:33.095Z" },
+]
 
 [[package]]
 name = "orjson"
@@ -5226,7 +5233,7 @@ wheels = [
 
 [[package]]
 name = "spatius"
-version = "1.0.3"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -5234,14 +5241,29 @@ dependencies = [
     { name = "protobuf" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/08/acd87ee0b4d1df32babb54567940f6c7243c4b3cfcfdb32daebbb9244c22/spatius-1.0.3.tar.gz", hash = "sha256:c4ba60fe362498689ab8f79088ad72126fe0cc76eb8be1225d89ccd0035e7713", size = 139470, upload-time = "2026-07-07T09:24:12.379Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/61/20/fad918f35d276b26ffe2a4991f59d5a768df3cfc2f737eedfa6ab2e08a58/spatius-1.0.4.tar.gz", hash = "sha256:1f041fe95ba3c7465825ceda03ac3be2e90173c20a11dd45854cf89ab1d86aef", size = 129807, upload-time = "2026-07-23T17:29:34.022Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/ed/2427b8501bb8137055cbe8925d450deae07654c2316f6d03823b48b539ba/spatius-1.0.3-py3-none-any.whl", hash = "sha256:d850f7043b8284bd5ea152398566389ebe0089d3122c17b7912bd7c1adde5ccf", size = 22856, upload-time = "2026-07-07T09:24:11.255Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/fc/c0e9176e988dca84321b03fab9b4aa0ab782372555d9245a0a60ed5aa9c0/spatius-1.0.4-py3-none-any.whl", hash = "sha256:3f99be2fba873a5dd798b265852f40f97b624413ea39a9fc14891e578da774de", size = 22903, upload-time = "2026-07-23T17:29:32.879Z" },
 ]
 
 [package.optional-dependencies]
 opus = [
-    { name = "opuslib" },
+    { name = "opuslib-next" },
+]
+
+[[package]]
+name = "speechify-api"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/67/961acfbf3355c73b85c9a85e7d2ca4c38a9f14261c845ba9c804940969de/speechify_api-3.0.1.tar.gz", hash = "sha256:e73a084fd6845cb2f92bff2e4dfa6d58052ff97e8112b38dc67ebbf47610aa1a", size = 48230, upload-time = "2026-07-10T19:41:34.679Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/7d/52daedb2aa7e1df49f39a03b0d87ea25cd281588102f4231cffbcbf32038/speechify_api-3.0.1-py3-none-any.whl", hash = "sha256:7e09d09bee792a348a5dbfe0e07a806152ba2797c70b399b6e5544b320808cf8", size = 75381, upload-time = "2026-07-10T19:41:33.749Z" },
 ]
 
 [[package]]
