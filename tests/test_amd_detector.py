@@ -65,6 +65,7 @@ class _FakeSession:
         self.said: list[str] = []
         self.interrupts = 0
         self.ivr_calls: list[str] = []
+        self.aec_warmup_expirations = 0
         self._next_handle = _FakeHandle()
 
     async def interrupt(self, *, force: bool = False) -> None:
@@ -77,27 +78,30 @@ class _FakeSession:
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         self.ivr_calls.append(transcript or "")
 
+    def _on_aec_warmup_expired(self) -> None:
+        self.aec_warmup_expirations += 1
+
 
 class _FakeClassifier:
     def __init__(self) -> None:
         self._verdict_ready = asyncio.Event()
         self._verdict_result: AMDPredictionEvent | None = None
         self.reset_count = 0
-        self.reset_start_timers: list[bool] = []
-        self.start_turn_timers_count = 0
+        self.reset_arm_turn_timers: list[bool] = []
+        self.arm_turn_timers_count = 0
         self.ended = False
 
-    async def reset(self, *, start_timers: bool = True) -> None:
+    async def reset(self, *, arm_turn_timers: bool = True) -> None:
         self.reset_count += 1
-        self.reset_start_timers.append(start_timers)
+        self.reset_arm_turn_timers.append(arm_turn_timers)
         self._verdict_result = None
         self._verdict_ready = asyncio.Event()
 
     def end_input(self) -> None:
         self.ended = True
 
-    def start_turn_timers(self) -> None:
-        self.start_turn_timers_count += 1
+    def arm_turn_timers(self) -> None:
+        self.arm_turn_timers_count += 1
 
 
 def _verdict(category: AMDCategory, transcript: str = "greeting") -> AMDPredictionEvent:
@@ -159,6 +163,7 @@ async def test_screening_then_human_reports_screening_playback() -> None:
 
     assert session.said == ["this is alex"]  # only the screening message played
     assert clf.reset_count == 1  # reset once after screening
+    assert session.aec_warmup_expirations == 1
     assert result.category == AMDCategory.HUMAN
     assert result.screening_detected is True
     assert result.message_playback == "played"
@@ -166,7 +171,13 @@ async def test_screening_then_human_reports_screening_playback() -> None:
 
 async def test_screening_then_voicemail_plays_both() -> None:
     session = _FakeSession()
-    detector = _make_detector(session)
+    callback_screening_detected: list[bool] = []
+
+    def voicemail_message(prediction: AMDPredictionEvent) -> str:
+        callback_screening_detected.append(prediction.screening_detected)
+        return "leave a message"
+
+    detector = _make_detector(session, voicemail_message=voicemail_message)
     clf = _FakeClassifier()
 
     result = await _drive(
@@ -176,6 +187,7 @@ async def test_screening_then_voicemail_plays_both() -> None:
     )
 
     assert session.said == ["this is alex", "leave a message"]
+    assert callback_screening_detected == [True]
     assert result.category == AMDCategory.MACHINE_VM
     assert result.screening_detected is True
     assert result.message_playback == "played"  # reflects the voicemail message
@@ -201,6 +213,7 @@ async def test_direct_voicemail_plays_voicemail() -> None:
     result = await _drive(detector, clf, [_verdict(AMDCategory.MACHINE_VM)])
 
     assert session.said == ["leave a message"]
+    assert session.aec_warmup_expirations == 0
     assert result.screening_detected is False
     assert result.message_playback == "played"
 
@@ -234,7 +247,7 @@ async def test_screening_rearms_classifier_before_playback_finishes() -> None:
 
     await asyncio.wait_for(handle.started.wait(), timeout=1.0)
     assert clf.reset_count == 1
-    assert clf.reset_start_timers == [False]
+    assert clf.reset_arm_turn_timers == [False]
 
     clf._verdict_result = _verdict(AMDCategory.HUMAN)
     clf._verdict_ready.set()
