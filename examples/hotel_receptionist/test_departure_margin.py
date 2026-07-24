@@ -148,6 +148,22 @@ async def test_airport_car_uses_explicit_departure_and_echoes_booking_reference(
         await db.aclose()
 
 
+def test_reconfirmation_schema_requires_departure_time_but_accepts_null() -> None:
+    # Required-but-nullable: the model must confront the field on every call (so it
+    # asks the caller), while a caller who doesn't know the time never blocks the tool.
+    agent = HotelReceptionistAgent()
+    flight_tool = next(
+        tool for tool in agent.tools if tool.__name__ == "request_flight_reconfirmation"
+    )
+    schema = build_legacy_openai_schema(flight_tool)
+    parameters = schema["function"]["parameters"]
+
+    assert "departure_time" in parameters["required"]
+    prop = parameters["properties"]["departure_time"]
+    assert "null" in str(prop)
+    assert "ASK the caller" in prop["description"]
+
+
 def test_airport_car_schema_requires_flight_departure_time() -> None:
     agent = HotelReceptionistAgent()
     car_tool = next(tool for tool in agent.tools if tool.__name__ == "book_airport_car")
