@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-quickdial"
+dynamic = ["version"]
+description = "LiveKit Agents plugin for Quickdial — cheap, fast, real-time TTS & STT"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Quickdial AI", email = "hello@quickdial.ai" }]
+keywords = [
+    "webrtc", "realtime", "audio", "livekit", "livekit-agents",
+    "quickdial", "stt", "tts", "speech-to-text", "text-to-speech",
+    "voice", "streaming", "websocket",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "livekit-agents[codecs]>=1.6.6",
+    "aiohttp>=3.9",
+]
+
+[project.urls]
+Homepage = "https://quickdial.ai"
+Documentation = "https://quickdial.ai/docs"
+Repository = "https://github.com/samay-ai/livekit-plugins-quickdial"
+Issues = "https://github.com/samay-ai/livekit-plugins-quickdial/issues"
+
+[tool.hatch.version]
+path = "livekit/plugins/quickdial/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
