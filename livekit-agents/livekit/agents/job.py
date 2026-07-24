@@ -55,6 +55,10 @@ from .utils.misc import is_cloud
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
+def _serialize_session_report(report: SessionReport) -> str:
+    return json.dumps(report.to_dict(), indent=2, default=str)
+
+
 def _observability_url(livekit_url: str) -> str | None:
     """Return the observability endpoint, or None if observability is unavailable."""
     url = os.environ.get("LIVEKIT_OBSERVABILITY_URL")
@@ -287,7 +291,7 @@ class JobContext:
         # console recording, dump data to a local file
         if c.enabled and c.record:
             try:
-                report_json = json.dumps(report.to_dict(), indent=2)
+                report_json = _serialize_session_report(report)
 
                 import aiofiles
                 import aiofiles.os
