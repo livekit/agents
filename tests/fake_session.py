@@ -133,7 +133,13 @@ class FakeActions:
         self._items: list[FakeUserSpeech | FakeLLMResponse | FakeTTSResponse] = []
 
     def add_user_speech(
-        self, start_time: float, end_time: float, transcript: str, *, stt_delay: float = 0.2
+        self,
+        start_time: float,
+        end_time: float,
+        transcript: str,
+        *,
+        stt_delay: float = 0.2,
+        interim_interval: float | None = None,
     ) -> None:
         self._items.append(
             FakeUserSpeech(
@@ -141,6 +147,7 @@ class FakeActions:
                 end_time=end_time,
                 transcript=transcript,
                 stt_delay=stt_delay,
+                interim_interval=interim_interval,
             )
         )
 
