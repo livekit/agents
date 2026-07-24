@@ -626,7 +626,12 @@ class RealtimeSession(  # noqa: F811
 
     def _start_session_recycle_timer(self) -> None:
         """Start the session recycling timer."""
-        if self._session_recycle_task and not self._session_recycle_task.done():
+        current_task = asyncio.current_task()
+        if (
+            self._session_recycle_task
+            and not self._session_recycle_task.done()
+            and self._session_recycle_task is not current_task
+        ):
             self._session_recycle_task.cancel()
 
         duration = self._calculate_session_duration()
