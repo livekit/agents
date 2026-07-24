@@ -9,7 +9,7 @@ description = "Agent Framework plugin for Blaze AI services (STT, TTS, LLM)."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
-authors = [{ name = "LiveKit"}]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = [
     "webrtc", "realtime", "audio", "video", "livekit",
     "blaze", "stt", "tts", "llm", "voice-agent", "vietnamese",

@@ -287,8 +287,7 @@ class STT(stt.STT):
         wav_data = convert_pcm_to_wav(
             pcm_data,
             sample_rate=sample_rate,
-            channels=num_channels,
-            bits_per_sample=16,
+            num_channels=num_channels,
         )
 
         params = {

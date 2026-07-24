@@ -44,20 +44,17 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
-from livekit.agents.utils import shortuuid
-from livekit.agents.utils.aio.channel import ChanClosed, ChanEmpty
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given, shortuuid
+from livekit.agents.utils.aio.channel import ChanClosed
 
 from ._config import BlazeConfig
 from ._utils import apply_normalization_rules, effective_connect_timeout
 from .log import logger
-
-# Regex for splitting text at sentence boundaries.
-# Do not split on comma to avoid over-fragmented synthesis and long pauses
-# between short clauses under higher-latency environments.
-_SENTENCE_END_RE = re.compile(r"(?:\n\n+|\n|[.!?;:。！？；：](?:\s|$))")
 
 _WS_PING_INTERVAL = 20
 _WS_PING_TIMEOUT = 20
@@ -153,101 +150,8 @@ def _generate_silence(sample_rate: int, duration_ms: int) -> bytes:
     return b"\x00\x00" * num_samples
 
 
-# ---------------------------------------------------------------------------
-# Batching helpers (used inside SynthesizeStream to combine small text chunks)
-# ---------------------------------------------------------------------------
-
-
-def _find_batch_split(
-    text: str,
-    *,
-    min_chars: int = 100,
-    target_chars: int = 200,
-    max_chars: int = 350,
-    force: bool = False,
-    is_first_batch: bool = False,
-) -> int | None:
-    """Find a natural split point in *text* for TTS batching.
-
-    Returns the character index to split at, or None if the buffer isn't ready yet.
-
-    For the first batch, uses a low word-count threshold to minimise
-    first-audio latency without cutting too early by character length.
-    Subsequent batches use *min_chars* so that
-    short sentences are merged and per-batch WS overhead is reduced.
-    """
-
-    def _word_count(s: str) -> int:
-        return len(re.findall(r"\S+", s))
-
-    def _safe_split_on_whitespace(s: str, preferred_idx: int, floor_idx: int = 1) -> int:
-        """Try to split at a nearby whitespace boundary, otherwise keep preferred index."""
-        idx = min(max(preferred_idx, 1), len(s))
-        floor = max(1, min(floor_idx, idx))
-
-        # Walk backward to find a whitespace boundary so we don't cut mid-word.
-        while idx > floor and not s[idx - 1].isspace():
-            idx -= 1
-
-        if idx <= floor:
-            return preferred_idx
-
-        # Trim leading spaces from the next chunk.
-        while idx < len(s) and s[idx].isspace():
-            idx += 1
-
-        return idx
-
-    if not text.strip():
-        return None
-
-    hard_limit = min(len(text), max_chars)
-    punct_positions = [m.end() for m in _SENTENCE_END_RE.finditer(text[:hard_limit])]
-
-    # First batch: prioritize first-audio latency, but gate by word count
-    # instead of fixed character count.
-    if is_first_batch:
-        for pos in punct_positions:
-            if _word_count(text[:pos]) >= 4:
-                return pos
-
-    # Hard limit reached: we must split to avoid unbounded buffering.
-    if len(text) >= max_chars:
-        if punct_positions:
-            split_pos = punct_positions[-1]
-            # Avoid returning a tiny chunk that caller logic will prepend back,
-            # which can cause a non-progress loop under continuous input.
-            if split_pos >= 8:
-                return split_pos
-        return _safe_split_on_whitespace(text, max_chars, floor_idx=min_chars)
-
-    # Subsequent batches: prefer a boundary around target size (instead of
-    # the earliest >= min_chars) to reduce segment count and WS overhead.
-    if len(text) >= min_chars and punct_positions:
-        if len(text) >= target_chars:
-            for pos in punct_positions:
-                if pos >= target_chars:
-                    return pos
-
-        candidates = [pos for pos in punct_positions if pos >= min_chars]
-        if candidates:
-            return candidates[-1]
-
-    # End-of-input flush: always emit remaining content, even if short.
-    if force:
-        if punct_positions:
-            return punct_positions[-1]
-        return _safe_split_on_whitespace(text, len(text), floor_idx=1)
-
-    return None
-
-
-def _normalize_batch_text(text: str) -> str:
-    """Final guard before sending text to TTS backend.
-
-    Keeps sentence content intact while removing excessive whitespace/newlines
-    that can slow synthesis and produce unnatural pauses.
-    """
+def _normalize_text(text: str) -> str:
+    """Collapse excessive whitespace before sending text to TTS."""
     text = re.sub(r"\n{2,}", "\n", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text
@@ -262,9 +166,9 @@ class TTS(tts.TTS):
     """
     Blaze Text-to-Speech Plugin with streaming support.
 
-    Uses a single WebSocket connection per turn to synthesize multiple
-    text batches, reducing per-sentence connection overhead and enabling
-    audio to stream to the user as soon as it's generated.
+    Uses a single WebSocket connection per turn. Text chunking is handled by
+    the framework sentence tokenizer (pass ``tokenizer`` to configure); the
+    plugin sends each tokenized unit as a ``query`` over the WS speech session.
     """
 
     def __init__(
@@ -280,10 +184,7 @@ class TTS(tts.TTS):
         audio_quality: int = 32,
         sample_rate: int = 24000,
         normalization_rules: dict[str, str] | None = None,
-        batch_min_chars: int = 100,
-        batch_target_chars: int = 200,
-        batch_max_chars: int = 350,
-        batch_max_wait_s: float = 0.45,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         inter_sentence_silence_ms: int = 150,
         timeout: float | None = None,
         stream_timeout: float | None = None,
@@ -313,19 +214,16 @@ class TTS(tts.TTS):
         self._audio_quality = int(audio_quality) if audio_quality is not None else 32
         self._sample_rate = sample_rate
         self._timeout = timeout if timeout is not None else self._config.tts_timeout
-        # Separate timeout for the full streaming session (WebSocket + all batches in a turn).
-        # Streaming turns can span many text batches; this guards against a truly hung session
+        # Separate timeout for the full streaming session (WebSocket + all queries in a turn).
+        # Streaming turns can span many tokens; this guards against a truly hung session
         # without killing healthy long-running turns the way a short per-request timeout would.
         self._stream_timeout = (
             stream_timeout if stream_timeout is not None else self._config.tts_stream_timeout
         )
         self._normalization_rules = normalization_rules
-
-        # Batching configuration
-        self._batch_min_chars = batch_min_chars
-        self._batch_target_chars = batch_target_chars
-        self._batch_max_chars = batch_max_chars
-        self._batch_max_wait_s = batch_max_wait_s
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
         self._inter_sentence_silence_ms = inter_sentence_silence_ms
 
         # Build WebSocket URL (convert http(s) to ws(s))
@@ -334,8 +232,7 @@ class TTS(tts.TTS):
 
         logger.info(
             f"BlazeTTS initialized (streaming): url={self._api_url}, "
-            f"speaker={self._speaker_id}, language={self._language}, format={self._audio_format}, "
-            f"batch=[{batch_min_chars},{batch_target_chars},{batch_max_chars}]"
+            f"speaker={self._speaker_id}, language={self._language}, format={self._audio_format}"
         )
 
     @property
@@ -461,7 +358,7 @@ class ChunkedStream(tts.ChunkedStream):
         session_deadline = turn_start + tts_cfg._stream_timeout
 
         text = apply_normalization_rules(self._input_text, tts_cfg._normalization_rules)
-        text = _normalize_batch_text(text)
+        text = _normalize_text(text)
 
         mime_type = {
             "pcm": "audio/pcm",
@@ -577,12 +474,12 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 # ---------------------------------------------------------------------------
-# Streaming TTS — single WebSocket, multiple batches
+# Streaming TTS — single WebSocket; chunking via framework tokenizer
 # ---------------------------------------------------------------------------
 
 
 class _TTSSynthesizeStream(tts.SynthesizeStream):
-    """Streaming TTS that reuses one WebSocket for all batches in a turn."""
+    """Streaming TTS that reuses one WebSocket; tokenizes input with framework tokenizer."""
 
     def __init__(
         self,
@@ -592,10 +489,6 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         super().__init__(tts=tts_instance, conn_options=conn_options)
         self._blaze_tts = tts_instance
-
-    # ------------------------------------------------------------------
-    # WebSocket helpers
-    # ------------------------------------------------------------------
 
     def _speech_start_params(self) -> dict:
         """Build the speech-start message payload."""
@@ -653,24 +546,17 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             self._blaze_tts._model,
         )
 
-    # ------------------------------------------------------------------
-    # Main streaming loop — single speech session per turn
-    # ------------------------------------------------------------------
-
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Read text tokens, batch them, synthesize over a single WS speech session.
+        """Tokenize input text and synthesize over a single WS speech session.
 
-        Sends one speech-start / speech-end pair for the entire turn so the
-        gateway only extracts 'first N words' once, reducing external TTS API
-        calls from ~2×batches to ~batches+1.  Audio reading runs concurrently
-        with text sending for optimal pipelining.
+        Chunking is delegated to the framework sentence tokenizer. Each token
+        is sent as a ``query``; flush sentinels flush the tokenizer stream.
 
         Timeouts use per-recv idle detection (``_timeout``) plus an absolute
-        session cap (``_stream_timeout``) instead of a single timer around the
-        whole turn.  If the WebSocket drops before any audio is emitted, up to
-        ``_WS_FAST_RECONNECT_ATTEMPTS`` fast reconnects resend queued batches;
-        further retries are handled by ``SynthesizeStream._main_task`` so retry
-        count stays linear rather than ``(max_retry+1)²``.
+        session cap (``_stream_timeout``). If the WebSocket drops before any
+        audio is emitted, up to ``_WS_FAST_RECONNECT_ATTEMPTS`` fast reconnects
+        resend queued queries; further retries are handled by
+        ``SynthesizeStream._main_task``.
         """
         request_id = shortuuid()
         turn_start = time.monotonic()
@@ -731,10 +617,11 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             self._num_segments = output_emitter.num_segments
             stream_initialized = True
 
-        batch_count = 0
+        query_count = 0
         seg_count = 0
-        sent_batches: list[str] = []
-        text_buf = ""
+        sent_queries: list[str] = []
+        # After the first successful pass over input, reconnects only resend
+        # queries already accepted by the gateway (tokenizer is not rewound).
         input_done = False
 
         try:
@@ -753,7 +640,6 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                     ) as ws:
                         await self._ws_connect_and_auth(ws, request_id, ws_guard)
 
-                        # ---------- single speech-start for the whole turn ----------
                         speech_start_msg = self._speech_start_params()
                         logger.info(
                             "[%s] TTS speech-start (single session): %s",
@@ -764,18 +650,17 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         ack = await ws_guard.recv(ws)
                         logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
 
-                        if sent_batches and ws_attempt > 1:
+                        if sent_queries and ws_attempt > 1:
                             logger.warning(
-                                "[%s] TTS WS reconnect attempt %d/%d — resending %d batch(es)",
+                                "[%s] TTS WS reconnect attempt %d/%d — resending %d query(ies)",
                                 request_id,
                                 ws_attempt,
                                 max_ws_attempts,
-                                len(sent_batches),
+                                len(sent_queries),
                             )
-                            for batch in sent_batches:
-                                await ws.send(json.dumps({"query": batch}))
+                            for query in sent_queries:
+                                await ws.send(json.dumps({"query": query}))
 
-                        # ---------- concurrent audio reader ----------
                         async def _read_audio(
                             guard: _WSStreamGuard = ws_guard,
                             connection: websockets.ClientConnection = ws,
@@ -843,7 +728,6 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                     st = msg.get("status") or msg.get("type", "")
 
                                     if st == "speech-end":
-                                        # Final flush with fade-out
                                         if runtime_is_pcm and pending_tail:
                                             output_emitter.push(
                                                 _apply_pcm16_fade(
@@ -855,18 +739,14 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         break
 
                                     elif st == "started-byte-stream":
-                                        # Initialize output emitter on first segment.
                                         _ensure_output_initialized(msg.get("contentType"))
-                                        # Insert inter-segment silence and reset fade-in
-                                        # flag so each new segment begins with a fade-in.
                                         if has_prev_segment:
                                             if runtime_is_pcm and silence_pcm:
                                                 output_emitter.push(silence_pcm)
-                                            first_audio = True  # reset for this segment's fade-in
+                                            first_audio = True
 
                                     elif st == "finished-byte-stream":
                                         _seg_count += 1
-                                        # Fade-out tail of this TTS segment
                                         if runtime_is_pcm and pending_tail:
                                             output_emitter.push(
                                                 _apply_pcm16_fade(
@@ -897,106 +777,62 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                         reader_task = asyncio.create_task(_read_audio())
 
-                        # ---------- batch text sender ----------
                         async def _send_query(text: str, *, resend: bool = False) -> None:
-                            nonlocal batch_count
+                            nonlocal query_count
                             normalized = apply_normalization_rules(
                                 text,
                                 tts_cfg._normalization_rules,
                             )
-                            normalized = _normalize_batch_text(normalized)
+                            normalized = _normalize_text(normalized)
                             if not normalized.strip():
                                 return
                             if not resend:
-                                batch_count += 1
-                                has_img_tag = (
-                                    "<img>" in normalized.lower() or "</img>" in normalized.lower()
-                                )
+                                query_count += 1
                                 preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
                                 logger.info(
-                                    "[%s] TTS batch %d — %d chars has_img_tag=%s: '%s'",
+                                    "[%s] TTS query %d — %d chars: '%s'",
                                     request_id,
-                                    batch_count,
+                                    query_count,
                                     len(normalized),
-                                    has_img_tag,
                                     preview,
                                 )
-                                logger.debug(
-                                    "[%s] TTS batch %d full_text=%r",
-                                    request_id,
-                                    batch_count,
-                                    normalized,
-                                )
-                                sent_batches.append(normalized)
+                                sent_queries.append(normalized)
                             await ws.send(json.dumps({"query": normalized}))
-                            if batch_count == 1 and not resend:
+                            if query_count == 1 and not resend:
                                 self._mark_started()
-
-                        async def _drain_batches(force: bool) -> None:
-                            nonlocal text_buf
-                            while True:
-                                idx = _find_batch_split(
-                                    text_buf,
-                                    min_chars=tts_cfg._batch_min_chars,
-                                    target_chars=tts_cfg._batch_target_chars,
-                                    max_chars=tts_cfg._batch_max_chars,
-                                    force=force,
-                                    is_first_batch=(batch_count == 0),
-                                )
-                                if idx is None:
-                                    break
-                                chunk = text_buf[:idx]
-                                text_buf = text_buf[idx:]
-                                if not chunk:
-                                    continue
-                                if len(chunk.strip()) < 8 and not force:
-                                    text_buf = chunk + text_buf
-                                    break
-                                await _send_query(chunk)
 
                         try:
                             if not input_done:
-                                # Main input loop — read tokens with a timeout so we
-                                # can flush accumulated text while waiting for more.
-                                while not input_done:
+                                sent_tokenizer_stream = tts_cfg._sentence_tokenizer.stream()
+
+                                async def _input_task(
+                                    tokenizer_stream: tokenize.SentenceStream = sent_tokenizer_stream,
+                                ) -> None:
                                     try:
-                                        data = await asyncio.wait_for(
-                                            self._input_ch.recv(),
-                                            timeout=tts_cfg._batch_max_wait_s,
-                                        )
-                                    except asyncio.TimeoutError:
-                                        await _drain_batches(force=False)
-                                        continue
-                                    except (ChanClosed, StopAsyncIteration):
-                                        input_done = True
-                                        await _drain_batches(force=True)
-                                        break
+                                        async for data in self._input_ch:
+                                            if isinstance(data, self._FlushSentinel):
+                                                tokenizer_stream.flush()
+                                                continue
+                                            tokenizer_stream.push_text(data)
+                                    except ChanClosed:
+                                        pass
+                                    finally:
+                                        tokenizer_stream.end_input()
 
-                                    if isinstance(data, self._FlushSentinel):
-                                        input_done = True
-                                        await _drain_batches(force=True)
-                                        break
+                                async def _token_send_task(
+                                    tokenizer_stream: tokenize.SentenceStream = sent_tokenizer_stream,
+                                ) -> None:
+                                    async for ev in tokenizer_stream:
+                                        await _send_query(ev.token)
 
-                                    text_buf += data
-
-                                    # Read-ahead: drain pending tokens so short
-                                    # sentences get merged before we split again.
-                                    while True:
-                                        try:
-                                            extra = self._input_ch.recv_nowait()
-                                        except (ChanEmpty, ChanClosed):
-                                            break
-                                        if isinstance(extra, self._FlushSentinel):
-                                            input_done = True
-                                            break
-                                        text_buf += extra
-
-                                    await _drain_batches(force=input_done)
-
-                            # Flush any remaining text
-                            if text_buf:
-                                await _send_query(text_buf)
-                                text_buf = ""
+                                input_t = asyncio.create_task(_input_task())
+                                send_t = asyncio.create_task(_token_send_task())
+                                try:
+                                    await asyncio.gather(input_t, send_t)
+                                finally:
+                                    await utils.aio.gracefully_cancel(input_t, send_t)
+                                    await sent_tokenizer_stream.aclose()
+                                    input_done = True
 
                             # Close the single speech session
                             await ws.send(json.dumps({"event": "speech-end"}))
@@ -1038,9 +874,9 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         # (explicit flush() here would emit an extra synthetic marker frame).
 
         logger.info(
-            "[%s] TTS turn complete: %d batches, %d TTS segments, %.3fs total",
+            "[%s] TTS turn complete: %d queries, %d TTS segments, %.3fs total",
             request_id,
-            batch_count,
+            query_count,
             seg_count,
             time.monotonic() - turn_start,
         )
