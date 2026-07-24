@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
-from .markup_utils import convert_expression_tags, extract_and_strip
+from .markup_utils import convert_expression_tags, extract_and_strip, vanish_trail
 
 
 class ExpressiveTag(TypedDict):
@@ -632,6 +632,9 @@ _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 # any <expr ...> or <expr .../> tag (open or self-closing; attrs in group 1)
 _EXPR_OPEN_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
 _EXPR_CLOSE_RE = re.compile(r"</expr\s*>")
+# strip variants also capture the tag's trailing spaces (see vanish_trail)
+_EXPR_OPEN_STRIP_RE = re.compile(_EXPR_OPEN_RE.pattern + r"(?P<trail>[ \t]*)")
+_EXPR_CLOSE_STRIP_RE = re.compile(_EXPR_CLOSE_RE.pattern + r"(?P<trail>[ \t]*)")
 # self-closing markers only (the trailing / is required)
 _EXPR_SELF_RE = re.compile(r"<expr\b([^>]*?)/\s*>")
 # a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
@@ -676,10 +679,10 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
     def _repl(m: re.Match[str]) -> str:
         attrs = _expr_attrs(m.group(1))
         tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return ""
+        return vanish_trail(m, m.group("trail"))
 
-    clean = _EXPR_OPEN_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_RE.sub("", clean)
+    clean = _EXPR_OPEN_STRIP_RE.sub(_repl, text)
+    clean = _EXPR_CLOSE_STRIP_RE.sub(lambda m: vanish_trail(m, m.group("trail")), clean)
     return clean, tags
 
 
@@ -821,9 +824,41 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
+# tag names a trailing fragment may be cut from: every provider's XML tags plus "expr"
+_TAIL_TAG_NAMES = tuple(sorted({*_ALL_MARKUP_TAGS, "expr"}))
+_TAIL_TAG_NAME_RE = re.compile(r"[a-zA-Z-]*")
+
+
+def _open_tag_fragment(text: str) -> bool:
+    """True if ``text`` ends in an unterminated ``<...`` that could still be a known tag.
+
+    Only fragments that could grow into a known tag qualify, so real text containing a
+    stray ``<`` (e.g. ``i<n then stop``) is never mistaken for markup.
+    """
+    last_lt = text.rfind("<")
+    if last_lt <= text.rfind(">"):
+        return False
+    frag = text[last_lt + 1 :].removeprefix("/")
+    name = _TAIL_TAG_NAME_RE.match(frag).group()  # type: ignore[union-attr]
+    return name in _TAIL_TAG_NAMES or (
+        name == frag and any(t.startswith(name) for t in _TAIL_TAG_NAMES)
+    )
+
+
+def _drop_open_tail(text: str) -> str:
+    """Drop a trailing unterminated markup tag (text sliced/cut mid-tag)."""
+    if _open_tag_fragment(text):
+        return text[: text.rfind("<")]
+    return text
+
+
 def strip_all_markup(text: str) -> str:
-    """:func:`split_all_markup` returning only the clean text (tags discarded)."""
-    return split_all_markup(text)[0]
+    """:func:`split_all_markup` returning only the clean text (tags discarded).
+
+    Also drops a trailing unterminated tag, so callers slicing text at arbitrary
+    character offsets that may fall inside a tag never see a partial tag.
+    """
+    return split_all_markup(_drop_open_tail(text))[0]
 
 
 def strip_expr_markup(text: str) -> str:
@@ -850,6 +885,19 @@ def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     }
 
 
+# a complete self-closing expressive marker (<expr/>, <expression/>, or <emotion/>)
+_EXPR_MARKER_SPLIT_RE = re.compile(r"(<(?:expr|expression|emotion)\b[^>]*?/\s*>)")
+
+
+def split_expression_markers(text: str) -> list[str]:
+    """Split raw text at complete self-closing expression markers, keeping the markers.
+
+    The room output pushes each piece through :class:`TranscriptMarkupStripper`
+    separately so the text on either side of a marker lands in the right wire segment.
+    """
+    return [piece for piece in _EXPR_MARKER_SPLIT_RE.split(text) if piece]
+
+
 class TranscriptMarkupStripper:
     """Stateful, provider-agnostic markup stripper for one transcript segment.
 
@@ -864,16 +912,24 @@ class TranscriptMarkupStripper:
     def __init__(self) -> None:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
+        # last emitted char was whitespace (or nothing emitted yet): a stripped tag
+        # often leaves its separating space in the next chunk, so lstrip the next
+        # emission rather than surface a doubled/leading space
+        self._tail_ws = True
 
     def _has_open_tag(self) -> bool:
-        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled, and
-        # any unclosed "[" (bracket tags have no such ambiguity)
-        last_lt = self._buf.rfind("<")
-        if last_lt > self._buf.rfind(">"):
-            nxt = self._buf[last_lt + 1 : last_lt + 2]
-            if not nxt or nxt == "/" or nxt.isalpha():
-                return True
+        # hold a trailing "<" that could still be a known tag (so "3 < 5" or "i<n then"
+        # isn't stalled), and any unclosed "[" (bracket tags have no such ambiguity)
+        if _open_tag_fragment(self._buf):
+            return True
         return self._buf.rfind("[") > self._buf.rfind("]")
+
+    def _emit(self, clean: str) -> str:
+        if self._tail_ws:
+            clean = clean.lstrip()
+        if clean:
+            self._tail_ws = clean[-1].isspace()
+        return clean
 
     def push(self, text: str) -> str:
         """Feed a chunk; return the clean text ready to emit (may be empty)."""
@@ -883,7 +939,7 @@ class TranscriptMarkupStripper:
         clean, tags = split_all_markup(self._buf)
         self._buf = ""
         self._tags.extend(tags)
-        return clean
+        return self._emit(clean)
 
     def flush(self) -> str:
         """Drain any buffered text at segment end; return the remaining clean text."""
@@ -892,7 +948,7 @@ class TranscriptMarkupStripper:
         clean, tags = split_all_markup(self._buf)
         self._buf = ""
         self._tags.extend(tags)
-        return clean
+        return self._emit(clean)
 
     @property
     def tags(self) -> list[ExpressiveTag]:
