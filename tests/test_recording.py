@@ -97,7 +97,6 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
     """Create a minimal mock SessionReport for upload tests."""
     report = MagicMock()
-    report.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     report.job_id = "job-1"
     report.room_id = "room-1"
     report.room = "test-room"
@@ -110,6 +109,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
+    report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     return report
 
 
@@ -241,7 +241,7 @@ async def test_record_normalization(
 ) -> None:
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=record)
-    assert session._recording_options == expected
+    assert session.options.recording_options == expected
     await _cleanup(session)
 
 
@@ -249,7 +249,7 @@ async def test_record_not_given_without_job_ctx() -> None:
     """When record is omitted and no JobContext is available, all options should be False."""
     session = _create_simple_session()
     await session.start(SimpleAgent())
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -320,7 +320,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -372,6 +372,35 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+def test_session_report_constructor_includes_recording_options_in_options() -> None:
+    from livekit.agents.voice.report import SessionReport
+
+    recording_options: RecordingOptions = {
+        "audio": False,
+        "traces": True,
+        "logs": False,
+        "transcript": False,
+        "redaction": True,
+    }
+    session = _create_simple_session()
+    session.options.recording_options = recording_options
+    report = SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=session.options,
+        events=[],
+        chat_history=session.history,
+    )
+
+    assert report.options.recording_options == recording_options
+    serialized_recording_options = report.to_dict()["options"]["recording_options"]
+    assert serialized_recording_options == recording_options
+
+    serialized_recording_options["audio"] = True
+    assert report.options.recording_options["audio"] is False
 
 
 async def test_upload_audio_only_no_file() -> None:
