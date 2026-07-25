@@ -60,7 +60,7 @@ class AvatarSession(BaseAvatarSession):
     @property
     def provider(self) -> str:
         return "livetalking"
-    
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = utils.http_context.http_session()
