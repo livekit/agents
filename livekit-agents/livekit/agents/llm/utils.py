@@ -256,7 +256,54 @@ ResponseFormatT = TypeVar("ResponseFormatT", default=None)
 
 
 def is_typed_dict(cls: type | Any) -> bool:
-    return isinstance(cls, type) and issubclass(cls, dict) and hasattr(cls, "__annotations__")
+    if not isinstance(cls, type):
+        return False
+    from typing_extensions import is_typeddict
+
+    return is_typeddict(cls) or (issubclass(cls, dict) and hasattr(cls, "__annotations__"))
+
+
+def _clean_type_annotation(ann: Any) -> Any:
+    if ann is None:
+        return ann
+    origin = get_origin(ann)
+    if origin is not None and (
+        getattr(origin, "__name__", "") in ("Required", "NotRequired")
+        or str(origin).endswith(("Required", "NotRequired"))
+    ):
+        args = get_args(ann)
+        if args:
+            return _clean_type_annotation(args[0])
+    if getattr(ann, "__name__", "") in ("Required", "NotRequired") or str(ann).endswith(
+        ("Required", "NotRequired")
+    ):
+        args = get_args(ann)
+        if args:
+            return _clean_type_annotation(args[0])
+    return ann
+
+
+def _is_typed_dict_field_required(cls: type, key: str, raw_ann: Any) -> bool:
+    ann_str = str(raw_ann)
+    if "NotRequired" in ann_str:
+        return False
+    if "Required" in ann_str:
+        return True
+    opt_keys = getattr(cls, "__optional_keys__", None)
+    if opt_keys is not None and key in opt_keys:
+        return False
+    req_keys = getattr(cls, "__required_keys__", None)
+    if req_keys is not None:
+        return key in req_keys
+    return getattr(cls, "__total__", True)
+
+
+def _get_typed_dict_hints(cls: type) -> dict[str, Any]:
+    try:
+        raw_hints = get_type_hints(cls)
+    except Exception:
+        raw_hints = getattr(cls, "__annotations__", {})
+    return {k: _clean_type_annotation(v) for k, v in raw_hints.items()}
 
 
 # mostly from https://github.com/openai/openai-python/blob/main/src/openai/lib/_parsing/_completions.py
@@ -277,10 +324,14 @@ def to_response_format_param(
 
     # add support for TypedDict
     if is_typed_dict(response_format):
-        response_format = create_model(
-            response_format.__name__,
-            **{k: (v, ...) for k, v in response_format.__annotations__.items()},  # type: ignore
-        )
+        hints = _get_typed_dict_hints(response_format)
+        raw_annotations = getattr(response_format, "__annotations__", {})
+        fields: dict[str, Any] = {}
+        for k, v in hints.items():
+            is_req = _is_typed_dict_field_required(response_format, k, raw_annotations.get(k, v))
+            fields[k] = (v, ... if is_req else None)
+
+        response_format = create_model(response_format.__name__, **fields)
     json_schema_type: type[BaseModel] | TypeAdapter[Any] | None = None
     if inspect.isclass(response_format) and issubclass(response_format, BaseModel):
         name = response_format.__name__
