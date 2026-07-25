@@ -20,6 +20,8 @@ import os
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
+import httpx
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -50,6 +52,7 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 AUDIO_FORMAT = "pcm"
 MIME_TYPE = "audio/pcm"
+CALLER_HEADER = "Speechify-Caller"
 
 
 @dataclass
@@ -136,6 +139,7 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
+        self._owns_client = client is None
         if client is not None:
             self._client = client
         else:
@@ -145,9 +149,21 @@ class TTS(tts.TTS):
                     "Speechify API key is required, either as the api_key argument "
                     "or via the SPEECHIFY_API_KEY environment variable"
                 )
+            # Fixed httpx.AsyncClient default header so every request the SDK
+            # issues is attributed to this integration, regardless of call site.
+            # Timeout/limits mirror the openai plugin's owned-client defaults —
+            # httpx's own 5s default is too short for longer synthesis requests.
+            self._httpx_client = httpx.AsyncClient(
+                headers={CALLER_HEADER: "livekit"},
+                timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
+                limits=httpx.Limits(
+                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
+                ),
+            )
             self._client = AsyncSpeechify(
                 token=resolved_key,
                 base_url=base_url if is_given(base_url) else None,
+                httpx_client=self._httpx_client,
             )
 
         self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
@@ -168,6 +184,10 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Speechify"
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._httpx_client.aclose()
 
     async def list_voices(self) -> list[Voice]:
         """List the voices available for the configured Speechify account."""

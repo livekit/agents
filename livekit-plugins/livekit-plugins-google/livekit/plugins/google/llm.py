@@ -266,6 +266,10 @@ class LLM(llm.LLM):
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
 
+    async def _prewarm_impl(self) -> None:
+        # also fetches auth tokens ahead of time on vertexai
+        await self._client.aio.models.list(config={"page_size": 1})
+
     @property
     def model(self) -> str:
         return self._opts.model
