@@ -62,6 +62,7 @@ livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
 livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
+livekit-plugins-spatius = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }

@@ -254,23 +254,31 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    for frame in audio_bstream.write(data.data.tobytes()):
-                        self._speech_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
-                    if not self._input_ch.closed:
-                        logger.warning(
-                            "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
-                        )
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, rtc.AudioFrame):
+                        for frame in audio_bstream.write(data.data.tobytes()):
+                            self._speech_duration += frame.duration
+                            await ws.send_bytes(frame.data.tobytes())
+                    elif isinstance(data, self._FlushSentinel):
+                        if not self._input_ch.closed:
+                            logger.warning(
+                                "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
+                            )
 
-            for frame in audio_bstream.flush():
-                self._speech_duration += frame.duration
-                await ws.send_bytes(frame.data.tobytes())
+                for frame in audio_bstream.flush():
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
 
-            self._closing_ws = True
-            await ws.send_str('{"type":"close"}')
+                self._closing_ws = True
+                await ws.send_str('{"type":"close"}')
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if self._closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError(
+                    message="Cartesia STT connection closed unexpectedly",
+                    retryable=True,
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

@@ -31,7 +31,11 @@ from .events import (
     UserStateChangedEvent,
     UserTurnExceededEvent,
 )
-from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions
+from .keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -77,6 +81,7 @@ __all__ = [
     "UserTurnExceededEvent",
     "KeytermsOptions",
     "KeytermDetectionOptions",
+    "STTContextOptions",
     "TranscriptSynchronizer",
     "io",
     "presets",
