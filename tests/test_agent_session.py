@@ -31,7 +31,6 @@ from livekit.agents import (
 from livekit.agents.llm import (
     FunctionTool,
     FunctionToolCall,
-    InputTranscriptionCompleted,
     RawFunctionTool,
     ToolContext,
     ToolFlag,
