@@ -14,7 +14,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LivetalkingAPI
@@ -25,7 +25,7 @@ _AVATAR_AGENT_IDENTITY = "livetalking-avatar-agent"
 _AVATAR_AGENT_NAME = "livetalking-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A Livetalking avatar session"""
 
     def __init__(
@@ -38,6 +38,7 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self.conversation_id: str | None = None
@@ -52,6 +53,14 @@ class AvatarSession:
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
 
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "livetalking"
+    
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = utils.http_context.http_session()
@@ -67,6 +76,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -89,6 +100,12 @@ class AvatarSession:
             .to_jwt()
         )
 
+        logger.debug("starting avatar session")
+        self.conversation_id = await self._api.create_conversation(
+            avatar_id=self._avatar_id,
+            properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
+        )
+
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
@@ -96,10 +113,4 @@ class AvatarSession:
                 sample_rate=SAMPLE_RATE,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
             ),
-        )
-
-        logger.debug("starting avatar session")
-        self.conversation_id = await self._api.create_conversation(
-            avatar_id=self._avatar_id,
-            properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
         )

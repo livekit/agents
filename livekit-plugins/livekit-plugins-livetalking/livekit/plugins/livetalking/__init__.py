@@ -17,7 +17,6 @@ from .avatar import AvatarSession
 from .version import __version__
 
 __all__ = [
-    "Exception",
     "AvatarSession",
     "__version__",
 ]
