@@ -18,6 +18,7 @@ from .log import logger
 
 DEFAULT_API_URL = "https://livetalking.top/api/stream"
 
+
 class LivetalkingAPI:
     def __init__(
         self,
@@ -48,11 +49,10 @@ class LivetalkingAPI:
         if avatar_id:
             payload = {
                 "avatar": avatar_id,
-                #"properties": properties,
+                # "properties": properties,
             }
         else:
-            payload = {
-            }
+            payload = {}
         payload.update(properties)
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
