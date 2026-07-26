@@ -585,6 +585,18 @@ class InterruptionStreamBase(ABC):
             match input_frame:
                 case _FlushSentinel():
                     continue
+                case _AgentSpeechStartedSentinel() if (
+                    self._agent_speech_started and self._overlap_started
+                ):
+                    # One agent turn can span several speech segments — the reply that
+                    # follows a tool call, or a queued say() — and the later segments
+                    # arrive here with no end sentinel in between. Resetting on those
+                    # would strand an overlap the user is still in the middle of:
+                    # _overlap_started gates whether their audio reaches the gateway at
+                    # all, and only a fresh VAD speech onset — which never comes for
+                    # speech already under way — can raise it again.
+                    logger.trace("agent speech continued into a new segment, keeping open overlap")
+                    continue
                 case _AgentSpeechStartedSentinel() | _AgentSpeechEndedSentinel():
                     await _reset_state()
                     self._agent_speech_started = isinstance(
