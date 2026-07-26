@@ -1283,7 +1283,11 @@ class AudioRecognition:
                 )
 
         elif ev.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-            if self._first_interim_time is None and self._speech_start_time is not None:
+            if (
+                self._first_interim_time is None
+                and self._speech_start_time is not None
+                and ev.alternatives[0].text
+            ):
                 self._first_interim_time = time.time()
             self._hooks.on_interim_transcript(
                 ev,
