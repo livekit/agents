@@ -85,22 +85,26 @@ def _compute_end_of_turn_metrics(
 ) -> _EndOfTurnMetrics:
     """Compute the end-of-turn timing metrics from the captured turn anchors.
 
-    ``last_speaking_time`` is the internal ``_last_speaking_time`` anchor (reported
-    as ``stopped_speaking_at``). When the turn detector commits a turn whose anchor
-    was never refreshed for this segment, that value can be stale and predate the
-    start of the current turn, producing wildly inflated delays (see issue #6093).
+    Every delay is measured from ``last_speaking_time`` — the internal
+    ``_last_speaking_time`` anchor, reported as ``stopped_speaking_at``. When the
+    turn detector commits a turn whose anchor was never refreshed for this segment,
+    that value can be stale and predate the start of the current turn, producing
+    wildly inflated delays (see issue #6093). We treat such an inconsistent anchor
+    the same way we treat unreliable VAD: skip the calculation and return ``None``
+    rather than emit a likely wrong value. A valid anchor must satisfy
+    ``last_speaking_time >= speech_start_time`` (you cannot stop speaking before the
+    turn started).
 
-    We treat such an inconsistent anchor the same way we treat unreliable VAD: skip
-    the calculation and return ``None`` rather than emit a likely wrong value. A
-    valid anchor must satisfy ``last_speaking_time >= speech_start_time`` (you cannot
-    stop speaking before the turn started).
+    Each metric is derived only from the anchors it actually needs, so a missing one
+    doesn't take the others down with it. ``speech_start_time`` in particular is
+    unknown for a turn opened by a transcript that arrived after the previous turn
+    was committed (the turn-start anchor is cleared on commit, and this turn had no
+    start-of-speech of its own) — that says nothing about how long transcription
+    took, which is measurable from the two transcript-side anchors alone.
     """
-    if (
-        speech_start_time is None
-        or last_speaking_time is None
-        or last_final_transcript_time is None
+    if last_speaking_time is None or (
         # stale/out-of-order anchor: stopping to speak cannot predate the turn start
-        or last_speaking_time < speech_start_time
+        speech_start_time is not None and last_speaking_time < speech_start_time
     ):
         return _EndOfTurnMetrics(
             started_speaking_at=None,
@@ -112,7 +116,11 @@ def _compute_end_of_turn_metrics(
     return _EndOfTurnMetrics(
         started_speaking_at=speech_start_time,
         stopped_speaking_at=last_speaking_time,
-        transcription_delay=max(last_final_transcript_time - last_speaking_time, 0),
+        transcription_delay=(
+            max(last_final_transcript_time - last_speaking_time, 0)
+            if last_final_transcript_time is not None
+            else None
+        ),
         end_of_turn_delay=max(now - last_speaking_time, 0),
     )
 
@@ -166,6 +174,46 @@ class _STTPipeline:
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
         # wall-clock anchor for this stream, used in STT driven timestamps and barge-in
         self.input_started_at: float | None = None
+        # total audio pushed to this pipeline, and the wall clock that position
+        # corresponds to — the anchor for mapping STT timestamps (see `wall_time_at`)
+        self._audio_duration: float = 0.0
+        self._wall_at_audio_end: float = 0.0
+
+    @property
+    def audio_duration(self) -> float:
+        """Seconds of audio pushed to this pipeline since its first frame.
+
+        STT timestamps are positions on this timeline, so a stream created
+        mid-session takes this as its ``start_time_offset``.
+        """
+        return self._audio_duration
+
+    def note_audio_pushed(self, duration: float, *, synthetic: bool = False) -> None:
+        """Advance the audio timeline and re-anchor it to wall clock.
+
+        ``synthetic`` audio (the silence used to flush the STT buffer on a manual
+        commit) is injected far faster than realtime, so it advances the wall
+        anchor by its own duration instead of to *now* — otherwise every position
+        behind it would map that much further into the past.
+        """
+        self._audio_duration += duration
+        self._wall_at_audio_end = self._wall_at_audio_end + duration if synthetic else time.time()
+
+    def wall_time_at(self, audio_time: float) -> float | None:
+        """Map a position on this pipeline's audio timeline to wall clock.
+
+        Anchored on the *most recent* push rather than on ``input_started_at``, so
+        the result only depends on how much audio was delivered between
+        ``audio_time`` and now. A one-shot anchor instead carries every earlier
+        divergence between the audio timeline and wall clock forever: a stall,
+        a muted track or a jitter-buffer catch-up burst biases it permanently,
+        in whichever direction the audio ran behind or ahead of realtime.
+
+        Returns ``None`` until audio has started flowing.
+        """
+        if self.input_started_at is None:
+            return None
+        return self._wall_at_audio_end - (self._audio_duration - audio_time)
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
@@ -371,6 +419,15 @@ class AudioRecognition:
     @property
     def _input_started_at(self) -> float | None:
         return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
+
+    @property
+    def _input_audio_duration(self) -> float:
+        """Seconds of audio pushed to the STT pipeline (0 before audio starts)."""
+        return self._stt_pipeline.audio_duration if self._stt_pipeline is not None else 0.0
+
+    def _stt_wall_time(self, stt_time: float) -> float | None:
+        """Wall clock for an STT timestamp, or ``None`` if it can't be mapped yet."""
+        return self._stt_pipeline.wall_time_at(stt_time) if self._stt_pipeline is not None else None
 
     def _start(
         self,
@@ -636,8 +693,11 @@ class AudioRecognition:
                 self._reset_interruption_detection()
                 return
 
-            if ev.alternatives[0].end_time > 0 and self._within_ignore_window(
-                ev.alternatives[0].end_time + self._input_started_at
+            end_wall_time = self._stt_wall_time(ev.alternatives[0].end_time)
+            if (
+                ev.alternatives[0].end_time > 0
+                and end_wall_time is not None
+                and self._within_ignore_window(end_wall_time)
             ):
                 # reset the index to emit from the next valid event
                 emit_from_index = None
@@ -653,22 +713,18 @@ class AudioRecognition:
             else []
         )
         _ignore_user_transcript_until = self._ignore_user_transcript_until
-        _input_started_at = self._input_started_at
         # reset before emitting to avoid recursive calls
         self._reset_interruption_detection()
 
         for ev in events_to_emit:
             added_delay = 0.0
             if ev.alternatives and ev.alternatives[0].end_time > 0:
-                added_delay = max(
-                    0,
-                    (
-                        ev.alternatives[0].end_time
-                        + _input_started_at
-                        - _ignore_user_transcript_until
+                end_wall_time = self._stt_wall_time(ev.alternatives[0].end_time)
+                if end_wall_time is not None:
+                    added_delay = max(
+                        0,
+                        (end_wall_time - _ignore_user_transcript_until) + (cooldown or 0.0),
                     )
-                    + (cooldown or 0.0),
-                )
             logger.trace(
                 "re-emitting held user transcript",
                 extra={
@@ -718,38 +774,47 @@ class AudioRecognition:
         # we have something concrete to release them
         if not ev.alternatives:
             return True
+        start_wall_time = self._stt_wall_time(ev.alternatives[0].start_time)
         if (
             # most vendors don't set timestamps properly, in which case we just assume
             # it is a valid event after the ignore_user_transcript_until timestamp
-            is_given(self._input_started_at)
             # check if the event should be held if
-            # 1. the stt input stream has started
+            # 1. the stt input stream has started (the timestamp maps to wall clock)
             # 2. the current event has a valid start and end time, relative to the input stream start time
             # 3. the event's wall-clock time falls inside the bounded ignore-user-transcript window
-            and self._input_started_at is not None
+            start_wall_time is not None
             and not (ev.alternatives[0].start_time == ev.alternatives[0].end_time == 0)
             and ev.alternatives[0].start_time > 0
-            and self._within_ignore_window(ev.alternatives[0].start_time + self._input_started_at)
+            and self._within_ignore_window(start_wall_time)
         ):
             return True
 
         return False
 
     def _push_audio(
-        self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
+        self,
+        frame: rtc.AudioFrame,
+        *,
+        stt_frame: rtc.AudioFrame | None = None,
+        synthetic: bool = False,
     ) -> None:
         """Forward an audio frame to STT, VAD, AMD and the interruption detector.
 
         When ``stt_frame`` is provided, it is sent to the STT pipeline in place of
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD, AMD and the interruption channel always receive ``frame``.
+
+        ``synthetic`` marks audio that isn't arriving from the input in realtime
+        (see ``_STTPipeline.note_audio_pushed``).
         """
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
-            self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
+            pushed = stt_frame if stt_frame is not None else frame
+            self._stt_pipeline.audio_ch.send_nowait(pushed)
+            self._stt_pipeline.note_audio_pushed(pushed.duration, synthetic=synthetic)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
@@ -1030,7 +1095,9 @@ class AudioRecognition:
                     silence = utils.audio.silence_frame(0.2, self._sample_rate)
                     num_frames = max(0, int(math.ceil(stt_flush_duration / silence.duration)))
                     for _ in range(num_frames):
-                        self._push_audio(silence)
+                        # injected far faster than realtime; must not drag the
+                        # audio->wall mapping of everything before it into the past
+                        self._push_audio(silence, synthetic=True)
 
                 # wait for the final transcript to be available
                 try:
@@ -1147,16 +1214,16 @@ class AudioRecognition:
                 await self._flush_held_transcripts(cooldown=end_cooldown)
                 # no return here to allow the new event to be processed normally
 
-        has_stt_end_time = bool(
-            len(ev.alternatives) > 0
-            and ev.alternatives[0].end_time > 0
-            and self._input_started_at is not None
+        stt_end_wall_time = (
+            self._stt_wall_time(ev.alternatives[0].end_time)
+            if len(ev.alternatives) > 0 and ev.alternatives[0].end_time > 0
+            else None
         )
         now = time.time()
+        # the provider can't have transcribed audio it hasn't received, so a mapped
+        # time ahead of now means the mapping is off; clamp rather than look ahead
         stt_last_speaking_time = (
-            min(ev.alternatives[0].end_time + self._input_started_at, now)
-            if has_stt_end_time and self._input_started_at is not None
-            else now
+            min(stt_end_wall_time, now) if stt_end_wall_time is not None else now
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
@@ -1195,8 +1262,8 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript
@@ -1255,8 +1322,8 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -1306,8 +1373,8 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech, use stt timestamp
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()

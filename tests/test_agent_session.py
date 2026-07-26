@@ -1069,8 +1069,12 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
     input_started_at = time.time() - 10.0
-    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
-    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
+    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at),
+    # which also maps audio-timeline timestamps to wall clock (_STTPipeline.wall_time_at)
+    recognition._stt_pipeline = SimpleNamespace(  # type: ignore[assignment]
+        input_started_at=input_started_at,
+        wall_time_at=lambda audio_time: input_started_at + audio_time,
+    )
 
     try:
         # the agent speaks for a couple of seconds so the held transcript still lands

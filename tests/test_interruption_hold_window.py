@@ -35,6 +35,9 @@ def _make_recognition(
     ar._agent_speech_started_at = agent_started
     pipeline = MagicMock()
     pipeline.input_started_at = input_started
+    # audio timeline anchored at `input_started`, flowing at realtime — the mapping
+    # itself is covered by the _STTPipeline tests
+    pipeline.wall_time_at = lambda audio_time: input_started + audio_time
     ar._stt_pipeline = pipeline
     return ar
 

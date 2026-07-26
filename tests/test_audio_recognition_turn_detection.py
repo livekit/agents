@@ -88,6 +88,9 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._vad_base_turn_detection = False
+    # turn-scoped barge-in state, read when the bounce builds _EndOfTurnInfo
+    ar._turn_backchannel_over_agent = False
+    ar._overlap_in_current_turn = False
 
     endpointing = MagicMock()
     endpointing.min_delay = 0.01
@@ -314,14 +317,16 @@ class TestEotPredictionDedup:
         )
         ar._last_emitted_prediction = prev
 
-        # Wire only the bits ``clear_user_turn`` touches beyond the eou helper.
+        # Wire only the bits ``_clear_user_turn`` touches beyond the eou helper.
         ar._audio_interim_transcript = ""
         ar._audio_preflight_transcript = ""
         ar._stt_request_ids = []
+        ar._turn_tracker = MagicMock()
         ar._turn_detector_stream.flush = MagicMock()
-        ar.update_stt = MagicMock()  # type: ignore[method-assign]
+        # the stt reset at the end of _clear_user_turn is out of scope here
+        ar._update_stt = MagicMock()  # type: ignore[method-assign]
 
-        ar.clear_user_turn()
+        ar._clear_user_turn()
 
         assert ar._last_emitted_prediction is None
 
@@ -553,7 +558,9 @@ class TestPredictionFutureLifecycle:
 
         assert ar._turn_detector_stream.predict.call_count == 0
         ar._hooks.on_eot_prediction.assert_not_called()
-        flush_warnings = [r for r in caplog.records if "already flushed" in r.getMessage()]
+        flush_warnings = [
+            r for r in caplog.records if "after turn has been committed" in r.getMessage()
+        ]
         assert len(flush_warnings) == 1
 
     async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
@@ -658,7 +665,7 @@ class TestVadMinSilenceRequirement:
 
     def test_update_turn_detector_validates_pairing(self) -> None:
         """Integration: attaching an audio detector over a too-low VAD raises
-        through the ``update_turn_detector`` call site, before any stream is
+        through the ``_update_turn_detector`` call site, before any stream is
         built."""
         ar = _make_recognition_for_validation()
         ar._tasks = set()
@@ -667,8 +674,102 @@ class TestVadMinSilenceRequirement:
         detector = MagicMock(spec=_StreamingTurnDetector)
 
         with pytest.raises(ValueError, match="min_silence_duration"):
-            ar.update_turn_detector(detector)
+            ar._update_turn_detector(detector)
 
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
         detector.stream.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# The endpointing window is measured from the speaking anchor
+# ---------------------------------------------------------------------------
+
+
+class TestEndpointingAnchoredOnSpeechEnd:
+    """``_bounce_eou_task`` sleeps ``endpointing_delay - (now - last_speaking_time)``.
+
+    The anchor therefore decides *when the agent replies*, not just what the EOU
+    metrics report: time already spent transcribing is time the user has been
+    silent, so it counts against the endpointing window. An anchor that has
+    collapsed onto the transcript-arrival instant restarts the whole window from
+    that moment and delays the reply by however wrong it was.
+
+    Virtual time makes the sleep exact, so these assert the arithmetic directly.
+    """
+
+    pytestmark = [pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
+    @staticmethod
+    def _prepared(
+        *,
+        anchor_age: float | None,
+        probability: float,
+        min_delay: float = 0.5,
+        max_delay: float = 3.0,
+    ) -> AudioRecognition:
+        ar = _make_full_recognition_for_eou()
+        ar._endpointing.min_delay = min_delay
+        ar._endpointing.max_delay = max_delay
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(probability)
+
+        now = time.time()
+        ar._user_turn_start = now - 5.0
+        ar._last_speaking_time = None if anchor_age is None else now - anchor_age
+        # the final transcript landed just now, which is what made us bounce
+        ar._last_final_transcript_time = now
+        ar._audio_transcript = "hello there"
+        return ar
+
+    @staticmethod
+    async def _bounce(ar: AudioRecognition) -> float:
+        """Run one eou bounce, returning how long it waited."""
+        started = time.time()
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        return time.time() - started
+
+    async def test_transcription_time_counts_against_the_endpointing_window(self) -> None:
+        """Anchor 0.6s old with a 0.5s min_delay → the window already elapsed."""
+        ar = self._prepared(anchor_age=0.6, probability=0.9)
+
+        waited = await self._bounce(ar)
+
+        assert waited == pytest.approx(0.0, abs=0.01)
+        ar._hooks.on_end_of_turn.assert_called_once()
+        metrics = ar._hooks.on_end_of_turn.call_args.args[0].metrics
+        assert metrics.transcription_delay == pytest.approx(0.6, abs=0.01)
+
+    async def test_anchor_collapsed_onto_arrival_restarts_the_window(self) -> None:
+        """An anchor pinned to the transcript-arrival instant (the failure mode
+        when a provider's audio clock maps ahead of wall clock) waits the full
+        min_delay *after* the transcript, and reports ~0 transcription delay."""
+        ar = self._prepared(anchor_age=0.0, probability=0.9)
+
+        waited = await self._bounce(ar)
+
+        assert waited == pytest.approx(0.5, abs=0.01)
+        metrics = ar._hooks.on_end_of_turn.call_args.args[0].metrics
+        assert metrics.transcription_delay == pytest.approx(0.0, abs=0.01)
+
+    async def test_unlikely_eot_extends_to_max_delay_from_the_anchor(self) -> None:
+        """A sub-threshold prediction swaps in max_delay — still measured from
+        the anchor, so the extra patience is not additive with the STT latency."""
+        ar = self._prepared(anchor_age=0.6, probability=0.2)
+
+        waited = await self._bounce(ar)
+
+        assert waited == pytest.approx(2.4, abs=0.01)  # 3.0 max_delay - 0.6 elapsed
+
+    async def test_missing_anchor_waits_the_full_delay_and_skips_metrics(self) -> None:
+        """No anchor at all (no VAD, no usable provider timestamp): fall back to
+        the full delay, and report nothing rather than a guessed delay."""
+        ar = self._prepared(anchor_age=None, probability=0.9)
+
+        waited = await self._bounce(ar)
+
+        assert waited == pytest.approx(0.5, abs=0.01)
+        metrics = ar._hooks.on_end_of_turn.call_args.args[0].metrics
+        assert metrics.transcription_delay is None
+        assert metrics.stopped_speaking_at is None
