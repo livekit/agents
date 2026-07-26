@@ -33,10 +33,16 @@ from . import auth
 from .auth import KrispLicenseAuthProvider, LiveKitCloudAuthProvider
 from .log import logger
 from .version import __version__
-from .viva_filter import KrispVivaFilterFrameProcessor
+from .viva_filter import (
+    KrispVivaFilterFrameProcessor,
+    voice_isolation,
+    voice_isolation_telephony,
+)
 
 __all__ = [
     "KrispVivaFilterFrameProcessor",
+    "voice_isolation",
+    "voice_isolation_telephony",
     "LiveKitCloudAuthProvider",
     "KrispLicenseAuthProvider",
     "auth",
