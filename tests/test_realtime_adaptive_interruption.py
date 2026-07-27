@@ -364,6 +364,18 @@ async def test_resume_does_not_restart_the_detector() -> None:
     assert _sentinel_names(ch) == []
 
 
+async def test_open_overlap_marks_the_next_agent_segment_as_resumed() -> None:
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ch.sent.clear()
+
+    ar._on_start_of_agent_speech(started_at=time.time())
+
+    assert _sentinel_names(ch) == []
+
+
 async def test_a_resolved_overlap_is_not_closed_again() -> None:
     # a turn can hold several overlaps, so closing keys off the open one rather than the turn
     ar, ch = _recognition_with_interruption_ch()
@@ -399,4 +411,8 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
 
     ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
 
-    assert "_AgentSpeechEndedSentinel" in _sentinel_names(ch)
+    assert _sentinel_names(ch) == [
+        "_OverlapSpeechEndedSentinel",
+        "_AgentSpeechEndedSentinel",
+    ]
+    assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
