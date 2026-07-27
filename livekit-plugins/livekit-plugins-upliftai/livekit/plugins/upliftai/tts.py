@@ -10,10 +10,11 @@ import os
 import time
 import uuid
 import weakref
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import socketio  # type: ignore[import-not-found]
+import socketio  # type: ignore[import-untyped, import-not-found, unused-ignore]
 
 from livekit.agents import (
     APIConnectionError,
@@ -25,7 +26,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import codecs, is_given
 
 from .log import logger
 
@@ -49,6 +50,17 @@ DEFAULT_VOICE_ID = "v_meklc281"
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "MP3_22050_32"
 WEBSOCKET_NAMESPACE = "/text-to-speech/multi-stream"
 
+# Sentence-ending punctuation: English, Urdu (۔ U+06D4, ؟ U+061F) and full-width marks
+SENTENCE_END_CHARS = ".!?…۔؟。！？"
+# closing quotes/brackets that may trail the sentence-ending punctuation
+_CLOSING_CHARS = "\"'”’»)]"
+
+DEFAULT_MIN_CHUNK_LEN = 20
+DEFAULT_MAX_CHUNK_LEN = 200
+# how many synthesis requests may be in flight ahead of the one currently being emitted
+MAX_PIPELINED_REQUESTS = 3
+AUDIO_CHUNK_TIMEOUT = 30.0
+
 
 def get_content_type_from_output_format(output_format: OutputFormat) -> str:
     """Get MIME type based on output format"""
@@ -66,6 +78,11 @@ def get_content_type_from_output_format(output_format: OutputFormat) -> str:
         return "audio/x-mulaw"
     else:
         raise ValueError(f"Unsupported output format: {output_format}")
+
+
+def _ends_sentence(token: str) -> bool:
+    stripped = token.rstrip(_CLOSING_CHARS)
+    return bool(stripped) and stripped[-1] in SENTENCE_END_CHARS
 
 
 @dataclass
@@ -87,6 +104,8 @@ class _TTSOptions:
     sample_rate: int
     num_channels: int
     phrase_replacement_config_id: str | None
+    min_chunk_len: int
+    max_chunk_len: int
 
 
 class TTS(tts.TTS):
@@ -102,6 +121,8 @@ class TTS(tts.TTS):
         num_channels: int = DEFAULT_NUM_CHANNELS,
         phrase_replacement_config_id: NotGivenOr[str] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
+        min_chunk_len: int = DEFAULT_MIN_CHUNK_LEN,
+        max_chunk_len: int = DEFAULT_MAX_CHUNK_LEN,
     ) -> None:
         """
         Create a new instance of Uplift TTS.
@@ -109,7 +130,7 @@ class TTS(tts.TTS):
         Args:
             base_url: Base URL for TTS service. Defaults to wss://api.upliftai.org
             api_key: API key for authentication
-            voice_id: Voice ID to use. Defaults to "17"
+            voice_id: Voice ID to use. Defaults to "v_meklc281"
             output_format: Audio output format. Options:
                 - 'PCM_22050_16': PCM format, 22.05kHz, 16-bit
                 - 'WAV_22050_16': WAV format, 22.05kHz, 16-bit
@@ -118,11 +139,16 @@ class TTS(tts.TTS):
                 - 'MP3_22050_64': MP3 format, 22.05kHz, 64kbps
                 - 'MP3_22050_128': MP3 format, 22.05kHz, 128kbps
                 - 'OGG_22050_16': OGG format, 22.05kHz, 16-bit
-                - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
-            sample_rate: Sample rate for audio output. Defaults to 22050
+                - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit. Intended for telephony
+                  integrations; not currently decodable in the agents audio pipeline
+                  (headerless μ-law is not supported by the SDK decoder)
             num_channels: Number of audio channels. Defaults to 1 (mono)
             phrase_replacement_config_id: Optional ID for phrase replacement configuration
             word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
+            min_chunk_len: Minimum buffered characters before a sentence boundary
+                triggers a synthesis request. Defaults to 20
+            max_chunk_len: Maximum buffered characters before a synthesis request is
+                forced, even without a sentence boundary. Defaults to 200
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -148,6 +174,11 @@ class TTS(tts.TTS):
                 "API key is required, either as argument or set UPLIFTAI_API_KEY environment variable"
             )
 
+        if min_chunk_len < 1:
+            raise ValueError("min_chunk_len must be at least 1")
+        if max_chunk_len <= min_chunk_len:
+            raise ValueError("max_chunk_len must be greater than min_chunk_len")
+
         # Use provided tokenizer or create default
         resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
         if is_given(word_tokenizer):
@@ -165,10 +196,19 @@ class TTS(tts.TTS):
             phrase_replacement_config_id=phrase_replacement_config_id
             if is_given(phrase_replacement_config_id)
             else None,
+            min_chunk_len=min_chunk_len,
+            max_chunk_len=max_chunk_len,
         )
 
         self._client: WebSocketClient | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._prewarm_task: asyncio.Task[None] | None = None
+
+        logger.info(
+            "UpliftAI TTS initialized (sentence-chunked streaming): "
+            f"min_chunk_len={min_chunk_len} max_chunk_len={max_chunk_len} "
+            f"pipelined={MAX_PIPELINED_REQUESTS} output_format={output_format}"
+        )
 
     def update_options(
         self,
@@ -202,8 +242,36 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    def prewarm(self) -> None:
+        """Initiate the WebSocket connection to the TTS service without blocking.
+
+        This starts a background task that connects if not already connected, so the
+        first synthesis request doesn't pay the connection cost.
+        """
+        if self._prewarm_task is not None:
+            return
+        if self._client and self._client.connected:
+            return
+
+        if not self._client:
+            self._client = WebSocketClient(self._opts)
+        client = self._client
+
+        async def _prewarm_impl() -> None:
+            if not await client.connect():
+                logger.warning("failed to prewarm TTS WebSocket connection")
+
+        # hold a strong reference: the event loop alone won't keep the task alive
+        task = asyncio.create_task(_prewarm_impl())
+        task.add_done_callback(lambda _: setattr(self, "_prewarm_task", None))
+        self._prewarm_task = task
+
     async def aclose(self) -> None:
         """Clean up resources"""
+        if self._prewarm_task is not None:
+            await utils.aio.gracefully_cancel(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
 
@@ -221,68 +289,82 @@ class WebSocketClient:
         self.opts = opts
         self.sio: socketio.AsyncClient | None = None
         self.connected = False
-        self.audio_callbacks: dict[str, asyncio.Queue[bytes | None]] = {}
+        # each queue yields audio bytes, an Exception on failure, or None when done
+        self.audio_callbacks: dict[str, asyncio.Queue[bytes | Exception | None]] = {}
         self.active_requests: dict[str, bool] = {}
+        # serializes concurrent connect() calls (e.g. prewarm racing the first synthesis)
+        self._connect_lock = asyncio.Lock()
 
     async def connect(self) -> bool:
         """Establish WebSocket connection"""
-        if self.connected:
-            return True
+        async with self._connect_lock:
+            if self.connected:
+                return True
 
-        try:
-            self.sio = socketio.AsyncClient(
-                reconnection=True,
-                reconnection_attempts=3,
-                reconnection_delay=1,
-                logger=False,
-                engineio_logger=False,
-            )
+            try:
+                # drop any previous socket before replacing it: a stale client
+                # left auto-reconnecting in the background shares our handlers
+                # and could flip self.connected under a new connection
+                if self.sio is not None:
+                    try:
+                        await self.sio.disconnect()
+                    except Exception:
+                        pass
+                    self.sio = None
 
-            # Register handlers
-            self.sio.on("message", self._on_message, namespace=WEBSOCKET_NAMESPACE)
-            self.sio.on("connect", self._on_connect, namespace=WEBSOCKET_NAMESPACE)
-            self.sio.on("disconnect", self._on_disconnect, namespace=WEBSOCKET_NAMESPACE)
+                # reconnection is handled by the SDK retry loop (which replays
+                # the turn), not by socket.io auto-reconnect
+                self.sio = socketio.AsyncClient(
+                    reconnection=False,
+                    logger=False,
+                    engineio_logger=False,
+                )
 
-            # Prepare auth
-            auth_data = {"token": self.opts.api_key}
+                # Register handlers
+                self.sio.on("message", self._on_message, namespace=WEBSOCKET_NAMESPACE)
+                self.sio.on("connect", self._on_connect, namespace=WEBSOCKET_NAMESPACE)
+                self.sio.on("disconnect", self._on_disconnect, namespace=WEBSOCKET_NAMESPACE)
 
-            # Connect
-            await self.sio.connect(
-                self.opts.base_url,
-                auth=auth_data,
-                namespaces=[WEBSOCKET_NAMESPACE],
-                transports=["websocket"],
-                wait_timeout=10,
-            )
+                # Prepare auth
+                auth_data = {"token": self.opts.api_key}
 
-            # Wait for connection
-            max_wait = 5.0
-            start_time = time.time()
-            while not self.connected and (time.time() - start_time) < max_wait:
-                await asyncio.sleep(0.1)
+                # Connect
+                await self.sio.connect(
+                    self.opts.base_url,
+                    auth=auth_data,
+                    namespaces=[WEBSOCKET_NAMESPACE],
+                    transports=["websocket"],
+                    wait_timeout=10,
+                )
 
-            if not self.connected and self.sio.connected:
-                self.connected = True
+                # Wait for connection
+                max_wait = 5.0
+                start_time = time.time()
+                while not self.connected and (time.time() - start_time) < max_wait:
+                    await asyncio.sleep(0.1)
 
-            return self.connected
+                if not self.connected and self.sio.connected:
+                    self.connected = True
 
-        except Exception as e:
-            logger.error(f"Connection failed: {e}")
-            return False
+                return self.connected
+
+            except Exception as e:
+                logger.error(f"Connection failed: {e}")
+                return False
 
     async def synthesize(
         self, text: str, request_id: str | None = None
-    ) -> asyncio.Queue[bytes | None]:
+    ) -> asyncio.Queue[bytes | Exception | None]:
         """Send synthesis request and return audio queue"""
         if not self.sio or not self.connected:
             if not await self.connect():
-                raise ConnectionError("Failed to connect to TTS service")
+                raise APIConnectionError("Failed to connect to TTS service")
 
         if not request_id:
             request_id = str(uuid.uuid4())
 
         # Create audio queue
-        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        audio_queue: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
         self.audio_callbacks[request_id] = audio_queue
         self.active_requests[request_id] = True
 
@@ -312,6 +394,25 @@ class WebSocketClient:
             raise
 
         return audio_queue
+
+    async def cancel(self, request_id: str) -> None:
+        """Cancel an active synthesis request and drop any further audio for it"""
+        if request_id in self.audio_callbacks:
+            await self.audio_callbacks[request_id].put(None)
+            del self.audio_callbacks[request_id]
+        self.active_requests.pop(request_id, None)
+
+        if self.sio is None or not self.connected:
+            return
+
+        try:
+            await self.sio.emit(
+                "cancel",
+                {"type": "cancel", "requestId": request_id},
+                namespace=WEBSOCKET_NAMESPACE,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send cancel for request {request_id[:8]}: {e}")
 
     async def disconnect(self) -> None:
         """Disconnect from service"""
@@ -354,7 +455,7 @@ class WebSocketClient:
             logger.error(f"Error for {request_id}: {error_msg}")
 
             if request_id in self.audio_callbacks:
-                await self.audio_callbacks[request_id].put(None)
+                await self.audio_callbacks[request_id].put(APIError(f"TTS error: {error_msg}"))
                 del self.audio_callbacks[request_id]
                 if request_id in self.active_requests:
                     del self.active_requests[request_id]
@@ -363,7 +464,7 @@ class WebSocketClient:
         """Handle disconnection"""
         self.connected = False
         for queue in self.audio_callbacks.values():
-            await queue.put(None)
+            await queue.put(APIConnectionError("connection to TTS service closed"))
         self.audio_callbacks.clear()
         self.active_requests.clear()
 
@@ -393,34 +494,47 @@ class ChunkedStream(tts.ChunkedStream):
             # Create client if needed
             if not self._tts._client:
                 self._tts._client = WebSocketClient(self._tts._opts)
+            client = self._tts._client
 
             # Get audio queue
-            audio_queue = await self._tts._client.synthesize(self._input_text, request_id)
+            audio_queue = await client.synthesize(self._input_text, request_id)
 
             # Stream audio
-            while True:
-                try:
-                    audio_data = await asyncio.wait_for(audio_queue.get(), timeout=30.0)
+            try:
+                while True:
+                    try:
+                        audio_data = await asyncio.wait_for(
+                            audio_queue.get(), timeout=AUDIO_CHUNK_TIMEOUT
+                        )
+                    except asyncio.TimeoutError as e:
+                        raise APITimeoutError("timed out waiting for TTS audio") from e
 
                     if audio_data is None:
                         break
+                    if isinstance(audio_data, Exception):
+                        raise audio_data
 
                     output_emitter.push(audio_data)
-
-                except asyncio.TimeoutError:
-                    logger.warning("Audio timeout")
-                    break
+            except BaseException:
+                # on interruption, timeout or error, stop the server-side synthesis
+                await client.cancel(request_id)
+                raise
 
             output_emitter.flush()
 
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError() from e
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError(f"TTS synthesis failed: {str(e)}") from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming synthesis implementation"""
+    """Streaming synthesis implementation.
+
+    Buffered text is flushed to the TTS service at sentence boundaries (or after
+    ``max_chunk_len`` characters), and up to ``MAX_PIPELINED_REQUESTS`` requests are
+    kept in flight while earlier audio is still being emitted.
+    """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
@@ -429,42 +543,43 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute streaming synthesis"""
         request_id = utils.shortuuid()
+        # local so a retry attempt starts with a fresh channel instead of one
+        # already closed (or holding stale token streams) from a prior attempt
         segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
 
+        # chunks are decoded in-plugin (see _emit_chunk), the emitter gets raw PCM
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._tts._opts.sample_rate,
             num_channels=self._tts._opts.num_channels,
             stream=True,
-            mime_type=get_content_type_from_output_format(
-                self._tts._opts.voice_settings.output_format
-            ),
+            mime_type="audio/pcm",
         )
 
         async def _tokenize_input() -> None:
             """Tokenize input text"""
-            word_stream = None
+            token_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
-                    if word_stream is None:
-                        word_stream = self._tts._opts.word_tokenizer.stream()
-                        segments_ch.send_nowait(word_stream)
+                    if token_stream is None:
+                        token_stream = self._tts._opts.word_tokenizer.stream()
+                        segments_ch.send_nowait(token_stream)
 
-                    word_stream.push_text(input)
+                    token_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
-                    if word_stream is not None:
-                        word_stream.end_input()
-                    word_stream = None
+                    if token_stream is not None:
+                        token_stream.end_input()
+                    token_stream = None
 
-            if word_stream is not None:
-                word_stream.end_input()
+            if token_stream is not None:
+                token_stream.end_input()
 
             segments_ch.close()
 
         async def _process_segments() -> None:
             """Process segments"""
-            async for word_stream in segments_ch:
-                await self._run_segment(word_stream, output_emitter)
+            async for token_stream in segments_ch:
+                await self._run_segment(token_stream, output_emitter)
 
         tasks = [
             asyncio.create_task(_tokenize_input()),
@@ -475,59 +590,160 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except Exception as e:
-            raise APIConnectionError() from e
+            raise APIConnectionError(f"TTS stream failed: {str(e)}") from e
         finally:
+            # emitter finalization is the base class's job: end_input() on success,
+            # aclose() on failure (which discards any partial tail frame)
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_segment(
         self,
-        word_stream: tokenize.WordStream | tokenize.SentenceStream,
+        token_stream: tokenize.WordStream | tokenize.SentenceStream,
         output_emitter: tts.AudioEmitter,
     ) -> None:
         """Process a single segment"""
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
+        opts = self._tts._opts
 
-        try:
-            # Create client if needed
-            if not self._tts._client:
-                self._tts._client = WebSocketClient(self._tts._opts)
+        if not self._tts._client:
+            self._tts._client = WebSocketClient(opts)
+        client = self._tts._client
 
-            # Collect text
-            text_parts = []
-            async for data in word_stream:
-                text_parts.append(data.token)
+        output_emitter.start_segment(segment_id=utils.shortuuid())
 
-            if not text_parts:
-                return
+        # audio queues of in-flight requests, in submission order. the bound caps
+        # look-ahead at MAX_PIPELINED_REQUESTS queued, plus one being emitted and
+        # one blocked in _submit_buffer
+        inflight_ch: asyncio.Queue[tuple[str, asyncio.Queue[bytes | Exception | None]] | None] = (
+            asyncio.Queue(maxsize=MAX_PIPELINED_REQUESTS)
+        )
+        # requests submitted but not fully drained; cancelled server-side on teardown
+        pending_request_ids: set[str] = set()
 
-            # Format text
-            if isinstance(self._tts._opts.word_tokenizer, tokenize.WordTokenizer):
-                full_text = self._tts._opts.word_tokenizer.format_words(text_parts)
-            else:
-                full_text = " ".join(text_parts)
+        async def _schedule_chunks() -> None:
+            buffer: list[str] = []
+            buffer_len = 0
 
-            self._mark_started()
+            async def _submit_buffer() -> None:
+                nonlocal buffer, buffer_len
+                if not buffer:
+                    return
 
-            # Synthesize
-            audio_queue = await self._tts._client.synthesize(full_text, segment_id)
+                if isinstance(opts.word_tokenizer, tokenize.WordTokenizer):
+                    chunk_text = opts.word_tokenizer.format_words(buffer)
+                else:
+                    chunk_text = " ".join(buffer)
+                buffer, buffer_len = [], 0
 
-            # Stream audio
+                if not chunk_text.strip():
+                    return
+
+                self._mark_started()
+                chunk_request_id = str(uuid.uuid4())
+                # track before the await: if we're cancelled mid-submission, the
+                # request may already be on the wire and must still get cancelled
+                pending_request_ids.add(chunk_request_id)
+                audio_queue = await client.synthesize(chunk_text, chunk_request_id)
+                await inflight_ch.put((chunk_request_id, audio_queue))
+
+            async for token_data in token_stream:
+                token = token_data.token
+                if buffer and buffer_len + len(token) + 1 > opts.max_chunk_len:
+                    await _submit_buffer()
+
+                buffer.append(token)
+                buffer_len += len(token) + 1
+
+                if buffer_len >= opts.min_chunk_len and _ends_sentence(token):
+                    await _submit_buffer()
+
+            await _submit_buffer()
+            await inflight_ch.put(None)
+
+        async def _iter_audio(
+            audio_queue: asyncio.Queue[bytes | Exception | None],
+        ) -> AsyncIterator[bytes]:
             while True:
                 try:
-                    audio_data = await asyncio.wait_for(audio_queue.get(), timeout=30.0)
+                    audio_data = await asyncio.wait_for(
+                        audio_queue.get(), timeout=AUDIO_CHUNK_TIMEOUT
+                    )
+                except asyncio.TimeoutError as e:
+                    raise APITimeoutError("timed out waiting for TTS audio") from e
 
-                    if audio_data is None:
-                        break
+                if audio_data is None:
+                    return
+                if isinstance(audio_data, Exception):
+                    raise audio_data
 
+                yield audio_data
+
+        async def _emit_chunk(audio_queue: asyncio.Queue[bytes | Exception | None]) -> None:
+            # each request returns a complete audio file. a single decoder cannot
+            # span multiple files (a mid-stream MP3/RIFF header corrupts or
+            # truncates decoding), so every chunk is decoded independently and
+            # the emitter only ever sees raw PCM
+            if opts.voice_settings.output_format == "PCM_22050_16":
+                async for audio_data in _iter_audio(audio_queue):
                     output_emitter.push(audio_data)
+                return
 
-                except asyncio.TimeoutError:
-                    break
+            decoder = codecs.AudioStreamDecoder(
+                sample_rate=opts.sample_rate,
+                num_channels=opts.num_channels,
+                format=get_content_type_from_output_format(opts.voice_settings.output_format),
+            )
+            fed_bytes = 0
+            decoded_frames = 0
 
-            output_emitter.end_input()
+            async def _feed_decoder() -> None:
+                nonlocal fed_bytes
+                try:
+                    async for audio_data in _iter_audio(audio_queue):
+                        fed_bytes += len(audio_data)
+                        decoder.push(audio_data)
+                finally:
+                    decoder.end_input()
 
-        except Exception as e:
-            logger.error(f"Segment synthesis error: {e}")
-            raise APIError(f"Segment synthesis failed: {str(e)}") from e
+            feed_task = asyncio.create_task(_feed_decoder())
+            try:
+                async for frame in decoder:
+                    decoded_frames += 1
+                    output_emitter.push(frame.data.tobytes())
+                await feed_task  # propagate synthesis errors (APIError, timeout)
+            finally:
+                await utils.aio.gracefully_cancel(feed_task)
+                await decoder.aclose()
+
+            # the SDK decoder is fail-open: a decode error only logs and closes the
+            # stream. surface it as a retryable error instead of a silent gap in speech
+            if fed_bytes > 0 and decoded_frames == 0:
+                raise APIError(f"TTS audio chunk could not be decoded ({fed_bytes} bytes received)")
+
+        async def _emit_audio() -> None:
+            while (inflight := await inflight_ch.get()) is not None:
+                chunk_request_id, audio_queue = inflight
+                # on failure the id stays in pending_request_ids so teardown sends
+                # a cancel — required for timeouts, harmless for dead requests
+                await _emit_chunk(audio_queue)
+                pending_request_ids.discard(chunk_request_id)
+                # release the held-back tail frame so a chunk's final audio isn't
+                # delayed until the next chunk's audio arrives
+                output_emitter.flush()
+
+        tasks = [
+            asyncio.create_task(_schedule_chunks()),
+            asyncio.create_task(_emit_audio()),
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.gracefully_cancel(*tasks)
+            # on interruption or error, stop synthesis of requests we'll never play
+            for chunk_request_id in pending_request_ids:
+                await client.cancel(chunk_request_id)
+
+        output_emitter.end_segment()
