@@ -130,7 +130,8 @@ class LLM(OpenAILLM):
 
         ``reasoning_format`` controls how reasoning models (e.g. ``gpt-oss-120b``) return their
         thinking tokens. Set it to ``"hidden"`` or ``"parsed"`` to keep the model's internal
-        monologue out of the spoken message content.
+        monologue out of the spoken message content; ``"none"`` keeps the model's default
+        behavior.
 
         When ``gzip_compression`` is True (default), request payloads are gzip-compressed,
         which can reduce TTFT for requests with large prompts.

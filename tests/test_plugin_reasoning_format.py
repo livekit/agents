@@ -67,16 +67,18 @@ async def test_openai_with_cerebras_reasoning_format_in_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_xai_reasoning_format_in_request() -> None:
-    """``LLM.with_x_ai`` forwards ``reasoning_format`` to the request body."""
-    llm = OpenAILLM.with_x_ai(
-        model="grok-4-1-fast-reasoning",
+async def test_cerebras_reasoning_format_none_forwarded() -> None:
+    """``"none"`` (provider default) is a valid value and is forwarded verbatim."""
+    llm = CerebrasLLM(
+        model="gpt-oss-120b",
         api_key="test-key",
-        reasoning_format="parsed",
+        reasoning_format="none",
+        gzip_compression=False,
+        msgpack_encoding=False,
     )
     stream = llm.chat(chat_ctx=_chat_ctx())
     try:
         extra_body = stream._extra_kwargs.get("extra_body", {})
-        assert extra_body.get("reasoning_format") == "parsed"
+        assert extra_body.get("reasoning_format") == "none"
     finally:
         await stream.aclose()
