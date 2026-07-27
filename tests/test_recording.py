@@ -507,6 +507,71 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     mock_blrp.assert_not_called()
 
 
+def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
+    """Run _setup_cloud_tracer under the given os.environ and return the dict
+    passed to Resource.create."""
+    from livekit.agents.telemetry.traces import _setup_cloud_tracer
+
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
+        patch(f"{_TRACES_MOD}.get_logger_provider", return_value=MagicMock()),
+        patch(f"{_TRACES_MOD}.set_logger_provider"),
+        patch(f"{_TRACES_MOD}.OTLPLogExporter"),
+        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor"),
+        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}.logging"),
+    ):
+        mock_token = MagicMock()
+        mock_token.with_observability_grants.return_value = mock_token
+        mock_token.with_ttl.return_value = mock_token
+        mock_token.to_jwt.return_value = "test-jwt"
+        mock_at.return_value = mock_token
+
+        _setup_cloud_tracer(
+            room_id="room-1",
+            job_id="job-1",
+            **_observability_endpoint_arg(_setup_cloud_tracer),
+            enable_traces=False,
+            enable_logs=False,
+        )
+    # Resource.create is also called internally by LoggerProvider() with an
+    # empty dict, so select the call that built the tracing resource (the one
+    # carrying service.name) rather than relying on call ordering.
+    for call in mock_resource_create.call_args_list:
+        attrs = call.args[0]
+        if "service.name" in attrs:
+            return attrs
+    raise AssertionError("Resource.create was not called with the service resource")
+
+
+def test_setup_cloud_tracer_injects_hosted_agent_identity() -> None:
+    """LIVEKIT_AGENT_ID / LIVEKIT_AGENT_DEPLOYMENT are added to the tracing
+    resource as lk.cloud_agent_id / lk.deployment_id for cloud attribution."""
+    attrs = _resource_attrs_for_env(
+        {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": "canary"}
+    )
+    assert attrs["lk.cloud_agent_id"] == "CA_test123"
+    assert attrs["lk.deployment_id"] == "canary"
+
+
+def test_setup_cloud_tracer_omits_identity_when_env_unset() -> None:
+    """Self-hosted agents (no launcher env vars) get neither identity attr."""
+    attrs = _resource_attrs_for_env({})
+    assert "lk.cloud_agent_id" not in attrs
+    assert "lk.deployment_id" not in attrs
+
+
+def test_setup_cloud_tracer_omits_deployment_for_production() -> None:
+    """The launcher sets LIVEKIT_AGENT_DEPLOYMENT="" for production; an empty
+    value must be omitted rather than emitted as an empty deployment id."""
+    attrs = _resource_attrs_for_env(
+        {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": ""}
+    )
+    assert attrs["lk.cloud_agent_id"] == "CA_test123"
+    assert "lk.deployment_id" not in attrs
+
+
 # ---------------------------------------------------------------------------
 # Group 4: RecorderIO conditional creation
 # ---------------------------------------------------------------------------

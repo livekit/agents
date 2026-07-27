@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -284,7 +285,24 @@ def _setup_cloud_tracer(
     if metadata:
         session_metadata.update(metadata)
 
-    resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+    # Hosted-agent identity injected by the LiveKit Cloud launcher as env vars:
+    # the cloud agent id (LIVEKIT_AGENT_ID) and, for non-production deployments,
+    # the deployment id (LIVEKIT_AGENT_DEPLOYMENT). Added to the tracing resource
+    # (not the per-span metadata) so LiveKit Cloud agent insights can attribute
+    # telemetry per agent. Resource.create still merges any customer-set
+    # OTEL_RESOURCE_ATTRIBUTES via the standard env detector, so these do not
+    # clobber customer attributes. Empty/unset (e.g. self-hosted, or production
+    # deployment where LIVEKIT_AGENT_DEPLOYMENT is "") are simply omitted.
+    resource_attributes: dict[str, AttributeValue] = {
+        SERVICE_NAME: "livekit-agents",
+        **base_metadata,
+    }
+    if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
+        resource_attributes[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
+    if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
+        resource_attributes[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
+
+    resource = Resource.create(resource_attributes)
 
     if enable_traces:
         # Check if a tracer provider is not set and set one up
