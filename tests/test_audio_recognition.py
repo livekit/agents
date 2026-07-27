@@ -1188,3 +1188,16 @@ class TestAudioTimelineMapping:
         assert ar._last_final_transcript_time - ar._last_speaking_time == pytest.approx(
             0.4, abs=0.02
         )
+
+    async def test_synthetic_audio_arriving_first_anchors_like_real_audio(self) -> None:
+        """Nothing in the framework injects synthetic audio before real input (the
+        flush needs a sample rate, which only a real frame sets), but anchoring off
+        the never-set 0.0 wall time would map every position to the epoch.
+        """
+        pipeline = self._pipeline()
+        pipeline.input_started_at = time.time()
+        pipeline.note_audio_pushed(0.2, synthetic=True)
+
+        assert pipeline.wall_time_at(pipeline.audio_duration) == pytest.approx(
+            time.time(), abs=0.01
+        )

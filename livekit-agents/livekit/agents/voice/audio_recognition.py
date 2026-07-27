@@ -194,10 +194,17 @@ class _STTPipeline:
         ``synthetic`` audio (the silence used to flush the STT buffer on a manual
         commit) is injected far faster than realtime, so it advances the wall
         anchor by its own duration instead of to *now* — otherwise every position
-        behind it would map that much further into the past.
+        behind it would map that much further into the past. Synthetic audio can
+        only shift an anchor that real audio already established; arriving first
+        it is anchored like real audio, since there is no earlier position to hold
+        in place and the epoch-relative alternative would be nonsense.
         """
         self._audio_duration += duration
-        self._wall_at_audio_end = self._wall_at_audio_end + duration if synthetic else time.time()
+        self._wall_at_audio_end = (
+            self._wall_at_audio_end + duration
+            if synthetic and self._wall_at_audio_end > 0.0
+            else time.time()
+        )
 
     def wall_time_at(self, audio_time: float) -> float | None:
         """Map a position on this pipeline's audio timeline to wall clock.
