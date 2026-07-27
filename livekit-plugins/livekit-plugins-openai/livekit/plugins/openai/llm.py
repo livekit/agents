@@ -20,10 +20,8 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-import openai
-from openai.types import ReasoningEffort
-from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
+import openai
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
@@ -38,6 +36,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from openai.types import ReasoningEffort
+from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
 from .models import (
     CerebrasChatModels,
