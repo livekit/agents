@@ -17,7 +17,22 @@
 See https://docs.livekit.io/agents/integrations/avatar/bithuman/ for more information.
 """
 
-from .avatar import AvatarSession, BitHumanException
+import sys
+
+try:
+    from .avatar import AvatarSession, BitHumanException
+except ImportError:
+    # the bithuman SDK publishes no build for Python 3.14+, so neither it nor the third-party
+    # packages it pulls in are installed there
+    if sys.version_info >= (3, 14):
+        print(
+            "the bithuman SDK is not available on Python "
+            f"{sys.version_info.major}.{sys.version_info.minor}, "
+            "livekit-plugins-bithuman requires Python 3.13 or older",
+            flush=True,
+        )
+    raise
+
 from .version import __version__
 
 __all__ = [

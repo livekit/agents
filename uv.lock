@@ -543,15 +543,15 @@ name = "bithuman"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "av" },
-    { name = "loguru" },
-    { name = "networkx" },
-    { name = "numpy" },
-    { name = "opencv-python-headless" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyyaml" },
-    { name = "soundfile" },
+    { name = "av", marker = "python_full_version < '3.14'" },
+    { name = "loguru", marker = "python_full_version < '3.14'" },
+    { name = "networkx", marker = "python_full_version < '3.14'" },
+    { name = "numpy", marker = "python_full_version < '3.14'" },
+    { name = "opencv-python-headless", marker = "python_full_version < '3.14'" },
+    { name = "pydantic", marker = "python_full_version < '3.14'" },
+    { name = "pydantic-settings", marker = "python_full_version < '3.14'" },
+    { name = "pyyaml", marker = "python_full_version < '3.14'" },
+    { name = "soundfile", marker = "python_full_version < '3.14'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/f4/9faa8a78e8968f4404e5e47a2852d7a97313a667424a8e6f8bff16a28899/bithuman-2.7.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b399a37e187c17a8874e0eeb8e7e7a0907a4155537fac08185dabdb62491a7aa", size = 27205973, upload-time = "2026-07-17T00:14:45.72Z" },
@@ -2346,13 +2346,13 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-bithuman"
 source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
-    { name = "bithuman" },
+    { name = "bithuman", marker = "python_full_version < '3.14'" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", specifier = ">=0.5.25,<3" },
+    { name = "bithuman", marker = "python_full_version < '3.14'", specifier = ">=0.5.25,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -3191,8 +3191,8 @@ name = "loguru"
 version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
@@ -3772,7 +3772,7 @@ name = "opencv-python-headless"
 version = "5.0.0.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "python_full_version < '3.14'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1d/99/76b7c80252aa83c1af16393454aafd125a0287101afe8deb0a6821af0e30/opencv_python_headless-5.0.0.93.tar.gz", hash = "sha256:b82f9831daab90b725c7c1ee1b36cb5732c367096ac76d119e64e14eb70d5f3c", size = 81817738, upload-time = "2026-07-02T07:01:06.039Z" }
 wheels = [
@@ -5199,9 +5199,9 @@ name = "soundfile"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi" },
-    { name = "numpy" },
-    { name = "typing-extensions" },
+    { name = "cffi", marker = "python_full_version < '3.14'" },
+    { name = "numpy", marker = "python_full_version < '3.14'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/db/949331952a6fb1c5b12e9de80fd08747966c2039d1a61db4764fbd3981c2/soundfile-0.14.0.tar.gz", hash = "sha256:ba1c1a2d618bca5c406647c83b89f07cc8810fa506a50622a6993ba130c1de11", size = 47842, upload-time = "2026-06-06T08:58:47.869Z" }
 wheels = [
