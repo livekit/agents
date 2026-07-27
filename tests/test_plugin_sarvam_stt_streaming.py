@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -30,7 +31,11 @@ def _make_stream(
     stream._request_id = ""
     stream._session_id = ""
     stream._session_ended = False
+    stream._utterance_idx = None
     stream._total_reported_audio_duration = 0.0
+    stream._local_audio_duration = 0.0
+    stream._server_audio_duration_reported = False
+    stream._conn_options = stt_streaming.DEFAULT_API_CONNECT_OPTIONS
     stream._opts = stt_streaming.StreamingSTTOptions(
         language="hi-IN",
         api_key="sk_test",
@@ -84,16 +89,17 @@ def test_realtime_ws_url_includes_core_and_vad_params() -> None:
 
     assert url.startswith(stt_streaming.SARVAM_STT_REALTIME_URL)
     assert _parse_ws_url(url) == {
-        "language-code": "hi-IN",
-        "stream-type": "fast",
+        "language_code": "hi-IN",
+        "stream_type": "fast",
         "endpointing": "vad",
         "encoding": "linear16",
         "sample_rate": "16000",
         "model": "saaras:v3-realtime",
-        "vad_sot_threshold": "0.4",
-        "vad_min_speech_ms": "300",
-        "vad_min_silence_ms": "800",
-        "vad_smoothing_alpha": "0.5",
+        "mode": "transcribe",
+        "return_timestamps": "false",
+        "threshold": "0.4",
+        "min_speech_duration_ms": "300",
+        "silence_duration_ms": "800",
     }
 
 
@@ -110,19 +116,49 @@ def test_realtime_ws_url_omits_vad_params_for_manual_endpointing() -> None:
 
     params = _parse_ws_url(url)
     assert params["endpointing"] == "manual"
-    assert "vad_sot_threshold" not in params
-    assert "vad_min_speech_ms" not in params
+    assert "threshold" not in params
+    assert "min_speech_duration_ms" not in params
+
+
+def test_realtime_ws_url_includes_prompt_and_timestamp_controls() -> None:
+    opts = stt_streaming.StreamingSTTOptions(
+        language="en-IN",
+        api_key="sk_test",
+        prompt="LiveKit terminology",
+        return_timestamps=True,
+    )
+
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+
+    assert params["prompt"] == "LiveKit terminology"
+    assert params["return_timestamps"] == "true"
 
 
 def test_streaming_options_validate_realtime_contract() -> None:
-    with pytest.raises(ValueError, match="language auto is only supported"):
-        stt_streaming.StreamingSTTOptions(language="auto", api_key="sk_test", stream_type="fast")
-
     with pytest.raises(ValueError, match="sample_rate must be one of"):
         stt_streaming.StreamingSTTOptions(language="hi-IN", api_key="sk_test", sample_rate=44100)
 
     with pytest.raises(ValueError, match="language od-IN is not supported"):
         stt_streaming.StreamingSTTOptions(language="od-IN", api_key="sk_test")
+
+
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+def test_auto_language_is_valid_for_all_contract_endpointing_modes(endpointing: str) -> None:
+    opts = stt_streaming.StreamingSTTOptions(
+        language="auto",
+        api_key="sk_test",
+        stream_type="fast",
+        endpointing=endpointing,
+    )
+
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+
+    assert params["language_code"] == "auto"
+    assert params["endpointing"] == endpointing
 
 
 def test_simulated_streaming_allows_auto_language_and_mode() -> None:
@@ -137,9 +173,43 @@ def test_simulated_streaming_allows_auto_language_and_mode() -> None:
         stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
     )
 
-    assert params["language-code"] == "auto"
-    assert params["stream-type"] == "simulated"
+    assert params["language_code"] == "auto"
+    assert params["stream_type"] == "simulated"
     assert params["mode"] == "translate"
+
+
+def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
+    class _ReconnectEvent:
+        def __init__(self) -> None:
+            self.set_called = False
+
+        def set(self) -> None:
+            self.set_called = True
+
+    stream = _make_stream()
+    stream._ws = None
+    stream._reconnect_event = _ReconnectEvent()
+    updated_options = stt_streaming.StreamingSTTOptions(
+        language="en-IN",
+        api_key="sk_test",
+        stream_type="fast",
+        mode="translate",
+        endpointing="vad",
+        prompt="LiveKit",
+        vad_sot_threshold=0.6,
+    )
+
+    stream.update_options(updated_options)
+
+    assert stream._pending_config_update == {
+        "event": "config.update",
+        "language_code": "en-IN",
+        "stream_type": "fast",
+        "mode": "translate",
+        "prompt": "LiveKit",
+        "threshold": 0.6,
+    }
+    assert stream._reconnect_event.set_called is False
 
 
 @pytest.mark.asyncio
@@ -185,10 +255,10 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     assert event_types == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
         stt_streaming.stt.SpeechEventType.INTERIM_TRANSCRIPT,
-        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
     ]
-    final_event = stream._event_ch.events[2]
+    final_event = stream._event_ch.events[3]
     assert stream._session_id == "sess_123"
     assert stream._request_id == "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68"
     assert final_event.request_id == "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68"
@@ -197,9 +267,10 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     assert final_event.alternatives[0].confidence == 0.99
     assert final_event.alternatives[0].end_time == 1.75
 
-    eos_event = stream._event_ch.events[3]
+    eos_event = stream._event_ch.events[2]
     assert eos_event.alternatives[0].end_time == 1.75
-    assert eos_event.alternatives[0].metadata["utterance_idx"] == 0
+    assert eos_event.alternatives[0].metadata is not None
+    assert eos_event.alternatives[0].metadata["speech_end_wall_time"] > 0
 
 
 @pytest.mark.asyncio
@@ -209,12 +280,11 @@ async def test_streaming_session_begin_captures_server_request_id() -> None:
     await stream._handle_message(
         {
             "event": "session.begin",
-            "session_id": "sess_4594d4503cd4",
             "request_id": "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68",
         }
     )
 
-    assert stream._session_id == "sess_4594d4503cd4"
+    assert stream._session_id == ""
     assert stream._request_id == "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68"
 
 
@@ -225,12 +295,11 @@ async def test_streaming_request_id_stores_raw_value_without_format_assumptions(
     await stream._handle_message(
         {
             "event": "session.begin",
-            "session_id": "sess_xyz",
             "request_id": "srv_custom-id_v9",
         }
     )
 
-    assert stream._session_id == "sess_xyz"
+    assert stream._session_id == ""
     assert stream._request_id == "srv_custom-id_v9"
 
 
@@ -238,14 +307,14 @@ async def test_streaming_request_id_stores_raw_value_without_format_assumptions(
 async def test_streaming_session_begin_without_request_id_leaves_request_id_empty() -> None:
     stream = _make_stream()
 
-    await stream._handle_message({"event": "session.begin", "session_id": "sess_only"})
+    await stream._handle_message({"event": "session.begin"})
 
-    assert stream._session_id == "sess_only"
+    assert stream._session_id == ""
     assert stream._request_id == ""
 
 
 @pytest.mark.asyncio
-async def test_streaming_defers_end_of_speech_until_final_transcript() -> None:
+async def test_streaming_emits_end_of_speech_before_final_transcript() -> None:
     stream = _make_stream()
 
     await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
@@ -253,6 +322,7 @@ async def test_streaming_defers_end_of_speech_until_final_transcript() -> None:
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
     ]
 
     await stream._handle_message(
@@ -267,8 +337,8 @@ async def test_streaming_defers_end_of_speech_until_final_transcript() -> None:
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
-        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
     ]
 
 
@@ -290,8 +360,8 @@ async def test_streaming_final_after_speech_end_includes_audio_end_time() -> Non
         }
     )
 
-    final_event = stream._event_ch.events[1]
-    eos_event = stream._event_ch.events[2]
+    eos_event = stream._event_ch.events[1]
+    final_event = stream._event_ch.events[2]
     assert final_event.alternatives[0].end_time == 1.75
     assert eos_event.alternatives[0].end_time == 1.75
     assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 0
@@ -317,8 +387,8 @@ async def test_streaming_final_transcript_waits_for_speech_end_for_end_time() ->
     stream._audio_position = 2.0
     await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
 
-    final_event = stream._event_ch.events[0]
-    eos_event = stream._event_ch.events[1]
+    eos_event = stream._event_ch.events[0]
+    final_event = stream._event_ch.events[1]
     assert final_event.alternatives[0].end_time == 2.0
     assert eos_event.alternatives[0].end_time == 2.0
 
@@ -343,12 +413,33 @@ async def test_streaming_final_transcript_uses_current_audio_position_without_va
 
 
 @pytest.mark.asyncio
+async def test_streaming_final_transcript_uses_contract_timestamps_when_present() -> None:
+    stream = _make_stream(endpointing="manual")
+
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 0,
+            "text": "hello",
+            "language": "en-IN",
+            "language_confidence": 0.99,
+            "start_s": 0.7,
+            "end_s": 1.2,
+        }
+    )
+
+    final_event = stream._event_ch.events[0]
+    assert final_event.alternatives[0].start_time == 0.7
+    assert final_event.alternatives[0].end_time == 1.2
+
+
+@pytest.mark.asyncio
 async def test_streaming_logs_include_server_request_id_after_session_begin(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     stream = _make_stream()
 
-    with caplog.at_level(logging.INFO, logger=stt_streaming.logger.name):
+    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
         await stream._handle_message(
             {
                 "event": "session.begin",
@@ -373,6 +464,7 @@ async def test_streaming_logs_include_server_request_id_after_session_begin(
     assert len(partial_records) == 1
     assert partial_records[0].request_id == "srv_custom-id_v9"
     assert partial_records[0].session_id == "sess_4594d4503cd4"
+    assert partial_records[0].raw_data["text"] == "नमस्ते"
 
 
 @pytest.mark.asyncio
@@ -382,7 +474,7 @@ async def test_streaming_logs_partial_and_final_transcripts(
     stream = _make_stream()
     stream._audio_position = 1.0
 
-    with caplog.at_level(logging.INFO, logger=stt_streaming.logger.name):
+    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
         await stream._handle_message(
             {
                 "event": "transcript.partial",
@@ -404,6 +496,44 @@ async def test_streaming_logs_partial_and_final_transcripts(
     messages = [record.getMessage() for record in caplog.records]
     assert "Sarvam realtime STT transcript.partial" in messages
     assert "Sarvam realtime STT transcript.final" in messages
+
+
+@pytest.mark.asyncio
+async def test_streaming_info_logs_essential_data_without_raw_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _make_stream(endpointing="manual")
+    final_payload = {
+        "event": "transcript.final",
+        "utterance_idx": 0,
+        "text": "hello",
+        "language": "en-IN",
+        "language_confidence": 0.99,
+    }
+
+    with caplog.at_level(logging.INFO, logger=stt_streaming.logger.name):
+        await stream._handle_message(final_payload)
+
+    info_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Sarvam realtime STT transcript.final"
+    ]
+    assert len(info_records) == 1
+    assert info_records[0].text == "hello"
+    assert not hasattr(info_records[0], "raw_data")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
+        await stream._handle_message(final_payload)
+
+    debug_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Sarvam realtime STT raw event"
+    ]
+    assert len(debug_records) == 1
+    assert debug_records[0].raw_data == final_payload
 
 
 @pytest.mark.asyncio
@@ -462,7 +592,7 @@ async def test_streaming_safe_send_str_ignores_closed_transport() -> None:
 
 
 @pytest.mark.asyncio
-async def test_streaming_usage_metrics_emit_periodic_and_session_end_deltas() -> None:
+async def test_streaming_usage_metrics_emit_server_authoritative_session_end() -> None:
     stream = _make_stream()
     stream._request_id = "sess_123"
 
@@ -480,9 +610,54 @@ async def test_streaming_usage_metrics_emit_periodic_and_session_end_deltas() ->
         for event in stream._event_ch.events
         if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
     ]
-    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.5, 0.75]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [2.25]
     assert all(event.request_id == "sess_123" for event in usage_events)
     assert stream._session_ended is True
+    assert stream._server_audio_duration_reported is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_usage_accepts_server_duration_smaller_than_local_estimate() -> None:
+    stream = _make_stream()
+
+    stream._on_audio_duration_report(5.0)
+    await stream._handle_message(
+        {
+            "event": "session.end",
+            "session_id": "sess_123",
+            "audio_duration_s": 2.25,
+        }
+    )
+    await stream._handle_message(
+        {
+            "event": "session.end",
+            "session_id": "sess_123",
+            "audio_duration_s": 2.25,
+        }
+    )
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [2.25]
+
+
+@pytest.mark.asyncio
+async def test_streaming_usage_falls_back_to_local_duration_on_clean_close() -> None:
+    stream = _make_stream()
+
+    stream._on_audio_duration_report(1.5)
+    stream._emit_local_usage_fallback()
+    stream._emit_local_usage_fallback()
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.5]
 
 
 @pytest.mark.asyncio
@@ -547,6 +722,51 @@ async def test_streaming_error_handling_distinguishes_fatal_and_non_fatal() -> N
     assert excinfo.value.retryable is True
 
 
+@pytest.mark.asyncio
+async def test_streaming_error_logs_include_raw_sarvam_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _make_stream()
+    stream._request_id = "req_123"
+    raw_error = {
+        "event": "error",
+        "code": "invalid_subscription_key",
+        "message": "Invalid subscription key",
+        "is_fatal": True,
+        "status_code": 1003,
+    }
+
+    with caplog.at_level(logging.DEBUG, logger=stt_streaming.logger.name):
+        with pytest.raises(APIStatusError):
+            await stream._handle_message(raw_error)
+
+    info_records = [
+        record for record in caplog.records if record.getMessage() == "Sarvam realtime STT error"
+    ]
+    assert len(info_records) == 1
+    assert info_records[0].error_code == "invalid_subscription_key"
+    assert info_records[0].status_code == 1003
+    assert not hasattr(info_records[0], "raw_data")
+
+    raw_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Sarvam realtime STT raw event"
+    ]
+    assert len(raw_records) == 1
+    assert raw_records[0].raw_data == raw_error
+
+    error_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Fatal Sarvam realtime STT error"
+    ]
+    assert len(error_records) == 1
+    assert error_records[0].request_id == "req_123"
+    assert error_records[0].error_code == "invalid_subscription_key"
+    assert error_records[0].raw_message == raw_error
+
+
 def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
     class _FakeFallbackTask:
         def __init__(self) -> None:
@@ -562,6 +782,7 @@ def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
     stream._request_id = "req_old"
     stream._session_id = "sess_old"
     stream._session_ended = True
+    stream._utterance_idx = 7
     stream._manual_speech_started = True
     stream._pending_eos = True
     stream._pending_eos_time = 1.0
@@ -571,7 +792,9 @@ def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
     stream._utterance_speech_end_wall = 5.0
     stream._final_received_for_utterance = True
     stream._eos_emitted_for_utterance = True
+    stream._local_audio_duration = 10.0
     stream._total_reported_audio_duration = 50.0
+    stream._server_audio_duration_reported = True
     fallback_task = _FakeFallbackTask()
     stream._eos_fallback_task = fallback_task
 
@@ -582,6 +805,7 @@ def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
     assert stream._request_id == ""
     assert stream._session_id == ""
     assert stream._session_ended is False
+    assert stream._utterance_idx is None
     assert stream._manual_speech_started is False
     assert stream._pending_eos is False
     assert stream._pending_eos_time is None
@@ -591,7 +815,9 @@ def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
     assert stream._utterance_speech_end_wall is None
     assert stream._final_received_for_utterance is False
     assert stream._eos_emitted_for_utterance is False
+    assert stream._local_audio_duration == 0.0
     assert stream._total_reported_audio_duration == 0.0
+    assert stream._server_audio_duration_reported is False
     assert stream._eos_fallback_task is None
 
 
@@ -677,3 +903,103 @@ async def test_streaming_process_messages_raises_on_realtime_rejection_close() -
 
     assert excinfo.value.status_code == 4000
     assert "beta access denied" in excinfo.value.message
+
+
+@pytest.mark.asyncio
+async def test_streaming_process_messages_stops_after_session_end() -> None:
+    stream = _make_stream()
+
+    class _SessionEndWS:
+        close_code = None
+
+        def __init__(self) -> None:
+            self.receive_count = 0
+
+        async def receive(self) -> SimpleNamespace:
+            self.receive_count += 1
+            if self.receive_count > 1:
+                raise AssertionError("process_messages should stop after session.end")
+            return SimpleNamespace(
+                type=stt_streaming.aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "event": "session.end",
+                        "request_id": "req_123",
+                        "audio_duration_s": 1.25,
+                    }
+                ),
+            )
+
+    ws = _SessionEndWS()
+
+    await stream._process_messages(ws)
+
+    assert ws.receive_count == 1
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.25]
+
+
+@pytest.mark.asyncio
+async def test_streaming_process_messages_logs_realtime_rejection_close(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _make_stream()
+    ws = SimpleNamespace(
+        receive=lambda: asyncio.sleep(
+            0,
+            result=SimpleNamespace(
+                type=stt_streaming.aiohttp.WSMsgType.CLOSE,
+                data=4000,
+                extra="beta access denied",
+            ),
+        ),
+        close_code=4000,
+    )
+
+    with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
+        with pytest.raises(APIStatusError):
+            await stream._process_messages(ws)
+
+    close_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Sarvam realtime STT WebSocket closed unexpectedly"
+    ]
+    assert len(close_records) == 1
+    assert close_records[0].close_code == 4000
+    assert close_records[0].close_reason == "beta access denied"
+
+
+@pytest.mark.asyncio
+async def test_streaming_connect_logs_handshake_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _make_stream()
+    response_error = stt_streaming.aiohttp.ClientResponseError(
+        request_info=None,
+        history=(),
+        status=403,
+        message="Forbidden",
+    )
+
+    async def _raise_response_error(*args: object, **kwargs: object) -> None:
+        raise response_error
+
+    stream._session = SimpleNamespace(ws_connect=_raise_response_error)
+
+    with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
+        with pytest.raises(stt_streaming.aiohttp.ClientResponseError):
+            await stream._connect_ws()
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Sarvam realtime STT WebSocket handshake failed"
+    ]
+    assert len(records) == 1
+    assert records[0].status_code == 403
+    assert "API-SUBSCRIPTION-KEY" not in records[0].url
