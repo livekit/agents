@@ -82,7 +82,6 @@ def test_realtime_ws_url_includes_core_and_vad_params() -> None:
         vad_sot_threshold=0.4,
         vad_min_speech_ms=300,
         vad_min_silence_ms=800,
-        vad_smoothing_alpha=0.5,
     )
 
     url = stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
@@ -142,6 +141,15 @@ def test_streaming_options_validate_realtime_contract() -> None:
 
     with pytest.raises(ValueError, match="language od-IN is not supported"):
         stt_streaming.StreamingSTTOptions(language="od-IN", api_key="sk_test")
+
+
+def test_streaming_options_reject_server_tuned_vad_smoothing() -> None:
+    with pytest.raises(TypeError, match="vad_smoothing_alpha"):
+        stt_streaming.StreamingSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            vad_smoothing_alpha=0.5,
+        )
 
 
 @pytest.mark.parametrize("endpointing", ["vad", "manual"])

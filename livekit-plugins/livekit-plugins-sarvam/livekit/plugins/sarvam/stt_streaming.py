@@ -108,7 +108,6 @@ class StreamingSTTOptions:
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
     vad_min_silence_ms: int | None = None
-    vad_smoothing_alpha: float | None = None
 
     def __post_init__(self) -> None:
         if self.model != REALTIME_MODEL:
@@ -133,8 +132,6 @@ class StreamingSTTOptions:
             )
         if self.vad_sot_threshold is not None and not 0.0 <= self.vad_sot_threshold <= 1.0:
             raise ValueError("vad_sot_threshold must be between 0.0 and 1.0")
-        if self.vad_smoothing_alpha is not None and not 0.0 < self.vad_smoothing_alpha <= 1.0:
-            raise ValueError("vad_smoothing_alpha must be greater than 0.0 and at most 1.0")
         if self.vad_min_speech_ms is not None and self.vad_min_speech_ms < 0:
             raise ValueError("vad_min_speech_ms must be greater than or equal to 0")
         if self.vad_min_silence_ms is not None and self.vad_min_silence_ms < 0:
@@ -185,7 +182,6 @@ class STTStreaming(stt.STT):
         vad_sot_threshold: float | None = None,
         vad_min_speech_ms: int | None = None,
         vad_min_silence_ms: int | None = None,
-        vad_smoothing_alpha: float | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -217,7 +213,6 @@ class STTStreaming(stt.STT):
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
             vad_min_silence_ms=vad_min_silence_ms,
-            vad_smoothing_alpha=vad_smoothing_alpha,
         )
         self._session = http_session
         self._owns_session = http_session is None
@@ -264,7 +259,6 @@ class STTStreaming(stt.STT):
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
-        vad_smoothing_alpha: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         opts = StreamingSTTOptions(
             language=language if is_given(language) else self._opts.language,
@@ -288,9 +282,6 @@ class STTStreaming(stt.STT):
             vad_min_silence_ms=vad_min_silence_ms
             if is_given(vad_min_silence_ms)
             else self._opts.vad_min_silence_ms,
-            vad_smoothing_alpha=vad_smoothing_alpha
-            if is_given(vad_smoothing_alpha)
-            else self._opts.vad_smoothing_alpha,
         )
         self._opts = opts
         for stream in self._streams:
@@ -316,7 +307,6 @@ class STTStreaming(stt.STT):
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
             vad_min_silence_ms=self._opts.vad_min_silence_ms,
-            vad_smoothing_alpha=self._opts.vad_smoothing_alpha,
         )
         stream = StreamingSpeechStream(
             stt=self,
@@ -935,7 +925,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
             confidence = 0.0
 
-        metadata = {
+        metadata: dict[str, Any] = {
             key: data[key]
             for key in ("utterance_idx", "language_confidence")
             if key in data and data[key] is not None
