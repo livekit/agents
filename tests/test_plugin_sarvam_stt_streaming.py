@@ -32,6 +32,11 @@ def _make_stream(
     stream._session_id = ""
     stream._session_ended = False
     stream._utterance_idx = None
+    stream._utterance_in_progress = False
+    stream._active_endpointing = endpointing
+    stream._pending_endpointing = None
+    stream._endpointing_update_acknowledged = False
+    stream._pending_config_update = None
     stream._total_reported_audio_duration = 0.0
     stream._local_audio_duration = 0.0
     stream._server_audio_duration_reported = False
@@ -218,6 +223,104 @@ def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
         "threshold": 0.6,
     }
     assert stream._reconnect_event.set_called is False
+
+
+def test_active_stream_keeps_connection_only_options_on_update(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _make_stream()
+    stream._pending_config_update = None
+    stream._reconnect_event = SimpleNamespace(set_called=False)
+    stream._reconnect_event.set = lambda: setattr(stream._reconnect_event, "set_called", True)
+    updated_options = stt_streaming.StreamingSTTOptions(
+        language="hi-IN",
+        api_key="sk_test",
+        sample_rate=8000,
+        return_timestamps=True,
+        prompt="LiveKit",
+    )
+
+    with caplog.at_level(logging.WARNING, logger=stt_streaming.logger.name):
+        stream.update_options(updated_options)
+
+    assert stream._opts.sample_rate == 16000
+    assert stream._opts.return_timestamps is False
+    assert stream._pending_config_update == {
+        "event": "config.update",
+        "prompt": "LiveKit",
+    }
+    assert stream._reconnect_event.set_called is False
+    assert "only apply to new streams" in caplog.text
+
+
+def test_streaming_option_updates_merge_before_the_next_audio_frame() -> None:
+    stream = _make_stream()
+    stream._pending_config_update = None
+    stream.update_options(
+        stt_streaming.StreamingSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            prompt="LiveKit",
+        )
+    )
+    stream.update_options(
+        stt_streaming.StreamingSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            prompt="LiveKit",
+            mode="translate",
+        )
+    )
+
+    assert stream._pending_config_update == {
+        "event": "config.update",
+        "prompt": "LiveKit",
+        "mode": "translate",
+    }
+
+
+def test_streaming_option_update_clears_prompt_with_empty_string() -> None:
+    previous = stt_streaming.StreamingSTTOptions(
+        language="hi-IN",
+        api_key="sk_test",
+        prompt="LiveKit",
+    )
+    current = stt_streaming.StreamingSTTOptions(
+        language="hi-IN",
+        api_key="sk_test",
+        prompt=None,
+    )
+
+    assert stt_streaming.StreamingSpeechStream._config_update_payload(previous, current) == {
+        "event": "config.update",
+        "prompt": "",
+    }
+
+
+def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None:
+    stream = _make_stream()
+    stream._active_endpointing = "vad"
+    stream._utterance_in_progress = True
+    stream._pending_endpointing = None
+    stream._endpointing_update_acknowledged = False
+    stream._pending_config_update = None
+    stream.update_options(
+        stt_streaming.StreamingSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            endpointing="manual",
+        )
+    )
+
+    assert stream._active_endpointing == "vad"
+    assert stream._pending_endpointing == "manual"
+
+    stream._handle_config_updated()
+    assert stream._active_endpointing == "vad"
+
+    stream._utterance_in_progress = False
+    stream._apply_pending_endpointing()
+    assert stream._active_endpointing == "manual"
 
 
 @pytest.mark.asyncio
