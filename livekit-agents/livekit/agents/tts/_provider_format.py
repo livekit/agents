@@ -538,8 +538,8 @@ def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> l
 # has no sound for that field (nothing to filter). _allowed_sounds uses this to
 # remove disabled labels from the advertised vocabulary, so a sound steering turns
 # off is never exposed to the LLM in the first place. Every label in
-# _PROVIDER_SOUNDS must be governed by exactly one field, so a preset controls
-# the full vocabulary.
+# _PROVIDER_SOUNDS must be governed by exactly one field, so a steering config
+# controls the full vocabulary.
 _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     "inworld": {
         "laughing": ["laugh"],

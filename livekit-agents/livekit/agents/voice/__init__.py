@@ -1,11 +1,10 @@
-from . import io, presets, run_result
+from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
-    SpeechSteeringPreset,
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
@@ -47,7 +46,6 @@ __all__ = [
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",
-    "SpeechSteeringPreset",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
@@ -79,7 +77,6 @@ __all__ = [
     "KeytermDetectionOptions",
     "TranscriptSynchronizer",
     "io",
-    "presets",
     "room_io",
     "run_result",
     "_ParticipantAudioOutput",

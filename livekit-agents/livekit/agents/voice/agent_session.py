@@ -164,20 +164,16 @@ class NonverbalOptions(TypedDict, total=False):
     """cough, clearing the throat, yawn"""
 
 
-SpeechSteeringPreset = Literal["formal", "casual"]
-
-
 class SpeechSteeringOptions(TypedDict, total=False):
     """Steers verbal delivery and non-verbal sounds in generated speech.
 
-    Without ``preset``, this dict is the complete spec and ``nonverbal_sounds``
-    is atomic: passing it replaces the default value entirely rather than
-    merging field-by-field.
+    Every key is a sparse override on the default (full sound vocabulary,
+    light fillers): the expressive instructions already tell the LLM to match
+    its delivery to the register of the moment, so most agents need no
+    steering at all — set a key only to take an option away regardless of
+    context.
     """
 
-    preset: SpeechSteeringPreset
-    """Base preset; the other keys become sparse overrides merged onto it
-    (``nonverbal_sounds`` merges field-by-field)."""
     disfluencies: bool
     """Filler words such as "um" / "uh". On by default
     (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out."""
@@ -227,24 +223,6 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     return Instructions(template + "\n\n" + extra)
 
 
-def _resolve_speech_steering(steering: SpeechSteeringOptions) -> SpeechSteeringOptions:
-    """Resolve a ``preset`` reference; the returned dict never contains ``preset``."""
-    if (name := steering.get("preset")) is None:
-        return steering
-    from .presets import _BY_NAME
-
-    base = _BY_NAME.get(name)
-    if base is None:
-        raise ValueError(f"unknown speech steering preset {name!r}, available: {sorted(_BY_NAME)}")
-    merged: SpeechSteeringOptions = {**base, **steering}
-    merged.pop("preset", None)
-    base_sounds = base.get("nonverbal_sounds")
-    override_sounds = steering.get("nonverbal_sounds")
-    if base_sounds is not None and override_sounds is not None:
-        merged["nonverbal_sounds"] = {**base_sounds, **override_sounds}
-    return merged
-
-
 def resolve_expressive_options(
     expr: ExpressiveOptions, *, provider_key: str, default: ExpressiveOptions
 ) -> ExpressiveOptions:
@@ -253,9 +231,8 @@ def resolve_expressive_options(
     Starts from ``default``, renders ``speech_steering`` into per-provider delivery
     guidelines appended to the template, then applies any explicit
     ``tts_instructions_template`` override and ``tts_instructions_append`` (last, so
-    the user's free-form rules always win). Steering fields the user's
-    (preset-resolved) steering doesn't set fall back to ``default``'s
-    ``speech_steering``, so an explicit value — from the user or a preset — always
+    the user's free-form rules always win). Steering fields the user doesn't set
+    fall back to ``default``'s ``speech_steering``, so an explicit value always
     wins over a default. The returned dict always has ``tts_instructions_template``
     and ``speech_steering`` (never ``tts_instructions_append``); ``speech_steering``
     passes through so injection can filter the advertised markup vocabulary
@@ -267,7 +244,7 @@ def resolve_expressive_options(
 
     steering: SpeechSteeringOptions = {
         **default.get("speech_steering", {}),
-        **_resolve_speech_steering(expr.get("speech_steering") or {}),
+        **(expr.get("speech_steering") or {}),
     }
     if fragment := _provider_format.steering_instructions(provider_key, steering):
         tts_tmpl = _append_instructions(tts_tmpl, fragment)
