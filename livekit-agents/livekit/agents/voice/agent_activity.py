@@ -2608,8 +2608,9 @@ class AgentActivity(RecognitionHooks):
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if not self._speech_q and (not self._current_speech or self._current_speech.done()):
+            was_speaking = self._session.agent_state == "speaking"
             self._session._update_agent_state("listening")
-            if self._audio_recognition:
+            if self._audio_recognition and was_speaking:
                 self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
                 )
@@ -3331,7 +3332,14 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
+            was_speaking = self._session.agent_state == "speaking"
             self._session._update_agent_state("thinking")
+            if self._audio_recognition and was_speaking:
+                self._audio_recognition._on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
+            if self.interruption_enabled and was_speaking:
+                self._restore_interruption_by_audio_activity()
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self._audio_recognition:
