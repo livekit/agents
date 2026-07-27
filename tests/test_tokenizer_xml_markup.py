@@ -317,6 +317,32 @@ class TestFishAudioDialect:
         ]
         assert sorted(governed) == sorted(pf._FISHAUDIO_SOUNDS)
 
+    def test_register_rule_in_shared_preamble(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # register inference is provider-neutral: every markup-capable provider's
+        # block carries the rule via the shared preamble, not just fish
+        for provider in ("fishaudio", "inworld", "xai", "cartesia"):
+            instr = pf.llm_instructions(provider)
+            assert instr is not None
+            assert "REGISTER of the moment" in instr, provider
+
+    def test_register_supplement_matches_steering(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        default = pf.llm_instructions("fishaudio")
+        assert default is not None
+        assert "Laughter belongs only" in default
+        assert "Save fillers for relaxed moments" in default
+
+        # an opted-out concept must be absent from the ENTIRE block — not even
+        # mentioned prohibitively, or the LLM receives contradictory directions
+        composed = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {}, "disfluencies": False})
+        assert composed is not None
+        assert "laugh" not in composed.lower()
+        assert "filler" not in composed.lower()
+        assert "Um, uh" not in composed
+
     def test_disfluent_examples_follow_steering(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 

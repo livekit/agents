@@ -205,7 +205,13 @@ spelled-out forms like "I am" or "do not" sound stiff when spoken.
 Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
 like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
 on short replies or decorate every sentence. If a reaction wouldn't happen in a real \
-conversation, skip it — there's always another genuine beat to lean into."""
+conversation, skip it — there's always another genuine beat to lean into.
+
+Match your delivery to the REGISTER of the moment, and reassess every turn. When the \
+moment is professional, high-stakes, or emotionally heavy — bad news, an emergency, \
+real distress — keep delivery composed and restrained. When the moment is casual, \
+playful, or celebratory, let it loosen and brighten. A serious turn in an otherwise \
+casual conversation still gets a composed reply."""
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -457,6 +463,26 @@ sentences or commas.""",
         """When the conversation is in another language, still write every marker label in \
 English — labels are a fixed vocabulary, never translated.""",
     ]
+
+    # Vocabulary-specific register guidance on top of the preamble's neutral rule.
+    # Each clause mentions only concepts this steering actually enables, so an
+    # opted-out option is never referenced (not even prohibitively).
+    register = [
+        "At heavy moments reach for empathetic, sad, regretful, or hopeful — never a "
+        'bright label like "happy" or "excited" against hard news; bright labels belong '
+        "to bright moments."
+    ]
+    if any(s in sounds for s in ("laughing", "chuckling")):
+        register.append(
+            "Laughter belongs only in genuinely playful or celebratory beats, never at "
+            "a serious moment."
+        )
+    if disfluencies:
+        register.append(
+            "Save fillers for relaxed moments — never in an emergency or against grave news."
+        )
+    parts.append(" ".join(register))
+
     pool = _FISHAUDIO_EXAMPLES + (_FISHAUDIO_DISFLUENT_EXAMPLES if disfluencies else [])
     if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
         parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
