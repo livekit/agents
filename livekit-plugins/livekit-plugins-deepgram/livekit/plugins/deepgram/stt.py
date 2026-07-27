@@ -171,8 +171,10 @@ class STT(stt.STT):
             the DEEPGRAM_API_KEY environmental variable.
         """  # noqa: E501
 
-        # diarize_model implies diarization without also needing enable_diarization
-        _diarization_enabled = enable_diarization or is_given(diarize_model)
+        # diarize_model implies diarization without also needing enable_diarization; an
+        # empty string is treated as not set, matching the truthiness checks used when
+        # building the requests
+        _diarization_enabled = enable_diarization or bool(is_given(diarize_model) and diarize_model)
 
         super().__init__(
             capabilities=stt.STTCapabilities(

@@ -250,6 +250,16 @@ async def test_no_diarization_reports_no_capability():
     assert stt.capabilities.diarization is False
 
 
+@pytest.mark.asyncio
+async def test_empty_diarize_model_reports_no_capability():
+    """An empty diarize_model is treated as not set everywhere else, so the
+    capability flag must not advertise diarization for it."""
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key", diarize_model="")
+    assert stt.capabilities.diarization is False
+
+
 async def test_update_options_uses_stored_language_for_model_validation():
     from livekit.plugins.deepgram import STT
 
