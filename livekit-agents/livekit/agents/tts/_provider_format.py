@@ -502,21 +502,29 @@ _PROVIDER_SOUNDS: dict[str, list[str]] = {
 def _steering_removed(
     table: dict[str, dict[str, list[str]]], provider: str, steering: SpeechSteeringOptions | None
 ) -> set[str]:
-    """Labels from a per-provider governance table that *steering* disables."""
+    """Labels from a per-provider governance table that *steering* disables.
+
+    ``nonverbal_sounds`` accepts a bool or a sparse per-category dict:
+    ``True`` (like omitting the key) keeps the full vocabulary, ``False``
+    disables every sound, and in a dict an omitted category stays ENABLED —
+    ``{"laughing": False}`` removes laughter and nothing else.
+    """
     nonverbals = steering.get("nonverbal_sounds") if steering else None
     labels = table.get(provider)
-    if nonverbals is None or labels is None:
+    if nonverbals is None or nonverbals is True or labels is None:
         return set()
+    if nonverbals is False:
+        return {lb for lbs in labels.values() for lb in lbs}
     flags = dict(nonverbals)
-    return {lb for f, lbs in labels.items() if not flags.get(f, False) for lb in lbs}
+    return {lb for f, lbs in labels.items() if not flags.get(f, True) for lb in lbs}
 
 
 def _allowed_sounds(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
     """The provider's sound vocabulary minus labels steering disables.
 
     Every label is governed by a ``NonverbalOptions`` field, so passing
-    ``nonverbal_sounds`` with everything off returns an empty list — the
-    instruction builders then omit the Sounds section entirely.
+    ``nonverbal_sounds=False`` returns an empty list — the instruction
+    builders then omit the Sounds section entirely.
     """
     removed = _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering)
     return [s for s in _PROVIDER_SOUNDS.get(provider, []) if s not in removed]

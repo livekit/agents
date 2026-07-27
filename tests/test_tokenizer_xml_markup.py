@@ -277,13 +277,13 @@ class TestFishAudioDialect:
 
         # everything off: the Sounds section and any example demonstrating a sound
         # are omitted entirely, not advertised and then revoked
-        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {}})
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": False})
         assert instr is not None
         assert "laughing" not in instr and "clear throat" not in instr
         assert "Examples:" in instr  # the sound-free example survives
 
-        # laughing only: clear throat is gone, laughing stays
-        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {"laughing": True}})
+        # sparse opt-out: removing reflex sounds keeps the laugh family
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {"reflex_sounds": False}})
         assert instr is not None
         assert "laughing" in instr and "clear throat" not in instr
 
@@ -320,11 +320,69 @@ class TestFishAudioDialect:
 
         # an opted-out concept must be absent from the ENTIRE block — not even
         # mentioned prohibitively, or the LLM receives contradictory directions
-        composed = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {}, "disfluencies": False})
+        composed = pf.llm_instructions(
+            "fishaudio", {"nonverbal_sounds": False, "disfluencies": False}
+        )
         assert composed is not None
         assert "laugh" not in composed.lower()
         assert "filler" not in composed.lower()
         assert "Um, uh" not in composed
+
+    def test_nonverbal_sounds_accepts_bool(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # False disables the whole vocabulary; True (like omission) keeps it all
+        off = pf.llm_instructions("fishaudio", {"nonverbal_sounds": False})
+        on = pf.llm_instructions("fishaudio", {"nonverbal_sounds": True})
+        default = pf.llm_instructions("fishaudio")
+        assert off is not None and on is not None and default is not None
+        assert 'type="sound"' not in off and "laughing" not in off
+        for instr in (on, default):
+            assert "laughing, chuckling, clear throat" in instr
+        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": False}) == []
+        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": True}) == [
+            "laughing",
+            "chuckling",
+            "clear throat",
+        ]
+
+    def test_nonverbal_dict_is_sparse(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # a dict is a sparse opt-out: omitted categories stay enabled, so
+        # {"laughing": False} removes laughter and nothing else
+        steering = {"nonverbal_sounds": {"laughing": False}}
+        assert pf._allowed_sounds("fishaudio", steering) == ["clear throat"]
+        inworld = pf._allowed_sounds("inworld", steering)
+        assert "laugh" not in inworld
+        for kept in ("sigh", "breathe", "clear throat", "cough", "yawn"):
+            assert kept in inworld, kept
+        # xai's laugh-family prosody is governed by the same field
+        assert "laugh-speak" not in pf._allowed_prosody("xai", steering)
+        assert "whisper" in pf._allowed_prosody("xai", steering)
+
+    def test_steering_is_sparse_over_default(self) -> None:
+        from livekit.agents.voice.agent_session import (
+            DEFAULT_EXPRESSIVE_OPTIONS,
+            resolve_expressive_options,
+        )
+
+        # bare default: fillers on, no sound filtering
+        r = resolve_expressive_options(
+            {"speech_steering": {}},
+            provider_key="fishaudio",
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )["speech_steering"]
+        assert r["disfluencies"] is True
+        assert "nonverbal_sounds" not in r
+        # a composed agent: both taken away, regardless of context
+        r2 = resolve_expressive_options(
+            {"speech_steering": {"nonverbal_sounds": False, "disfluencies": False}},
+            provider_key="fishaudio",
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )["speech_steering"]
+        assert r2["nonverbal_sounds"] is False
+        assert r2["disfluencies"] is False
 
     def test_disfluent_examples_follow_steering(self) -> None:
         from livekit.agents.tts import _provider_format as pf

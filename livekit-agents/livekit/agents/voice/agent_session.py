@@ -143,10 +143,11 @@ class SessionConnectOptions:
 class NonverbalOptions(TypedDict, total=False):
     """Non-verbal vocalizations the TTS may produce (sounds that aren't words).
 
-    Omitted keys default to off, and together the keys cover every sound the
-    providers offer — a sound whose key is off is never advertised to the LLM.
-    Each key may later widen to ``bool | <Sound>Options`` (e.g.
-    ``laughing: bool | LaughingOptions``) for per-sound control without
+    A sparse opt-out: omitted keys default to ON, and a category set to
+    ``False`` is never advertised to the LLM — ``{"laughing": False}``
+    removes laughter and nothing else. Together the keys cover every sound
+    the providers offer. Each key may later widen to ``bool | <Sound>Options``
+    (e.g. ``laughing: bool | LaughingOptions``) for per-sound control without
     breaking existing callers.
     """
 
@@ -177,7 +178,11 @@ class SpeechSteeringOptions(TypedDict, total=False):
     disfluencies: bool
     """Filler words such as "um" / "uh". On by default
     (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out."""
-    nonverbal_sounds: NonverbalOptions
+    nonverbal_sounds: bool | NonverbalOptions
+    """Which non-verbal sounds the TTS may make. ``True`` (and omitting the
+    key) keeps the provider's full vocabulary, ``False`` disables every sound,
+    and a ``NonverbalOptions`` dict toggles per category (omitted categories
+    stay enabled)."""
     pace: Literal["slow", "normal", "fast"]
 
 
