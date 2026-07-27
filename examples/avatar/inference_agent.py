@@ -55,8 +55,10 @@ async def entrypoint(ctx: JobContext) -> None:
         raise ValueError("LEMONSLICE_IMAGE_URL must be set")
     avatar = inference.AvatarSession(
         "lemonslice",
-        image_url=avatar_image_url,
-        prompt="Be expressive in your movements and use your hands while talking.",
+        extra_kwargs=inference.LemonSliceOptions(
+            image_url=avatar_image_url,
+            prompt="Be expressive in your movements and use your hands while talking.",
+        ),
     )
     await avatar.start(session, room=ctx.room)
     await avatar.wait_for_join()
