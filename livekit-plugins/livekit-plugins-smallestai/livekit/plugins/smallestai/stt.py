@@ -97,6 +97,10 @@ class _STTOptions:
     word_timestamps: bool
     diarize: bool
     eou_timeout_ms: int  # end-of-utterance silence timeout in ms; valid range 100–10000ms
+    endpointing: bool  # finalize transcripts on trailing silence detection
+    keywords: list[tuple[str, float]]  # (keyword, intensifier) pairs; streaming only
+    format: bool  # punctuation/capitalization formatting; streaming only
+    sentence_timestamps: bool  # include sentence-level "utterances"; streaming only
     base_url: str
 
 
@@ -111,6 +115,10 @@ class STT(stt.STT):
         word_timestamps: bool = True,
         diarize: bool = False,
         eou_timeout_ms: int = 100,
+        endpointing: bool = True,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: bool = True,
+        sentence_timestamps: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
@@ -140,9 +148,29 @@ class STT(stt.STT):
                 utterance complete and emits a final transcript. Must be between 100 and
                 10000ms. Defaults to 100ms (the minimum) so that server-side EOU adds
                 minimal latency alongside LiveKit's own end-of-turn detection. If omitted,
-                the server applies an 800ms default. Note: the Smallest AI API will soon
-                support disabling server-side EOU entirely, which will allow LiveKit's
-                end-of-turn detection to be used exclusively.
+                the server applies an 800ms default. Acts as a ceiling on finalization
+                when ``endpointing`` is enabled; controls finalization on its own when
+                ``endpointing`` is disabled.
+            endpointing: Finalize transcripts as soon as trailing silence is detected in
+                the audio, rather than waiting on ``eou_timeout_ms`` alone. Defaults to
+                True. Disable to rely solely on ``eou_timeout_ms``-based finalization.
+            keywords: Boost recognition of specific words or phrases by passing a list of
+                ``(keyword, intensifier)`` tuples, e.g. ``[("NVIDIA", 2.0), ("Jensen
+                Huang", 1.0)]``. Intensifier controls boost strength: ~1.0 is a mild
+                boost for clear proper nouns, up to ~5.0 for terms that are consistently
+                misrecognized; values above 5 risk hallucination. Streaming only, up to
+                10,000 keywords per session. Defaults to no boosting.
+            format: Whether to apply punctuation and capitalization formatting to
+                streaming transcripts. Defaults to True. Disable to get raw, lowercase,
+                unpunctuated text — useful for LLM/NLP pipelines or search indexing where
+                normalized text is preferred. Streaming only.
+            sentence_timestamps: Include sentence-level timing in streaming transcripts.
+                When enabled, matching final transcripts carry an ``"utterances"`` list
+                (each with ``text``/``start``/``end``, plus ``speaker`` when ``diarize``
+                is enabled) in ``SpeechData.metadata["utterances"]``. Defaults to False.
+                For batch transcription, sentence-level utterances are included
+                automatically whenever ``word_timestamps`` is enabled; no separate flag
+                is needed there.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -173,6 +201,10 @@ class STT(stt.STT):
             word_timestamps=word_timestamps,
             diarize=diarize,
             eou_timeout_ms=eou_timeout_ms,
+            endpointing=endpointing,
+            keywords=list(keywords) if is_given(keywords) else [],
+            format=format,
+            sentence_timestamps=sentence_timestamps,
             base_url=base_url,
         )
         self._session = http_session
@@ -269,6 +301,10 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
         if is_given(model):
@@ -282,6 +318,14 @@ class STT(stt.STT):
             self._opts.encoding = encoding
         if is_given(eou_timeout_ms):
             self._opts.eou_timeout_ms = eou_timeout_ms
+        if is_given(endpointing):
+            self._opts.endpointing = endpointing
+        if is_given(keywords):
+            self._opts.keywords = list(keywords)
+        if is_given(format):
+            self._opts.format = format
+        if is_given(sentence_timestamps):
+            self._opts.sentence_timestamps = sentence_timestamps
 
         for stream in self._streams:
             stream.update_options(
@@ -290,6 +334,10 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 encoding=encoding,
                 eou_timeout_ms=eou_timeout_ms,
+                endpointing=endpointing,
+                keywords=keywords,
+                format=format,
+                sentence_timestamps=sentence_timestamps,
             )
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> _STTOptions:
@@ -332,6 +380,10 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -343,6 +395,14 @@ class SpeechStream(stt.SpeechStream):
             self._opts.encoding = encoding
         if is_given(eou_timeout_ms):
             self._opts.eou_timeout_ms = eou_timeout_ms
+        if is_given(endpointing):
+            self._opts.endpointing = endpointing
+        if is_given(keywords):
+            self._opts.keywords = list(keywords)
+        if is_given(format):
+            self._opts.format = format
+        if is_given(sentence_timestamps):
+            self._opts.sentence_timestamps = sentence_timestamps
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -454,6 +514,13 @@ class SpeechStream(stt.SpeechStream):
             "diarize": str(self._opts.diarize).lower(),
         }
         params["eou_timeout_ms"] = self._opts.eou_timeout_ms
+        params["endpointing"] = str(self._opts.endpointing).lower()
+        params["format"] = str(self._opts.format).lower()
+        params["sentence_timestamps"] = str(self._opts.sentence_timestamps).lower()
+        if self._opts.keywords:
+            params["keywords"] = ",".join(
+                f"{keyword}:{intensifier:g}" for keyword, intensifier in self._opts.keywords
+            )
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             + "/stt/live"
@@ -503,6 +570,10 @@ class SpeechStream(stt.SpeechStream):
         #   "words":        [           # present when word_timestamps=True
         #     {"word": str, "start": float, "end": float,
         #      "confidence": float, "speaker": int}  # speaker only when diarize=True
+        #   ]
+        #   "utterances":   [           # present when sentence_timestamps=True
+        #     {"text": str, "start": float, "end": float,
+        #      "speaker": int}  # speaker only when diarize=True
         #   ]
         # }
         session_id = data.get("session_id", "")
@@ -585,6 +656,20 @@ def _transcript_to_speech_data(
     # When language="multi", the server echoes the detected language in is_final responses.
     detected_language = data.get("language", language) or language
 
+    metadata: dict[str, Any] | None = None
+    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
+    if raw_utterances:
+        metadata = {
+            "utterances": [
+                {
+                    **u,
+                    "start": u.get("start", 0.0) + start_time_offset,
+                    "end": u.get("end", 0.0) + start_time_offset,
+                }
+                for u in raw_utterances
+            ]
+        }
+
     return [
         stt.SpeechData(
             language=LanguageCode(detected_language),
@@ -594,6 +679,7 @@ def _transcript_to_speech_data(
             confidence=raw_words[0].get("confidence", 0.0) if raw_words else 0.0,
             words=words,
             speaker_id=speaker_id,
+            metadata=metadata,
         )
     ]
 
@@ -609,11 +695,14 @@ def _batch_transcription_to_speech_event(
     #   "audio_length": str,   # duration in seconds as a string
     #   "words":        [{"word": str, "start": float, "end": float,
     #                     "confidence": float, "speaker": str}],
+    #   "utterances":   [{"text": str, "start": float, "end": float,
+    #                     "speaker": str}],  # present when word_timestamps=True
     #   "language":     str,
     #   "metadata":     {"filename": str, "duration": float, "fileSize": int}
     # }
     transcript = data.get("transcription", "")
     raw_words: list[dict[str, Any]] = data.get("words") or []
+    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
     detected_language = data.get("language", language) or language
 
     words: list[TimedString] | None = (
@@ -643,6 +732,7 @@ def _batch_transcription_to_speech_event(
                 end_time=end_time,
                 confidence=raw_words[0].get("confidence", 0.0) if raw_words else 0.0,
                 words=words,
+                metadata={"utterances": raw_utterances} if raw_utterances else None,
             )
         ],
     )
