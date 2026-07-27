@@ -48,12 +48,7 @@ def _xai_model() -> xai.realtime.RealtimeModel:
 
 
 def _inworld_model() -> inworld.realtime.RealtimeModel:
-    # LiveKit explicitly calls generate_reply() after adding a function_call_output.
-    # Disable Inworld's automatic continuation so it does not race that response.create.
-    return inworld.realtime.RealtimeModel(
-        model="openai/gpt-5.4-nano",
-        provider_data={"auto_tool_response": False},
-    )
+    return inworld.realtime.RealtimeModel(model="openai/gpt-5.4-nano")
 
 
 _skip_xai = pytest.mark.skipif(not os.environ.get("XAI_API_KEY"), reason="XAI_API_KEY not set")

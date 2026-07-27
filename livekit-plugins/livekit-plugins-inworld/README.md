@@ -228,6 +228,10 @@ responsiveness fillers, prompt caching, LLM generation params) are passed throug
 `provider_data`. It is a typed `ProviderData` (a `TypedDict`), so you get autocompletion and
 type checking while still writing a plain dict:
 
+Automatic responses after a tool result are disabled by default
+(`auto_tool_response=False`) because LiveKit explicitly requests the continuation. Set the
+option to `True` in `provider_data` to opt into server-driven tool continuation.
+
 ```python
 llm = inworld.realtime.RealtimeModel(
     provider_data={

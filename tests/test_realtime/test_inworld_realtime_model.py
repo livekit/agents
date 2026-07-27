@@ -4,17 +4,13 @@ from dataclasses import replace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from openai.types.realtime import (
-    ConversationItemAdded,
-    RealtimeConversationItemFunctionCall,
-)
 
-from livekit.agents import llm
 from livekit.plugins.inworld.realtime.realtime_model import (
     DEFAULT_LLM_MODEL,
     DEFAULT_STT_MODEL,
     DEFAULT_TTS_MODEL,
     DEFAULT_VOICE,
+    DEFAULT_WS_URL,
     RealtimeModel,
     RealtimeSession,
     _build_ws_url,
@@ -60,7 +56,9 @@ def test_defaults() -> None:
     assert model._opts.voice == DEFAULT_VOICE
     assert model._tts_model == DEFAULT_TTS_MODEL
     assert model._opts.input_audio_transcription.model == DEFAULT_STT_MODEL
-    assert model._provider_data is None
+    assert model._opts.base_url == DEFAULT_WS_URL
+    assert urlparse(model._opts.base_url).netloc == "api.inworld.ai"
+    assert model._provider_data == {"auto_tool_response": False}
     assert not model.capabilities.auto_tool_reply_generation
     assert model.provider == "Inworld"
     assert model._provider_label == "Inworld Realtime API"
@@ -128,36 +126,11 @@ def test_session_update_preserves_nested_provider_data_branches() -> None:
     assert pd["user_id"] == "user_abc"
 
 
-def test_session_update_omits_provider_data_when_unset() -> None:
-    assert "providerData" not in _session_update_payload(RealtimeModel(api_key=_API_KEY))
+def test_session_update_disables_automatic_tool_responses_by_default() -> None:
+    provider_data = _session_update_payload(RealtimeModel(api_key=_API_KEY))["providerData"]
+    assert provider_data == {"auto_tool_response": False}
 
 
-def test_function_call_without_previous_item_is_appended_to_remote_context() -> None:
-    session = RealtimeSession.__new__(RealtimeSession)
-    session._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()  # type: ignore[attr-defined]
-    session._item_create_future = {}  # type: ignore[attr-defined]
-    session.emit = lambda *args, **kwargs: None  # type: ignore[method-assign]
-
-    user_message = llm.ChatMessage(id="user_item", role="user", content=["weather?"])
-    session._remote_chat_ctx.insert(None, user_message)  # type: ignore[attr-defined]
-    event = ConversationItemAdded.model_construct(
-        type="conversation.item.added",
-        event_id="event_1",
-        previous_item_id=None,
-        item=RealtimeConversationItemFunctionCall(
-            id="call_item",
-            type="function_call",
-            call_id="call_1",
-            name="get_weather",
-            arguments="",
-            status="in_progress",
-        ),
-    )
-
-    session._handle_conversion_item_added(event)
-
-    assert event.previous_item_id == user_message.id
-    assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [  # type: ignore[attr-defined]
-        user_message.id,
-        "call_item",
-    ]
+def test_session_update_allows_automatic_tool_response_override() -> None:
+    model = RealtimeModel(api_key=_API_KEY, provider_data={"auto_tool_response": True})
+    assert _session_update_payload(model)["providerData"]["auto_tool_response"] is True

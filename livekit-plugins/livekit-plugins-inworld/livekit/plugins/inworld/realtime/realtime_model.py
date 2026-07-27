@@ -24,7 +24,6 @@ import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
 from openai.types.realtime import (
     AudioTranscription,
-    ConversationItemAdded,
     RealtimeAudioConfig,
     RealtimeAudioConfigOutput,
     RealtimeAudioInputTurnDetection,
@@ -44,7 +43,7 @@ from livekit.plugins import openai
 from .provider_data import ProviderData
 
 # wss URL; the server assigns a session on connect via the `key` query param
-DEFAULT_WS_URL = "wss://api.dev.inworld.ai/api/v1/realtime/session"
+DEFAULT_WS_URL = "wss://api.inworld.ai/api/v1/realtime/session"
 DEFAULT_LLM_MODEL = "openai/gpt-4o-mini"
 DEFAULT_TTS_MODEL = "inworld-tts-2"
 DEFAULT_STT_MODEL = "inworld/inworld-stt-1"
@@ -105,7 +104,8 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             tool_choice: Tool selection policy.
             provider_data: Inworld-specific ``providerData`` extensions (stt/tts/memory/
                 backchannel/responsiveness/caching/text_generation_config plus user_id/metadata),
-                sent verbatim in the session config. See :class:`ProviderData`.
+                merged into the session config. ``auto_tool_response`` defaults to ``False`` to
+                match LiveKit's explicit tool-continuation behavior. See :class:`ProviderData`.
             api_key: Inworld API key. Falls back to ``INWORLD_API_KEY``.
             base_url: Override the realtime WebSocket URL.
             http_session: Optional shared HTTP session.
@@ -140,7 +140,9 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         )
 
         self._tts_model = tts_model if is_given(tts_model) else DEFAULT_TTS_MODEL
-        self._provider_data = provider_data if is_given(provider_data) else None
+        self._provider_data: ProviderData = {"auto_tool_response": False}
+        if is_given(provider_data):
+            self._provider_data.update(provider_data)
         self._provider_label = "Inworld Realtime API"
 
     @property
@@ -154,21 +156,6 @@ class RealtimeModel(openai.realtime.RealtimeModel):
 
 
 class RealtimeSession(openai.realtime.RealtimeSession):
-    def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
-        # Inworld currently reports previous_item_id=None for model-generated function calls
-        # even when the conversation is nonempty. Under OpenAI's ordering semantics, None
-        # means the item has no predecessor, so LiveKit inserts it at the conversation head.
-        # Use the current tail as the predecessor to keep the call after the triggering turn
-        # and ensure its subsequent function_call_output is inserted directly after the call.
-        if (
-            event.item.type == "function_call"
-            and event.previous_item_id is None
-            and self._remote_chat_ctx._tail is not None
-        ):
-            event.previous_item_id = self._remote_chat_ctx._tail.item.id
-
-        super()._handle_conversion_item_added(event)
-
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         # Inworld uses Basic auth (the API key is already base64) and a session URL with
         # `key`/`protocol` query params, unlike OpenAI's Bearer + `?model=` scheme.
