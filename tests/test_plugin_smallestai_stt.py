@@ -1,4 +1,5 @@
 """Unit tests for SmallestAI STT plugin."""
+
 from __future__ import annotations
 
 import asyncio
@@ -142,9 +143,7 @@ async def test_close_stream_sent_on_end_input():
 
 def test_interim_transcript_emitted():
     stream = _make_stream_no_task()
-    stream._process_stream_event(
-        {"session_id": "s1", "transcript": "hello", "is_final": False}
-    )
+    stream._process_stream_event({"session_id": "s1", "transcript": "hello", "is_final": False})
     ev = stream._event_ch.recv_nowait()
     assert ev.type == SpeechEventType.START_OF_SPEECH
     ev2 = stream._event_ch.recv_nowait()
@@ -184,9 +183,7 @@ def test_is_last_without_transcript_emits_nothing():
 
 def test_session_id_recorded():
     stream = _make_stream_no_task()
-    stream._process_stream_event(
-        {"session_id": "abc123", "transcript": "hi", "is_final": False}
-    )
+    stream._process_stream_event({"session_id": "abc123", "transcript": "hi", "is_final": False})
     stream._event_ch.recv_nowait()  # START_OF_SPEECH
     ev = stream._event_ch.recv_nowait()  # INTERIM_TRANSCRIPT
     assert ev.request_id == "abc123"
@@ -362,9 +359,7 @@ def test_process_stream_event_attaches_utterances_metadata():
 def test_process_stream_event_no_utterances_key_when_absent():
     """metadata must stay None when sentence_timestamps is not enabled server-side."""
     stream = _make_stream_no_task()
-    stream._process_stream_event(
-        {"session_id": "s1", "transcript": "hello", "is_final": True}
-    )
+    stream._process_stream_event({"session_id": "s1", "transcript": "hello", "is_final": True})
     stream._event_ch.recv_nowait()  # START_OF_SPEECH
     ev = stream._event_ch.recv_nowait()  # FINAL_TRANSCRIPT
     assert ev.alternatives[0].metadata is None
