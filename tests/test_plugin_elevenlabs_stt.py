@@ -137,6 +137,22 @@ def test_enable_logging_can_be_disabled() -> None:
     assert _stt(enable_logging=False)._opts.enable_logging is False
 
 
+def test_previous_text_is_kept_for_realtime_model() -> None:
+    assert _stt(previous_text="prior context")._opts.previous_text == "prior context"
+
+
+def test_previous_text_is_ignored_for_non_realtime_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key",
+            model="scribe_v2",
+            previous_text="prior context",
+        )
+
+    assert instance._opts.previous_text is None
+    assert any("previous_text" in record.message for record in caplog.records)
+
+
 @pytest.mark.parametrize(("enable_logging", "expected"), [(True, "true"), (False, "false")])
 async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected: str) -> None:
     # enable_logging is a WebSocket query param. Verify it is forwarded to the
