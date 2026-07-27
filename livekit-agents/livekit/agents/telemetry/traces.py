@@ -59,7 +59,25 @@ from . import trace_types
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
     from ..observability import Tagger
+    from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
+
+
+_SESSION_OPTION_KEY_ALIASES = {
+    "keyterms": "lk.pii.keyterms",
+}
+
+
+def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
+    def _serialize(value: dict[str, Any]) -> dict[str, Any]:
+        return {
+            _SESSION_OPTION_KEY_ALIASES.get(key, key): (
+                _serialize(nested_value) if isinstance(nested_value, dict) else nested_value
+            )
+            for key, nested_value in value.items()
+        }
+
+    return _serialize(vars(options))
 
 
 class _DynamicTracer(Tracer):
@@ -567,7 +585,7 @@ async def _upload_session_report(
             body="session report",
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
-                "session.options": vars(report.options),
+                "session.options": _serialize_session_options(report.options),
                 "session.report_timestamp": report.timestamp,
                 "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
