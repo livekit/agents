@@ -103,6 +103,8 @@ class StreamingSTTOptions:
     sample_rate: int = 16000
     model: str = REALTIME_MODEL
     base_url: str = SARVAM_STT_REALTIME_URL
+    prompt: str | None = None
+    return_timestamps: bool = False
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
     vad_min_silence_ms: int | None = None
@@ -117,8 +119,6 @@ class StreamingSTTOptions:
             raise ValueError(
                 f"stream_type must be one of {', '.join(sorted(SUPPORTED_STREAM_TYPES))}"
             )
-        if self.language == "auto" and self.stream_type != "simulated":
-            raise ValueError("language auto is only supported when stream_type is simulated")
         if self.mode not in SUPPORTED_MODES:
             raise ValueError(f"mode must be one of {', '.join(sorted(SUPPORTED_MODES))}")
         if self.endpointing not in SUPPORTED_ENDPOINTING:
@@ -143,26 +143,26 @@ class StreamingSTTOptions:
 
 def _build_realtime_ws_url(base_url: str, opts: StreamingSTTOptions) -> str:
     params: dict[str, str] = {
-        "language-code": opts.language,
-        "stream-type": opts.stream_type,
+        "language_code": opts.language,
+        "stream_type": opts.stream_type,
         "endpointing": opts.endpointing,
         "encoding": opts.encoding,
         "sample_rate": str(opts.sample_rate),
         "model": opts.model,
     }
 
-    if opts.stream_type == "simulated":
-        params["mode"] = opts.mode
+    params["mode"] = opts.mode
+    params["return_timestamps"] = str(opts.return_timestamps).lower()
+    if opts.prompt is not None:
+        params["prompt"] = opts.prompt
 
     if opts.endpointing == "vad":
         if opts.vad_sot_threshold is not None:
-            params["vad_sot_threshold"] = str(opts.vad_sot_threshold)
+            params["threshold"] = str(opts.vad_sot_threshold)
         if opts.vad_min_speech_ms is not None:
-            params["vad_min_speech_ms"] = str(opts.vad_min_speech_ms)
+            params["min_speech_duration_ms"] = str(opts.vad_min_speech_ms)
         if opts.vad_min_silence_ms is not None:
-            params["vad_min_silence_ms"] = str(opts.vad_min_silence_ms)
-        if opts.vad_smoothing_alpha is not None:
-            params["vad_smoothing_alpha"] = str(opts.vad_smoothing_alpha)
+            params["silence_duration_ms"] = str(opts.vad_min_silence_ms)
 
     return f"{base_url}?{urlencode(params)}"
 
@@ -177,6 +177,8 @@ class STTStreaming(stt.STT):
         endpointing: RealtimeEndpointing | str = "vad",
         encoding: RealtimeEncoding | str = "linear16",
         sample_rate: int = 16000,
+        prompt: str | None = None,
+        return_timestamps: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_STT_REALTIME_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -210,6 +212,8 @@ class STTStreaming(stt.STT):
             encoding=encoding,
             sample_rate=sample_rate,
             base_url=base_url,
+            prompt=prompt,
+            return_timestamps=return_timestamps,
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
             vad_min_silence_ms=vad_min_silence_ms,
@@ -255,6 +259,8 @@ class STTStreaming(stt.STT):
         mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
@@ -269,6 +275,10 @@ class STTStreaming(stt.STT):
             encoding=self._opts.encoding,
             sample_rate=sample_rate if is_given(sample_rate) else self._opts.sample_rate,
             base_url=self._opts.base_url,
+            prompt=prompt if is_given(prompt) else self._opts.prompt,
+            return_timestamps=return_timestamps
+            if is_given(return_timestamps)
+            else self._opts.return_timestamps,
             vad_sot_threshold=vad_sot_threshold
             if is_given(vad_sot_threshold)
             else self._opts.vad_sot_threshold,
@@ -301,6 +311,8 @@ class STTStreaming(stt.STT):
             encoding=self._opts.encoding,
             sample_rate=self._opts.sample_rate,
             base_url=self._opts.base_url,
+            prompt=self._opts.prompt,
+            return_timestamps=self._opts.return_timestamps,
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
             vad_min_silence_ms=self._opts.vad_min_silence_ms,
@@ -339,7 +351,9 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._session_id = ""
         self._session_ended = False
+        self._utterance_idx: int | None = None
         self._reconnect_event = asyncio.Event()
+        self._pending_config_update: dict[str, Any] | None = None
         self._manual_speech_started = False
         self._pending_eos = False
         self._pending_eos_time: float | None = None
@@ -352,7 +366,9 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._eos_fallback_task: asyncio.Task[None] | None = None
         self._stream_started_at = time.time()
         self._audio_position = 0.0
+        self._local_audio_duration = 0.0
         self._total_reported_audio_duration = 0.0
+        self._server_audio_duration_reported = False
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -360,8 +376,44 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._logger = logger
 
     def update_options(self, opts: StreamingSTTOptions) -> None:
+        previous_opts = self._opts
         self._opts = opts
-        self._reconnect_event.set()
+        if opts.sample_rate != previous_opts.sample_rate:
+            self._reconnect_event.set()
+            return
+
+        update = self._config_update_payload(previous_opts, opts)
+        if update is not None:
+            self._pending_config_update = update
+
+    @staticmethod
+    def _config_update_payload(
+        previous: StreamingSTTOptions,
+        current: StreamingSTTOptions,
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"event": "config.update"}
+        values = (
+            ("language_code", previous.language, current.language),
+            ("stream_type", previous.stream_type, current.stream_type),
+            ("mode", previous.mode, current.mode),
+            ("prompt", previous.prompt, current.prompt),
+            ("endpointing", previous.endpointing, current.endpointing),
+            ("threshold", previous.vad_sot_threshold, current.vad_sot_threshold),
+            (
+                "min_speech_duration_ms",
+                previous.vad_min_speech_ms,
+                current.vad_min_speech_ms,
+            ),
+            (
+                "silence_duration_ms",
+                previous.vad_min_silence_ms,
+                current.vad_min_silence_ms,
+            ),
+        )
+        for key, old_value, new_value in values:
+            if old_value != new_value:
+                payload[key] = new_value
+        return payload if len(payload) > 1 else None
 
     def _build_log_context(self) -> dict[str, Any]:
         return {
@@ -371,6 +423,7 @@ class StreamingSpeechStream(stt.SpeechStream):
             "language": self._opts.language,
             "stream_type": self._opts.stream_type,
             "endpointing": self._opts.endpointing,
+            "utterance_idx": self._utterance_idx,
         }
 
     @staticmethod
@@ -469,6 +522,8 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._session_id = ""
         self._session_ended = False
+        self._utterance_idx = None
+        self._pending_config_update = None
         self._manual_speech_started = False
         self._pending_eos = False
         self._pending_eos_time = None
@@ -479,10 +534,14 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
         self._audio_duration_collector.flush()
+        self._emit_local_usage_fallback()
+        self._local_audio_duration = 0.0
         self._total_reported_audio_duration = 0.0
+        self._server_audio_duration_reported = False
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
+        self._utterance_idx = None
         self._pending_eos = False
         self._pending_eos_time = None
         self._pending_final_data = None
@@ -508,13 +567,19 @@ class StreamingSpeechStream(stt.SpeechStream):
                 extra={**self._build_log_context(), "payload": payload},
             )
 
+    async def _send_pending_config_update(self, ws: Any) -> None:
+        payload = self._pending_config_update
+        self._pending_config_update = None
+        if payload is not None:
+            await self._safe_send_str(ws, payload)
+
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         ws_url = _build_realtime_ws_url(self._opts.base_url, self._opts)
         headers = {
             "API-SUBSCRIPTION-KEY": self._opts.api_key,
             "User-Agent": USER_AGENT,
         }
-        self._logger.info(
+        self._logger.debug(
             "Connecting to Sarvam realtime STT WebSocket", extra=self._build_log_context()
         )
         try:
@@ -522,13 +587,33 @@ class StreamingSpeechStream(stt.SpeechStream):
                 self._session.ws_connect(ws_url, headers=headers, heartbeat=30.0),
                 self._conn_options.timeout,
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError):
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            self._logger.error(
+                "Failed to connect to Sarvam realtime STT WebSocket",
+                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                exc_info=True,
+            )
             raise
-        except aiohttp.ClientResponseError:
+        except aiohttp.ClientResponseError as e:
+            self._logger.error(
+                "Sarvam realtime STT WebSocket handshake failed",
+                extra={
+                    **self._build_log_context(),
+                    "error": e.message,
+                    "status_code": e.status,
+                    "url": ws_url,
+                },
+                exc_info=True,
+            )
             raise
         except Exception as e:
+            self._logger.error(
+                "Unexpected Sarvam realtime STT WebSocket connection error",
+                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                exc_info=True,
+            )
             raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
-        self._logger.info(
+        self._logger.debug(
             "Sarvam realtime STT WebSocket connected", extra=self._build_log_context()
         )
         return ws
@@ -544,6 +629,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         )
 
         async for data in self._input_ch:
+            await self._send_pending_config_update(ws)
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
                 frames.extend(audio_bstream.write(data.data.tobytes()))
@@ -577,6 +663,10 @@ class StreamingSpeechStream(stt.SpeechStream):
                     await self._handle_message(json.loads(msg.data))
                 except json.JSONDecodeError as e:
                     if _looks_like_error_text(msg.data):
+                        self._logger.error(
+                            "Sarvam realtime STT non-JSON error message",
+                            extra={**self._build_log_context(), "raw_message": msg.data},
+                        )
                         raise APIStatusError(
                             message=f"Sarvam realtime STT non-JSON error message: {msg.data}",
                             request_id=self._request_id or None,
@@ -587,7 +677,13 @@ class StreamingSpeechStream(stt.SpeechStream):
                         extra={**self._build_log_context(), "raw_data": msg.data},
                     )
                     continue
+                if self._session_ended:
+                    break
             elif msg.type == aiohttp.WSMsgType.ERROR:
+                self._logger.error(
+                    "Sarvam realtime STT WebSocket error",
+                    extra={**self._build_log_context(), "raw_message": msg.data},
+                )
                 raise APIConnectionError(f"Sarvam realtime STT WebSocket error: {msg.data}")
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSED,
@@ -597,9 +693,19 @@ class StreamingSpeechStream(stt.SpeechStream):
                 close_code = ws.close_code if ws.close_code is not None else msg.data
                 close_reason = msg.extra
                 if self._session_ended and close_code in (1000, 1001, None):
+                    self._emit_local_usage_fallback()
                     break
                 if close_code in (1000, 1001, None) and not _looks_like_error_text(close_reason):
+                    self._emit_local_usage_fallback()
                     break
+                self._logger.error(
+                    "Sarvam realtime STT WebSocket closed unexpectedly",
+                    extra={
+                        **self._build_log_context(),
+                        "close_code": close_code,
+                        "close_reason": close_reason,
+                    },
+                )
                 raise self._status_error_from_close(close_code, close_reason)
             else:
                 self._logger.debug(
@@ -640,6 +746,8 @@ class StreamingSpeechStream(stt.SpeechStream):
         elif event == "vad.speech_start":
             self._emit_pending_eos_before_new_speech()
             self._reset_utterance_state()
+            utterance_idx = data.get("utterance_idx")
+            self._utterance_idx = utterance_idx if isinstance(utterance_idx, int) else None
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
@@ -660,6 +768,8 @@ class StreamingSpeechStream(stt.SpeechStream):
                 self._final_received_for_utterance = True
         elif event == "session.end":
             self._handle_session_end(data)
+        elif event == "config.updated":
+            return
         elif event == "error":
             self._handle_error_event(data)
         elif event == "pong":
@@ -678,7 +788,6 @@ class StreamingSpeechStream(stt.SpeechStream):
             **self._build_log_context(),
             "event": event,
             "utterance_idx": data.get("utterance_idx"),
-            "raw_data": data,
         }
         if event in {"transcript.partial", "transcript.final"}:
             text = data.get("text")
@@ -695,10 +804,27 @@ class StreamingSpeechStream(stt.SpeechStream):
             pass
         elif event == "session.end":
             extra["audio_duration_s"] = data.get("audio_duration_s")
+        elif event == "config.updated":
+            extra["applied"] = data.get("applied")
+        elif event == "error":
+            extra["error_code"] = data.get("code")
+            extra["error_message"] = data.get("message")
+            extra["status_code"] = data.get("status_code")
         else:
             return
 
+        if event == "transcript.partial":
+            self._logger.debug(
+                "Sarvam realtime STT transcript.partial",
+                extra={**extra, "raw_data": data},
+            )
+            return
+
         self._logger.info(f"Sarvam realtime STT {event}", extra=extra)
+        self._logger.debug(
+            "Sarvam realtime STT raw event",
+            extra={**extra, "raw_data": data},
+        )
 
     def _is_valid_transcript(self, data: dict[str, Any]) -> bool:
         text = data.get("text")
@@ -719,14 +845,11 @@ class StreamingSpeechStream(stt.SpeechStream):
         if self._eos_emitted_for_utterance:
             return
 
-        if self._final_received_for_utterance:
-            self._try_commit_utterance()
-            return
-
         self._pending_eos = True
         self._pending_eos_time = self._utterance_speech_end_wall
-        if self._eos_fallback_task is None or self._eos_fallback_task.done():
-            self._eos_fallback_task = asyncio.create_task(self._emit_pending_eos_after_timeout())
+        self._emit_end_of_speech()
+        if self._final_received_for_utterance:
+            self._try_commit_utterance()
 
     async def _emit_pending_eos_after_timeout(
         self,
@@ -741,11 +864,7 @@ class StreamingSpeechStream(stt.SpeechStream):
             raise
 
     def _try_commit_utterance(self) -> None:
-        if (
-            self._pending_final_data is None
-            or self._utterance_speech_end_audio_pos is None
-            or self._eos_emitted_for_utterance
-        ):
+        if self._pending_final_data is None or self._utterance_speech_end_audio_pos is None:
             return
 
         committed_data = self._pending_final_data
@@ -753,7 +872,7 @@ class StreamingSpeechStream(stt.SpeechStream):
             stt.SpeechEventType.FINAL_TRANSCRIPT,
             committed_data,
         ):
-            self._logger.info(
+            self._logger.debug(
                 "Sarvam realtime STT utterance committed",
                 extra={
                     **self._build_log_context(),
@@ -761,7 +880,8 @@ class StreamingSpeechStream(stt.SpeechStream):
                     "speech_end_wall_time": self._utterance_speech_end_wall,
                 },
             )
-            self._emit_end_of_speech()
+            if not self._eos_emitted_for_utterance:
+                self._emit_end_of_speech()
             self._pending_final_data = None
 
     def _emit_end_of_speech(self) -> None:
@@ -826,17 +946,31 @@ class StreamingSpeechStream(stt.SpeechStream):
         ):
             metadata["speech_end_wall_time"] = self._utterance_speech_end_wall
         end_time = 0.0
+        start_time = 0.0
+        if event_type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            start_s = data.get("start_s")
+            end_s = data.get("end_s")
+            if isinstance(start_s, (int, float)) and not isinstance(start_s, bool):
+                start_time = max(float(start_s), 0.0)
+            if isinstance(end_s, (int, float)) and not isinstance(end_s, bool):
+                end_time = max(float(end_s), 0.0)
         if (
             event_type == stt.SpeechEventType.FINAL_TRANSCRIPT
             and self._utterance_speech_end_audio_pos is not None
+            and end_time == 0.0
         ):
             end_time = self._utterance_speech_end_audio_pos
-        elif event_type == stt.SpeechEventType.FINAL_TRANSCRIPT and self._audio_position > 0:
+        elif (
+            event_type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            and self._audio_position > 0
+            and end_time == 0.0
+        ):
             end_time = self._audio_position
 
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
             text=text,
+            start_time=start_time,
             end_time=end_time,
             confidence=float(confidence),
             metadata=metadata or None,
@@ -853,17 +987,28 @@ class StreamingSpeechStream(stt.SpeechStream):
     def _handle_session_end(self, data: dict[str, Any]) -> None:
         self._capture_server_ids(data)
         audio_duration = data.get("audio_duration_s")
-        if isinstance(audio_duration, (int, float)) and not isinstance(audio_duration, bool):
-            delta = max(float(audio_duration) - self._total_reported_audio_duration, 0.0)
-            if delta:
-                self._emit_usage(delta)
+        if (
+            isinstance(audio_duration, (int, float))
+            and not isinstance(audio_duration, bool)
+            and not self._server_audio_duration_reported
+        ):
+            server_audio_duration = max(float(audio_duration), 0.0)
+            if server_audio_duration:
+                self._emit_usage(server_audio_duration)
+            self._server_audio_duration_reported = True
         self._session_ended = True
 
     def _handle_error_event(self, data: dict[str, Any]) -> None:
         if not data.get("is_fatal", False):
             self._logger.warning(
                 "Non-fatal Sarvam realtime STT error",
-                extra={**self._build_log_context(), "error": data},
+                extra={
+                    **self._build_log_context(),
+                    "error_code": data.get("code"),
+                    "error_message": data.get("message"),
+                    "status_code": data.get("status_code"),
+                    "raw_message": data,
+                },
             )
             return
 
@@ -871,6 +1016,16 @@ class StreamingSpeechStream(stt.SpeechStream):
         status_code = data.get("status_code", -1)
         if not isinstance(status_code, int):
             status_code = -1
+        self._logger.error(
+            "Fatal Sarvam realtime STT error",
+            extra={
+                **self._build_log_context(),
+                "error_code": code,
+                "error_message": data.get("message", code),
+                "status_code": status_code,
+                "raw_message": data,
+            },
+        )
         raise APIStatusError(
             message=f"Sarvam realtime STT error: {data.get('message', code)}",
             status_code=status_code,
@@ -880,7 +1035,14 @@ class StreamingSpeechStream(stt.SpeechStream):
         )
 
     def _on_audio_duration_report(self, duration: float) -> None:
-        self._emit_usage(duration)
+        self._local_audio_duration += duration
+
+    def _emit_local_usage_fallback(self) -> None:
+        if self._server_audio_duration_reported:
+            return
+        delta = max(self._local_audio_duration - self._total_reported_audio_duration, 0.0)
+        if delta:
+            self._emit_usage(delta)
 
     def _emit_usage(self, duration: float) -> None:
         self._total_reported_audio_duration += duration
