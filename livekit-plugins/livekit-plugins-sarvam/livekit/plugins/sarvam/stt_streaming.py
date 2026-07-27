@@ -20,7 +20,7 @@ import os
 import platform
 import time
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlencode
 
@@ -342,6 +342,10 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._session_id = ""
         self._session_ended = False
         self._utterance_idx: int | None = None
+        self._utterance_in_progress = False
+        self._active_endpointing = opts.endpointing
+        self._pending_endpointing: RealtimeEndpointing | str | None = None
+        self._endpointing_update_acknowledged = False
         self._reconnect_event = asyncio.Event()
         self._pending_config_update: dict[str, Any] | None = None
         self._manual_speech_started = False
@@ -367,14 +371,33 @@ class StreamingSpeechStream(stt.SpeechStream):
 
     def update_options(self, opts: StreamingSTTOptions) -> None:
         previous_opts = self._opts
-        self._opts = opts
+        connection_only_options: list[str] = []
         if opts.sample_rate != previous_opts.sample_rate:
-            self._reconnect_event.set()
-            return
+            connection_only_options.append("sample_rate")
+            opts = replace(opts, sample_rate=previous_opts.sample_rate)
+        if opts.return_timestamps != previous_opts.return_timestamps:
+            connection_only_options.append("return_timestamps")
+            opts = replace(opts, return_timestamps=previous_opts.return_timestamps)
+        if connection_only_options:
+            self._logger.warning(
+                "Sarvam realtime STT connection-only option updates only apply to new streams",
+                extra={
+                    **self._build_log_context(),
+                    "options": connection_only_options,
+                },
+            )
+
+        self._opts = opts
+        if opts.endpointing != previous_opts.endpointing:
+            self._pending_endpointing = opts.endpointing
+            self._endpointing_update_acknowledged = False
 
         update = self._config_update_payload(previous_opts, opts)
         if update is not None:
-            self._pending_config_update = update
+            if self._pending_config_update is None:
+                self._pending_config_update = update
+            else:
+                self._pending_config_update.update(update)
 
     @staticmethod
     def _config_update_payload(
@@ -402,8 +425,29 @@ class StreamingSpeechStream(stt.SpeechStream):
         )
         for key, old_value, new_value in values:
             if old_value != new_value:
+                if key == "prompt" and new_value is None:
+                    new_value = ""
                 payload[key] = new_value
         return payload if len(payload) > 1 else None
+
+    def _handle_config_updated(self) -> None:
+        if self._pending_endpointing is not None:
+            self._endpointing_update_acknowledged = True
+            self._apply_pending_endpointing()
+
+    def _apply_pending_endpointing(self) -> None:
+        if (
+            self._pending_endpointing is not None
+            and self._endpointing_update_acknowledged
+            and not self._utterance_in_progress
+        ):
+            self._active_endpointing = self._pending_endpointing
+            self._pending_endpointing = None
+            self._endpointing_update_acknowledged = False
+
+    def _complete_utterance(self) -> None:
+        self._utterance_in_progress = False
+        self._apply_pending_endpointing()
 
     def _build_log_context(self) -> dict[str, Any]:
         return {
@@ -513,6 +557,10 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._session_id = ""
         self._session_ended = False
         self._utterance_idx = None
+        self._utterance_in_progress = False
+        self._active_endpointing = self._opts.endpointing
+        self._pending_endpointing = None
+        self._endpointing_update_acknowledged = False
         self._pending_config_update = None
         self._manual_speech_started = False
         self._pending_eos = False
@@ -627,9 +675,10 @@ class StreamingSpeechStream(stt.SpeechStream):
                 frames.extend(audio_bstream.flush())
 
             for frame in frames:
-                if self._opts.endpointing == "manual" and not self._manual_speech_started:
+                if self._active_endpointing == "manual" and not self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_start"})
                     self._manual_speech_started = True
+                    self._utterance_in_progress = True
 
                 self._audio_duration_collector.push(frame.duration)
                 self._audio_position += frame.duration
@@ -637,7 +686,7 @@ class StreamingSpeechStream(stt.SpeechStream):
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
-                if self._opts.endpointing == "manual" and self._manual_speech_started:
+                if self._active_endpointing == "manual" and self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_end"})
                     self._manual_speech_started = False
 
@@ -736,6 +785,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         elif event == "vad.speech_start":
             self._emit_pending_eos_before_new_speech()
             self._reset_utterance_state()
+            self._utterance_in_progress = True
             utterance_idx = data.get("utterance_idx")
             self._utterance_idx = utterance_idx if isinstance(utterance_idx, int) else None
             self._event_ch.send_nowait(
@@ -749,16 +799,18 @@ class StreamingSpeechStream(stt.SpeechStream):
         elif event == "transcript.partial":
             self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
         elif event == "transcript.final":
-            if self._opts.endpointing == "vad":
+            if self._active_endpointing == "vad":
                 if self._is_valid_transcript(data):
                     self._pending_final_data = data
                     self._final_received_for_utterance = True
                     self._try_commit_utterance()
             elif self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data):
                 self._final_received_for_utterance = True
+                self._complete_utterance()
         elif event == "session.end":
             self._handle_session_end(data)
         elif event == "config.updated":
+            self._handle_config_updated()
             return
         elif event == "error":
             self._handle_error_event(data)
@@ -828,7 +880,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._utterance_speech_end_audio_pos = self._audio_position
         self._utterance_speech_end_wall = time.time()
 
-        if self._opts.endpointing != "vad":
+        if self._active_endpointing != "vad":
             self._emit_end_of_speech()
             return
 
@@ -873,6 +925,7 @@ class StreamingSpeechStream(stt.SpeechStream):
             if not self._eos_emitted_for_utterance:
                 self._emit_end_of_speech()
             self._pending_final_data = None
+            self._complete_utterance()
 
     def _emit_end_of_speech(self) -> None:
         current_task = asyncio.current_task()
