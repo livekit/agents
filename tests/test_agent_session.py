@@ -331,11 +331,34 @@ async def test_tool_call() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    agent_speech_end_states: list[tuple[str, bool]] = []
+    on_end_of_agent_speech = AudioRecognition._on_end_of_agent_speech
+
+    def _record_agent_speech_end(
+        recognition: AudioRecognition,
+        *,
+        ignore_user_transcript_until: float,
+        paused: bool = False,
+    ) -> None:
+        agent_speech_end_states.append((session.agent_state, paused))
+        on_end_of_agent_speech(
+            recognition,
+            ignore_user_transcript_until=ignore_user_transcript_until,
+            paused=paused,
+        )
+
+    with patch.object(
+        AudioRecognition,
+        "_on_end_of_agent_speech",
+        _record_agent_speech_end,
+    ):
+        t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
     check_timestamp(playback_finished_events[1].playback_position, 3.0, speed_factor=speed)
+    assert agent_speech_end_states[0] == ("thinking", True)
+    assert all(state == ("listening", False) for state in agent_speech_end_states[1:])
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
