@@ -70,7 +70,7 @@ class _FakeSession:
 @pytest.mark.asyncio
 async def test_close_fires_after_silence() -> None:
     session = _FakeSession()
-    task = _arm_close_watchdog(session, grace=0.01, reopen_on_caller_speech=True)
+    task = _arm_close_watchdog(session, grace=0.01)
     await task
     assert session.shutdowns == 1
 
@@ -79,7 +79,7 @@ async def test_close_fires_after_silence() -> None:
 async def test_first_close_is_cancelled_when_the_caller_speaks() -> None:
     # anything the caller says after the first farewell re-opens the conversation
     session = _FakeSession()
-    task = _arm_close_watchdog(session, grace=0.05, reopen_on_caller_speech=True)
+    task = _arm_close_watchdog(session, grace=0.05)
     await asyncio.sleep(0)
     session.caller_speaks()
     await task
@@ -89,13 +89,24 @@ async def test_first_close_is_cancelled_when_the_caller_speaks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repeat_close_hangs_up_despite_caller_chatter() -> None:
-    # after the SECOND close, caller acknowledgments ("okay, heading down now")
-    # must not keep the line open forever - the goodbye already happened.
+async def test_repeat_close_is_cancelled_when_the_caller_speaks() -> None:
+    # A repeat close also yields to a newer caller turn so its stale timer cannot
+    # shut down the session while the agent is responding.
     session = _FakeSession()
-    task = _arm_close_watchdog(session, grace=0.05, reopen_on_caller_speech=False)
+    task = _arm_close_watchdog(session, grace=0.05)
     await asyncio.sleep(0)
     session.caller_speaks()
-    session.caller_speaks()
     await task
+    assert session.shutdowns == 0
+    assert session.handlers.get("conversation_item_added", []) == []
+
+
+@pytest.mark.asyncio
+async def test_new_close_supersedes_the_previous_watchdog() -> None:
+    session = _FakeSession()
+    first = _arm_close_watchdog(session, grace=0.05)
+    await asyncio.sleep(0)
+    second = _arm_close_watchdog(session, grace=0.01)
+    await asyncio.gather(first, second)
     assert session.shutdowns == 1
+    assert session.handlers.get("conversation_item_added", []) == []
