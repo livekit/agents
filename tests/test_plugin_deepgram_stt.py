@@ -113,6 +113,122 @@ async def test_update_options_diarize_model():
     assert stt._opts.diarize_model == "v2"
 
 
+async def test_prerecorded_diarize_model_omits_deprecated_diarize_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # diarize_model already enables diarization; Deepgram rejects requests
+    # that also carry the deprecated `diarize` flag.
+    from livekit import rtc
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.deepgram import STT
+
+    captured = _capture_request_params(monkeypatch)
+    stt = STT(api_key="test-key", diarize_model="v2", enable_diarization=True)
+
+    buffer = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+
+    with mock.patch.object(stt, "_ensure_session") as ensure_session:
+        ensure_session.return_value.post.side_effect = RuntimeError("stop-before-network")
+        with pytest.raises(APIConnectionError):
+            await stt._recognize_impl(buffer)
+
+    assert captured.get("diarize_model") == "v2"
+    assert "diarize" not in captured
+
+
+async def test_prerecorded_diarize_model_does_not_warn_about_ignoring(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # the "ignoring" warning must not fire when diarize_model actually enabled diarization
+    from livekit import rtc
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.deepgram import STT
+
+    _capture_request_params(monkeypatch)
+    stt = STT(api_key="test-key", diarize_model="v2", enable_diarization=True)
+
+    buffer = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+
+    with caplog.at_level("WARNING"):
+        with mock.patch.object(stt, "_ensure_session") as ensure_session:
+            ensure_session.return_value.post.side_effect = RuntimeError("stop-before-network")
+            with pytest.raises(APIConnectionError):
+                await stt._recognize_impl(buffer)
+
+    assert "diarization is not supported in non-streaming mode" not in caplog.text
+
+
+async def test_live_diarize_model_omits_deprecated_diarize_flag(monkeypatch: pytest.MonkeyPatch):
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.deepgram import STT
+
+    captured = _capture_request_params(monkeypatch)
+
+    session = mock.MagicMock()
+
+    async def fake_ws_connect(url, **kwargs):
+        raise APIConnectionError("stop-before-network")
+
+    session.ws_connect = fake_ws_connect
+
+    stt = STT(
+        api_key="test-key", diarize_model="latest", enable_diarization=True, http_session=session
+    )
+    stream = stt.stream(language="en-US")
+
+    with pytest.raises(APIConnectionError):
+        await stream._connect_ws()
+
+    assert captured.get("diarize_model") == "latest"
+    assert "diarize" not in captured
+    await stream.aclose()
+
+
+async def test_live_enable_diarization_still_uses_diarize_flag(monkeypatch: pytest.MonkeyPatch):
+    # without diarize_model the legacy `diarize` flag is still what turns diarization on
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.deepgram import STT
+
+    captured = _capture_request_params(monkeypatch)
+
+    session = mock.MagicMock()
+
+    async def fake_ws_connect(url, **kwargs):
+        raise APIConnectionError("stop-before-network")
+
+    session.ws_connect = fake_ws_connect
+
+    stt = STT(api_key="test-key", enable_diarization=True, http_session=session)
+    stream = stt.stream(language="en-US")
+
+    with pytest.raises(APIConnectionError):
+        await stream._connect_ws()
+
+    assert captured.get("diarize") is True
+    assert "diarize_model" not in captured
+    await stream.aclose()
+
+
+async def test_update_options_toggles_diarization_capability():
+    from livekit.plugins.deepgram import STT
+
+    stt = STT(api_key="test-key")
+    assert stt.capabilities.diarization is False
+
+    stt.update_options(diarize_model="v2")
+    assert stt.capabilities.diarization is True
+
+    stt.update_options(diarize_model="")
+    assert stt.capabilities.diarization is False
+
+    stt.update_options(enable_diarization=True)
+    assert stt.capabilities.diarization is True
+
+
 async def test_diarize_model_reports_diarization_capability():
     from livekit.plugins.deepgram import STT
 

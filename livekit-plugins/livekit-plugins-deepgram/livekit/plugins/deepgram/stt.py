@@ -274,11 +274,10 @@ class STT(stt.STT):
         if config.redact:
             recognize_config["redact"] = config.redact
         if config.diarize_model:
-            # Pre-recorded diarization is supported; diarize_model needs
-            # diarize=true alongside it (some models are pre-recorded only).
-            recognize_config["diarize"] = True
+            # diarize_model both enables diarization and selects the version, so it is
+            # sent on its own: Deepgram rejects requests that also carry `diarize`.
             recognize_config["diarize_model"] = config.diarize_model
-        if config.enable_diarization:
+        elif config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
         if config.language:
@@ -385,6 +384,13 @@ class STT(stt.STT):
             self._opts.enable_diarization = enable_diarization
         if is_given(diarize_model):
             self._opts.diarize_model = diarize_model
+        if is_given(enable_diarization) or is_given(diarize_model):
+            # keep the advertised capability in sync: consumers such as
+            # MultiSpeakerAdapter and FallbackAdapter gate on it.
+            self._capabilities = dataclasses.replace(
+                self._capabilities,
+                diarization=bool(self._opts.enable_diarization or self._opts.diarize_model),
+            )
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -766,12 +772,12 @@ class SpeechStream(stt.SpeechStream):
             "numerals": self._opts.numerals,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        # Deepgram needs diarize=true to actually turn diarization on;
-        # diarize_model only selects the model, so set both when it is given.
-        if self._opts.enable_diarization or self._opts.diarize_model:
-            live_config["diarize"] = True
+        # diarize_model both enables diarization and selects the version, so it replaces
+        # the deprecated `diarize` flag: Deepgram rejects requests that send both.
         if self._opts.diarize_model:
             live_config["diarize_model"] = self._opts.diarize_model
+        elif self._opts.enable_diarization:
+            live_config["diarize"] = True
         if self._opts.keywords:
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterm:
