@@ -281,15 +281,9 @@ def _setup_cloud_tracer(
         # only; the default dispatch has no agent name). Included in both the
         # resource (traces) and the session metadata (spans + logs).
         base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
-    # Hosted-agent identity injected by the LiveKit Cloud launcher as env vars:
-    # the cloud agent id (LIVEKIT_AGENT_ID) and, for non-production deployments,
-    # the deployment id (LIVEKIT_AGENT_DEPLOYMENT). Like agent_name, these are
-    # included in both the resource (traces) and the session metadata (spans +
-    # logs) so LiveKit Cloud agent insights can attribute telemetry per agent.
-    # Resource.create still merges any customer-set OTEL_RESOURCE_ATTRIBUTES via
-    # the standard env detector, so these do not clobber customer attributes.
-    # Empty/unset (e.g. self-hosted, or the production deployment where
-    # LIVEKIT_AGENT_DEPLOYMENT is "") are simply omitted.
+    # cloud agent id and deployment provided by LiveKit Cloud via env vars.
+    # Included in both the resource and the session metadata like agent_name;
+    # omitted when unset.
     if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
         base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
     if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):

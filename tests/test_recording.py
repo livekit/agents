@@ -545,9 +545,9 @@ def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
     raise AssertionError("Resource.create was not called with the service resource")
 
 
-def test_setup_cloud_tracer_injects_hosted_agent_identity() -> None:
-    """LIVEKIT_AGENT_ID / LIVEKIT_AGENT_DEPLOYMENT are added to the tracing
-    resource as lk.cloud_agent_id / lk.deployment_id for cloud attribution."""
+def test_setup_cloud_tracer_adds_identity_from_env() -> None:
+    """LIVEKIT_AGENT_ID / LIVEKIT_AGENT_DEPLOYMENT become
+    lk.cloud_agent_id / lk.deployment_id on the tracing resource."""
     attrs = _resource_attrs_for_env(
         {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": "canary"}
     )
@@ -556,15 +556,14 @@ def test_setup_cloud_tracer_injects_hosted_agent_identity() -> None:
 
 
 def test_setup_cloud_tracer_omits_identity_when_env_unset() -> None:
-    """Self-hosted agents (no launcher env vars) get neither identity attr."""
+    """Neither identity attr is set when the env vars are absent."""
     attrs = _resource_attrs_for_env({})
     assert "lk.cloud_agent_id" not in attrs
     assert "lk.deployment_id" not in attrs
 
 
-def test_setup_cloud_tracer_omits_deployment_for_production() -> None:
-    """The launcher sets LIVEKIT_AGENT_DEPLOYMENT="" for production; an empty
-    value must be omitted rather than emitted as an empty deployment id."""
+def test_setup_cloud_tracer_omits_empty_deployment() -> None:
+    """An empty LIVEKIT_AGENT_DEPLOYMENT is omitted rather than emitted."""
     attrs = _resource_attrs_for_env(
         {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": ""}
     )
