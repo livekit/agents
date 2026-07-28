@@ -374,9 +374,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         self._session = session
 
-        # AMD's timing is VAD-driven (speech start/end gate the silence + endpointing
-        # budgets), and the transcript-without-VAD path assumes a VAD false-negative on a
-        # short utterance — both only hold when a VAD is present.
         effective_vad = (session._activity.vad if session._activity else None) or session.vad
         if effective_vad is None:
             raise ValueError(
@@ -408,7 +405,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         session._amd = self
 
-        # classifier is dormant until start_detection_timer / start_listening;
+        # classifier is dormant until arm_detection_timer / start_listening;
         # the listening gate stays closed so pre-setup audio is dropped.
         self._start_span()
         if session._activity:
@@ -445,7 +442,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 return
             if self._closed or not self._classifier:
                 return
-
             if self._participant_identity:
                 publisher = room.remote_participants.get(self._participant_identity)
             else:
@@ -476,8 +472,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _start_listening(self) -> None:
         if self._closed or not self._classifier:
             return
-        self._classifier.start_detection_timer()
+        self._classifier.arm_detection_timer()
         self._classifier.start_listening()
+        self._classifier.arm_no_speech_timer()
         logger.debug("AMD starts listening")
 
     def _settle_participant_missing(self, error: str) -> None:
@@ -537,9 +534,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             try:
                 await asyncio.gather(*tasks)
             except APIError as e:
-                # dedicated STT died silently (the push_text race already covers the case
-                # where the session STT simply beats it). Fall back one-way to the session's
-                # transcripts so detection can still proceed.
                 logger.warning(
                     "amd: dedicated STT failed, falling back to session transcripts",
                     extra={"error": str(e)},
@@ -578,20 +572,22 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     if self._interrupt_on_machine:
                         await self._session.interrupt(force=True)
                     if not is_given(self._screening_message):
-                        # no way to respond to the prompt, so the screening system won't
-                        # advance — surface the screening verdict instead of looping into a
-                        # no-speech timeout.
+                        # surface the screening verdict instead of timing out
                         self._finish(verdict, "not_played")
                         return
+
                     logger.info("playing screening message")
-                    await classifier.reset(arm_turn_timers=False)
+                    await classifier.reset()
+                    classifier.start_listening()
                     self._session._on_aec_warmup_expired()
+
                     playback = await self._play(self._screening_message, verdict)
                     if playback == "not_played":
                         self._finish(verdict, playback)
                         return
                     logger.info("screening message: %s", playback)
-                    classifier.arm_turn_timers()
+                    classifier.arm_detection_timer()
+                    classifier.arm_no_speech_timer()
                     # remember the screening playback so a later human verdict reports it
                     self._last_playback = playback
                     continue
@@ -604,9 +600,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     self._finish(verdict, self._last_playback)
                     return
 
-                # terminal verdict
                 if verdict.is_machine and self._interrupt_on_machine:
                     await self._session.interrupt(force=True)
+
                 if verdict.category == AMDCategory.MACHINE_VM:
                     # voicemail message is the terminal-relevant one
                     playback = await self._play(self._voicemail_message, verdict)
@@ -615,8 +611,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     playback = self._last_playback
                 self._finish(verdict, playback)
                 return
-        except asyncio.CancelledError:
-            raise
         except Exception:
             logger.exception("amd detection loop failed")
             # always release execute(): a hang is worse than surfacing an error verdict.
