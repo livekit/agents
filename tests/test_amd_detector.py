@@ -87,21 +87,27 @@ class _FakeClassifier:
         self._verdict_ready = asyncio.Event()
         self._verdict_result: AMDPredictionEvent | None = None
         self.reset_count = 0
-        self.reset_arm_turn_timers: list[bool] = []
-        self.arm_turn_timers_count = 0
+        self.start_listening_count = 0
+        self.arm_detection_timer_count = 0
+        self.arm_no_speech_timer_count = 0
         self.ended = False
 
-    async def reset(self, *, arm_turn_timers: bool = True) -> None:
+    async def reset(self) -> None:
         self.reset_count += 1
-        self.reset_arm_turn_timers.append(arm_turn_timers)
         self._verdict_result = None
         self._verdict_ready = asyncio.Event()
+
+    def start_listening(self) -> None:
+        self.start_listening_count += 1
 
     def end_input(self) -> None:
         self.ended = True
 
-    def arm_turn_timers(self) -> None:
-        self.arm_turn_timers_count += 1
+    def arm_detection_timer(self) -> None:
+        self.arm_detection_timer_count += 1
+
+    def arm_no_speech_timer(self) -> None:
+        self.arm_no_speech_timer_count += 1
 
 
 def _verdict(category: AMDCategory, transcript: str = "greeting") -> AMDPredictionEvent:
@@ -233,7 +239,7 @@ async def test_screening_message_interrupted_is_reported() -> None:
     assert result.message_playback == "interrupted"
 
 
-async def test_screening_rearms_classifier_before_playback_finishes() -> None:
+async def test_screening_listens_during_playback_without_arming_timers() -> None:
     session = _FakeSession()
     handle = _BlockingHandle()
     session._next_handle = handle
@@ -247,7 +253,9 @@ async def test_screening_rearms_classifier_before_playback_finishes() -> None:
 
     await asyncio.wait_for(handle.started.wait(), timeout=1.0)
     assert clf.reset_count == 1
-    assert clf.reset_arm_turn_timers == [False]
+    assert clf.start_listening_count == 1
+    assert clf.arm_detection_timer_count == 0
+    assert clf.arm_no_speech_timer_count == 0
 
     clf._verdict_result = _verdict(AMDCategory.HUMAN)
     clf._verdict_ready.set()
@@ -257,6 +265,8 @@ async def test_screening_rearms_classifier_before_playback_finishes() -> None:
     await asyncio.wait_for(loop, timeout=1.0)
     assert detector._result is not None
     assert detector._result.category == AMDCategory.HUMAN
+    assert clf.arm_detection_timer_count == 1
+    assert clf.arm_no_speech_timer_count == 1
 
 
 async def test_ivr_navigates_and_returns_machine_ivr() -> None:

@@ -52,7 +52,6 @@ async def entrypoint(ctx: JobContext):
     phone_number = os.getenv("SIP_PHONE_NUMBER")
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY")
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
-    # Use a participant that joins the room manually instead of creating a SIP call.
     skip_sip = os.getenv("SKIP_SIP", "").lower() in {"1", "true", "yes"}
 
     # focus the session on the callee before AMD starts so audio recognition
@@ -67,13 +66,12 @@ async def entrypoint(ctx: JobContext):
     async with AMD(
         session,
         participant_identity=participant_identity or NOT_GIVEN,
-        screening_message="This is a screening reply message, and it is a long message so you should be patient",
-        voicemail_message="This is a voice mail",
+        screening_message="This is a predefined screening reply message",
+        voicemail_message="This is a predefined voicemail message",
     ) as detector:
         # start running amd before the SIP participant joins to avoid audio loss
         participant: rtc.RemoteParticipant | None = None
         if skip_sip:
-            logger.info("skipping SIP participant creation; waiting for a participant")
             participant = await ctx.wait_for_participant(identity=participant_identity)
         elif phone_number and outbound_trunk_id and participant_identity:
             logger.info(f"creating SIP participant for {participant_identity}")
