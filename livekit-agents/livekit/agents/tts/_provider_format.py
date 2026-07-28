@@ -883,25 +883,6 @@ class TranscriptMarkupStripper:
 _BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
 
 
-def minted_bracket_cues(before: str, after: str) -> list[str]:
-    """The bracket spans :func:`convert_markup` added, e.g. ``[laugh]``, ``[long-pause]``.
-
-    Conversion only ever adds brackets, so a span in *after* beyond those in *before* is
-    markup; one the LLM wrote itself (a ``[text](url)`` link) is in both and not reported.
-    """
-    if "[" not in after:
-        return []
-
-    prose = _BRACKET_SPAN_RE.findall(before)
-    cues: list[str] = []
-    for span in _BRACKET_SPAN_RE.findall(after):
-        if span in prose:
-            prose.remove(span)  # the LLM's own span, passed through by conversion
-        else:
-            cues.append(span)
-    return cues
-
-
 def _retext(token: TimedString, text: str) -> TimedString:
     """A copy of *token* carrying *text*, keeping the alignment metadata."""
     return TimedString(
@@ -914,29 +895,32 @@ def _retext(token: TimedString, text: str) -> TimedString:
     )
 
 
-def drop_bracket_cues(tokens: list[TimedString], cues: list[str]) -> list[TimedString]:
-    """Remove minted *cues* from one batch of TTS-aligned tokens, keeping their timings.
+def drop_bracket_cues(tokens: list[TimedString]) -> list[TimedString]:
+    """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
 
-    ``use_tts_aligned_transcript`` makes the provider's alignment of the *converted* text
-    the transcript, so the cues it carries would be published as words never spoken. Only
-    :func:`minted_bracket_cues` spans are dropped (each once), leaving the LLM's own
-    brackets alone; with expressive off nothing is recorded and this is a pass-through.
+    ``use_tts_aligned_transcript`` makes the provider's alignment of the text it was sent
+    the transcript, and that text is post-``convert_markup``, so it carries the native
+    ``[laugh]``/``[pause]`` cues as words the agent never spoke. Every bracket span goes:
+    the provider reads them all as cues, so none of them is ever audio, and markdown links
+    are already gone (``filter_markdown`` runs on TTS input by default).
 
-    Matching runs over the batch's joined text, so a cue may straddle tokens. One split
-    across two alignment *messages* is missed and stays in the transcript.
+    Matching runs over the joined batch, so a cue may straddle tokens; one split across two
+    alignment *messages* is missed and stays in the transcript. A cue between two spaces
+    takes one of them with it, leaving a single separator rather than a double space.
     """
-    if not cues:
-        return tokens
-
     text = "".join(tokens)
     if "[" not in text:
         return tokens
 
     dropped: set[int] = set()
     for match in _BRACKET_SPAN_RE.finditer(text):
-        if (span := match.group()) in cues:
-            cues.remove(span)  # each mint accounts for one occurrence
-            dropped.update(range(*match.span()))
+        start, end = match.span()
+        # take one of the spaces the cue sat between, so it leaves a single separator
+        if start > 0 and text[start - 1] == " " and (end == len(text) or text[end] == " "):
+            start -= 1
+        elif start == 0 and end < len(text) and text[end] == " ":
+            end += 1
+        dropped.update(range(start, end))
     if not dropped:
         return tokens
 
