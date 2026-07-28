@@ -404,7 +404,7 @@ class AgentsConsole:
                         self._last_user_metrics, event.item.metrics
                     )
                     self._last_user_metrics = None
-                    self._maybe_print_agent_initiated_message(event.item)
+                    self._print_agent_initiated_message(event.item)
 
             @session.on("agent_state_changed")
             def _on_agent_state_changed(event: AgentStateChangedEvent) -> None:
@@ -430,9 +430,9 @@ class AgentsConsole:
             # greeting before this subscription existed — catch up from history.
             for item in session.history.items:
                 if isinstance(item, llm.ChatMessage) and item.role == "assistant":
-                    self._maybe_print_agent_initiated_message(item)
+                    self._print_agent_initiated_message(item)
 
-    def _maybe_print_agent_initiated_message(self, item: llm.ChatMessage) -> None:
+    def _print_agent_initiated_message(self, item: llm.ChatMessage) -> None:
         """Print an assistant message that no `session.run()` will ever render.
 
         Only in text mode (audio mode hears it via the transcript synchronizer) and only
