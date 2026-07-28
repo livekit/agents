@@ -210,6 +210,8 @@ def _build_ws_url(stt) -> str:
         "endpointing": str(opts.endpointing).lower(),
         "format": str(opts.format).lower(),
         "sentence_timestamps": str(opts.sentence_timestamps).lower(),
+        "redact_pii": str(opts.redact_pii).lower(),
+        "redact_pci": str(opts.redact_pci).lower(),
     }
     if opts.keywords:
         params["keywords"] = ",".join(f"{kw}:{weight:g}" for kw, weight in opts.keywords)
@@ -336,6 +338,44 @@ def test_streaming_url_includes_keywords_when_set():
     url = unquote_plus(_build_ws_url(stt))
 
     assert "keywords=NVIDIA:2,Jensen Huang:1" in url, f"keywords not serialized correctly: {url}"
+
+
+def test_streaming_url_redact_pii_pci_default_false():
+    """redact_pii and redact_pci must default to false (opt-in features)."""
+    from livekit.plugins.smallestai import STT
+
+    stt = STT(api_key="test-key")
+    url = _build_ws_url(stt)
+
+    assert "redact_pii=false" in url, f"redact_pii=false missing from URL: {url}"
+    assert "redact_pci=false" in url, f"redact_pci=false missing from URL: {url}"
+
+
+def test_streaming_url_redact_pii_pci_enabled():
+    """redact_pii=true and redact_pci=true must be reflected when explicitly enabled."""
+    from livekit.plugins.smallestai import STT
+
+    stt = STT(api_key="test-key", redact_pii=True, redact_pci=True)
+    url = _build_ws_url(stt)
+
+    assert "redact_pii=true" in url, f"redact_pii=true missing from URL: {url}"
+    assert "redact_pci=true" in url, f"redact_pci=true missing from URL: {url}"
+
+
+def test_process_stream_event_attaches_redacted_entities_metadata():
+    """redacted_entities present in a stream event must surface via SpeechData.metadata."""
+    stream = _make_stream_no_task()
+    stream._process_stream_event(
+        {
+            "session_id": "s1",
+            "transcript": "[CREDITCARDCVV_1] and expiry [TIME_2] slash 34.",
+            "is_final": True,
+            "redacted_entities": ["[CREDITCARDCVV_1]", "[TIME_2]"],
+        }
+    )
+    stream._event_ch.recv_nowait()  # START_OF_SPEECH
+    ev = stream._event_ch.recv_nowait()  # FINAL_TRANSCRIPT
+    assert ev.alternatives[0].metadata == {"redacted_entities": ["[CREDITCARDCVV_1]", "[TIME_2]"]}
 
 
 def test_process_stream_event_attaches_utterances_metadata():
