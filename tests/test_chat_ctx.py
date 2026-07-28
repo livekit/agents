@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import inference
+from livekit.agents import APIConnectionError, inference
 from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -119,6 +119,108 @@ def test_aws_image_content_rejects_external_urls():
 
     with pytest.raises(ValueError, match="external_url is not supported by AWS Bedrock"):
         chat_ctx.to_provider_format(format="aws")
+
+
+def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
+    # the shape generate_reply(instructions=...) produces: a trailing system message
+    instructions = "Ask the caller for the year they were born."
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=[instructions])
+    return chat_ctx, instructions
+
+
+def test_openai_format_preserves_mid_conversation_system_messages():
+    # intentional pass-through: repositioning for providers that need it
+    # happens in the inference LLMStream, not in the shared openai serializer
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
+    assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
+    assert messages[-1]["content"] == instructions
+
+
+async def test_inference_llm_repositions_instructions(monkeypatch):
+    captured: dict = {}
+
+    async def _capture_create(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop request")
+
+    lk_llm = inference.LLM(
+        "google/gemini-2.5-flash", api_key="fake", api_secret="fake-secret-of-at-least-32-bytes!"
+    )
+    monkeypatch.setattr(lk_llm._client.chat.completions, "create", _capture_create)
+    conn_options = APIConnectOptions(max_retry=0)
+
+    try:
+        chat_ctx, instructions = _ctx_with_per_turn_instructions()
+        stream = lk_llm.chat(chat_ctx=chat_ctx, conn_options=conn_options)
+        with pytest.raises(APIConnectionError):
+            await stream.collect()
+        await stream.aclose()
+
+        messages = captured["messages"]
+        assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
+        assert messages[-1]["content"] == f"<instructions>\n{instructions}\n</instructions>"
+        # the original ctx must not be mutated
+        assert [item.role for item in chat_ctx.items] == ["system", "assistant", "user", "system"]
+
+        # openai-served models keep the system role
+        captured.clear()
+        lk_llm.update_options(model="openai/gpt-4.1")
+        stream = lk_llm.chat(chat_ctx=chat_ctx, conn_options=conn_options)
+        with pytest.raises(APIConnectionError):
+            await stream.collect()
+        await stream.aclose()
+
+        messages = captured["messages"]
+        assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
+    finally:
+        await lk_llm.aclose()
+
+
+def test_mistralai_format_converts_mid_conversation_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert entries[-1] == {
+        "type": "message.input",
+        "role": "user",
+        "content": f"<instructions>\n{instructions}\n</instructions>",
+    }
+
+
+def test_per_turn_instructions_convert_without_a_preamble():
+    # no base system message: the trailing per-turn message is still mid-conversation
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=["Ask the caller for the year they were born."])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions is None
+    assert [e["role"] for e in entries] == ["user", "user"]
+    assert entries[-1]["content"].startswith("<instructions>")
+
+
+def test_empty_mid_conversation_system_messages_are_dropped():
+    # a text-less later system message must not shadow the base preamble
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["Hi!"])
+    chat_ctx.add_message(role="system", content=[""])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert [e["role"] for e in entries] == ["user"]
 
 
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():

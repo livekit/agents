@@ -17,38 +17,40 @@ def convert_mid_conversation_instructions(
 ) -> llm.ChatContext:
     """Convert mid-conversation system messages to the given role to preserve their position.
 
-    The first system/developer message is kept as the base preamble.
-    Every later system/developer message is rewritten with the given
-    role, wrapped in ``template``. This covers both mid-conversation
-    instructions and per-turn instructions appended by ``generate_reply``
-    on the very first turn (when there's no user/assistant content yet
-    to anchor "mid-conversation"). Without this, providers like Gemini,
+    A system/developer message is kept as the base preamble only when it
+    is the first one and no conversation content (messages, tool calls)
+    precedes it. Every other system/developer message is rewritten with
+    the given role, wrapped in ``template``; ones without text content
+    are dropped so they can't shadow the preamble. This covers both
+    mid-conversation instructions and per-turn instructions appended by
+    ``generate_reply`` — including on the very first turn, when the
+    preamble is the only other item. Without this, providers like Gemini,
     Anthropic, and AWS fall back to ``inject_dummy_user_message``
     (a literal ``"."`` user turn the model frequently responds to with
     "you didn't say anything").
     """
-    first_system_seen = False
+    preamble_allowed = True
     items: list[llm.ChatItem] = []
 
     for item in chat_ctx.items:
-        if (
-            item.type == "message"
-            and item.role in ("system", "developer")
-            and first_system_seen
-            and (text := item.raw_text_content)
-        ):
-            items.append(
-                llm.ChatMessage(
-                    id=item.id,
-                    role=role,
-                    content=[template.format(content=text)],
-                    created_at=item.created_at,
+        if item.type == "message" and item.role in ("system", "developer"):
+            if preamble_allowed:
+                preamble_allowed = False
+                items.append(item)
+            elif text := item.raw_text_content:
+                items.append(
+                    llm.ChatMessage(
+                        id=item.id,
+                        role=role,
+                        content=[template.format(content=text)],
+                        created_at=item.created_at,
+                    )
                 )
-            )
-        else:
-            if item.type == "message" and item.role in ("system", "developer"):
-                first_system_seen = True
-            items.append(item)
+            continue
+
+        if item.type in ("message", "function_call", "function_call_output"):
+            preamble_allowed = False
+        items.append(item)
 
     return llm.ChatContext(items)
 
