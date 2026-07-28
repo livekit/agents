@@ -32,7 +32,7 @@ class FakeUserSpeech(BaseModel):
     end_time: float
     transcript: str  # empty string fires VAD SOS/EOS only — no STT events
     stt_delay: float
-    final: bool = True  # when False, only an interim transcript is emitted (no final)
+    final: bool = True
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
         obj = copy.deepcopy(self)
@@ -231,7 +231,6 @@ class FakeRecognizeStream(RecognizeStream):
             if curr_time() < final_transcript_time:
                 await asyncio.sleep(final_transcript_time - curr_time())
             if not fake_speech.final:
-                # interim only: STT dropped the utterance without a final transcript
                 continue
             self.send_fake_transcript(fake_speech.transcript, is_final=True)
 

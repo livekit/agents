@@ -114,8 +114,6 @@ async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float
     t_origin = time.time()
     audio_input.push(0.1)
 
-    # wait for the user speeches to be processed (no STT: rely on drain_delay for the
-    # VAD timeline to play out)
     if isinstance(stt, FakeSTT):
         await stt.fake_user_speeches_done
 

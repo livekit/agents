@@ -325,7 +325,6 @@ class AudioRecognition:
 
         self._vad_speech_started: bool = False
 
-        # transcription timeout: VAD heard speech but STT produced no transcript
         self._transcription_timeout_handle: asyncio.TimerHandle | None = None
         self._turn_speech_duration: float = 0.0
         self._turn_transcript_received: bool = False
@@ -1132,6 +1131,13 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
+        if (
+            ev.type
+            in (stt.SpeechEventType.FINAL_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT)
+            and ev.alternatives[0].text
+        ):
+            self._mark_turn_transcribed()
+
         # handle interruption detection
         # - hold the event until the ignore_user_transcript_until expires
         # - release only relevant events
@@ -1181,8 +1187,6 @@ class AudioRecognition:
             self._final_transcript_received.set()
             if not transcript:
                 return
-
-            self._mark_turn_transcribed()
 
             self._hooks.on_final_transcript(
                 ev,
@@ -1256,8 +1260,6 @@ class AudioRecognition:
             if not transcript:
                 return
 
-            self._mark_turn_transcribed()
-
             logger.debug(
                 "received user preflight transcript",
                 extra={"user_transcript": transcript, "language": self._last_language},
@@ -1292,7 +1294,7 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
-            # interim transcripts don't cancel the timeout: STT may drop them without a final
+            # An interim may never be followed by a final transcript.
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):
@@ -1861,7 +1863,6 @@ class AudioRecognition:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
 
-    # region: user transcription timeout
     def _cancel_transcription_timeout(self) -> None:
         if self._transcription_timeout_handle is not None:
             self._transcription_timeout_handle.cancel()
@@ -1872,12 +1873,11 @@ class AudioRecognition:
         self._cancel_transcription_timeout()
 
     def _arm_transcription_timeout(self, speech_duration: float) -> None:
-        self._turn_speech_duration += speech_duration
-
         timeout = self._session.options.transcription_timeout
         if timeout is None or self._turn_transcript_received:
             return
 
+        self._turn_speech_duration += speech_duration
         self._cancel_transcription_timeout()
         self._transcription_timeout_handle = asyncio.get_running_loop().call_later(
             timeout, self._on_transcription_timeout
@@ -1888,14 +1888,9 @@ class AudioRecognition:
         if self._user_turn_start is None or self._turn_transcript_received:
             return
 
-        if self._agent_speaking:
-            return
-
         self._hooks.on_transcription_timeout(
             speech_duration=self._turn_speech_duration, turn_start=self._user_turn_start
         )
-
-    # endregion
 
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():

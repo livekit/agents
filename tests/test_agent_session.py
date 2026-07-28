@@ -1465,6 +1465,37 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
+async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._interruption_enabled = True
+    recognition._agent_speaking = True
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert list(recognition._transcript_buffer) == [event]
+        assert hooks.final_transcripts == []
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
