@@ -22,10 +22,9 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     One regex scan both removes the markup and records each removed tag, so
     stripping and extraction can never disagree about what counts as a tag.
 
-    Only XML-shaped markup is recognized. Square-bracket spans are never markup
-    here: a provider's native brackets (Inworld ``[laughs]``, xAI ``[pause]``) are
-    produced on the audio path by ``convert_markup`` and never come back through a
-    strip, while ``[text](url)`` links and ``[Enter]``-style prose do.
+    Only XML-shaped markup is recognized. Square brackets are left alone: in LLM output
+    they are prose (``[text](url)`` links) that a strip would mangle, and provider-native
+    ones are removed at their source by ``_provider_format.drop_bracket_cues``.
 
     Returns ``(clean_text, tags)`` where ``tags`` is a list of ``(type, value)``
     pairs in order of appearance:

@@ -20,7 +20,7 @@ import re
 from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
-from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
+from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from .markup_utils import convert_expression_tags, extract_and_strip
 
 
@@ -782,10 +782,9 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     (all the LLM is ever taught) plus every native tag name, so a hallucinated native
     tag is stripped rather than leaked.
 
-    Square-bracket spans are deliberately *not* stripped. A provider's native brackets
-    (Inworld ``[laughs]``, xAI ``[pause]``) are produced by ``convert_markup`` on the
-    audio path only, so they never reach a transcript — while ``[text](url)`` markdown
-    links and ``[Enter]``-style prose do, and a bracket strip mangles them.
+    Square-bracket spans are *not* stripped: the LLM only writes expr, so brackets in its
+    output are prose (a ``[text](url)`` link) that a strip would mangle. Provider-native
+    brackets never arrive here — :func:`drop_bracket_cues` removes them at their source.
     """
     # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
     # sinks call this per streamed chunk and expressive is off by default, making this the
@@ -879,6 +878,76 @@ class TranscriptMarkupStripper:
     def expression_attribute(self) -> dict[str, str] | None:
         """The ``lk.expression`` attribute for the tags stripped so far, if any."""
         return expression_attribute(self._tags)
+
+
+_BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
+
+
+def minted_bracket_cues(before: str, after: str) -> list[str]:
+    """The bracket spans :func:`convert_markup` added, e.g. ``[laugh]``, ``[long-pause]``.
+
+    Conversion only ever adds brackets, so a span in *after* beyond those in *before* is
+    markup; one the LLM wrote itself (a ``[text](url)`` link) is in both and not reported.
+    """
+    if "[" not in after:
+        return []
+
+    prose = _BRACKET_SPAN_RE.findall(before)
+    cues: list[str] = []
+    for span in _BRACKET_SPAN_RE.findall(after):
+        if span in prose:
+            prose.remove(span)  # the LLM's own span, passed through by conversion
+        else:
+            cues.append(span)
+    return cues
+
+
+def _retext(token: TimedString, text: str) -> TimedString:
+    """A copy of *token* carrying *text*, keeping the alignment metadata."""
+    return TimedString(
+        text,
+        start_time=token.start_time,
+        end_time=token.end_time,
+        confidence=token.confidence,
+        start_time_offset=token.start_time_offset,
+        speaker_id=token.speaker_id,
+    )
+
+
+def drop_bracket_cues(tokens: list[TimedString], cues: list[str]) -> list[TimedString]:
+    """Remove minted *cues* from one batch of TTS-aligned tokens, keeping their timings.
+
+    ``use_tts_aligned_transcript`` makes the provider's alignment of the *converted* text
+    the transcript, so the cues it carries would be published as words never spoken. Only
+    :func:`minted_bracket_cues` spans are dropped (each once), leaving the LLM's own
+    brackets alone; with expressive off nothing is recorded and this is a pass-through.
+
+    Matching runs over the batch's joined text, so a cue may straddle tokens. One split
+    across two alignment *messages* is missed and stays in the transcript.
+    """
+    if not cues:
+        return tokens
+
+    text = "".join(tokens)
+    if "[" not in text:
+        return tokens
+
+    dropped: set[int] = set()
+    for match in _BRACKET_SPAN_RE.finditer(text):
+        if (span := match.group()) in cues:
+            cues.remove(span)  # each mint accounts for one occurrence
+            dropped.update(range(*match.span()))
+    if not dropped:
+        return tokens
+
+    out: list[TimedString] = []
+    pos = 0
+    for token in tokens:
+        kept = "".join(c for i, c in enumerate(token, start=pos) if i not in dropped)
+        pos += len(token)
+        if kept:
+            out.append(token if kept == str(token) else _retext(token, kept))
+    return out
 
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {

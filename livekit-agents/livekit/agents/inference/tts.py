@@ -21,6 +21,7 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
+from ..tts._provider_format import drop_bracket_cues, minted_bracket_cues
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
@@ -520,8 +521,8 @@ class TTS(tts.TTS):
                 return ""  # older inworld models don't support markup
             return provider
 
-        # llm_instructions / to_text / normalize / convert are inherited from the
-        # base Markup, keyed on _provider_key() above.
+        # llm_instructions / normalize / convert are inherited from the base Markup,
+        # keyed on _provider_key() above.
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
@@ -681,6 +682,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
+        # markup conversion mints native bracket cues for some providers; with aligned
+        # transcripts the provider hands that converted text back as the transcript, so
+        # the cues have to come back out again (see drop_bracket_cues)
+        self._minted_cues: list[str] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -715,7 +720,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt = base_pkt.copy()
                 # re-normalize at sentence level: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
-                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                normalized = self._tts.markup.normalize(ev.token)
+                converted = self._tts.markup.convert(normalized)
+                if self._expressive:
+                    # record what conversion minted, so the aligned transcript can drop
+                    # exactly those spans and leave the LLM's own brackets alone
+                    self._minted_cues.extend(minted_bracket_cues(normalized, converted))
                 token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
@@ -772,24 +782,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "output_alignment":
                     from ..voice.io import TimedString
 
+                    aligned: list[TimedString] = []
                     if words := data.get("words"):
-                        for word_info in words:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    word_info["word"],
-                                    start_time=word_info["start"],
-                                    end_time=word_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(w["word"], start_time=w["start"], end_time=w["end"])
+                            for w in words
+                        ]
                     elif chars := data.get("chars"):
-                        for char_info in chars:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    char_info["char"],
-                                    start_time=char_info["start"],
-                                    end_time=char_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(c["char"], start_time=c["start"], end_time=c["end"])
+                            for c in chars
+                        ]
+                    if aligned:
+                        # the provider aligned the *converted* text: drop the cues that
+                        # conversion minted before they become transcript text
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues(aligned, self._minted_cues)
+                        )
                 elif data.get("type") == "done":
                     output_emitter.end_input()
                     break
