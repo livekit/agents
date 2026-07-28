@@ -2,7 +2,7 @@ import os
 import time
 from collections.abc import Callable
 from typing import Generic, TypeVar
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 T = TypeVar("T")
 
@@ -62,6 +62,10 @@ def _resolve_cloudflare_gateway(
             )
         base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
     return base_url, cf_aig_token
+
+
+def _is_cloudflare_gateway(url: str) -> bool:
+    return urlparse(url).hostname == "gateway.ai.cloudflare.com"
 
 
 def _bare_model(model: str) -> str:

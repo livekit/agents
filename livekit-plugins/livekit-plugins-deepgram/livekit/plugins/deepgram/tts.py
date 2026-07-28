@@ -25,7 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import _resolve_cloudflare_gateway, _to_deepgram_url
+from ._utils import _is_cloudflare_gateway, _resolve_cloudflare_gateway, _to_deepgram_url
 from .log import logger
 from .models import TTSModels
 
@@ -143,6 +143,9 @@ class TTS(tts.TTS):
         Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
         streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
         API key is required.
+
+        Only streaming is supported through the gateway: ``synthesize()`` raises
+        ``NotImplementedError``.
 
         Args:
             model: Deepgram model name (e.g. ``"aura-1"``); the ``@cf/deepgram/`` prefix is
@@ -271,6 +274,10 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
+        if _is_cloudflare_gateway(self._opts.base_url):
+            raise NotImplementedError(
+                "the Cloudflare AI Gateway only proxies Deepgram's streaming API; use stream()"
+            )
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(

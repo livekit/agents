@@ -170,6 +170,21 @@ def test_en_only_fallback_preserves_cf_prefix() -> None:
     assert bare._opts.model == "nova-2-general"
 
 
+# --- non-streaming paths are not proxied by the gateway; fail fast with a clear error ---
+
+
+async def test_stt_with_cloudflare_recognize_raises() -> None:
+    stt = deepgram.STT.with_cloudflare(account_id="a", cf_aig_token="t")
+    with pytest.raises(NotImplementedError, match="streaming"):
+        await stt.recognize([])
+
+
+def test_tts_with_cloudflare_synthesize_raises() -> None:
+    tts = deepgram.TTS.with_cloudflare(account_id="a", cf_aig_token="t")
+    with pytest.raises(NotImplementedError, match="streaming"):
+        tts.synthesize("hello")
+
+
 # --- STTv2 (Flux) ---
 
 

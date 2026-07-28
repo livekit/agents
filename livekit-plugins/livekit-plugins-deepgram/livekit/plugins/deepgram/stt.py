@@ -45,7 +45,13 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _bare_model, _resolve_cloudflare_gateway, _to_deepgram_url
+from ._utils import (
+    PeriodicCollector,
+    _bare_model,
+    _is_cloudflare_gateway,
+    _resolve_cloudflare_gateway,
+    _to_deepgram_url,
+)
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -262,6 +268,9 @@ class STT(stt.STT):
         streaming protocol. Auth uses the ``cf-aig-authorization`` header; no Deepgram
         API key is required.
 
+        Only streaming is supported through the gateway: ``recognize()`` raises
+        ``NotImplementedError``.
+
         Args:
             model: Deepgram model name (e.g. ``"nova-3"``); the ``@cf/deepgram/`` prefix is
                 added automatically. A value already prefixed with ``@cf/`` is used as-is.
@@ -312,6 +321,12 @@ class STT(stt.STT):
         language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        if _is_cloudflare_gateway(self._opts.endpoint_url):
+            raise NotImplementedError(
+                "the Cloudflare AI Gateway only proxies Deepgram's streaming API;"
+                " use stream() or wrap with a StreamAdapter"
+            )
+
         config = self._sanitize_options(language=language)
 
         recognize_config = {
