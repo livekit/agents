@@ -998,7 +998,7 @@ class LLM(llm.LLM):
 
         if base_url is None:
             account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-            if account_id is None:
+            if not account_id:
                 raise ValueError(
                     "Cloudflare account_id is required, either as argument or set "
                     "CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"

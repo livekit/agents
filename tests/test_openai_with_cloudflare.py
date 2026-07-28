@@ -147,3 +147,10 @@ def test_missing_api_key_raises() -> None:
 def test_missing_account_id_raises() -> None:
     with pytest.raises(ValueError, match=r"account_id"):
         openai.LLM.with_cloudflare(model="openai/gpt-4o", api_key="cf-tok")
+
+
+def test_empty_account_id_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # an empty CLOUDFLARE_ACCOUNT_ID must not build ".../accounts//ai/v1"
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "")
+    with pytest.raises(ValueError, match=r"account_id"):
+        openai.LLM.with_cloudflare(model="openai/gpt-4o", api_key="cf-tok")
