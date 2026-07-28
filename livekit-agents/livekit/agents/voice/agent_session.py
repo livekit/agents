@@ -30,7 +30,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import get_job_context
-from ..llm import AgentHandoff, ChatContext, MetricsReport
+from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
@@ -483,6 +483,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = vad or None
         self._llm = llm or None
         self._tts = tts or None
+
+        # eagerly establish DNS/TLS to the LLM provider so the first inference
+        # request doesn't pay connection setup costs
+        if isinstance(self._llm, LLM):
+            self._llm.prewarm(loop=self._loop)
 
         self._keyterm_detector = KeytermDetector(
             static_keyterms=self._opts.stt_context_options["keyterms"],
@@ -1608,7 +1613,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent)
+        await self._update_activity(agent, wait_on_enter=False)
+
+        # watch on_enter so the run captures its output without awaiting it
+        if (activity := self._activity) is not None and activity._on_enter_task is not None:
+            if (run_state := self._global_run_state) is not None and not run_state.done():
+                run_state._watch_handle(activity._on_enter_task)
 
     def _emit_debug_message(self, payload: dict[str, Any]) -> None:
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""

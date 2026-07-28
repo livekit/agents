@@ -1028,7 +1028,7 @@ class ChatMessageAssert:
         async for chunk in llm_v.chat(
             chat_ctx=chat_ctx,
             tools=[check_intent],
-            tool_choice={"type": "function", "function": {"name": "check_intent"}},
+            tool_choice="required",
             extra_kwargs=extra_kwargs,
         ):
             if chunk.usage is not None:

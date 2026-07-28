@@ -20,7 +20,7 @@ See https://docs.livekit.io/agents/integrations/avatar/bithuman/ for more inform
 from .log import print_unsupported_python
 
 try:
-    # on Python 3.14+ the third-party packages avatar.py pulls in through bithuman are missing too
+    # outside 3.11-3.13 the third-party packages avatar.py reaches through bithuman are gone too
     from .avatar import AvatarSession, BitHumanException
 except ImportError:
     print_unsupported_python()
