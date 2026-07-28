@@ -45,7 +45,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, _bare_model, _resolve_cloudflare_gateway, _to_deepgram_url
 from .log import logger
 from .models import DeepgramLanguages, DeepgramModels
 
@@ -276,20 +276,12 @@ class STT(stt.STT):
             sample_rate: Audio sample rate in Hz, forwarded to ``STT``.
             http_session: Optional aiohttp session, forwarded to ``STT``.
         """
-        cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
-        if not cf_aig_token:
-            raise ValueError(
-                "Cloudflare AI Gateway token is required, either as argument or set"
-                " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
-            )
-        if base_url is None:
-            account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-            if not account_id:
-                raise ValueError(
-                    "Cloudflare account_id is required, either as argument or set"
-                    " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
-                )
-            base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+        base_url, cf_aig_token = _resolve_cloudflare_gateway(
+            account_id=account_id,
+            gateway_id=gateway_id,
+            cf_aig_token=cf_aig_token,
+            base_url=base_url,
+        )
 
         if not model.startswith("@cf/"):
             model = f"@cf/deepgram/{model}"
@@ -1011,12 +1003,6 @@ def prerecorded_transcription_to_speech_event(
             for alt in dg_alts
         ],
     )
-
-
-def _bare_model(model: DeepgramModels | str) -> str:
-    # Cloudflare AI Gateway routes Deepgram models as "@cf/deepgram/<model>"; strip the routing
-    # prefix so model-name checks see the underlying Deepgram model (e.g. "nova-3").
-    return model.removeprefix("@cf/deepgram/")
 
 
 def _validate_model(

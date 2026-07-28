@@ -41,7 +41,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, _bare_model, _resolve_cloudflare_gateway, _to_deepgram_url
 from .log import logger
 from .models import V2Models
 
@@ -77,6 +77,7 @@ class STTv2(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -95,9 +96,13 @@ class STTv2(stt.STT):
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             mip_opt_out: Whether to take part in the model improvement program
+            extra_headers: Additional HTTP headers sent on every connection, merged over the
+                default ``Authorization: Token`` header. When no API key is set, these become
+                the sole auth (e.g. the Cloudflare AI Gateway).
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is provided or found in environment variables
+                (unless ``extra_headers`` is supplied).
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -115,9 +120,14 @@ class STTv2(stt.STT):
         )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
-        if not deepgram_api_key:
+        extra = dict(extra_headers) if is_given(extra_headers) else {}
+        if not deepgram_api_key and not extra:
             raise ValueError("Deepgram API key is required")
-        self._api_key = deepgram_api_key
+        # default Token auth only when a key is present; extra_headers merge on top (and are
+        # the sole auth when no key is set, e.g. the Cloudflare AI Gateway)
+        self._connect_headers = (
+            {"Authorization": f"Token {deepgram_api_key}"} if deepgram_api_key else {}
+        ) | extra
 
         if is_given(keyterms):
             logger.warning(
@@ -132,7 +142,7 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
-        if language_hint and model != "flux-general-multi":
+        if language_hint and _bare_model(model) != "flux-general-multi":
             logger.warning(
                 "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
                 model,
@@ -183,6 +193,70 @@ class STTv2(stt.STT):
     def provider(self) -> str:
         return "Deepgram"
 
+    @staticmethod
+    def with_cloudflare(
+        *,
+        model: str = "flux",
+        account_id: str | None = None,
+        gateway_id: str = "default",
+        cf_aig_token: str | None = None,
+        base_url: str | None = None,
+        sample_rate: int = 16000,
+        eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eot_threshold: NotGivenOr[float] = NOT_GIVEN,
+        eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> STTv2:
+        """Create a Deepgram Flux STT routed through the Cloudflare AI Gateway.
+
+        Connects to the gateway's ``workers-ai`` WebSocket, which proxies Deepgram's
+        Flux (v2) streaming protocol. Auth uses the ``cf-aig-authorization`` header; no
+        Deepgram API key is required.
+
+        Args:
+            model: Deepgram model name; the ``@cf/deepgram/`` prefix is added automatically.
+                Defaults to ``"flux"``, Cloudflare's only Flux model (the catalog has no
+                ``flux-general-en`` / ``flux-general-multi`` variants). A value already
+                prefixed with ``@cf/`` is used as-is.
+            account_id: Cloudflare account ID. Falls back to ``CLOUDFLARE_ACCOUNT_ID``.
+                Required unless ``base_url`` is given.
+            gateway_id: Gateway name. Defaults to ``"default"``.
+            cf_aig_token: Gateway token for ``cf-aig-authorization``. Falls back to
+                ``CLOUDFLARE_AI_GATEWAY_TOKEN``.
+            base_url: Full gateway endpoint; overrides ``account_id`` / ``gateway_id``.
+            sample_rate: Audio sample rate in Hz, forwarded to ``STTv2``.
+            eager_eot_threshold: Eager end-of-turn threshold, forwarded to ``STTv2``.
+            eot_threshold: End-of-turn threshold, forwarded to ``STTv2``.
+            eot_timeout_ms: End-of-turn timeout, forwarded to ``STTv2``.
+            keyterm: Key terms to improve recognition accuracy, forwarded to ``STTv2``.
+            http_session: Optional aiohttp session, forwarded to ``STTv2``.
+        """
+        base_url, cf_aig_token = _resolve_cloudflare_gateway(
+            account_id=account_id,
+            gateway_id=gateway_id,
+            cf_aig_token=cf_aig_token,
+            base_url=base_url,
+        )
+
+        if not model.startswith("@cf/"):
+            model = f"@cf/deepgram/{model}"
+
+        return STTv2(
+            model=model,
+            sample_rate=sample_rate,
+            eager_eot_threshold=eager_eot_threshold,
+            eot_threshold=eot_threshold,
+            eot_timeout_ms=eot_timeout_ms,
+            keyterm=keyterm,
+            base_url=base_url,
+            http_session=http_session,
+            # explicit empty key opts out of the DEEPGRAM_API_KEY env fallback, so the gateway
+            # only ever receives cf-aig-authorization (no stray Authorization: Token header)
+            api_key="",
+            extra_headers={"cf-aig-authorization": cf_aig_token},
+        )
+
     def stream(
         self,
         *,
@@ -193,9 +267,9 @@ class STTv2(stt.STT):
             stt=self,
             conn_options=conn_options,
             opts=self._opts,
-            api_key=self._api_key,
             http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,
+            connect_headers=self._connect_headers,
         )
         self._streams.add(stream)
         return stream
@@ -251,7 +325,7 @@ class STTv2(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
             self._opts.language_hint = language_hint
-            if language_hint and self._opts.model != "flux-general-multi":
+            if language_hint and _bare_model(self._opts.model) != "flux-general-multi":
                 logger.warning(
                     "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
                     self._opts.model,
@@ -300,13 +374,13 @@ class SpeechStreamv2(stt.SpeechStream):
         stt: STTv2,
         opts: STTOptions,
         conn_options: APIConnectOptions,
-        api_key: str,
         http_session: aiohttp.ClientSession,
         base_url: str,
+        connect_headers: dict[str, str],
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._api_key = api_key
+        self._connect_headers = dict(connect_headers)
         self._session = http_session
         self._opts.endpoint_url = base_url
         self._speaking = False
@@ -513,7 +587,7 @@ class SpeechStreamv2(stt.SpeechStream):
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
+                    headers=self._connect_headers,
                     heartbeat=30.0,
                 ),
                 self._conn_options.timeout,

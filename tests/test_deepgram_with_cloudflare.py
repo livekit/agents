@@ -168,3 +168,115 @@ def test_en_only_fallback_preserves_cf_prefix() -> None:
     # the bare (non-prefixed) path is unchanged
     bare = deepgram.STT(model="nova-2-meeting", language="fr", api_key="k")
     assert bare._opts.model == "nova-2-general"
+
+
+# --- STTv2 (Flux) ---
+
+
+def test_stt_v2_builds_gateway_url_and_auth() -> None:
+    stt = deepgram.STTv2.with_cloudflare(account_id="acct", cf_aig_token="cf-tok")
+    assert stt._opts.endpoint_url == "https://gateway.ai.cloudflare.com/v1/acct/default/workers-ai"
+    assert stt._connect_headers == {"cf-aig-authorization": "cf-tok"}
+    assert stt._opts.model == "@cf/deepgram/flux"
+    assert stt.capabilities.streaming is True
+
+
+def test_stt_v2_account_id_and_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "env-acct")
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "env-tok")
+    stt = deepgram.STTv2.with_cloudflare()
+    assert "/v1/env-acct/default/workers-ai" in stt._opts.endpoint_url
+    assert stt._connect_headers == {"cf-aig-authorization": "env-tok"}
+
+
+def test_stt_v2_model_accepts_bare_and_prefixed_names() -> None:
+    # Cloudflare's catalog has a single flux model: @cf/deepgram/flux
+    assert (
+        deepgram.STTv2.with_cloudflare(account_id="a", cf_aig_token="t", model="flux")._opts.model
+        == "@cf/deepgram/flux"
+    )
+    assert (
+        deepgram.STTv2.with_cloudflare(
+            account_id="a", cf_aig_token="t", model="@cf/deepgram/flux"
+        )._opts.model
+        == "@cf/deepgram/flux"
+    )
+
+
+def test_stt_v2_base_url_override() -> None:
+    stt = deepgram.STTv2.with_cloudflare(
+        account_id="ignored", base_url="https://example.com/ws", cf_aig_token="t"
+    )
+    assert stt._opts.endpoint_url == "https://example.com/ws"
+
+
+def test_stt_v2_missing_account_id_raises() -> None:
+    with pytest.raises(ValueError, match=r"account_id"):
+        deepgram.STTv2.with_cloudflare(cf_aig_token="t")
+
+
+def test_stt_v2_missing_token_raises() -> None:
+    with pytest.raises(ValueError, match=r"[Tt]oken"):
+        deepgram.STTv2.with_cloudflare(account_id="acct")
+
+
+def test_stt_v2_forwards_flux_options() -> None:
+    stt = deepgram.STTv2.with_cloudflare(
+        account_id="a",
+        cf_aig_token="t",
+        eager_eot_threshold=0.5,
+        eot_threshold=0.8,
+        eot_timeout_ms=4000,
+        keyterm=["livekit"],
+    )
+    assert stt._opts.eager_eot_threshold == 0.5
+    assert stt._opts.eot_threshold == 0.8
+    assert stt._opts.eot_timeout_ms == 4000
+    assert stt._opts.keyterm == ["livekit"]
+
+
+def test_stt_v2_default_token_auth_unchanged() -> None:
+    assert deepgram.STTv2(api_key="k")._connect_headers == {"Authorization": "Token k"}
+
+
+def test_stt_v2_extra_headers_merge_over_token_auth() -> None:
+    stt = deepgram.STTv2(api_key="k", extra_headers={"X-Trace": "1"})
+    assert stt._connect_headers == {"Authorization": "Token k", "X-Trace": "1"}
+
+
+def test_stt_v2_extra_headers_are_sole_auth_without_key() -> None:
+    stt = deepgram.STTv2(extra_headers={"cf-aig-authorization": "x"})
+    assert stt._connect_headers == {"cf-aig-authorization": "x"}
+
+
+def test_stt_v2_no_key_and_no_extra_headers_raises() -> None:
+    with pytest.raises(ValueError):
+        deepgram.STTv2()
+
+
+def test_stt_v2_with_cloudflare_ignores_deepgram_api_key_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "leaked-key")
+    stt = deepgram.STTv2.with_cloudflare(account_id="a", cf_aig_token="cf")
+    assert stt._connect_headers == {"cf-aig-authorization": "cf"}
+
+
+def test_stt_v2_language_hint_warning_sees_through_cf_prefix(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    # a prefixed multi model is still flux-general-multi; language_hint must not warn
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.deepgram"):
+        deepgram.STTv2(
+            model="@cf/deepgram/flux-general-multi",
+            language_hint=["fr"],
+            extra_headers={"cf-aig-authorization": "cf"},
+        )
+    assert not any("language_hint" in r.message for r in caplog.records)
+
+    # the bare non-multi path still warns
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.deepgram"):
+        deepgram.STTv2(model="flux-general-en", language_hint=["fr"], api_key="k")
+    assert any("language_hint" in r.message for r in caplog.records)

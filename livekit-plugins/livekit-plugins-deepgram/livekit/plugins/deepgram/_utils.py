@@ -1,3 +1,4 @@
+import os
 import time
 from collections.abc import Callable
 from typing import Generic, TypeVar
@@ -36,6 +37,37 @@ class PeriodicCollector(Generic[T]):
             self._callback(self._total)
             self._total = None
         self._last_flush_time = time.monotonic()
+
+
+def _resolve_cloudflare_gateway(
+    *,
+    account_id: str | None,
+    gateway_id: str,
+    cf_aig_token: str | None,
+    base_url: str | None,
+) -> tuple[str, str]:
+    """Resolve the (base_url, token) pair for a Cloudflare AI Gateway ``workers-ai`` endpoint."""
+    cf_aig_token = cf_aig_token or os.environ.get("CLOUDFLARE_AI_GATEWAY_TOKEN")
+    if not cf_aig_token:
+        raise ValueError(
+            "Cloudflare AI Gateway token is required, either as argument or set"
+            " CLOUDFLARE_AI_GATEWAY_TOKEN environment variable"
+        )
+    if base_url is None:
+        account_id = account_id or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+        if not account_id:
+            raise ValueError(
+                "Cloudflare account_id is required, either as argument or set"
+                " CLOUDFLARE_ACCOUNT_ID environment variable (or pass base_url directly)"
+            )
+        base_url = f"https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai"
+    return base_url, cf_aig_token
+
+
+def _bare_model(model: str) -> str:
+    # Cloudflare AI Gateway routes Deepgram models as "@cf/deepgram/<model>"; strip the routing
+    # prefix so model-name checks see the underlying Deepgram model (e.g. "nova-3").
+    return model.removeprefix("@cf/deepgram/")
 
 
 def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
