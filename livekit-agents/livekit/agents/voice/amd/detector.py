@@ -64,7 +64,6 @@ EVALUATED_STT_MODELS: set[str] = {
 
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
-_DEFAULT_SIP_ANSWER_TIMEOUT = 60.0
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -73,7 +72,7 @@ class DetectionOptions(TypedDict, total=False):
     machine_silence_threshold: float
     no_speech_threshold: float
     timeout: float
-    sip_answer_timeout: float
+    max_endpointing_delay: float
     prompt: str
 
 
@@ -83,7 +82,7 @@ _DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
     "machine_silence_threshold": MACHINE_SILENCE_THRESHOLD,
     "no_speech_threshold": NO_SPEECH_THRESHOLD,
     "timeout": TIMEOUT,
-    "sip_answer_timeout": _DEFAULT_SIP_ANSWER_TIMEOUT,
+    "max_endpointing_delay": MAX_ENDPOINTING_DELAY,
     "prompt": AMD_PROMPT,
 }
 
@@ -103,19 +102,32 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
     AMD should be started before the SIP participant is created so no audio
-    is missed. For SIP participants, the detection-timeout budget starts when
-    ``sip.callStatus == "active"``. A separate ``sip_answer_timeout`` bounds
-    calls that never become active.
+    is missed. Until an audio track is published, the detection timeout bounds
+    the wait, so AMD cannot hang when the call never connects. Once audio does
+    arrive, the detection-timeout budget is started by the transition to
+    listening rather than by the publication: for an outbound SIP call the
+    first audio is usually carrier early media that arrives while the phone is
+    still ringing, and anchoring the budget there would let it expire before
+    the callee ever answers.
 
-    For SIP participants, the no-speech timer and
-    audio/transcript processing are deferred until ``sip.callStatus ==
+    For SIP participants, the detection budget, the no-speech timer and
+    audio/transcript processing are all deferred until ``sip.callStatus ==
     "active"`` so pre-answer audio (ringback, carrier early media, dialtone)
-    does not poison the classifier or burn the no-speech budget.
+    does not poison the classifier or burn the detection budget.
+
+    AMD does not apply its own timeout to the wait for an answer. Bound the
+    ring window by passing ``wait_until_answered=True`` to
+    ``create_sip_participant``; the SIP client derives the request deadline
+    from ``ringing_timeout`` (30 seconds by default), and an explicit request
+    ``timeout`` can extend that deadline.
 
     The recommended pattern is the async context manager::
 
         async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
-            await ctx.api.sip.create_sip_participant(...)
+            await ctx.api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(..., wait_until_answered=True),
+                timeout=45,
+            )
             await ctx.wait_for_participant(identity=participant_identity)
             result = await detector.execute()
 
@@ -145,18 +157,21 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             the resolved STT or LLM is not among the bundled AMD-tested model
             strings. Has no effect on classification behavior.
         detection_options: Optional overrides for timing thresholds and the AMD
-            classification prompt (see :class:`DetectionOptions`). The
-            `sip_answer_timeout` option bounds how long SIP AMD waits for an
-            active call (60 seconds by default). When omitted, library defaults
-            apply.
+            classification prompt (see :class:`DetectionOptions`). When
+            omitted, library defaults apply. ``max_endpointing_delay`` can be
+            set here to override the session activity's endpointing backstop
+            for AMD.
         wait_until_finished: If ``True``, once any speech has been heard the
             ``detection_timeout`` no longer forces emission — AMD will keep
-            waiting for the post-speech silence and a positive end-of-turn
-            from the session's turn detector before emitting. Useful for
-            outbound voicemail flows where leaving a message early would
-            overlap the greeting. ``no_speech_timeout`` (uncertain) still fires
-            normally (no audio at all means there is nothing to wait for).
-            Defaults to ``False``.
+            waiting for post-speech silence and either a session end-of-turn
+            signal or the session's max endpointing delay before emitting.
+            Useful for outbound voicemail flows where leaving a message early
+            would overlap the greeting. ``no_speech_timeout`` (uncertain)
+            still fires normally (no audio at all means there is nothing to
+            wait for). Continuous audio without a speech-end or end-of-turn can
+            therefore extend detection beyond ``timeout``; set this to
+            ``False`` when ``timeout`` should remain a hard cap after speech
+            starts. Defaults to ``True``.
     """
 
     _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
@@ -173,7 +188,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
-        wait_until_finished: bool = False,
+        wait_until_finished: bool = True,
     ) -> None:
         super().__init__()
 
@@ -204,11 +219,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._closed = False
         self._span: trace.Span | None = None
 
-        self._opts: DetectionOptions = (
-            {**_DEFAULT_DETECTION_OPTIONS, **detection_options}
-            if is_given(detection_options)
-            else _DEFAULT_DETECTION_OPTIONS
+        self._provided_detection_options: DetectionOptions = (
+            detection_options if is_given(detection_options) else {}
         )
+        self._opts: DetectionOptions = {
+            **_DEFAULT_DETECTION_OPTIONS,
+            **self._provided_detection_options,
+        }
 
         if not self._suppress_compatibility_warning:
             if is_given(self._stt):
@@ -398,6 +415,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             self._start_listening()
         else:
+            # Start the outer budget before waiting for a publication, so AMD
+            # can settle even if the participant never publishes audio.
+            if self._classifier:
+                self._classifier.start_detection_timer()
             room = session._room_io.room
             publication = await wait_for_track_publication(
                 room=room,
@@ -407,6 +428,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._closed or not self._classifier:
                 return
+            # Audio exists, so the budget has served its purpose as a
+            # publication bound. Do not re-anchor it here: on an outbound SIP
+            # call this publication is usually carrier early media arriving
+            # while the phone is still ringing. `_start_listening()` arms the
+            # greeting budget after the call becomes active.
+            self._classifier.cancel_detection_timer()
+
             if self._participant_identity:
                 publisher = room.remote_participants.get(self._participant_identity)
             else:
@@ -444,24 +472,15 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
-            await asyncio.wait_for(
-                wait_for_participant_attribute(
-                    room,
-                    identity=identity,
-                    attribute=_SIP_CALL_STATUS_ATTR,
-                    value=_SIP_CALL_STATUS_ACTIVE,
-                ),
-                timeout=self._opts["sip_answer_timeout"],
+            await wait_for_participant_attribute(
+                room,
+                identity=identity,
+                attribute=_SIP_CALL_STATUS_ATTR,
+                value=_SIP_CALL_STATUS_ACTIVE,
             )
-        except asyncio.TimeoutError:
-            if not self._closed and self._classifier:
-                self._classifier._on_timeout(
-                    category=AMDCategory.UNCERTAIN,
-                    reason="sip_answer_timeout",
-                )
-            return
         except RuntimeError as e:
-            # SIP participant disconnected before going active, default to detection timeout
+            # If the participant disappears before going active, start the
+            # normal listening timers so AMD still settles.
             logger.debug(
                 "AMD: SIP answer wait failed; starting to listen", extra={"reason": str(e)}
             )
@@ -586,9 +605,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         if _llm:
             max_endpointing_delay = (
-                session._activity.max_endpointing_delay
-                if session._activity
-                else MAX_ENDPOINTING_DELAY
+                self._provided_detection_options["max_endpointing_delay"]
+                if "max_endpointing_delay" in self._provided_detection_options
+                else (
+                    session._activity.max_endpointing_delay
+                    if session._activity
+                    else self._opts["max_endpointing_delay"]
+                )
             )
             return _AMDClassifier(
                 _llm,

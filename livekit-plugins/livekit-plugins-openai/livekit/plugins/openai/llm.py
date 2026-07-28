@@ -175,7 +175,13 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        # token-free request supported by openai and openai-compatible servers
+        await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
+
         if self._owns_client:
             await self._client.close()
 

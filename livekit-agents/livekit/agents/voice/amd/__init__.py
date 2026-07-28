@@ -1,4 +1,4 @@
 from .classifier import AMDCategory, AMDPredictionEvent
-from .detector import AMD, DetectionOptions
+from .detector import AMD
 
-__all__ = ["AMD", "AMDCategory", "AMDPredictionEvent", "DetectionOptions"]
+__all__ = ["AMD", "AMDCategory", "AMDPredictionEvent"]

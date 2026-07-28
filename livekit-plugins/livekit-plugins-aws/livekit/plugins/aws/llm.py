@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import aioboto3  # type: ignore
+from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
@@ -32,6 +32,10 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
+from .utils import _resolve_session
+
+if TYPE_CHECKING:
+    import aioboto3  # type: ignore
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
@@ -63,7 +67,7 @@ class LLM(llm.LLM):
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         cache_system: bool = False,
         cache_tools: bool = False,
-        session: aioboto3.Session | None = None,
+        session: AioSession | aioboto3.Session | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -86,15 +90,17 @@ class LLM(llm.LLM):
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
             cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
-            session (aioboto3.Session, optional): Optional aioboto3 session to use.
+            session (AioSession, optional): Optional aiobotocore session to use. Passing a legacy
+                aioboto3.Session is deprecated but still accepted.
         """  # noqa: E501
         super().__init__()
 
-        self._session = session or aioboto3.Session(
-            aws_access_key_id=api_key if is_given(api_key) else None,
-            aws_secret_access_key=api_secret if is_given(api_secret) else None,
-            region_name=region if is_given(region) else None,
-        )
+        self._session = _resolve_session(session)
+        if session is None:
+            if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
+                self._session.set_credentials(api_key, api_secret)
+            if is_given(region) and region:
+                self._session.set_config_variable("region", region)
 
         bedrock_model = (
             model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -216,7 +222,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        session: aioboto3.Session,
+        session: AioSession,
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
@@ -234,7 +240,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
         try:
             config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.client("bedrock-runtime", config=config) as client:
+            async with self._session.create_client("bedrock-runtime", config=config) as client:
                 response = await client.converse_stream(**self._opts)
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:

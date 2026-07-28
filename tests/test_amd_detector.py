@@ -1,188 +1,376 @@
-"""Tests for SIP answer timing in the AMD detector."""
+"""Tests for the AMD detector lifecycle: when the detection budget is armed.
+
+The budget bounds two different things at two different times:
+
+- before any audio is published it bounds the wait for a publication, so AMD
+  settles instead of hanging when a call never connects;
+- once AMD starts listening it is the detection window for the greeting.
+
+It must not run in between. For an outbound SIP call the first audio is usually
+carrier early media that arrives while the phone is still ringing, so a budget
+anchored at the publication expires before the callee ever answers.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, DetectionOptions as PublicDetectionOptions
-from livekit.agents.voice.amd import (
-    DetectionOptions as AMDDetectionOptions,
-    detector as detector_module,
-)
-from livekit.agents.voice.amd.classifier import AMDCategory, _AMDClassifier
+from livekit.agents.types import NOT_GIVEN
+from livekit.agents.voice.amd import detector as amd_detector
+from livekit.agents.voice.amd.classifier import AMDCategory
 from livekit.agents.voice.amd.detector import AMD
 
 from .fake_llm import FakeLLM
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
-
-def _make_detector(
-    *,
-    sip_answer_timeout: float,
-    no_speech_threshold: float = 10.0,
-) -> tuple[AMD, _AMDClassifier]:
-    classifier = _AMDClassifier(
-        FakeLLM(),
-        no_speech_threshold=no_speech_threshold,
-        timeout=20.0,
-    )
-    detector = object.__new__(AMD)
-    detector._closed = False
-    detector._classifier = classifier
-    detector._opts = {"sip_answer_timeout": sip_answer_timeout}
-    return detector, classifier
+DETECTION_TIMEOUT = 20.0
+NO_SPEECH_TIMEOUT = 10.0
+HUMAN_SILENCE = 0.5
 
 
-def test_detection_options_are_exported() -> None:
-    assert PublicDetectionOptions is AMDDetectionOptions
+class _Clock:
+    """Virtual seconds since the lifecycle started."""
+
+    def __init__(self) -> None:
+        self._t0 = time.time()
+
+    def now(self) -> float:
+        return round(time.time() - self._t0, 3)
+
+    async def until(self, t: float) -> None:
+        delay = t - self.now()
+        if delay > 0:
+            await asyncio.sleep(delay)
 
 
-def test_default_sip_answer_timeout_is_60_seconds() -> None:
-    assert detector_module._DEFAULT_DETECTION_OPTIONS["sip_answer_timeout"] == 60.0
+class _Activity:
+    max_endpointing_delay = 3.0
+
+    def _pause_authorization(self) -> None: ...
+
+    def _resume_authorization(self) -> None: ...
 
 
-async def test_sip_active_starts_detection_timer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def wait_for_active(*_args: Any, **_kwargs: Any) -> None:
-        return None
+class _Call:
+    """One scripted call: the publication and the answer are driven by the test."""
 
+    def __init__(self, *, sip: bool = True, identity: str = "callee") -> None:
+        loop = asyncio.get_running_loop()
+        self.published: asyncio.Future[object] = loop.create_future()
+        self.answered: asyncio.Future[None] = loop.create_future()
+        self.publisher = SimpleNamespace(
+            kind=(
+                rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                if sip
+                else rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+            ),
+            identity=identity,
+            track_publications={f"{identity}_audio": object()},
+        )
+        self.room = SimpleNamespace(remote_participants={identity: self.publisher})
+        self.session = SimpleNamespace(
+            llm=FakeLLM(),
+            options=SimpleNamespace(ivr_detection=False),
+            _activity=_Activity(),
+            _ivr_activity=None,
+            _room_io=SimpleNamespace(room=self.room),
+            _root_span_context=None,
+            _session_host=None,
+            _amd=None,
+        )
+
+    def publish_audio(self) -> None:
+        """Carrier audio arrives (early media during ring, or the answered call)."""
+        if not self.published.done():
+            self.published.set_result(SimpleNamespace(sid=f"{self.publisher.identity}_audio"))
+
+    def answer(self) -> None:
+        """``sip.callStatus`` flips to ``active``."""
+        if not self.answered.done():
+            self.answered.set_result(None)
+
+    def hangup_before_answer(self) -> None:
+        if not self.answered.done():
+            self.answered.set_exception(RuntimeError("participant disconnected"))
+
+
+def _install(monkeypatch: pytest.MonkeyPatch, call: _Call) -> None:
+    async def fake_wait_for_track_publication(**_: object) -> object:
+        return await call.published
+
+    async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+        await call.answered
+
+    monkeypatch.setattr(amd_detector, "wait_for_track_publication", fake_wait_for_track_publication)
     monkeypatch.setattr(
-        detector_module,
-        "wait_for_participant_attribute",
-        wait_for_active,
+        amd_detector, "wait_for_participant_attribute", fake_wait_for_participant_attribute
     )
-    detector, classifier = _make_detector(sip_answer_timeout=30.0)
-
-    await detector._wait_for_sip_answer(object(), "callee")
-
-    assert classifier.listening
-    assert classifier._detection_timeout_timer is not None
-    await classifier.close()
 
 
-async def test_start_listening_does_not_restart_detection_timer() -> None:
-    detector, classifier = _make_detector(sip_answer_timeout=30.0)
-
-    detector._start_listening()
-    timer = classifier._detection_timeout_timer
-    detector._start_listening()
-
-    assert classifier.listening
-    assert timer is not None
-    assert classifier._detection_timeout_timer is timer
-    await classifier.close()
-
-
-async def test_non_sip_track_starts_detection_immediately(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    publication = SimpleNamespace(sid="track")
-    participant = SimpleNamespace(
-        identity="callee",
-        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-        track_publications={publication.sid: publication},
+def _amd(call: _Call) -> AMD:
+    detector = AMD(
+        call.session,  # type: ignore[arg-type]
+        llm=call.session.llm,
+        participant_identity=call.publisher.identity,
+        suppress_compatibility_warning=True,
     )
-    room = SimpleNamespace(remote_participants={"callee": participant})
-
-    async def wait_for_track(*_args: Any, **_kwargs: Any) -> Any:
-        return publication
-
-    monkeypatch.setattr(detector_module, "wait_for_track_publication", wait_for_track)
-    detector, classifier = _make_detector(sip_answer_timeout=30.0)
-    detector._participant_identity = "callee"
     detector._stt = NOT_GIVEN
-    detector._sip_answer_task = None
-    session = SimpleNamespace(_room_io=SimpleNamespace(room=room))
-
-    await detector._setup(session)
-
-    assert classifier.listening
-    assert classifier._detection_timeout_timer is not None
-    await classifier.close()
+    return detector
 
 
-async def test_close_cancels_pending_setup_and_answer_tasks() -> None:
-    async def wait_forever() -> None:
-        await asyncio.Event().wait()
-
-    setup_task = asyncio.create_task(wait_forever())
-    answer_task = asyncio.create_task(wait_forever())
-    detector = object.__new__(AMD)
-    detector._closed = False
-    detector._setup_task = setup_task
-    detector._sip_answer_task = answer_task
-    detector._audio_ch = None
-    detector._classifier = None
-    detector._span = None
-    detector._session = SimpleNamespace(_activity=None, _amd=detector)
-    await asyncio.sleep(0)
-
-    await detector.aclose()
-
-    assert setup_task.cancelled()
-    assert answer_task.cancelled()
-    assert detector._setup_task is None
-    assert detector._sip_answer_task is None
-    assert detector._session._amd is None
+def _budget_armed(detector: AMD) -> bool:
+    assert detector._classifier is not None
+    return detector._classifier._detection_timeout_timer is not None
 
 
-@pytest.mark.parametrize("sip_answer_timeout", [35.0, 45.0])
-async def test_sip_answer_timeout_completes_uncertain_verdict(
-    monkeypatch: pytest.MonkeyPatch,
-    sip_answer_timeout: float,
-) -> None:
-    async def wait_forever(*_args: Any, **_kwargs: Any) -> None:
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(
-        detector_module,
-        "wait_for_participant_attribute",
-        wait_forever,
-    )
-    detector, classifier = _make_detector(sip_answer_timeout=sip_answer_timeout)
-    started_at = asyncio.get_running_loop().time()
-
-    await detector._wait_for_sip_answer(object(), "callee")
-
-    assert asyncio.get_running_loop().time() - started_at == pytest.approx(sip_answer_timeout)
-    assert classifier._verdict_ready.is_set()
-    assert classifier._verdict_result is not None
-    assert classifier._verdict_result.category == AMDCategory.UNCERTAIN
-    assert classifier._verdict_result.reason == "sip_answer_timeout"
-    assert not classifier.listening
-    assert classifier._detection_timeout_timer is None
-    await classifier.close()
+async def _short_greeting(detector: AMD, clock: _Clock, *, at: float) -> None:
+    """A 0.5s greeting with no transcript, which pre-bakes a human verdict."""
+    await clock.until(at)
+    detector._on_user_speech_started()
+    await clock.until(at + 0.5)
+    detector._on_user_speech_ended(0.0)
 
 
-async def test_sip_wait_failure_preserves_listening_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fail_wait(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("participant disconnected")
+class TestAMDDetectionBudget:
+    async def test_budget_bounds_the_wait_for_a_publication(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A call that never publishes audio must settle, not hang."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
 
-    monkeypatch.setattr(
-        detector_module,
-        "wait_for_participant_attribute",
-        fail_wait,
-    )
-    detector, classifier = _make_detector(
-        sip_answer_timeout=30.0,
-        no_speech_threshold=30.0,
-    )
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+            await asyncio.sleep(0)
+            assert _budget_armed(detector), "budget must bound the publication wait"
 
-    await detector._wait_for_sip_answer(object(), "callee")
+            await clock.until(DETECTION_TIMEOUT + 5.0)
 
-    assert classifier.listening
-    assert classifier._detection_timeout_timer is not None
-    await classifier._verdict_ready.wait()
-    assert classifier._verdict_result is not None
-    assert classifier._verdict_result.category == AMDCategory.UNCERTAIN
-    assert classifier._verdict_result.reason == "detection_timeout"
-    await classifier.close()
+        assert verdicts == [(DETECTION_TIMEOUT, AMDCategory.UNCERTAIN, "detection_timeout")]
+
+    async def test_early_media_does_not_start_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ringing case from #6187: audio at t=1, answer well past the budget.
+
+        The publication is carrier early media, so it must not anchor the budget
+        and no verdict may be emitted while the phone is still ringing.
+        """
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await asyncio.sleep(0)
+            assert not _budget_armed(detector), "early media must not arm the budget"
+
+            await clock.until(DETECTION_TIMEOUT + 12.0)
+            assert verdicts == [], "no verdict may be reached before the call is answered"
+            assert detector._classifier is not None
+            assert not detector._classifier.listening
+
+            call.answer()
+            await asyncio.sleep(0)
+            assert _budget_armed(detector), "the budget starts when the call is answered"
+
+            await _short_greeting(detector, clock, at=DETECTION_TIMEOUT + 12.5)
+            await clock.until(DETECTION_TIMEOUT + 20.0)
+
+        assert verdicts == [
+            (DETECTION_TIMEOUT + 13.5, AMDCategory.HUMAN, "short_greeting"),
+        ]
+
+    async def test_budget_runs_from_the_answer_not_from_the_publication(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A silent answered call times out one full budget after the answer."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await clock.until(15.0)
+            call.answer()
+
+            await clock.until(15.0 + DETECTION_TIMEOUT + 5.0)
+
+        assert verdicts == [(15.0 + NO_SPEECH_TIMEOUT, AMDCategory.UNCERTAIN, "no_speech_timeout")]
+
+    async def test_ordinary_sip_call_is_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Answered quickly: same verdict and timing as before the change."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await clock.until(2.0)
+            call.answer()
+            await _short_greeting(detector, clock, at=2.5)
+            await clock.until(10.0)
+
+        assert verdicts == [(3.0 + HUMAN_SILENCE, AMDCategory.HUMAN, "short_greeting")]
+
+    async def test_non_sip_participant_listens_at_track_subscription(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-SIP publisher has no answer signal: listening starts at track-up."""
+        call = _Call(sip=False, identity="peer")
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await asyncio.sleep(0)
+            assert detector._classifier is not None
+            assert detector._classifier.listening
+            assert _budget_armed(detector)
+
+            await _short_greeting(detector, clock, at=1.5)
+            await clock.until(10.0)
+
+        assert verdicts == [(2.0 + HUMAN_SILENCE, AMDCategory.HUMAN, "short_greeting")]
+
+    async def test_sip_disconnect_before_answer_still_settles(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A callee that hangs up while ringing settles on the no-speech timer."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await clock.until(5.0)
+            call.hangup_before_answer()
+
+            await clock.until(5.0 + NO_SPEECH_TIMEOUT + 5.0)
+
+        assert verdicts == [(5.0 + NO_SPEECH_TIMEOUT, AMDCategory.UNCERTAIN, "no_speech_timeout")]
+
+    async def test_two_successive_lifecycles(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A second AMD lifecycle settles exactly like the first."""
+        clock = _Clock()
+        results: list[list[tuple[float, AMDCategory, str]]] = []
+
+        for index in range(2):
+            call = _Call()
+            _install(monkeypatch, call)
+            verdicts: list[tuple[float, AMDCategory, str]] = []
+            base = index * 20.0
+
+            async with _amd(call) as detector:
+                detector.on(
+                    "amd_prediction",
+                    lambda ev, v=verdicts: v.append((clock.now(), ev.category, ev.reason)),
+                )
+
+                await clock.until(base + 1.0)
+                call.publish_audio()
+                await clock.until(base + 2.0)
+                call.answer()
+                await _short_greeting(detector, clock, at=base + 2.5)
+                await clock.until(base + 10.0)
+
+            results.append(verdicts)
+
+        assert results == [
+            [(3.5, AMDCategory.HUMAN, "short_greeting")],
+            [(23.5, AMDCategory.HUMAN, "short_greeting")],
+        ]
+
+    async def test_unanswered_call_is_bounded_by_the_caller_dial_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The caller's dial request is what bounds a call that is never answered."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        dial_timeout = 32.0
+
+        async def dial() -> None:
+            await clock.until(dial_timeout)
+            raise TimeoutError("create_sip_participant timed out waiting for an answer")
+
+        execute_task: asyncio.Task[object] | None = None
+        with pytest.raises(TimeoutError):
+            async with _amd(call) as detector:
+                execute_task = asyncio.create_task(detector.execute())
+                await clock.until(1.0)
+                call.publish_audio()
+                await dial()
+
+        assert execute_task is not None
+        with pytest.raises(RuntimeError, match="amd closed before a result was available"):
+            await asyncio.wait_for(execute_task, timeout=5.0)
+        assert clock.now() == pytest.approx(dial_timeout, abs=0.01)
+
+    async def test_unanswered_call_has_no_amd_side_bound_after_early_media(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without the documented caller bound, AMD itself waits for the answer."""
+        call = _Call()
+        _install(monkeypatch, call)
+        clock = _Clock()
+        verdicts: list[tuple[float, AMDCategory, str]] = []
+
+        async with _amd(call) as detector:
+            detector.on(
+                "amd_prediction",
+                lambda ev: verdicts.append((clock.now(), ev.category, ev.reason)),
+            )
+
+            await clock.until(1.0)
+            call.publish_audio()
+            await clock.until(10 * DETECTION_TIMEOUT)
+
+            assert verdicts == []
+            assert not _budget_armed(detector)

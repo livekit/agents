@@ -69,6 +69,10 @@ async def entrypoint(ctx: JobContext):
         # start running amd before the SIP participant joins to avoid audio loss
         if phone_number and outbound_trunk_id and participant_identity:
             logger.info(f"creating SIP participant for {participant_identity}")
+            # With wait_until_answered, the request blocks until the call is
+            # answered or fails. Its deadline must outlast the ring window:
+            # this is what bounds a call that is never answered. AMD applies
+            # its own detection timeout only once the call goes active.
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
@@ -76,7 +80,10 @@ async def entrypoint(ctx: JobContext):
                     sip_call_to=phone_number,
                     participant_identity=participant_identity,
                     wait_until_answered=True,
-                )
+                    # optionally override the ring window (defaults to 30s):
+                    # ringing_timeout=Duration(seconds=30),  # google.protobuf.duration_pb2
+                ),
+                timeout=45,
             )
             participant = await ctx.wait_for_participant(identity=participant_identity)
             logger.info(

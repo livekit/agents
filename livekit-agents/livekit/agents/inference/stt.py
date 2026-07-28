@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
@@ -31,6 +31,9 @@ from ..types import (
 )
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -117,7 +120,8 @@ class AssemblyaiOptions(TypedDict, total=False):
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
     speaker_labels: bool  # when True, enables speaker diarization (default off)
-    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1500 chars)
+    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1750 chars)
+    previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
     voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
     voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
     mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
@@ -234,6 +238,19 @@ def _keyterms_extra_for_model(
     if isinstance(existing, str):
         existing = [existing]
     return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
+
+
+_ASSEMBLYAI_CARRYOVER_MODELS = (
+    "assemblyai/u3-rt-pro",
+    "assemblyai/universal-3-5-pro",
+)
+
+_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
+
+
+def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> bool:
+    """True if the model natively carries agent_context (AssemblyAI U3 Pro family)."""
+    return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -549,6 +566,7 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
+        # chat_context follows the model's native support; the session decides whether to forward
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -557,6 +575,7 @@ class STT(stt.STT):
                 aligned_transcript="word",
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
+                chat_context=_supports_agent_context_carryover(model),
             ),
         )
 
@@ -678,6 +697,7 @@ class STT(stt.STT):
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
+                chat_context=_supports_agent_context_carryover(self._opts.model),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -717,6 +737,21 @@ class STT(stt.STT):
                 stream._pending_extra = keyterm_extra
             else:
                 stream.update_options(extra=keyterm_extra)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and (text := chat_item.text_content)
+        ):
+            if len(text) > _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:
+                logger.debug(
+                    "truncating agent_context carryover from %d to %d chars",
+                    len(text),
+                    _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS,
+                )
+                text = text[-_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:]
+            self.update_options(extra={"agent_context": text})
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
@@ -817,33 +852,40 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=self._opts.sample_rate // 20,  # 50ms
             )
 
-            async for ev in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(ev, rtc.AudioFrame):
-                    if vad_stream is not None:
-                        vad_stream.push_frame(ev)
-                    frames.extend(audio_bstream.push(ev.data))
-                elif isinstance(ev, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for ev in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(ev, rtc.AudioFrame):
+                        if vad_stream is not None:
+                            vad_stream.push_frame(ev)
+                        frames.extend(audio_bstream.push(ev.data))
+                    elif isinstance(ev, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    audio_bytes = frame.data.tobytes()
-                    base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-                    audio_msg = {
-                        "type": "input_audio",
-                        "audio": base64_audio,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                    for frame in frames:
+                        self._speech_duration += frame.duration
+                        audio_bytes = frame.data.tobytes()
+                        base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                        audio_msg = {
+                            "type": "input_audio",
+                            "audio": base64_audio,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
 
-            if vad_stream is not None:
-                vad_stream.end_input()
+                if vad_stream is not None:
+                    vad_stream.end_input()
 
-            closing_ws = True
-            finalize_msg = {
-                "type": "session.finalize",
-            }
-            await ws.send_str(json.dumps(finalize_msg))
+                closing_ws = True
+                finalize_msg = {
+                    "type": "session.finalize",
+                }
+                await ws.send_str(json.dumps(finalize_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or http_session.closed:
+                    return
+                raise APIConnectionError(
+                    "LiveKit Inference STT connection closed unexpectedly"
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:

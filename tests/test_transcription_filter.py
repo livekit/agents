@@ -324,6 +324,10 @@ async def _collect(stream) -> str:
     return result
 
 
+async def _collect_chunks(stream) -> list[str]:
+    return [chunk async for chunk in stream]
+
+
 @pytest.mark.parametrize("chunk_size", [1, 2, 5, 11, 50])
 async def test_replace_across_chunk_sizes(chunk_size: int):
     """Test replacement with multiple keys, case insensitivity, and boundary spanning."""
@@ -365,6 +369,39 @@ async def test_replace_edge_cases():
     # backslashes in replacement values are treated literally
     transform = replace({"word": r"\1 \n \t"})
     assert await _collect(transform(_stream_text("a word here", 2))) == r"a \1 \n \t here"
+
+
+async def test_replace_flushes_non_prefix_text_immediately():
+    """Text that cannot begin any key is emitted whole, not held or split mid-word."""
+    transform = replace({"LiveKit": "Lyve Kit"})
+    chunks = await _collect_chunks(transform(_stream_text("you connect.", 100)))
+    assert chunks == ["you connect."]
+
+
+async def test_replace_holds_only_potential_prefix():
+    """A trailing run that is a prefix of a key is held until it can be resolved."""
+    transform = replace({"LiveKit": "Lyve Kit"})
+    chunks = await _collect_chunks(transform(_stream_text("visit Live", 100)))
+    # "visit " flushes immediately; only "Live" (a LiveKit prefix) is held to the end
+    assert chunks[0] == "visit "
+    assert "".join(chunks) == "visit Live"
+
+
+async def test_replace_prefers_longest_overlapping_key():
+    """Overlapping keys resolve to the longest match, not dict/insertion order.
+
+    Longest-match holds when the longer key is buffered together; a key split
+    mid-token across chunks falls back to the shorter match (same as before —
+    correcting that needs incremental leftmost-longest matching).
+    """
+    transform = replace({"a": "X", "ab": "Y"})
+    assert await _collect(transform(_stream_text("ab", 100))) == "Y"
+
+
+async def test_replace_does_not_cascade():
+    """A replacement's output is not re-matched against other keys (single pass)."""
+    transform = replace({"a": "b", "b": "c"})
+    assert await _collect(transform(_stream_text("a", 100))) == "b"
 
 
 async def test_apply_text_transforms_with_callable():

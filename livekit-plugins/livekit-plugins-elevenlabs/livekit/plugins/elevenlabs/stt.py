@@ -40,7 +40,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
 from .models import STTRealtimeSampleRates
 
@@ -76,6 +76,7 @@ class STTOptions:
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
     enable_logging: bool
+    previous_text: str | None
 
 
 class STT(stt.STT):
@@ -96,6 +97,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
+        previous_text: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -123,6 +125,8 @@ class STT(stt.STT):
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
+            previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
+                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
         if is_given(model_id):
@@ -152,6 +156,13 @@ class STT(stt.STT):
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
+        resolved_previous_text = previous_text if is_given(previous_text) else None
+        if not use_realtime and resolved_previous_text is not None:
+            logger.warning(
+                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+            )
+            resolved_previous_text = None
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=use_realtime,
@@ -179,6 +190,7 @@ class STT(stt.STT):
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
+            previous_text=resolved_previous_text,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -231,7 +243,7 @@ class STT(stt.STT):
                     raise APIStatusError(
                         message=response_json.get("detail", "Unknown ElevenLabs error"),
                         status_code=response.status,
-                        request_id=None,
+                        request_id=trace_id_from_headers(response.headers),
                         body=response_json,
                     )
                 extracted_text = response_json.get("text")
@@ -250,7 +262,7 @@ class STT(stt.STT):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
         except Exception as e:
@@ -421,34 +433,39 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                # Write audio bytes to buffer and get 50ms frames
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    # Write audio bytes to buffer and get 50ms frames
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": audio_b64,
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                            }
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": audio_b64,
+                                    "commit": False,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
                         )
-                    )
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        has_ended = False
+                        if has_ended:
+                            self._audio_duration_collector.flush()
+                            has_ended = False
 
-            closing_ws = True
+                closing_ws = True
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -485,6 +502,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                if self._opts.previous_text:
+                    # Must be the first input_audio_chunk on the connection.
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                                "previous_text": self._opts.previous_text,
+                            }
+                        )
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -563,6 +593,12 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=trace_id_from_headers(e.headers),
+            ) from e
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 

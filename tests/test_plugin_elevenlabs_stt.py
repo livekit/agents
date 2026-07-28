@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from multidict import CIMultiDict
 
 from livekit.agents import stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
 pytestmark = pytest.mark.plugin("elevenlabs")
 
@@ -33,6 +35,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         keyterms=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
+        previous_text=None,
     )
     stream._language = None
     stream._event_ch = _EventSink()
@@ -134,6 +137,22 @@ def test_enable_logging_can_be_disabled() -> None:
     assert _stt(enable_logging=False)._opts.enable_logging is False
 
 
+def test_previous_text_is_kept_for_realtime_model() -> None:
+    assert _stt(previous_text="prior context")._opts.previous_text == "prior context"
+
+
+def test_previous_text_is_ignored_for_non_realtime_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key",
+            model="scribe_v2",
+            previous_text="prior context",
+        )
+
+    assert instance._opts.previous_text is None
+    assert any("previous_text" in record.message for record in caplog.records)
+
+
 @pytest.mark.parametrize(("enable_logging", "expected"), [(True, "true"), (False, "false")])
 async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected: str) -> None:
     # enable_logging is a WebSocket query param. Verify it is forwarded to the
@@ -158,3 +177,10 @@ async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected
     await stream._connect_ws()
 
     assert f"enable_logging={expected}" in captured["url"]
+
+
+def test_trace_id_from_headers() -> None:
+    # header lookup is case-insensitive, and an absent header returns None
+    assert trace_id_from_headers(CIMultiDict({"X-Trace-Id": "trace-1"})) == "trace-1"
+    assert trace_id_from_headers(CIMultiDict()) is None
+    assert trace_id_from_headers(None) is None
