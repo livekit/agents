@@ -341,11 +341,10 @@ class AgentsConsole:
         self._last_metrics_text: Text | None = None
         self._last_user_metrics: llm.MetricsReport | None = None
 
-        # Text mode renders agent replies from `session.run()` events, which only covers
-        # turns the user typed. Agent-initiated messages (an on_enter greeting, a background
-        # tool result delivered between turns) are printed from `conversation_item_added`
-        # instead; this set deduplicates the two paths and `_text_run_active` suppresses the
-        # event path while a typed exchange is rendering its own output.
+        # Text mode renders agent replies from `session.run()` events, so agent-initiated
+        # messages (an on_enter greeting, a background update between turns) are printed from
+        # `conversation_item_added` instead; the set and flag keep the two paths from
+        # printing the same message twice.
         self._printed_item_ids: set[str] = set()
         self._text_run_active = False
 
@@ -426,18 +425,12 @@ class AgentsConsole:
                 self._io_transcription_sync.text_output,
             )
 
-            # An agent that speaks first (generate_reply on enter) may have committed its
-            # greeting before this subscription existed — catch up from history.
-            for item in session.history.items:
-                if isinstance(item, llm.ChatMessage) and item.role == "assistant":
-                    self._print_agent_initiated_message(item)
-
     def _print_agent_initiated_message(self, item: llm.ChatMessage) -> None:
         """Print an assistant message that no `session.run()` will ever render.
 
         Only in text mode (audio mode hears it via the transcript synchronizer) and only
-        while no typed exchange is in flight (`_text_run_active` — those messages are the
-        run's own output and are printed, and registered, by `_text_mode`)."""
+        while no typed exchange is in flight (those messages are the run's own output,
+        printed and registered by `_text_mode`)."""
         if (
             self._console_mode != "text"
             or self._text_run_active
@@ -446,7 +439,19 @@ class AgentsConsole:
         ):
             return
         self._printed_item_ids.add(item.id)
-        _print_agent_message(self, item)
+
+        self.console.print()
+        self.console.print(
+            Text.assemble(
+                ("  \u25cf ", "#6BCB77"),
+                ("Agent", "bold #6BCB77"),
+            )
+        )
+        for line in item.text_content.split("\n"):
+            self.console.print(Text(f"    {line}"))
+
+        if (metrics_text := _format_turn_metrics(None, item.metrics)) is not None:
+            self.console.print(Text("    ").append_text(metrics_text))
 
     @property
     def enabled(self) -> bool:
@@ -1363,25 +1368,6 @@ def _format_turn_metrics(
         assembled.extend(e2e_parts)
 
     return Text.assemble(*assembled)
-
-
-def _print_agent_message(c: AgentsConsole, item: llm.ChatMessage) -> None:
-    """Render one agent-initiated assistant message — same styling as a run's message event."""
-    c.console.print()
-    c.console.print(
-        Text.assemble(
-            ("  \u25cf ", "#6BCB77"),
-            ("Agent", "bold #6BCB77"),
-        )
-    )
-    for line in (item.text_content or "").split("\n"):
-        c.console.print(Text(f"    {line}"))
-
-    metrics_text = _format_turn_metrics(None, item.metrics)
-    if metrics_text is not None:
-        metrics_line = Text("    ")
-        metrics_line.append_text(metrics_text)
-        c.console.print(metrics_line)
 
 
 def _print_run_event(
