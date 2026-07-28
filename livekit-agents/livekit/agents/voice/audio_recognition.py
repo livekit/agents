@@ -1003,7 +1003,9 @@ class AudioRecognition:
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
             self._user_turn_span.end()
         self._user_turn_span = None
+        self._user_turn_start = None
         self._stt_request_ids = []
+        self._reset_transcription_timeout()
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
@@ -1710,9 +1712,7 @@ class AudioRecognition:
                 self._user_turn_span = None
                 self._user_turn_start = None
                 self._stt_request_ids = []
-                self._cancel_transcription_timeout()
-                self._turn_speech_duration = 0.0
-                self._turn_transcript_received = False
+                self._reset_transcription_timeout()
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
@@ -1867,6 +1867,11 @@ class AudioRecognition:
         if self._transcription_timeout_handle is not None:
             self._transcription_timeout_handle.cancel()
             self._transcription_timeout_handle = None
+
+    def _reset_transcription_timeout(self) -> None:
+        self._cancel_transcription_timeout()
+        self._turn_speech_duration = 0.0
+        self._turn_transcript_received = False
 
     def _mark_turn_transcribed(self) -> None:
         self._turn_transcript_received = True

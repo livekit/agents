@@ -1496,6 +1496,40 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         await _close_test_session(session)
 
 
+async def test_clear_user_turn_resets_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 1.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    recognition._turn_speech_duration = 2.0
+    recognition._turn_transcript_received = True
+    recognition._user_turn_start = time.time()
+
+    try:
+        recognition._clear_user_turn()
+
+        assert timeout_handle.cancelled()
+        assert recognition._transcription_timeout_handle is None
+        assert recognition._turn_speech_duration == 0.0
+        assert recognition._turn_transcript_received is False
+        assert recognition._user_turn_start is None
+
+        recognition._arm_transcription_timeout(1.0)
+        assert recognition._transcription_timeout_handle is not None
+    finally:
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
