@@ -148,46 +148,39 @@ class STT(stt.STT):
             diarize: Enable speaker diarization. When True, each word includes a
                 speaker ID (integer during streaming, string label in batch).
                 Defaults to False.
-            eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Must be between 100 and
-                10000ms. Defaults to 100ms (the minimum) so that server-side EOU adds
-                minimal latency alongside LiveKit's own end-of-turn detection. If omitted,
-                the server applies an 800ms default. Acts as a ceiling on finalization
-                when ``endpointing`` is enabled; controls finalization on its own when
-                ``endpointing`` is disabled.
-            endpointing: Finalize transcripts as soon as trailing silence is detected in
-                the audio, rather than waiting on ``eou_timeout_ms`` alone. Defaults to
-                True. Disable to rely solely on ``eou_timeout_ms``-based finalization.
-            keywords: Boost recognition of specific words or phrases by passing a list of
-                ``(keyword, intensifier)`` tuples, e.g. ``[("NVIDIA", 2.0), ("Jensen
-                Huang", 1.0)]``. Intensifier controls boost strength: ~1.0 is a mild
-                boost for clear proper nouns, up to ~5.0 for terms that are consistently
-                misrecognized; values above 5 risk hallucination. Streaming only, up to
-                10,000 keywords per session. Defaults to no boosting.
-            format: Whether to apply punctuation and capitalization formatting to
-                streaming transcripts. Defaults to True. Disable to get raw, lowercase,
-                unpunctuated text — useful for LLM/NLP pipelines or search indexing where
-                normalized text is preferred. Streaming only.
-            sentence_timestamps: Include sentence-level timing in streaming transcripts.
-                When enabled, matching final transcripts carry an ``"utterances"`` list
-                (each with ``text``/``start``/``end``, plus ``speaker`` when ``diarize``
-                is enabled) in ``SpeechData.metadata["utterances"]``. Defaults to False.
-                For batch transcription, sentence-level utterances are included
-                automatically whenever ``word_timestamps`` is enabled; no separate flag
-                is needed there.
-            redact_pii: Mask personally identifiable information (names, addresses, phone
-                numbers) in streaming transcripts with placeholder tokens like
-                ``[FIRSTNAME_1]``, ``[PHONENUMBER_1]``. Matching entities are also listed
-                in ``SpeechData.metadata["redacted_entities"]``. Defaults to False. Only
-                reliably supported for ``language="en"`` and ``language="hi"``; other
-                languages accept the flag but may not redact consistently. Streaming only.
-            redact_pci: Mask payment card information (credit card numbers, CVVs, ZIP
-                codes, account numbers) in streaming transcripts with placeholder tokens
-                like ``[CREDITCARDCVV_1]``, ``[ZIPCODE_1]``, ``[ACCOUNTNUMBER_1]``.
-                Matching entities are also listed in
-                ``SpeechData.metadata["redacted_entities"]``. Defaults to False. Only
-                reliably supported for ``language="en"`` and ``language="hi"``; other
-                languages accept the flag but may not redact consistently. Streaming only.
+            eou_timeout_ms: Silence (ms) before the server finalizes an utterance.
+                Range 100-10000ms; defaults to 100ms so server-side EOU adds minimal
+                latency on top of LiveKit's own end-of-turn detection (falls back to
+                the server's 800ms default if omitted). Acts as a ceiling when
+                ``endpointing`` is enabled; the sole finalization trigger when disabled.
+            endpointing: Finalize on trailing silence instead of waiting on
+                ``eou_timeout_ms`` alone. Defaults to True; disable to rely solely on
+                ``eou_timeout_ms``.
+            keywords: Boost recognition via ``(keyword, intensifier)`` tuples, e.g.
+                ``[("NVIDIA", 2.0), ("Jensen Huang", 1.0)]``. Intensifier ~1.0 (mild) to
+                ~5.0 (strong); avoid values above 5 (hallucination risk). Streaming only,
+                up to 10,000 keywords per session. Defaults to no boosting.
+            format: Apply punctuation and capitalization to streaming transcripts.
+                Defaults to True; disable for raw, lowercase, unpunctuated text — useful
+                for LLM/NLP pipelines or search indexing. Streaming only.
+            sentence_timestamps: Include sentence-level timing in streaming
+                transcripts, exposed as an ``"utterances"`` list (``text``/``start``/
+                ``end``, plus ``speaker`` when ``diarize`` is enabled) in
+                ``SpeechData.metadata["utterances"]``. Defaults to False. In batch
+                transcription this is automatic whenever ``word_timestamps`` is
+                enabled — no separate flag needed.
+            redact_pii: Mask PII (names, addresses, phone numbers) in streaming
+                transcripts with placeholder tokens (e.g. ``[FIRSTNAME_1]``,
+                ``[PHONENUMBER_1]``); matches are also listed in
+                ``SpeechData.metadata["redacted_entities"]``. Defaults to False.
+                Reliable only for ``language="en"``/``"hi"`` — other languages accept
+                the flag but may redact inconsistently. Streaming only.
+            redact_pci: Mask payment card info (card numbers, CVVs, ZIP codes, account
+                numbers) in streaming transcripts with placeholder tokens (e.g.
+                ``[CREDITCARDCVV_1]``, ``[ACCOUNTNUMBER_1]``); matches are also listed
+                in ``SpeechData.metadata["redacted_entities"]``. Defaults to False.
+                Reliable only for ``language="en"``/``"hi"`` — other languages accept
+                the flag but may redact inconsistently. Streaming only.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
