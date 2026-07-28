@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import inspect
 import json
 import re
-import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Union,
     cast,
     get_args,
     get_origin,
@@ -239,7 +238,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model)
+    schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
 
     return {
         "type": "function",
@@ -299,6 +298,9 @@ def to_response_format_param(
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
+    # No null sentinel here: nothing resolves it on the decode side (users validate
+    # the raw payload themselves), so the schema must be exactly what validation
+    # accepts. Defaulted fields stay required; the model produces their values.
     schema = _strict.to_strict_json_schema(json_schema_type)
     return {
         "type": "json_schema",
@@ -308,6 +310,182 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
+
+
+def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None:
+        if "default" in schema and not _json_schema_allows_null(schema, root=root):
+            return copy.deepcopy(schema["default"])
+        return None
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for variant in all_of:
+            if isinstance(variant, dict):
+                value = _inject_schema_defaults(value, schema=variant, root=root)
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
+                    return _inject_schema_defaults(value, schema=variant, root=root)
+
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        additional = schema.get("additionalProperties")
+        if isinstance(properties, dict) or isinstance(additional, dict):
+            # additionalProperties only governs keys not declared in properties
+            def _inject_entry(key: str, item: Any) -> Any:
+                prop = properties.get(key) if isinstance(properties, dict) else None
+                if isinstance(prop, dict):
+                    return _inject_schema_defaults(item, schema=prop, root=root)
+                if isinstance(additional, dict):
+                    return _inject_schema_defaults(item, schema=additional, root=root)
+                return item
+
+            return {key: _inject_entry(key, item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        prefix_items = schema.get("prefixItems")
+        items = schema.get("items")
+        if isinstance(prefix_items, list) or isinstance(items, dict):
+            # prefixItems covers positional slots (fixed tuples); items the rest
+            def _inject_item(i: int, item: Any) -> Any:
+                if (
+                    isinstance(prefix_items, list)
+                    and i < len(prefix_items)
+                    and isinstance(prefix_items[i], dict)
+                ):
+                    return _inject_schema_defaults(item, schema=prefix_items[i], root=root)
+                if isinstance(items, dict):
+                    return _inject_schema_defaults(item, schema=items, root=root)
+                return item
+
+            return [_inject_item(i, item) for i, item in enumerate(value)]
+
+    return value
+
+
+def _json_schema_allows_null(
+    schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
+) -> bool:
+    """Whether ``null`` is a valid instance of ``schema``.
+
+    JSON schema keywords are conjunctive: null must satisfy every constraint
+    present (type, enum, const, allOf, unions, $ref), so any keyword that
+    rejects null makes the whole schema reject it.
+    """
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        if ref in (seen_refs or set()):
+            return False
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict) and not _json_schema_allows_null(
+            resolved, root=root, seen_refs={*(seen_refs or set()), ref}
+        ):
+            return False
+
+    typ = schema.get("type")
+    if isinstance(typ, str) and typ != "null":
+        return False
+    if isinstance(typ, list) and "null" not in typ:
+        return False
+
+    if "const" in schema and schema["const"] is not None:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        return False
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(
+        _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+        for variant in all_of
+        if isinstance(variant, dict)
+    ):
+        return False
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list) and not any(
+            isinstance(variant, dict)
+            and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+            for variant in variants
+        ):
+            return False
+
+    return True
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None and "default" in schema and not _json_schema_allows_null(schema, root=root):
+        return True
+
+    if "const" in schema and value != schema["const"]:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        return False
+
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        return any(_json_type_matches(value, item) for item in typ if isinstance(item, str))
+    if isinstance(typ, str) and not _json_type_matches(value, typ):
+        return False
+
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and not all(key in value for key in required):
+            return False
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            # the strict wire schema closes objects (additionalProperties: false),
+            # so a key outside the declared properties rules this variant out;
+            # otherwise a payload meant for a sibling union variant matches any
+            # variant that merely ignores the extra keys
+            if schema.get("additionalProperties") in (None, False) and any(
+                key not in properties for key in value
+            ):
+                return False
+            for key, item in value.items():
+                property_schema = properties.get(key)
+                if isinstance(property_schema, dict) and not _json_schema_matches(
+                    item, property_schema, root=root
+                ):
+                    return False
+
+    return True
+
+
+def _json_type_matches(value: Any, typ: str) -> bool:
+    if typ == "null":
+        return value is None
+    if typ == "object":
+        return isinstance(value, dict)
+    if typ == "array":
+        return isinstance(value, list)
+    if typ == "boolean":
+        return isinstance(value, bool)
+    if typ == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if typ == "number":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if typ == "string":
+        return isinstance(value, str)
+    return True
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -537,22 +715,11 @@ def _prepare_function_arguments(
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
-        # Function arguments with default values are treated as optional
-        # when converted to strict LLM function descriptions. (e.g., we convert default
-        # parameters to type: ["string", "null"]).
-        # The following make sure to use the default value when we receive None.
-        # (Only if the type can't be Optional)
-        for param_name, param in signature.parameters.items():
-            type_hint = type_hints[param_name]
-            if param_name in args_dict and args_dict[param_name] is None:
-                if not _is_optional_type(type_hint):
-                    if param.default is not inspect.Parameter.empty:
-                        args_dict[param_name] = param.default
-                    else:
-                        raise ValueError(
-                            f"Received no value for required parameter '{param_name}': "
-                            "this argument cannot be None and no default is available."
-                        )
+        # Strict LLM schemas represent defaulted fields as nullable (see
+        # _ensure_strict_json_schema): null means "use the default". Resolve
+        # the sentinel, including in nested models, before validation.
+        schema = model_type.model_json_schema()
+        args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
@@ -584,18 +751,6 @@ def _prepare_function_arguments(
     bound = signature.bind(**{**raw_fields, **context_dict})
     bound.apply_defaults()
     return bound.args, bound.kwargs
-
-
-def _is_optional_type(hint: Any) -> bool:
-    if get_origin(hint) is Annotated:
-        hint = get_args(hint)[0]
-
-    origin = get_origin(hint)
-
-    is_union = origin is Union
-    is_union = is_union or origin is types.UnionType
-
-    return is_union and type(None) in get_args(hint)
 
 
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
