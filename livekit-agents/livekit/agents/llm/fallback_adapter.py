@@ -88,6 +88,16 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm connections for all contained LLM instances.
+
+        Every LLM in the fallback chain is warmed so that a fallback provider has
+        an already-established connection (DNS resolved, TLS handshaked) and does
+        not add latency precisely when the primary has just failed.
+        """
+        for llm_instance in self._llm_instances:
+            llm_instance.prewarm(loop=loop)
+
     def chat(
         self,
         *,

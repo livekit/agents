@@ -124,8 +124,14 @@ class FallbackAdapter(
         return FallbackSynthesizeStream(tts=self, conn_options=conn_options)
 
     def prewarm(self) -> None:
-        if self._tts_instances:
-            self._tts_instances[0].prewarm()
+        """Pre-warm connections for all contained TTS instances.
+
+        Every TTS in the fallback chain is warmed so that a fallback provider has
+        an already-established connection (DNS resolved, TLS handshaked) and does
+        not add latency precisely when the primary has just failed.
+        """
+        for tts_instance in self._tts_instances:
+            tts_instance.prewarm()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)

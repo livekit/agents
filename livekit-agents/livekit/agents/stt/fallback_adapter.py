@@ -118,6 +118,16 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
+    def prewarm(self) -> None:
+        """Pre-warm connections for all contained STT instances.
+
+        Every STT in the fallback chain is warmed so that a fallback provider has
+        an already-established connection (DNS resolved, TLS handshaked) and does
+        not add latency precisely when the primary has just failed.
+        """
+        for stt_instance in self._stt_instances:
+            stt_instance.prewarm()
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
         for stt_instance in self._stt_instances:

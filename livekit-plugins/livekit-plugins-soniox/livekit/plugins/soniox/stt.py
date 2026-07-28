@@ -534,9 +534,6 @@ class SpeechStream(stt.SpeechStream):
                         if token["is_final"]:
                             if is_end_token(token):
                                 send_endpoint_transcript()
-                                self._report_processed_audio_duration(
-                                    total_audio_proc_ms,
-                                )
                             else:
                                 final.update(token)
                         else:
@@ -602,7 +599,13 @@ class SpeechStream(stt.SpeechStream):
                     # 3) on error or finish, flush any remaining final tokens.
                     if content.get("finished") or has_error:
                         send_endpoint_transcript()
-                        self._report_processed_audio_duration(total_audio_proc_ms)
+
+                    # Report processed audio duration on every message. The helper tracks
+                    # `_reported_duration_ms` and only emits a RECOGNITION_USAGE event for
+                    # the delta since the last report, so calling this unconditionally is
+                    # safe and ensures usage is never under-reported when the stream ends
+                    # without a clean endpoint token (e.g. disconnection or error).
+                    self._report_processed_audio_duration(total_audio_proc_ms)
 
                     if has_error:
                         err_code = content.get("error_code")
