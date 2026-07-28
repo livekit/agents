@@ -975,7 +975,7 @@ class LLM(llm.LLM):
                 URL. Falls back to ``CLOUDFLARE_ACCOUNT_ID``. Required unless ``base_url`` is set.
             api_key (str | None, optional): Cloudflare API token with the ``AI Gateway``
                 permission, sent as the ``Authorization: Bearer`` header. Falls back to
-                ``CLOUDFLARE_API_KEY``.
+                ``CLOUDFLARE_API_TOKEN``.
             gateway_id (str | None, optional): Route through a specific gateway via the
                 ``cf-aig-gateway-id`` header. Defaults to the account's default gateway.
             base_url (str | None, optional): Full endpoint URL, e.g.
@@ -989,11 +989,11 @@ class LLM(llm.LLM):
             LLM: A configured LLM instance routed through the Cloudflare AI Gateway.
         """
 
-        api_key = api_key or os.environ.get("CLOUDFLARE_API_KEY")
+        api_key = api_key or os.environ.get("CLOUDFLARE_API_TOKEN")
         if not api_key:
             raise ValueError(
                 "Cloudflare API token is required, either as argument or set "
-                "CLOUDFLARE_API_KEY environment variable"
+                "CLOUDFLARE_API_TOKEN environment variable"
             )
 
         if base_url is None:

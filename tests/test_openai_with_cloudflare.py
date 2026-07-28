@@ -14,7 +14,7 @@ _BASE_URL = "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1"
 @pytest.fixture(autouse=True)
 def _clear_cloudflare_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # keep construction deterministic regardless of the host environment
-    monkeypatch.delenv("CLOUDFLARE_API_KEY", raising=False)
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
     monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
 
 
@@ -30,7 +30,7 @@ def test_account_id_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_api_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CLOUDFLARE_API_KEY", "env-tok")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "env-tok")
     llm = openai.LLM.with_cloudflare(model="openai/gpt-4o", account_id="acct")
     assert llm._client.api_key == "env-tok"
 
