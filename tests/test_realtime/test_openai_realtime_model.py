@@ -1,16 +1,70 @@
 from __future__ import annotations
 
+import asyncio
+import types
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
-from livekit.agents import llm
+from livekit.agents import APIConnectOptions, llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession, _is_fatal_error
 
 pytestmark = pytest.mark.unit
+
+
+def _create_response_retry_session(*, retry_interval: float = 0) -> RealtimeSession:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._opts = SimpleNamespace(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=retry_interval)
+    )
+    session._realtime_model = SimpleNamespace(
+        _provider_label="openai",
+        _label="openai",
+        label="openai",
+        model="gpt-realtime",
+        provider="openai",
+    )
+    session._msg_ch = SimpleNamespace(closed=False)
+    session._response_created_futures = {}
+    session._response_create_params = {}
+    session._response_retry_event_ids = set()
+    session._response_retry_generations = {}
+    session._discarded_event_ids = set()
+    session._current_generation = None
+    session._instructions = None
+    session._sent_events = []
+    session._errors = []
+    session.send_event = types.MethodType(
+        lambda self, event: self._sent_events.append(event),
+        session,
+    )
+    session.emit = types.MethodType(
+        lambda self, event_name, event: self._errors.append((event_name, event)),
+        session,
+    )
+    return session
+
+
+def _response_created(*, client_event_id: str, response_id: str = "resp_1") -> SimpleNamespace:
+    return SimpleNamespace(
+        response=SimpleNamespace(id=response_id, metadata={"client_event_id": client_event_id})
+    )
+
+
+def _response_failed(*, code: str = "rate_limit_exceeded") -> SimpleNamespace:
+    return SimpleNamespace(
+        response=SimpleNamespace(
+            id="resp_1",
+            status="failed",
+            usage=None,
+            status_details=SimpleNamespace(
+                error=SimpleNamespace(type="server_error", code=code),
+            ),
+        )
+    )
 
 
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:
@@ -119,3 +173,77 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     )
     RealtimeSession._handle_response_done_but_not_complete(session, event)
     assert captured["recoverable"] is True
+
+
+async def test_response_done_failed_retries_before_output() -> None:
+    session = _create_response_retry_session()
+
+    fut = session.generate_reply(instructions="say hi")
+    create_event = session._sent_events[-1]
+    client_event_id = create_event.response.metadata["client_event_id"]
+    session._handle_response_created(_response_created(client_event_id=client_event_id))
+
+    generation = await fut
+    assert generation.response_id == "resp_1"
+
+    session._handle_response_done(_response_failed())
+    await asyncio.sleep(0.15)
+
+    assert len(session._sent_events) == 2
+    retry_event = session._sent_events[-1]
+    assert retry_event.type == "response.create"
+    assert retry_event.event_id.startswith("response_retry_")
+    assert retry_event.response.instructions == "say hi"
+    created_events = [event for event in session._errors if event[0] == "generation_created"]
+    session._handle_response_created(
+        _response_created(client_event_id=retry_event.event_id, response_id="resp_2")
+    )
+    assert [
+        event for event in session._errors if event[0] == "generation_created"
+    ] == created_events
+    assert retry_event.event_id not in session._response_retry_event_ids
+    assert session._current_generation is not None
+    assert session._current_generation.retry_count == 1
+    error_event = next(event for event in session._errors if event[0] == "error")
+    assert error_event[1].recoverable is True
+
+
+async def test_response_done_failed_does_not_retry_after_output_started() -> None:
+    session = _create_response_retry_session()
+
+    fut = session.generate_reply(instructions="say hi")
+    create_event = session._sent_events[-1]
+    client_event_id = create_event.response.metadata["client_event_id"]
+    session._handle_response_created(_response_created(client_event_id=client_event_id))
+    await fut
+    assert session._current_generation is not None
+    session._current_generation.output_started = True
+
+    session._handle_response_done(_response_failed())
+    await asyncio.sleep(0.15)
+
+    assert len(session._sent_events) == 1
+    assert session._current_generation is None
+
+
+async def test_response_done_failed_does_not_retry_against_new_generation() -> None:
+    session = _create_response_retry_session(retry_interval=0.05)
+
+    fut = session.generate_reply(instructions="say hi")
+    create_event = session._sent_events[-1]
+    client_event_id = create_event.response.metadata["client_event_id"]
+    session._handle_response_created(_response_created(client_event_id=client_event_id))
+    await fut
+
+    session._handle_response_done(_response_failed())
+    old_generation = session._current_generation
+    session._handle_response_created(
+        _response_created(client_event_id="unrelated_turn", response_id="resp_new")
+    )
+    assert session._current_generation is not old_generation
+
+    await asyncio.sleep(0.5)
+
+    assert len(session._sent_events) == 1
+    assert session._response_retry_event_ids == set()
+    assert session._response_retry_generations == {}
