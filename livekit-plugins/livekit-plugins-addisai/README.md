@@ -101,7 +101,9 @@ tts = addisai.TTS(
 ```
 
 The plugin preserves one AddisAI `client_request_id` across LiveKit retry
-attempts to prevent duplicate generation and billing.
+attempts to prevent duplicate generation and billing. Each attempt gets a fresh
+LiveKit output request ID so downstream consumers can discard partial audio
+from a failed attempt safely.
 
 The primary TTS options are:
 
