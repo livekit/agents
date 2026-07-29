@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from ..llm.chat_context import ChatContext, ChatItem
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
+    DuplicateScope,
     FunctionTool,
     RawFunctionTool,
     StopResponse,
@@ -20,6 +22,7 @@ from ..llm.tool_context import (
     ToolError,
     ToolFlag,
     Toolset,
+    as_duplicate_policy,
     function_tool,
 )
 from ..llm.utils import prepare_function_arguments
@@ -198,12 +201,33 @@ def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
     return False
 
 
+def _canonical_args(raw_arguments: dict[str, Any]) -> str:
+    """Stable JSON for argument comparison.
+
+    ``sort_keys`` recurses into nested objects, so a provider's key-emission order
+    can't make two identical calls look different. Lists stay order-sensitive —
+    ``["a", "b"]`` and ``["b", "a"]`` are genuinely different arguments.
+    """
+    return json.dumps(raw_arguments, sort_keys=True, default=str)
+
+
+def _duplicate_key(
+    *, fnc_name: str, scope: DuplicateScope, raw_arguments: dict[str, Any]
+) -> tuple[str, str | None]:
+    """The identity a call is deduplicated on. Always name-scoped, so two tools
+    can never collide; under ``"name"`` equality reduces to name equality."""
+    if scope == "name_and_args":
+        return (fnc_name, _canonical_args(raw_arguments))
+    return (fnc_name, None)
+
+
 @dataclass
 class _RunningTask:
     ctx: RunContext
     exe_task: asyncio.Task[Any]
     executor: _ToolExecutor
     allow_cancellation: bool
+    duplicate_key: tuple[str, str | None] = ("", None)
 
 
 @dataclass
@@ -265,15 +289,23 @@ class _ToolExecutor:
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
         info = tool.info
-        on_duplicate: DuplicateMode = info.on_duplicate
+        duplicate_policy = as_duplicate_policy(info.on_duplicate)
+        on_duplicate: DuplicateMode = duplicate_policy.mode
         allow_cancellation: bool = ToolFlag.CANCELLABLE in info.flags
 
         confirm_duplicate: bool | None = None
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
 
+        # derived AFTER the pop: CONFIRM_DUPLICATE_PARAM is harness state, not a tool
+        # argument, and a confirming re-call must key identically to the call it
+        # confirms — otherwise `confirm` + `name_and_args` would never match.
+        dup_key = _duplicate_key(
+            fnc_name=fnc_name, scope=duplicate_policy.scope, raw_arguments=raw_arguments
+        )
+
         duplicate_result = await self._check_duplicate(
-            fnc_name, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
+            dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
         )
         if duplicate_result is not None:
             logger.debug(
@@ -363,6 +395,7 @@ class _ToolExecutor:
             exe_task=exe_task,
             executor=self,
             allow_cancellation=allow_cancellation,
+            duplicate_key=dup_key,
         )
         self._running_tasks[call_id] = running_task
 
@@ -597,7 +630,7 @@ class _ToolExecutor:
 
     async def _check_duplicate(
         self,
-        fnc_name: str,
+        dup_key: tuple[str, str | None],
         *,
         on_duplicate: DuplicateMode,
         confirm_duplicate: bool | None,
@@ -605,11 +638,13 @@ class _ToolExecutor:
         if on_duplicate == "allow":
             return None
 
+        fnc_name = dup_key[0]
+
         async with self._duplicate_check_lock:
             running_fnc_calls = [
                 t.ctx.function_call
                 for t in self._running_tasks.values()
-                if t.ctx.function_call.name == fnc_name
+                if t.duplicate_key == dup_key
             ]
             if len(running_fnc_calls) == 0:
                 return None

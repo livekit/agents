@@ -37,6 +37,7 @@ from ..voice.events import RunContext
 from .async_toolset import AsyncToolset
 from .tool_context import (
     DuplicateMode,
+    DuplicatePolicy,
     RawFunctionTool,
     ToolError,
     ToolFlag,
@@ -56,8 +57,11 @@ class MCPToolOptions(TypedDict, total=False):
     flags: ToolFlag
     """Flags passed to the @function_tool decorator, e.g. ToolFlag.CANCELLABLE."""
 
-    on_duplicate: DuplicateMode
-    """Behavior when a tool is called multiple times in the same context."""
+    on_duplicate: DuplicateMode | DuplicatePolicy
+    """Behavior when a tool is called multiple times in the same context.
+
+    Pass a :class:`DuplicatePolicy` to also control what counts as a duplicate,
+    e.g. ``DuplicatePolicy("reject", scope="name_and_args")``."""
 
     report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
