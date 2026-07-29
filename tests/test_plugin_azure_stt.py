@@ -2,10 +2,12 @@ import asyncio
 import copy
 import json
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import stt
+from livekit.agents import LanguageCode, stt
+from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.azure import stt as azure_stt
 
 pytestmark = pytest.mark.plugin("azure")
@@ -303,3 +305,55 @@ def test_provider_progress_resets_retries_without_transcript(monkeypatch, callba
     stream._speaking = False
     getattr(stream, callback)(SimpleNamespace(result=SimpleNamespace(text="")))
     assert stream._num_retries == 0
+
+
+def _stt_options(**overrides):
+    defaults = {
+        "speech_key": "key",
+        "speech_region": "region",
+        "speech_host": NOT_GIVEN,
+        "speech_auth_token": NOT_GIVEN,
+        "sample_rate": 16000,
+        "num_channels": 1,
+        "segmentation_silence_timeout_ms": NOT_GIVEN,
+        "segmentation_max_time_ms": NOT_GIVEN,
+        "segmentation_strategy": NOT_GIVEN,
+        "language": [LanguageCode("en-US")],
+    }
+    defaults.update(overrides)
+    return azure_stt.STTOptions(**defaults)
+
+
+def _patch_recognizer_deps(monkeypatch, grammar):
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "PhraseListGrammar",
+        SimpleNamespace(from_recognizer=lambda recognizer: grammar),
+    )
+    monkeypatch.setattr(azure_stt.speechsdk, "SpeechConfig", lambda **kwargs: MagicMock())
+    monkeypatch.setattr(azure_stt.speechsdk.audio, "AudioConfig", lambda **kwargs: MagicMock())
+    monkeypatch.setattr(azure_stt.speechsdk, "SpeechRecognizer", lambda **kwargs: MagicMock())
+
+
+def test_azure_phrase_list_weight_applied_to_grammar(monkeypatch):
+    grammar = MagicMock()
+    _patch_recognizer_deps(monkeypatch, grammar)
+    config = _stt_options(phrase_list=["LiveKit", "WebRTC"], phrase_list_weight=1.8)
+
+    azure_stt._create_speech_recognizer(config=config, stream=MagicMock())
+
+    assert [call.args[0] for call in grammar.addPhrase.call_args_list] == [
+        "LiveKit",
+        "WebRTC",
+    ]
+    grammar.setWeight.assert_called_once_with(1.8)
+
+
+def test_azure_phrase_list_without_weight_leaves_grammar_default(monkeypatch):
+    grammar = MagicMock()
+    _patch_recognizer_deps(monkeypatch, grammar)
+    config = _stt_options(phrase_list=["LiveKit"])
+
+    azure_stt._create_speech_recognizer(config=config, stream=MagicMock())
+
+    grammar.setWeight.assert_not_called()
