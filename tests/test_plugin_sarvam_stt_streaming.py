@@ -77,6 +77,42 @@ def _parse_ws_url(url: str) -> dict[str, str]:
     return {key: value[0] for key, value in qs.items()}
 
 
+def test_streaming_disables_connection_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        stt_streaming,
+        "StreamingSpeechStream",
+        _CapturedStream,
+    )
+    stt = stt_streaming.STTStreaming(
+        api_key="sk_test",
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    conn_options = stt_streaming.APIConnectOptions(
+        max_retry=3,
+        retry_interval=1.5,
+        timeout=12.0,
+    )
+
+    stt.stream(conn_options=conn_options)
+
+    stream_conn_options = captured["conn_options"]
+    assert isinstance(
+        stream_conn_options,
+        stt_streaming.APIConnectOptions,
+    )
+    assert stream_conn_options.max_retry == 0
+    assert stream_conn_options.retry_interval == 1.5
+    assert stream_conn_options.timeout == 12.0
+
+
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
     opts = stt_streaming.StreamingSTTOptions(
         language="hi-IN",

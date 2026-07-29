@@ -293,6 +293,7 @@ class STTStreaming(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> StreamingSpeechStream:
+        conn_options = replace(conn_options, max_retry=0)
         opts = StreamingSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
