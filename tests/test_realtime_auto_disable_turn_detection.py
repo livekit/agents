@@ -270,6 +270,66 @@ def test_non_realtime_llm_reports_no_server_side_td() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# "ignoring the turn_detection setting": only when the user set one
+# --------------------------------------------------------------------------- #
+
+
+def _td_ignored_warned(caplog: pytest.LogCaptureFixture) -> bool:
+    return any(
+        r.levelno == logging.WARNING and "ignoring the turn_detection setting" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_default_turn_detector_is_superseded_silently(caplog: pytest.LogCaptureFixture) -> None:
+    # nothing configured client-side: the eager TurnDetector() default is not user intent
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True)),
+        vad=FakeVAD(fake_user_speeches=[]),
+    )
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        activity = _activity(session)
+
+    assert activity._rt_turn_detection_enabled is True
+    assert activity._turn_detection is None
+    assert not _td_ignored_warned(caplog)
+
+
+def test_session_turn_detector_warns_when_model_keeps_server_td(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # can_disable=False: the user's TurnDetector really is dropped, so say so
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(turn_detection=True, can_disable_turn_detection=False)
+        ),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(turn_detection=inference.TurnDetector()),
+    )
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        activity = _activity(session)
+
+    assert activity._turn_detection is None
+    assert _td_ignored_warned(caplog)
+
+
+def test_agent_turn_detector_warns_when_model_keeps_server_td(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # an agent-level override is user intent as well, even on a default session
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(turn_detection=True, can_disable_turn_detection=False)
+        ),
+        vad=FakeVAD(fake_user_speeches=[]),
+    )
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        AgentActivity(Agent(instructions="test", turn_detection=inference.TurnDetector()), session)
+
+    assert _td_ignored_warned(caplog)
+
+
+# --------------------------------------------------------------------------- #
 # fallback adapter: disable propagates to every underlying session; support is
 # the conservative AND across models
 # --------------------------------------------------------------------------- #

@@ -329,10 +329,17 @@ class AgentActivity(RecognitionHooks):
                     return None
 
                 if self._rt_turn_detection_enabled:
-                    logger.warning(
-                        "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
-                        "with server-side turn detection enabled, ignoring the turn_detection setting"
-                    )
+                    # only warn when the user asked for a TurnDetector, the eager default is
+                    # silently superseded by the server-side turn detection
+                    if (
+                        is_given(self._agent.turn_detection)
+                        or self._session._turn_detection_explicit
+                    ):
+                        logger.warning(
+                            "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
+                            "with server-side turn detection enabled, "
+                            "ignoring the turn_detection setting"
+                        )
                     return None
 
             return turn_detection
