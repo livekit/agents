@@ -2161,9 +2161,14 @@ class AgentActivity(RecognitionHooks):
             ),
         )
 
-        if ev.alternatives[0].text and self._turn_detection not in (
-            "manual",
-            "realtime_llm",
+        if (
+            self.vad is None
+            and ev.alternatives[0].text
+            and self._turn_detection
+            not in (
+                "manual",
+                "realtime_llm",
+            )
         ):
             self._interrupt_by_audio_activity()
 
