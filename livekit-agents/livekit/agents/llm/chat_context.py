@@ -263,7 +263,9 @@ class MetricsReport(TypedDict, total=False):
     """
 
     llm_node_ttfs: float
-    """Time from LLM generation start to the first sentence chunk, segmented with the same tokenizer the TTS path uses
+    """Time from LLM generation start until the first sentence reached the TTS provider, as
+    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
+    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
 
     Assistant `ChatMessage` only
     """

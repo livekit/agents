@@ -25,7 +25,6 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..tokenize import SentenceTokenizer, blingfire
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -59,9 +58,9 @@ class _LLMGenerationData:
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    started_at: float | None = None
     ttft: float | None = None
     tps: float | None = None
-    ttfs: float | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -155,22 +154,12 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
-    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(
-            node,
-            chat_ctx,
-            tool_ctx,
-            model_settings,
-            data,
-            model,
-            provider,
-            sentence_tokenizer,
-        )
+        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -194,9 +183,9 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
-    sentence_tokenizer: SentenceTokenizer | None = None,
 ) -> bool:
     start_time = time.perf_counter()
+    data.started_at = start_time
     current_span = trace.get_current_span()
     data.started_fut.set_result(None)
 
@@ -245,19 +234,6 @@ async def _llm_inference_task(
 
     # forward llm stream to output channels
     usage: CompletionUsage | None = None
-    if sentence_tokenizer is None:
-        sentence_tokenizer = blingfire.SentenceTokenizer(retain_format=True)
-    sentence_stream = sentence_tokenizer.stream()
-
-    async def _set_time_first_sentence() -> None:
-        try:
-            async for _ in sentence_stream:
-                data.ttfs = time.perf_counter() - start_time
-                return
-        except Exception:
-            logger.exception("failed to time first sentence (llm_node_ttfs)")
-
-    ttfs_task = asyncio.create_task(_set_time_first_sentence())
     try:
         async for chunk in llm_node:
             if data.ttft is None:
@@ -315,22 +291,13 @@ async def _llm_inference_task(
             if content:
                 data.generated_text += content
                 text_ch.send_nowait(content)
-                if data.ttfs is None:
-                    sentence_stream.push_text(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
-        try:
-            sentence_stream.end_input()  # flush any trailing sentence, then close
-        except Exception:
-            pass
-        await utils.aio.cancel_and_wait(ttfs_task)
 
     duration = time.perf_counter() - start_time
     if usage is not None and duration > 0:
         data.tps = usage.completion_tokens / duration
-    if data.ttfs is None and data.generated_text.strip():
-        data.ttfs = duration
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -349,6 +316,17 @@ class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
     timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
     ttfb: float | None = None
+    # perf_counter when the first text of this segment reached the TTS provider, as stamped
+    # by the TTS stream itself; None when a custom tts_node publishes no stamp
+    synthesis_started_at: float | None = None
+
+
+def _time_to_first_sentence(
+    llm_data: _LLMGenerationData, tts_data: _TTSGenerationData | None
+) -> float | None:
+    if llm_data.started_at is None or tts_data is None or tts_data.synthesis_started_at is None:
+        return None
+    return tts_data.synthesis_started_at - llm_data.started_at
 
 
 def perform_tts_inference(
@@ -428,10 +406,12 @@ async def _tts_inference_task(
                 # the framework TTS streams attach the time the text was first sent to the
                 # provider; without it (custom tts_node), fall back to the arrival of the
                 # first input token, which also counts any text buffering (e.g. sentence
-                # tokenization) as TTFB
-                anchor: float | None = audio_frame.userdata.get(
-                    USERDATA_TTS_STARTED_TIME, start_time
+                # tokenization) as TTFB. ttfs takes no such fallback and stays unreported.
+                anchor = data.synthesis_started_at = audio_frame.userdata.get(
+                    USERDATA_TTS_STARTED_TIME
                 )
+                if anchor is None:
+                    anchor = start_time
                 if anchor is not None:
                     data.ttfb = time.perf_counter() - anchor
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
