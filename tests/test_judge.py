@@ -36,6 +36,7 @@ class _CapturingLLM(llm.LLM):
         super().__init__()
         self._tool_call = tool_call
         self.tool_choice: Any = None
+        self.extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN
 
     def chat(
         self,
@@ -48,6 +49,7 @@ class _CapturingLLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         self.tool_choice = tool_choice
+        self.extra_kwargs = extra_kwargs
         return _CapturingStream(
             self,
             chat_ctx=chat_ctx,
@@ -111,6 +113,7 @@ async def test_evals_judge_uses_required_tool_choice() -> None:
 
     assert result.verdict == "pass"
     assert fake_llm.tool_choice == "required"
+    assert fake_llm.extra_kwargs == {"temperature": 0.0}
 
 
 def test_min_reasoning_effort_mapping() -> None:
