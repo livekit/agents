@@ -764,6 +764,25 @@ async def test_streaming_usage_metrics_emit_server_authoritative_session_end() -
 
 
 @pytest.mark.asyncio
+async def test_streaming_session_end_falls_back_to_local_duration_without_server_usage() -> None:
+    stream = _make_stream()
+    stream._request_id = "req_123"
+    stream._on_audio_duration_report(1.5)
+
+    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
+    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.5]
+    assert stream._server_audio_duration_reported is False
+    assert stream._session_ended is True
+
+
+@pytest.mark.asyncio
 async def test_streaming_usage_accepts_server_duration_smaller_than_local_estimate() -> None:
     stream = _make_stream()
 

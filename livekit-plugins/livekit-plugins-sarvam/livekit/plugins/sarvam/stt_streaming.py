@@ -1040,6 +1040,8 @@ class StreamingSpeechStream(stt.SpeechStream):
             if server_audio_duration:
                 self._emit_usage(server_audio_duration)
             self._server_audio_duration_reported = True
+        else:
+            self._emit_local_usage_fallback()
         self._session_ended = True
 
     def _handle_error_event(self, data: dict[str, Any]) -> None:
