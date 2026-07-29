@@ -40,8 +40,9 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
 class FakeRealtimeSession(RealtimeSession):
     """A hermetic RealtimeSession that records calls and can be scripted to fail."""
 
-    def __init__(self, model: FakeRealtimeModel) -> None:
+    def __init__(self, model: FakeRealtimeModel, *, turn_detection_disabled: bool = False) -> None:
         super().__init__(model)
+        self.turn_detection_disabled = turn_detection_disabled
         self._chat_ctx = ChatContext.empty()
         self._tools = ToolContext.empty()
         self.closed = False
@@ -171,8 +172,8 @@ class FakeRealtimeModel(RealtimeModel):
     def active_session(self) -> FakeRealtimeSession:
         return self.created_sessions[-1]
 
-    def session(self) -> FakeRealtimeSession:
-        sess = FakeRealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        sess = FakeRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         sess.update_error = self.bring_up_error
         self.created_sessions.append(sess)
         return sess
