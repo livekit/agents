@@ -49,6 +49,8 @@ async def test_recognize_maps_addisai_response() -> None:
             if part.name == "audio":
                 fields["audio"] = await part.read()
             elif part.name:
+                if part.name == "request_data":
+                    assert "Content-Type" not in part.headers
                 fields[part.name] = await part.text()
 
         assert bytes(fields["audio"]).startswith(b"RIFF")

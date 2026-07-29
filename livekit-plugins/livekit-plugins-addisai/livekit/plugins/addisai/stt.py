@@ -127,16 +127,19 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         options = self._sanitize_options(language=language)
-        form = aiohttp.FormData()
-        form.add_field(
-            "audio",
+        form = aiohttp.MultipartWriter("form-data")
+        request_part = form.append(json.dumps({"language_code": options.language}))
+        request_part.set_content_disposition("form-data", name="request_data")
+        # The AddisAI endpoint ignores this field when aiohttp labels it text/plain.
+        request_part.headers.pop("Content-Type", None)
+        audio_part = form.append(
             rtc.combine_audio_frames(buffer).to_wav_bytes(),
-            filename="audio.wav",
-            content_type="audio/wav",
+            {"Content-Type": "audio/wav"},
         )
-        form.add_field(
-            "request_data",
-            json.dumps({"language_code": options.language}),
+        audio_part.set_content_disposition(
+            "form-data",
+            name="audio",
+            filename="audio.wav",
         )
 
         try:
