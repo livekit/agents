@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum, auto
+from functools import partial
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
@@ -25,9 +28,14 @@ You are solely responsible for collecting the credit card number.
 {modality_specific}
 If the user refuses to provide a credit card number, call decline_card_capture().
 If the user wishes to start over the credit card collection process, call restart_card_collection().
+Call `append_card_number` as soon as the user provides a new group of digits. Pass only the newly provided digits; the task stores earlier groups.
+For a correction, use `replace_last` to replace only the incorrect trailing digits.
+Call `submit_card_number` when the user indicates they have finished, or set `finish=True` when appending the final group.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded, submitted, or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's credit card number, back to the user.
-{confirmation_instructions}
+Never state or infer how many digits have been collected.
+When explaining an input format, never provide invented or example card numbers, security codes, expiration months, or expiration years. Describe only the format's structure.
 """
 
 _CARD_NUMBER_AUDIO_SPECIFIC = """
@@ -46,8 +54,10 @@ You are solely responsible for collecting the user's card's security code.
 {modality_specific}
 If the user refuses to provide a code, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's security code, back to the user.
+When explaining an input format, never provide invented or example card numbers, security codes, expiration months, or expiration years. Describe only the format's structure.
 {confirmation_instructions}
 """
 
@@ -64,16 +74,21 @@ Handle input as typed text. Users will type the security code directly.
 _EXPIRATION_DATE_BASE_INSTRUCTIONS = """
 You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card's expiration date.
+An expiration date contains only a month and a year. Never interpret any part as a day of the month.
 {modality_specific}
 If the user refuses to provide a date, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, and never state that a value was recorded or confirmed unless the corresponding tool call succeeded.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat any sensitive information, such as the user's expiration date, back to the user.
+When explaining an input format, never provide invented or example card numbers, security codes, expiration months, or expiration years. Describe only the format's structure.
+If the user asks how to say the expiration year, say it can be provided using the last two digits or in full four digits. Do not give a concrete example.
 {confirmation_instructions}
 """
 
 _EXPIRATION_DATE_AUDIO_SPECIFIC = """
 Handle input as noisy voice transcription. Expect users to say the expiration date in formats like 'April twenty five', 'oh four twenty five', 'four slash twenty five', or 'April 2025'.
+When a month name is followed by a two-digit number, it is complete month-and-year input. Strip any ordinal suffix from the number, use its numeric part as the last two digits of the year, and call `update_expiration_date` immediately. Never interpret or reject this pattern as a day of the month, and never call `decline_card_capture` for it.
 Normalize spoken months and digits silently.
 Filter out filler words or hesitations.
 """
@@ -128,6 +143,11 @@ class CardCollectionRestartError(ToolError):
         return self._reason
 
 
+class _CardNumberStage(Enum):
+    COLLECTING = auto()
+    CONFIRMING = auto()
+
+
 @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
 async def decline_card_capture(context: RunContext, reason: str) -> None:
     """Handles the case when the user explicitly declines to provide a detail for their card information.
@@ -161,12 +181,12 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
         require_explicit_ask: bool = False,
         extra_instructions: str = "",
     ) -> None:
-        confirmation_instructions = (
-            "Call `confirm_card_number` once the user has repeated their card number."
-        )
         extra_suffix = f"\n{extra_instructions}" if extra_instructions else ""
 
         self._card_number = ""
+        self._card_number_buffer = ""
+        self._card_number_stage = _CardNumberStage.COLLECTING
+        self._card_number_lock = asyncio.Lock()
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -174,22 +194,17 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             instructions=Instructions(
                 audio=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_AUDIO_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is not False else ""
-                    ),
                 )
                 + extra_suffix,
                 text=_CARD_NUMBER_BASE_INSTRUCTIONS.format(
                     modality_specific=_CARD_NUMBER_TEXT_SPECIFIC,
-                    confirmation_instructions=(
-                        confirmation_instructions if require_confirmation is True else ""
-                    ),
                 )
                 + extra_suffix,
             ),
             chat_ctx=chat_ctx,
             tools=[
-                self._build_update_card_number_tool(),
+                self._build_append_card_number_tool(),
+                self._build_submit_card_number_tool(),
                 decline_card_capture,
                 restart_card_collection,
             ],
@@ -200,86 +215,172 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             instructions=(
                 "Get the user's credit card number. First scan the conversation - if a "
                 "credit card number was already given (e.g. the user volunteered it "
-                "before the task started), use it via update_card_number rather than "
-                "re-asking. Only ask fresh when no credit card number is in the "
-                "conversation yet."
+                "before the task started), record it via append_card_number and submit it "
+                "rather than re-asking. Only ask fresh when no credit card number is in "
+                "the conversation yet."
             )
         )
 
-    def _build_update_card_number_tool(self) -> llm.FunctionTool:
+    def _build_append_card_number_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
         # based on require_explicit_ask.
         flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
         @function_tool(flags=flags)
-        async def update_card_number(context: RunContext, card_number: str) -> str | None:
-            """Call to record the user's card number. Only call once the entire number has been given, do not call in increments.
+        async def append_card_number(
+            context: RunContext,
+            digits: str,
+            replace_last: int = 0,
+            finish: bool = False,
+        ) -> str | None:
+            """Append newly provided digits to the active card-number reading.
+
+            Pass only new digits. To correct a suffix, remove it with replace_last while
+            appending the replacement. Set finish when these are the final digits. The task
+            decides whether another reading is required.
 
             Args:
-                card_number (str): The credit card number as a string with no dashes or spaces
+                digits: Newly provided card-number digits, with no spaces or dashes.
+                replace_last: Number of trailing digits to replace before appending.
+                finish: Whether the user has finished the current reading.
             """
-            return await self._update_card_number_impl(context, card_number)
-
-        return update_card_number
-
-    async def _update_card_number_impl(self, context: RunContext, card_number: str) -> str | None:
-        card_number = "".join([d for d in card_number if d.isdigit()])
-        if len(card_number) < 13 or len(card_number) > 19:
-            self.session.generate_reply(
-                instructions="The length of the card number is invalid, ask the user to repeat their card number."
+            return await self._append_card_number_impl(
+                context, digits, replace_last=replace_last, finish=finish
             )
-            return None
-        else:
-            self._card_number = card_number
 
-            if not self._confirmation_required(context):
-                if not self.validate_card_number(self._card_number):
-                    self.session.generate_reply(
-                        instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
-                    )
-                else:
-                    issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
-                    if not self.done():
-                        self.complete(
-                            GetCardNumberResult(issuer=issuer, card_number=self._card_number)
-                        )
-                return None
+        return append_card_number
 
-            confirm_tool = self._build_confirm_tool(card_number=card_number)
-            current_tools = [t for t in self.tools if t.id != "confirm_card_number"]
-            current_tools.append(confirm_tool)
-            await self.update_tools(current_tools)
+    def _build_submit_card_number_tool(self) -> llm.FunctionTool:
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
+
+        @function_tool(flags=flags)
+        async def submit_card_number(context: RunContext) -> str | None:
+            """Submit the active card-number reading after the user finishes it.
+
+            Do not call before the user finishes a reading. The task decides whether another
+            reading is required.
+            """
+            return await self._submit_card_number_impl(context)
+
+        return submit_card_number
+
+    async def _append_card_number_impl(
+        self,
+        context: RunContext,
+        digits: str,
+        *,
+        replace_last: int = 0,
+        finish: bool = False,
+    ) -> str | None:
+        async with self._card_number_lock:
+            normalized_digits = "".join(d for d in digits if d.isdigit())
+            if not normalized_digits:
+                raise ToolError(
+                    "No card-number digits were provided. Call submit_card_number if the "
+                    "user has finished the current reading."
+                )
+            if replace_last < 0:
+                raise ToolError("replace_last cannot be negative")
+            if replace_last > len(self._card_number_buffer):
+                raise ToolError(
+                    "replace_last exceeds the digits currently collected; ask the user to "
+                    "restart or repeat the correction"
+                )
+
+            retained = (
+                self._card_number_buffer[:-replace_last]
+                if replace_last
+                else self._card_number_buffer
+            )
+            candidate = retained + normalized_digits
+            if len(candidate) > 19:
+                raise ToolError(
+                    "The card number is too long. Ask the user to correct the latest digits "
+                    "or restart card collection."
+                )
+
+            self._card_number_buffer = candidate
+            if finish or self._should_auto_submit(candidate):
+                return self._submit_card_number_locked(context)
 
             return (
-                "The card number has been updated.\n"
-                "Ask them to repeat the number, do not repeat the number back to them.\n"
+                "Card-number input recorded. Continue collecting new groups with "
+                "append_card_number, or call submit_card_number when the user finishes. "
+                "Do not repeat digits or state how many digits have been collected."
             )
 
-    def _build_confirm_tool(self, *, card_number: str) -> llm.FunctionTool:
-        @function_tool()
-        async def confirm_card_number(repeated_card_number: str) -> None:
-            """Call after the user repeats their card number for confirmation.
+    async def _submit_card_number_impl(self, context: RunContext) -> str | None:
+        async with self._card_number_lock:
+            return self._submit_card_number_locked(context)
 
-            Args:
-                repeated_card_number (str): The card number repeated by the user as a string
-            """
-            repeated_card_number = "".join([d for d in repeated_card_number if d.isdigit()])
-            if repeated_card_number != card_number:
-                self.session.generate_reply(
-                    instructions="The repeated card number does not match, ask the user to try again."
-                )
-                return
+    def _submit_card_number_locked(self, context: RunContext) -> str | None:
+        candidate = self._card_number_buffer
+        try:
+            self._validate_card_number_input(candidate)
+        except ToolError:
+            if self._card_number_stage is _CardNumberStage.CONFIRMING:
+                self._card_number_buffer = ""
+            raise
 
-            if not self.validate_card_number(card_number):
-                self.session.generate_reply(
-                    instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
-                )
-            else:
-                issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
-                if not self.done():
-                    self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
+        if self._card_number_stage is _CardNumberStage.COLLECTING:
+            self._card_number = candidate
+            if not self._confirmation_required(context):
+                self._complete_card_number(candidate)
+                return None
 
-        return confirm_card_number
+            self._card_number_stage = _CardNumberStage.CONFIRMING
+            self._card_number_buffer = ""
+            return (
+                "The initial card number has been submitted. Ask the user to repeat the "
+                "entire number for confirmation. Record that reading with append_card_number "
+                "and submit_card_number. Do not repeat any digits yourself."
+            )
+
+        self._card_number_buffer = ""
+        if candidate == self._card_number:
+            self._complete_card_number(candidate)
+            return None
+
+        self._card_number = candidate
+        return (
+            "The repeated number differed and has been treated as a correction. Ask the "
+            "user to repeat the entire corrected number once more, using append_card_number "
+            "and submit_card_number. Do not repeat any digits yourself."
+        )
+
+    def _validate_card_number_input(self, card_number: str) -> None:
+        if not 13 <= len(card_number) <= 19:
+            raise ToolError(
+                "The card number has an invalid length. Continue collecting digits or ask "
+                "the user to repeat the number."
+            )
+        if not self.validate_card_number(card_number):
+            raise ToolError(
+                "The card number failed validation. Ask the user to correct the latest "
+                "digits or repeat the number."
+            )
+
+    def _complete_card_number(self, card_number: str) -> None:
+        if not self.done():
+            issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
+            self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
+
+    def _should_auto_submit(self, card_number: str) -> bool:
+        if (
+            self._card_number_stage is _CardNumberStage.CONFIRMING
+            and card_number == self._card_number
+        ):
+            return True
+        if len(card_number) == 19:
+            return True
+        if len(card_number) == 15 and card_number.startswith(("34", "37")):
+            return True
+        if len(card_number) != 16:
+            return False
+
+        first_two = int(card_number[:2])
+        first_four = int(card_number[:4])
+        return 51 <= first_two <= 55 or 2221 <= first_four <= 2720
 
     def validate_card_number(self, card_number: str) -> bool:
         """Validates card number via the Luhn algorithm"""
@@ -383,6 +484,15 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
                 instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
             )
             return None
+        elif (
+            self._security_code
+            and stripped == self._security_code
+            and self._confirmation_required(context)
+        ):
+            raise ToolError(
+                "This security code is already recorded and awaiting confirmation. "
+                "Call `confirm_security_code` with the repeated code instead."
+            )
         else:
             self._security_code = stripped
 
@@ -398,8 +508,11 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
 
             return (
                 "The security code has been updated.\n"
+                "If the user already repeated the security code earlier in the conversation, call "
+                "`confirm_security_code` with that repeated security code now instead of asking again.\n"
                 "Do not repeat the security code back to the user, ask them to repeat themselves.\n"
-                "Call `confirm_security_code` once the user confirms, do not call it preemptively.\n"
+                "Call `confirm_security_code` once the user has repeated the code. Do not call it "
+                "preemptively, and do not treat the code as confirmed until that call succeeds.\n"
             )
 
     def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
@@ -490,9 +603,14 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         ) -> str | None:
             """Call to update the card's expiration date. Collect both the numerical month and year.
 
+            The component after the month is always interpreted as a year and never as a day.
+            Strip any ordinal suffix introduced by transcription before calling this tool.
+
             Args:
-                expiration_month (int): The numerical expiration month of the card, example: '04' for April
-                expiration_year (int): The numerical expiration year of the card shortened to the last two digits, for example, '35' for 2035
+                expiration_month (int): The numerical month from the first component.
+                expiration_year (int): The second component after the month, always interpreted
+                    as a year and never as a day. Strip any transcribed ordinal suffix and use
+                    either the last two digits or the full four-digit year.
             """
             return await self._update_expiration_date_impl(
                 context, expiration_month, expiration_year
@@ -503,14 +621,10 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     async def _update_expiration_date_impl(
         self, context: RunContext, expiration_month: int, expiration_year: int
     ) -> str | None:
+        expiration_year = self._normalize_expiration_year(expiration_year)
         if not (1 <= expiration_month <= 12):
             self.session.generate_reply(
                 instructions="The expiration month is invalid, ask the user to repeat the expiration month."
-            )
-            return None
-        elif not (0 <= expiration_year <= 99):
-            self.session.generate_reply(
-                instructions="The expiration year is invalid, ask the user to repeat the expiration year."
             )
             return None
         elif self._is_expired(expiration_month, expiration_year):
@@ -518,6 +632,15 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
             )
             return None
+        elif (
+            self._expiration_date
+            and f"{expiration_month:02d}/{expiration_year:02d}" == self._expiration_date
+            and self._confirmation_required(context)
+        ):
+            raise ToolError(
+                "This expiration date is already recorded and awaiting confirmation. "
+                "Call `confirm_expiration_date` with the repeated date instead."
+            )
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -535,8 +658,11 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
             return (
                 "The expiration date has been updated.\n"
+                "If the user already repeated the expiration date earlier in the conversation, call "
+                "`confirm_expiration_date` with that repeated expiration date now instead of asking again.\n"
                 "Do not repeat the expiration date back to the user, ask them to repeat themselves.\n"
-                "Call `confirm_expiration_date` once the user confirms, do not call it preemptively.\n"
+                "Call `confirm_expiration_date` once the user has repeated the date. Do not call it "
+                "preemptively, and do not treat the date as confirmed until that call succeeds.\n"
             )
 
     def _build_confirm_tool(
@@ -555,6 +681,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 repeated_expiration_month (int): The expiration month repeated by the user
                 repeated_expiration_year (int): The expiration year repeated by the user
             """
+            repeated_expiration_year = self._normalize_expiration_year(repeated_expiration_year)
             if (
                 repeated_expiration_month != expiration_month
                 or repeated_expiration_year != expiration_year
@@ -569,10 +696,25 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
         return confirm_expiration_date
 
+    def _normalize_expiration_year(self, year: int) -> int:
+        if 0 <= year <= 99:
+            return year
+        current_century = self._current_date().year // 100 * 100
+        if current_century <= year <= current_century + 99:
+            return year % 100
+        raise ToolError(
+            "The expiration year must use its last two digits or the full four-digit year. "
+            "Ask the user to repeat the expiration year without providing an example."
+        )
+
     def _is_expired(self, month: int, year: int) -> bool:
-        today = date.today()
-        full_year = 2000 + year
+        today = self._current_date()
+        current_century = today.year // 100 * 100
+        full_year = current_century + year
         return (full_year, month) < (today.year, today.month)
+
+    def _current_date(self) -> date:
+        return date.today()
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
@@ -581,6 +723,12 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
 
 
 class GetCreditCardTask(AgentTask[GetCreditCardResult]):
+    """Collect a complete credit card through a sequence of focused tasks.
+
+    Confirmation remains model-directed with automatic tool choice. The prompts require an
+    explicit tool call, but a model that produces only text can leave a confirmation pending.
+    """
+
     def __init__(
         self,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
@@ -613,7 +761,6 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
         # TaskGroup overwrites each sub-task's chat_ctx with its own (see
         # TaskGroup.on_enter) - without seeding the TaskGroup, sub-tasks
         # would run with empty context.
-        ctx = self.chat_ctx
         # Role hint for the cardholder sub-task. With IGNORE_ON_ENTER on
         # update_name (via require_explicit_ask=True), the model is
         # structurally forced to ask before recording. The extra text
@@ -629,6 +776,9 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             cardholder_extra = f"{self._extra_instructions}\n\n{cardholder_extra}"
 
         while not self.done():
+            # A restarted TaskGroup merges its final turn back into this task before
+            # raising, so take a fresh snapshot instead of dropping that turn.
+            ctx = self.chat_ctx
             # Order: number first (most natural for the caller to give
             # when asked for "card details"), then expiry and security
             # code, then the cardholder name LAST. The name most often
@@ -638,7 +788,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
             # into update_name.
             task_group = TaskGroup(chat_ctx=ctx)
             task_group.add(
-                lambda: GetCardNumberTask(
+                partial(
+                    GetCardNumberTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -647,7 +798,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the user's card number",
             )
             task_group.add(
-                lambda: GetExpirationDateTask(
+                partial(
+                    GetExpirationDateTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -656,7 +808,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the card's expiration date",
             )
             task_group.add(
-                lambda: GetSecurityCodeTask(
+                partial(
+                    GetSecurityCodeTask,
                     chat_ctx=ctx,
                     require_confirmation=self._require_confirmation,
                     extra_instructions=self._extra_instructions,
@@ -665,7 +818,8 @@ class GetCreditCardTask(AgentTask[GetCreditCardResult]):
                 description="Collects the card's security code",
             )
             task_group.add(
-                lambda: GetNameTask(
+                partial(
+                    GetNameTask,
                     last_name=True,
                     chat_ctx=ctx,
                     extra_instructions=cardholder_extra,

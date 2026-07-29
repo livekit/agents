@@ -23,6 +23,13 @@ session = AgentSession(
 ### Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
+- [`credit_card_collection.py`](./credit_card_collection.py) - Stateful credit-card collection with confirmation
+
+Run the credit-card collection example in console mode:
+
+```bash
+uv run examples/voice_agents/credit_card_collection.py console
+```
 
 ### Real-time Models
 
