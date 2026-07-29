@@ -15,11 +15,16 @@ INLINE_PATTERNS = [
     (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),
     # links: keep text part [text](url) -> text
     (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),
+    # bold italic: remove asterisks from ***text*** (must run before the **/*
+    # patterns, which cannot match across the extra delimiter)
+    (re.compile(r"(?<![\w*])\*\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*\*(?![\w*])"), r"\1"),
     # bold: remove asterisks from **text** (word/asterisk boundaries, so
     # punctuation like ``**bold**!`` still matches)
     (re.compile(r"(?<![\w*])\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*(?![\w*])"), r"\1"),
     # italic: remove asterisks from *text* (word/asterisk boundaries)
     (re.compile(r"(?<![\w*])\*(?!\s|\*)([^*\n]+?)(?<!\s)\*(?![\w*])"), r"\1"),
+    # bold italic with underscores: remove underscores from ___text___
+    (re.compile(r"(?<!\w)___([^_]+?)___(?!\w)"), r"\1"),
     # bold with underscores: remove underscores from __text__ (word boundaries)
     (re.compile(r"(?<!\w)__([^_]+?)__(?!\w)"), r"\1"),
     # italic with underscores: remove underscores from _text_ (word boundaries)

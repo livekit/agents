@@ -216,6 +216,37 @@ async def test_punctuation_boundary_no_false_positives(text: str, chunk_size: in
     assert result == text
 
 
+# --- combined bold + italic ---
+#
+# ``***text***`` and ``___text___`` were left untouched: the bold pattern
+# stops at the extra delimiter and the italic pattern rejects a ``*`` right
+# after the opening one, so the delimiters leaked through to TTS.
+
+BOLD_ITALIC_CASES = [
+    # (input, expected)
+    ("This is ***very important*** text.", "This is very important text."),
+    ("Call ***now***!", "Call now!"),
+    ("___Totally___ critical.", "Totally critical."),
+    ("Use ***both*** and **bold** and *italic*.", "Use both and bold and italic."),
+]
+
+
+@pytest.mark.parametrize("text,expected", BOLD_ITALIC_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 50])
+async def test_bold_italic(text: str, expected: str, chunk_size: int):
+    """Triple-delimiter emphasis is stripped like the single and double forms."""
+
+    async def stream():
+        for i in range(0, len(text), chunk_size):
+            yield text[i : i + chunk_size]
+
+    result = ""
+    async for chunk in filter_markdown(stream()):
+        result += chunk
+
+    assert result == expected
+
+
 # Emoji test data
 EMOJI_INPUT = """Hello! 😀 Welcome to our app! 🎉
 
