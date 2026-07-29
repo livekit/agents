@@ -217,16 +217,21 @@ class ChunkedStream(tts.ChunkedStream):
             ) as response:
                 response_payload = await parse_json_response(response)
                 data = unwrap_data(response_payload)
-                request_id = (
+                provider_request_id = (
                     str(data.get("id") or "")
                     or response_request_id(response)
                     or self._client_request_id
                 )
 
+            # The provider request ID is stable across an idempotent retry. LiveKit
+            # needs a new output request ID for each attempt so downstream consumers
+            # can discard any partial audio emitted by a failed download.
+            output_emitter._note_provider_request_id(provider_request_id)
+            stream_request_id = utils.shortuuid()
             audio_url = _audio_url(data)
             await self._download_audio(
                 audio_url=audio_url,
-                request_id=request_id,
+                request_id=stream_request_id,
                 provider_mime_type=data.get("mime_type"),
                 output_emitter=output_emitter,
             )

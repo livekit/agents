@@ -101,7 +101,8 @@ async def test_synthesize_downloads_clip_and_reuses_idempotency_key() -> None:
         "voice_settings": {"speed": 1.0},
     }
     assert events
-    assert all(event.request_id == "clip-123" for event in events)
+    assert len({event.request_id for event in events}) == 1
+    assert all(event.request_id != "clip-123" for event in events)
     assert sum(event.frame.duration for event in events) == pytest.approx(0.1)
 
 
@@ -137,7 +138,76 @@ async def test_synthesize_accepts_inline_audio_data_url() -> None:
             events = [event async for event in stream]
 
     assert events
-    assert all(event.request_id == "inline-clip" for event in events)
+    assert len({event.request_id for event in events}) == 1
+    assert all(event.request_id != "inline-clip" for event in events)
+
+
+async def test_retry_uses_fresh_stream_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import APIConnectionError, tts
+    from livekit.plugins.addisai.tts import ChunkedStream
+
+    generation_requests: list[dict[str, object]] = []
+    attempt_request_ids: list[str] = []
+
+    async def generate(request: web.Request) -> web.Response:
+        generation_requests.append(await request.json())
+        return web.json_response(
+            {
+                "data": {
+                    "id": "stable-provider-clip",
+                    "mime_type": "audio/wav",
+                    "audio_url": "https://example.invalid/audio.wav",
+                }
+            }
+        )
+
+    async def download_audio(
+        self: ChunkedStream,
+        *,
+        audio_url: str,
+        request_id: str,
+        provider_mime_type: object,
+        output_emitter: tts.AudioEmitter,
+    ) -> None:
+        del self, audio_url, provider_mime_type
+        attempt_request_ids.append(request_id)
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=16_000,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
+        output_emitter.push(b"\0\0" * 1600)
+        if len(attempt_request_ids) == 1:
+            raise APIConnectionError("simulated signed-URL disconnect")
+
+    monkeypatch.setattr(ChunkedStream, "_download_audio", download_audio)
+
+    app = web.Application()
+    app.router.add_post("/api/v1/voice/generations", generate)
+
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        client = addisai.TTS(
+            api_key="test-key",
+            base_url=str(server.make_url("/")).rstrip("/"),
+            generation_timeout=5,
+            http_session=session,
+        )
+        async with client.synthesize(
+            "retry me",
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=2),
+        ) as stream:
+            events = [event async for event in stream]
+
+    assert len(generation_requests) == 2
+    assert (
+        generation_requests[0]["client_request_id"] == generation_requests[1]["client_request_id"]
+    )
+    assert len(attempt_request_ids) == 2
+    assert attempt_request_ids[0] != attempt_request_ids[1]
+    assert {event.request_id for event in events} == {attempt_request_ids[1]}
 
 
 @pytest.mark.parametrize("language", ["en", "ha", "sw", ""])
