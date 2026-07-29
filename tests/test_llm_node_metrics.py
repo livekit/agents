@@ -65,17 +65,44 @@ def _tts_data(synthesis_started_at: float | None) -> _TTSGenerationData:
 
 class TestLLMNodeTps:
     async def test_tps_set_when_usage_reported(self) -> None:
-        data = await _run_inference([_content("Hello there, friend."), _usage_chunk(30)])
+        data = await _run_inference(
+            [_content("Hello there, "), _content("friend."), _usage_chunk(30)]
+        )
         assert data.tps is not None
         assert data.tps > 0
 
     async def test_tps_zero_when_zero_usage_is_reported(self) -> None:
-        data = await _run_inference([_content("Hello there, friend."), _usage_chunk(0)])
+        data = await _run_inference(
+            [_content("Hello there, "), _content("friend."), _usage_chunk(0)]
+        )
         assert data.tps == 0
 
     async def test_tps_none_when_no_usage_reported(self) -> None:
         data = await _run_inference([_content("Hello there, friend.")])  # no usage chunk
         assert data.tps is None
+
+    async def test_tps_none_when_reply_arrived_in_one_chunk(self) -> None:
+        # nothing streamed, so there is no rate to report -- the alternative anchors would
+        # divide by prefill or by a network round trip and invent one
+        data = await _run_inference([_content("Sure!"), _usage_chunk(3)])
+        assert data.tps is None
+
+    async def test_tps_excludes_time_to_first_token(self) -> None:
+        # 10 tokens over a ~50ms streaming window that follows a ~200ms prefill: ~200 tok/s.
+        # anchoring on inference start would report ~40
+        async def slow_first_token(chat_ctx, tools, model_settings):  # type: ignore[no-untyped-def]
+            await asyncio.sleep(0.2)
+            yield _content("Hello there, ")
+            await asyncio.sleep(0.05)
+            yield _content("friend.")
+            yield _usage_chunk(10)
+
+        data = _LLMGenerationData(text_ch=aio.Chan(), function_ch=aio.Chan())
+        await _llm_inference_task(
+            slow_first_token, ChatContext.empty(), ToolContext.empty(), ModelSettings(), data
+        )
+        assert data.tps is not None
+        assert data.tps > 100
 
 
 class TestLLMNodeStartedAt:

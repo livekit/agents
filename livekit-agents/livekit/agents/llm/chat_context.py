@@ -257,7 +257,9 @@ class MetricsReport(TypedDict, total=False):
     """
 
     llm_node_tps: float
-    """LLM output tokens per second for this turn, measured at the `llm_node`
+    """LLM output tokens per second for this turn, measured at the `llm_node` over the
+    streaming window (first to last text chunk). Absent for a reply that arrived in a
+    single chunk, which has no measurable rate
 
     Assistant `ChatMessage` only
     """

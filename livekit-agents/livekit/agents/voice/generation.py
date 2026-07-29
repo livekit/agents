@@ -234,6 +234,8 @@ async def _llm_inference_task(
 
     # forward llm stream to output channels
     usage: CompletionUsage | None = None
+    first_content_at: float | None = None
+    last_content_at = 0.0
     try:
         async for chunk in llm_node:
             if data.ttft is None:
@@ -289,15 +291,22 @@ async def _llm_inference_task(
 
             # route text content to output channels
             if content:
+                now = time.perf_counter()
+                if first_content_at is None:
+                    first_content_at = now
+                last_content_at = now
                 data.generated_text += content
                 text_ch.send_nowait(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
 
-    duration = time.perf_counter() - start_time
-    if usage is not None and duration > 0:
-        data.tps = usage.completion_tokens / duration
+    if (
+        usage is not None
+        and first_content_at is not None
+        and (streaming_window := last_content_at - first_content_at) > 0
+    ):
+        data.tps = usage.completion_tokens / streaming_window
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
