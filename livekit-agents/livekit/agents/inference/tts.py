@@ -22,7 +22,13 @@ from .._exceptions import (
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
@@ -682,6 +688,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
+        # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
+        # of an unclosed span here between messages
+        self._held_tokens: list[TimedString] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -771,8 +780,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "output_alignment":
-                    from ..voice.io import TimedString
-
                     aligned: list[TimedString] = []
                     if words := data.get("words"):
                         aligned = [
@@ -788,9 +795,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                         # the provider aligned the *converted* text, so under expressive it
                         # carries native cues that were never spoken
                         output_emitter.push_timed_transcript(
-                            drop_bracket_cues(aligned) if self._expressive else aligned
+                            drop_bracket_cues(aligned, self._held_tokens)
+                            if self._expressive
+                            else aligned
                         )
                 elif data.get("type") == "done":
+                    if self._held_tokens:  # release an unclosed span, cue unresolved
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues([], self._held_tokens, final=True)
+                        )
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":

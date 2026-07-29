@@ -881,6 +881,8 @@ class TranscriptMarkupStripper:
 
 
 _BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
+# cap on how long an unclosed "[" is held before it is released as plain text
+_MAX_HELD_CHARS = 256
 
 
 def _retext(token: TimedString, text: str) -> TimedString:
@@ -895,19 +897,23 @@ def _retext(token: TimedString, text: str) -> TimedString:
     )
 
 
-def drop_bracket_cues(tokens: list[TimedString]) -> list[TimedString]:
+def drop_bracket_cues(
+    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
+) -> list[TimedString]:
     """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
 
     ``use_tts_aligned_transcript`` makes the provider's alignment of the text it was sent
-    the transcript, and that text is post-``convert_markup``, so it carries the native
-    ``[laugh]``/``[pause]`` cues as words the agent never spoke. Every bracket span goes:
-    the provider reads them all as cues, so none of them is ever audio, and markdown links
+    the transcript, and that text is post-``convert_markup``, so it carries native
+    ``[laugh]``/``[speak calmly]`` cues as words the agent never spoke. Every bracket span
+    goes: the provider reads them all as cues, so none is ever audio, and markdown links
     are already gone (``filter_markdown`` runs on TTS input by default).
 
-    Matching runs over the joined batch, so a cue may straddle tokens; one split across two
-    alignment *messages* is missed and stays in the transcript. A cue between two spaces
-    takes one of them with it, leaving a single separator rather than a double space.
+    Alignment arrives in messages finer-grained than a cue — often one word at a time — so
+    *held* carries the tail of an unclosed span across calls; pass the same list every time
+    and call once more with ``final=True`` at end of stream to release it.
     """
+    tokens = held + tokens
+    held.clear()
     text = "".join(tokens)
     if "[" not in text:
         return tokens
@@ -921,16 +927,26 @@ def drop_bracket_cues(tokens: list[TimedString]) -> list[TimedString]:
         elif start == 0 and end < len(text) and text[end] == " ":
             end += 1
         dropped.update(range(start, end))
-    if not dropped:
-        return tokens
+
+    # hold from an unclosed "[" so a cue straddling messages is still judged as a whole;
+    # past _MAX_HELD_CHARS give up, since a lone bracket must not stall the transcript
+    hold_from = len(text)
+    if not final and (open_at := text.rfind("[")) > text.rfind("]"):
+        if len(text) - open_at <= _MAX_HELD_CHARS:
+            hold_from = open_at
 
     out: list[TimedString] = []
     pos = 0
     for token in tokens:
-        kept = "".join(c for i, c in enumerate(token, start=pos) if i not in dropped)
+        emit = "".join(
+            c for i, c in enumerate(token, start=pos) if i < hold_from and i not in dropped
+        )
+        keep = "".join(c for i, c in enumerate(token, start=pos) if i >= hold_from)
         pos += len(token)
-        if kept:
-            out.append(token if kept == str(token) else _retext(token, kept))
+        if emit:
+            out.append(token if emit == str(token) else _retext(token, emit))
+        if keep:
+            held.append(token if keep == str(token) else _retext(token, keep))
     return out
 
 
