@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Generic, TypeVar, cast
@@ -31,6 +32,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         *,
         track_source: rtc.TrackSource.ValueType | list[rtc.TrackSource.ValueType],
         processor: rtc.FrameProcessor[T] | None = None,
+        stall_timeout: float = 10.0,
     ) -> None:
         self._room = room
         self._accepted_sources = (
@@ -53,6 +55,7 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._processor = processor
         self._processor_owned = False
+        self._stall_timeout = stall_timeout
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -148,15 +151,103 @@ class _ParticipantInputStream(Generic[T], ABC):
             "source": rtc.TrackSource.Name(publication.source),
         }
         logger.debug("start reading stream", extra=extra)
-        async for event in stream:
-            if not self._attached:
-                # drop frames if the stream is detached
-                continue
-            frame = cast(T, event.frame)
-            self._process_frame(frame)
-            await self._data_ch.send(frame)
+
+        current_stream = stream
+        recovery_count = 0
+        max_recoveries = 3
+
+        while recovery_count <= max_recoveries:
+            stall_detected = await self._read_stream_with_stall_detection(
+                current_stream, extra
+            )
+
+            if not stall_detected:
+                break
+
+            recovery_count += 1
+            if recovery_count <= max_recoveries:
+                logger.warning(
+                    "attempting audio stream recovery",
+                    extra={
+                        "attempt": recovery_count,
+                        "max_attempts": max_recoveries,
+                        **extra,
+                    },
+                )
+                try:
+                    if publication.track is None:
+                        logger.warning(
+                            "track unavailable, cannot recover",
+                            extra=extra,
+                        )
+                        break
+                    current_stream = self._create_stream(
+                        publication.track, participant
+                    )
+                    self._stream = current_stream
+                except Exception as e:
+                    logger.error(
+                        "failed to reopen audio stream",
+                        extra={"error": str(e), **extra},
+                    )
+                    break
 
         logger.debug("stream closed", extra=extra)
+
+    async def _read_stream_with_stall_detection(
+        self,
+        stream: rtc.VideoStream | rtc.AudioStream,
+        extra: dict[str, Any],
+    ) -> bool:
+        """Read from stream with stall detection. Returns True if stall was detected."""
+        last_frame_time = time.time()
+        stall_event = asyncio.Event()
+
+        async def watchdog() -> None:
+            nonlocal last_frame_time
+            while not stall_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(stall_event.wait()),
+                        timeout=self._stall_timeout,
+                    )
+                    return  # event was set, no stall
+                except asyncio.TimeoutError:
+                    if time.time() - last_frame_time >= self._stall_timeout:
+                        logger.warning(
+                            "audio input stall detected",
+                            extra={
+                                "elapsed": round(
+                                    time.time() - last_frame_time, 1
+                                ),
+                                **extra,
+                            },
+                        )
+                        await stream.aclose()
+                        return
+
+        watchdog_task = asyncio.create_task(watchdog())
+
+        try:
+            async for event in stream:
+                if not self._attached:
+                    # drop frames if the stream is detached
+                    continue
+                last_frame_time = time.time()
+                frame = cast(T, event.frame)
+                self._process_frame(frame)
+                await self._data_ch.send(frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        finally:
+            stall_event.set()
+            watchdog_task.cancel()
+            await asyncio.gather(watchdog_task, return_exceptions=True)
+
+        # check if stall caused the stream to exit
+        return time.time() - last_frame_time >= self._stall_timeout
 
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
@@ -241,6 +332,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        stall_timeout: float = 10.0,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
@@ -249,6 +341,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             processor=(
                 noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
             ),
+            stall_timeout=stall_timeout,
         )
         AudioInput.__init__(self, label="RoomIO")
         if frame_size_ms <= 0:
