@@ -1875,3 +1875,4 @@ class AudioRecognition:
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
             self._user_turn_span.end()
         self._user_turn_span = None
+        self._user_turn_start = None
