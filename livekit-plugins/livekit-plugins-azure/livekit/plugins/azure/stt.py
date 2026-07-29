@@ -59,6 +59,7 @@ class STTOptions:
     speech_endpoint: NotGivenOr[str] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
+    phrase_list_weight: NotGivenOr[float] = NOT_GIVEN
     explicit_punctuation: bool = False
     true_text_post_processing: bool = False
 
@@ -81,6 +82,7 @@ class STT(stt.STT):
         profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN,
         speech_endpoint: NotGivenOr[str] = NOT_GIVEN,
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
+        phrase_list_weight: NotGivenOr[float] = NOT_GIVEN,
         explicit_punctuation: bool = False,
         true_text_post_processing: bool = False,
     ):
@@ -98,6 +100,9 @@ class STT(stt.STT):
         Args:
             phrase_list: List of words or phrases to boost recognition accuracy.
                         Azure will give higher priority to these phrases during recognition.
+            phrase_list_weight: Biasing weight for the phrase list, in the range [0.0, 2.0].
+                        Azure's default is 1.0; higher values bias more strongly toward the
+                        phrase list, and 0.0 disables it without removing the phrases.
             explicit_punctuation: Controls punctuation behavior. If True, enables explicit punctuation mode
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
@@ -157,6 +162,7 @@ class STT(stt.STT):
             profanity=profanity,
             speech_endpoint=speech_endpoint,
             phrase_list=phrase_list,
+            phrase_list_weight=phrase_list_weight,
             explicit_punctuation=explicit_punctuation,
             true_text_post_processing=true_text_post_processing,
         )
@@ -526,5 +532,7 @@ def _create_speech_recognizer(
         phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(speech_recognizer)
         for phrase in config.phrase_list:
             phrase_list_grammar.addPhrase(phrase)
+        if is_given(config.phrase_list_weight):
+            phrase_list_grammar.setWeight(config.phrase_list_weight)
 
     return speech_recognizer
