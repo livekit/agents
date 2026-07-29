@@ -139,9 +139,8 @@ async def test_markdown_filter(chunk_size: int):
 # --- emphasis that must be stripped ---
 #
 # One table per direction. This one covers every emphasis form the filter is
-# expected to remove: the three delimiter widths, boundaries made of
-# punctuation rather than whitespace, and scripts written without spaces,
-# where the delimiter necessarily sits flush against a word character.
+# expected to remove: the three delimiter widths, boundaries made of punctuation
+# rather than whitespace, and delimiters flush against a word character.
 
 EMPHASIS_CASES = [
     # (input, expected)
@@ -175,6 +174,12 @@ EMPHASIS_CASES = [
     ("这是*重要*的文本。", "这是重要的文本。"),
     ("テスト**強調**です。", "テスト強調です。"),
     ("**中文**开头。", "中文开头。"),
+    ("นี่คือ**ข้อความ**สำคัญ", "นี่คือข้อความสำคัญ"),
+    # korean: spaced between words, but a particle follows the closing run
+    ("이것은 **중요**합니다.", "이것은 중요합니다."),
+    ("한국어**강조**입니다.", "한국어강조입니다."),
+    ("한국어***강조***입니다.", "한국어강조입니다."),
+    ("이것은 *중요*합니다.", "이것은 중요합니다."),
 ]
 
 
@@ -206,6 +211,7 @@ PRESERVE_CASES = [
     # underscores even though CJK asterisk emphasis is stripped
     "テスト__強調__です。",
     "变量__name__的值",
+    "한국어__강조__입니다.",
     # runs that cannot pair up
     "****quad****",
     "____quad____",
@@ -237,9 +243,17 @@ HORIZONTAL_RULE_CASES = [
     ("before\n-----\nafter", "before\n\nafter"),
     ("before\n  ---  \nafter", "before\n\nafter"),
     ("*****", ""),
+    # markers may be spaced apart, and a rule wins over a list item
+    ("before\n* * *\nafter", "before\n\nafter"),
+    ("before\n- - -\nafter", "before\n\nafter"),
+    ("before\n_ _ _\nafter", "before\n\nafter"),
+    ("before\n   - - - \nafter", "before\n\nafter"),
     # not rules
     ("wait --- what?", "wait --- what?"),
     ("a -- b", "a -- b"),
+    # a fourth column of indent makes the line code, not a rule
+    ("before\n    ---\nafter", "before\n    ---\nafter"),
+    ("before\n\t---\nafter", "before\n\t---\nafter"),
 ]
 
 

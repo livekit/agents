@@ -1,20 +1,22 @@
 import re
 from collections.abc import AsyncIterable
 
-# Scripts written without spaces between words. An emphasis delimiter in such a
-# script necessarily sits flush against a word character, so a neighbour from
-# one of these ranges is still a valid emphasis boundary.
-_CONTINUOUS_SCRIPTS = (
+# Scripts that put an emphasis delimiter flush against a word character: CJK,
+# kana and Thai take no spaces at all, Korean attaches particles to the closing
+# run. A neighbour from one of these ranges is still a valid boundary.
+_FLUSH_EMPHASIS_SCRIPTS = (
     r"\u0e00-\u0e7f"  # thai
+    r"\u1100-\u11ff"  # hangul jamo
     r"\u3040-\u30ff"  # hiragana, katakana
+    r"\u3130-\u318f"  # hangul compatibility jamo
     r"\u3400-\u4dbf"  # cjk unified ideographs extension a
     r"\u4e00-\u9fff"  # cjk unified ideographs
+    r"\uac00-\ud7af"  # hangul syllables
     r"\uf900-\ufaff"  # cjk compatibility ideographs
     r"\uff66-\uff9d"  # halfwidth katakana
 )
-# a word character that would make emphasis intra-word; the negated class
-# subtracts the continuous scripts from ``\w``
-_INTRAWORD = rf"[^\W{_CONTINUOUS_SCRIPTS}]"
+# a word character that would make emphasis intra-word: ``\w`` less those scripts
+_INTRAWORD = rf"[^\W{_FLUSH_EMPHASIS_SCRIPTS}]"
 
 # emphasis *text*, **text**, ***text***: the closing run has to match the
 # opening one. Asterisks are also arithmetic, exponents and globs, so each side
@@ -29,7 +31,7 @@ _ASTERISK_EMPHASIS = re.compile(
 # the same for underscores. CommonMark has no intra-word underscore emphasis,
 # so the boundary here stays the full word class -- that is what keeps
 # ``snake_case`` and ``__dunder__`` intact, in every script.
-_UNDERSCORE_EMPHASIS = re.compile(r"(?<!\w)(_{1,3})([^_]+?)\1(?!\w)")
+_UNDERSCORE_EMPHASIS = re.compile(r"(?<!\w)(_{1,3})(?!\s)([^_\n]+?)(?<!\s)\1(?!\w)")
 
 # Anchored at the start of a line only, so they are safe to apply to a prefix
 # of a line that is still being streamed.
@@ -43,10 +45,18 @@ LINE_PATTERNS = [
 ]
 
 # These match a whole line, so they may only be applied once the line is known
-# to be complete -- a prefix of ``____ and so on`` is not a horizontal rule.
+# to be complete -- a prefix of ``____ and so on`` is not a horizontal rule. They
+# run before LINE_PATTERNS, which would read ``* * *`` as a list item.
 FULL_LINE_PATTERNS = [
-    # horizontal rules: --- / *** / ___ carry no spoken content
-    (re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", re.MULTILINE), ""),
+    # horizontal rules carry no spoken content. per CommonMark the markers may be
+    # spaced apart, and a fourth column of indent makes the line code
+    (
+        re.compile(
+            r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$",
+            re.MULTILINE,
+        ),
+        "",
+    ),
 ]
 
 INLINE_PATTERNS = [
@@ -95,7 +105,7 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
     def has_incomplete_pattern(buffer: str) -> bool:
         """Check if buffer might contain incomplete markdown patterns that need more text."""
 
-        if buffer.endswith(("#", "-", "+", "*", ">", "!", "`", "~", " ")):
+        if buffer.endswith(("#", "-", "+", "*", "_", ">", "!", "`", "~", " ")):
             return True
 
         # emphasis delimiters that cannot pair up yet
@@ -115,12 +125,12 @@ async def filter_markdown(text: AsyncIterable[str]) -> AsyncIterable[str]:
 
     def process_complete_text(text: str, *, is_newline: bool, is_line_end: bool) -> str:
         if is_newline:
-            for pattern, replacement in LINE_PATTERNS:
-                text = pattern.sub(replacement, text)
-
             if is_line_end:
                 for pattern, replacement in FULL_LINE_PATTERNS:
                     text = pattern.sub(replacement, text)
+
+            for pattern, replacement in LINE_PATTERNS:
+                text = pattern.sub(replacement, text)
 
         # most spoken text carries no inline markup at all
         if not INLINE_MARKERS.search(text):
