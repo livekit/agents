@@ -65,6 +65,16 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # set by a silent update(): the output is recorded but no reply is generated
+        self._suppress_reply = False
+
+        # on a tool the delegation LLM called: the delegate call it belongs to
+        self._delegation_parent: RunContext[Any] | None = None
+
+        # on a delegate call: the handle its delegated tools run against. stands for the turn
+        # that will speak the answer, and _deliver_reply completes it once that reply is done
+        self._delegation_speech_handle: SpeechHandle | None = None
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -99,6 +109,11 @@ class RunContext(Generic[Userdata_T]):
         assistant turn to complete (including all function tools),
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
+        if (parent := self._delegation_parent) is not None:
+            # for a delegated tool that is the conversation model's line handing the request over
+            await parent.wait_for_playout()
+            return
+
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
     @asynccontextmanager
@@ -167,6 +182,7 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -180,6 +196,9 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Release control without speaking. The message is still recorded as the
+                tool's output so the model has a result for its call, but no reply is
+                generated from it. Only meaningful on the first update.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -229,8 +248,15 @@ class RunContext(Generic[Userdata_T]):
             ),
         )
 
+        if (parent := self._delegation_parent) is not None:
+            # re-attributed to the delegate call, and deliberately not releasing this tool:
+            # the delegation LLM would resume and answer on partial facts
+            await parent.update(raw_message)
+            return
+
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = silent
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return

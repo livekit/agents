@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 
 from .. import utils
 from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.realtime import RealtimeModel
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
@@ -490,15 +491,18 @@ class _ToolExecutor:
         from .agent_activity import ActivityClosedError
 
         target_agent: Agent
+        target_activity: AgentActivity
         try:
             if self._owning_activity is not None:
                 await self._owning_activity.wait_for_idle()
+                target_activity = self._owning_activity
                 target_agent = self._owning_activity.agent
             else:
                 target_activity = await session.wait_for_idle()
                 target_agent = target_activity.agent
         except ActivityClosedError:
             logger.debug("dropping tool reply — owning activity closed")
+            _finish_delegations(self._pending_updates)
             self._pending_updates.clear()
             return
 
@@ -512,6 +516,7 @@ class _ToolExecutor:
             pending_items.extend(update.items)
 
         if not pending_items:
+            _finish_delegations(updates)
             return
 
         # only insert again if delivery target differs (session-scoped handoff)
@@ -541,6 +546,24 @@ class _ToolExecutor:
         )
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+
+        # a model that continues on its own needs no client-triggered response: the
+        # update_chat_ctx above was the whole delivery. the capability is read off the active
+        # session so a fallback adapter reports the model actually in use
+        rt_session = target_activity.realtime_llm_session
+        if (
+            isinstance(target_activity.llm, RealtimeModel)
+            and rt_session is not None
+            and rt_session.capabilities.auto_tool_reply_generation
+        ):
+            logger.debug(
+                "delivered async tool results without a reply, the model continues on its own",
+                extra={"call_ids": call_ids},
+            )
+            # no speech of ours to wait for; the model decides when to say this
+            _finish_delegations(updates)
+            return
+
         speech = session.generate_reply(
             instructions=_render(template, {"call_ids": call_ids}),
             tool_choice="none",
@@ -592,6 +615,8 @@ class _ToolExecutor:
                     )
                 ),
             )
+            # the answer has been said, so a delegated tool sequenced off its handle runs
+            _finish_delegations(updates)
 
         speech.add_done_callback(_on_speech_done)
 
@@ -650,6 +675,13 @@ class _ToolExecutor:
                 return _render(self._tool_options["duplicate_confirm_template"], dict(args))
 
         return None
+
+
+def _finish_delegations(updates: Sequence[_PendingUpdate]) -> None:
+    """Complete the delegation handle of any delegate call in ``updates``."""
+    for update in updates:
+        if (handle := update.ctx._delegation_speech_handle) is not None:
+            handle._mark_done()
 
 
 def _build_executor_map(

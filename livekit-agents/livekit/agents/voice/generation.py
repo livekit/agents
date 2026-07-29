@@ -34,12 +34,13 @@ from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-from .tool_executor import _build_executor_map
+from .tool_executor import _build_executor_map, _ToolExecutor
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
+    from .events import RunContext
     from .transcription.text_transforms import TextTransforms
 
 
@@ -637,6 +638,8 @@ def perform_tool_executions(
     function_stream: AsyncIterable[llm.FunctionCall],
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
+    default_executor: _ToolExecutor | None = None,
+    delegation_parent: RunContext | None = None,
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
     tool_output = _ToolOutput(output=[], first_tool_started_fut=asyncio.Future())
     task = asyncio.create_task(
@@ -649,6 +652,8 @@ def perform_tool_executions(
             tool_output=tool_output,
             tool_execution_started_cb=tool_execution_started_cb,
             tool_execution_completed_cb=tool_execution_completed_cb,
+            default_executor=default_executor,
+            delegation_parent=delegation_parent,
         ),
         name="execute_tools_task",
     )
@@ -666,6 +671,8 @@ async def _execute_tools_task(
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
     tool_output: _ToolOutput,
+    default_executor: _ToolExecutor | None = None,
+    delegation_parent: RunContext | None = None,
 ) -> None:
     """Dispatch tools through the activity's _ToolExecutor.
 
@@ -691,10 +698,10 @@ async def _execute_tools_task(
         return
 
     # Route AsyncToolset members to their own executor so session-scoped async
-    # tools survive handoff; everything else falls back to the activity executor.
-    executor_by_name = _build_executor_map(
-        toolsets=tool_ctx.toolsets, default=activity._tool_executor
-    )
+    # tools survive handoff; everything else falls back to the activity executor,
+    # or to the delegation executor when these are the delegation's own calls.
+    fallback_executor = default_executor or activity._tool_executor
+    executor_by_name = _build_executor_map(toolsets=tool_ctx.toolsets, default=fallback_executor)
 
     tasks: list[asyncio.Task[Any]] = []
     try:
@@ -797,6 +804,7 @@ async def _execute_tools_task(
                 run_ctx = RunContext(
                     session=session, speech_handle=speech_handle, function_call=fnc_call
                 )
+                run_ctx._delegation_parent = delegation_parent
 
                 logger.debug(
                     "executing mock tool" if mocked else "executing tool",
@@ -807,7 +815,7 @@ async def _execute_tools_task(
                     },
                 )
 
-                executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+                executor = executor_by_name.get(fnc_call.name, fallback_executor)
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,
@@ -818,7 +826,7 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable, fnc_call: llm.FunctionCall, run_ctx: RunContext
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -832,6 +840,9 @@ async def _execute_tools_task(
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        if run_ctx._suppress_reply:
+                            # a silent update() keeps the output item but asks for no speech
+                            output.reply_required = False
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
@@ -862,7 +873,7 @@ async def _execute_tools_task(
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call),
+                    _traceable_fnc_tool(function_callable, fnc_call, run_ctx),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
@@ -903,7 +914,10 @@ async def _execute_tools_task(
         if len(tool_output.output) > 0:
             logger.debug(
                 "tools execution completed",
-                extra={"speech_id": speech_handle.id},
+                extra={
+                    "functions": [output.fnc_call.name for output in tool_output.output],
+                    "speech_id": speech_handle.id,
+                },
             )
 
 
