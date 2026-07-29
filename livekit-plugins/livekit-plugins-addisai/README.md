@@ -11,10 +11,16 @@ The plugin supports Amharic (`am`) and Afaan Oromo (`om`):
 ## Installation
 
 ```bash
+uv add "livekit-agents[addisai]~=1.6"
+```
+
+Or install the plugin package directly:
+
+```bash
 pip install livekit-plugins-addisai
 ```
 
-## Prerequisites
+## Authentication
 
 Create an AddisAI API key and set it as an environment variable:
 
@@ -56,6 +62,13 @@ final-only; interim transcripts are not available.
 
 Use `language="om"` for Afaan Oromo.
 
+The primary STT options are:
+
+- `language`: `"am"` for Amharic or `"om"` for Afaan Oromo. The default is
+  `"am"`.
+- `api_key`: Optional API key. When omitted, the plugin reads `ADDIS_API_KEY`.
+- `base_url`: Optional AddisAI API base URL override.
+
 ## Text-to-speech
 
 ```python
@@ -90,6 +103,17 @@ tts = addisai.TTS(
 The plugin preserves one AddisAI `client_request_id` across LiveKit retry
 attempts to prevent duplicate generation and billing.
 
+The primary TTS options are:
+
+- `language`: `"am"` for Amharic or `"om"` for Afaan Oromo. The default is
+  `"am"`.
+- `voice`: An available voice ID from the dynamic AddisAI voice catalog. The
+  default is `"am-hamen"`.
+- `output_format`: `"pcm_16000"`, `"wav_44100"`, or `"mp3_44100"`. The default
+  is `"pcm_16000"`.
+- `speed`: Optional Addis Voices 2 speed setting.
+- `api_key`: Optional API key. When omitted, the plugin reads `ADDIS_API_KEY`.
+
 ## Language switching
 
 Both clients can be updated between requests:
@@ -114,3 +138,10 @@ realtime audio API. They are not included in this initial plugin:
 
 These capabilities can be added in focused follow-up contributions as their
 public contracts mature.
+
+## Additional resources
+
+- [AddisAI speech-to-text documentation](https://docs.addisassistant.com/docs/capabilities/speech-to-text)
+- [AddisAI text-to-speech documentation](https://docs.addisassistant.com/docs/capabilities/text-to-speech)
+- [AddisAI Python SDK](https://github.com/Addis-AI-Org/addisai-py)
+- [LiveKit Agents documentation](https://docs.livekit.io/agents/)
