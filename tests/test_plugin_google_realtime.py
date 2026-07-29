@@ -5,8 +5,10 @@ import logging
 import pytest
 from google.genai import types
 
-from livekit.agents import utils
+from livekit.agents import llm, utils
+from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
 
@@ -95,3 +97,182 @@ async def test_late_content_after_generation_complete_is_dropped(
     assert gen.output_text == ""
     assert not gen._done
     assert any("after generation completed" in r.message for r in caplog.records)
+
+
+def _tool_call(call_id: str = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
+    return types.LiveServerToolCall(
+        function_calls=[types.FunctionCall(id=call_id, name=name, args={})]
+    )
+
+
+def _tool_output(call_id: str = "fc_1", name: str = "lookup") -> llm.FunctionCallOutput:
+    return llm.FunctionCallOutput(call_id=call_id, name=name, output="42", is_error=False)
+
+
+async def _make_connected_session(
+    monkeypatch: pytest.MonkeyPatch, *, non_blocking_tools: bool = False
+) -> RealtimeSession:
+    """A session that believes it is connected, so update_chat_ctx actually emits.
+
+    The placeholder is never called: the send task is not running, so client events just
+    queue up in `_msg_ch` for the test to inspect. `_make_session` closes that channel to
+    stop the connect loop, so it is replaced with an open one first.
+    """
+    session = await _make_session(monkeypatch)
+    if non_blocking_tools:
+        session._opts.tool_behavior = types.Behavior.NON_BLOCKING
+    session._msg_ch = utils.aio.Chan[ClientEvents]()
+    session._active_session = object()  # type: ignore[assignment]
+    return session
+
+
+async def _drain_sent(session: RealtimeSession) -> list[object]:
+    sent: list[object] = []
+    while not session._msg_ch.empty():
+        sent.append(session._msg_ch.recv_nowait())
+    return sent
+
+
+async def test_tool_response_sent_after_client_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool result owed by an interrupted turn still reaches Gemini, silently.
+
+    Gemini blocks the turn until every tool call is answered and offers no cancel, so dropping
+    the result strands the session: it stops responding and `generate_reply` never gets a
+    generation (issue #6569). SILENT records the result without prompting speech the user never
+    asked for.
+    """
+    session = await _make_connected_session(monkeypatch, non_blocking_tools=True)
+    session._start_new_generation()
+    session._handle_tool_calls(_tool_call())
+
+    # the user was interrupted locally; Gemini was never told
+    session.interrupt()
+    await _drain_sent(session)
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(_tool_output())
+    await session.update_chat_ctx(chat_ctx)
+
+    sent = await _drain_sent(session)
+    responses = [m for m in sent if isinstance(m, types.LiveClientToolResponse)]
+    assert len(responses) == 1, f"expected the tool response to be sent, got {sent}"
+    assert responses[0].function_responses is not None
+    assert responses[0].function_responses[0].id == "fc_1"
+    assert responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
+
+
+async def test_tool_response_sent_after_server_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini drops the call when it interrupts the turn itself, but the result is still sent.
+
+    It costs nothing — the API can use it on the next turn — and withholding it would leave the
+    local context claiming a result the server never saw.
+    """
+    session = await _make_connected_session(monkeypatch)
+    session._start_new_generation()
+    session._handle_tool_calls(_tool_call())
+    session._handle_server_content(types.LiveServerContent(interrupted=True))
+    await _drain_sent(session)
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(_tool_output())
+    await session.update_chat_ctx(chat_ctx)
+
+    responses = [
+        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+    ]
+    assert len(responses) == 1
+
+
+async def test_tool_response_uses_configured_scheduling_when_not_interrupted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normal path keeps the configured scheduling; SILENT is only for interrupted turns."""
+    session = await _make_connected_session(monkeypatch)
+    session._start_new_generation()
+    session._handle_tool_calls(_tool_call())
+    await _drain_sent(session)
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(_tool_output())
+    await session.update_chat_ctx(chat_ctx)
+
+    responses = [
+        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+    ]
+    assert len(responses) == 1
+    assert responses[0].function_responses is not None
+    assert responses[0].function_responses[0].scheduling is None
+
+
+async def test_interrupted_tool_response_keeps_default_scheduling_for_blocking_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini ignores scheduling on BLOCKING declarations, so none is claimed.
+
+    The response is still sent — unblocking the turn matters more than the reply it prompts.
+    """
+    session = await _make_connected_session(monkeypatch)
+    session._start_new_generation()
+    session._handle_tool_calls(_tool_call())
+    session.interrupt()
+    await _drain_sent(session)
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(_tool_output())
+    await session.update_chat_ctx(chat_ctx)
+
+    responses = [
+        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+    ]
+    assert len(responses) == 1
+    assert responses[0].function_responses is not None
+    assert responses[0].function_responses[0].scheduling is None
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
+    """Vertex AI rejects `scheduling` (and `id`), so neither is set for it."""
+    res = create_function_response(
+        _tool_output(),
+        vertexai=vertexai,
+        tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
+    )
+
+    if vertexai:
+        assert res.scheduling is None
+        assert res.id is None
+    else:
+        assert res.scheduling == types.FunctionResponseScheduling.SILENT
+        assert res.id == "fc_1"
+
+
+def test_vertex_scheduling_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    with caplog.at_level(logging.WARNING):
+        RealtimeModel(
+            vertexai=True,
+            project="p",
+            location="us-central1",
+            tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
+        )
+
+    assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+
+def test_gemini_api_scheduling_does_not_warn(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+
+    with caplog.at_level(logging.WARNING):
+        RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
+
+    assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
