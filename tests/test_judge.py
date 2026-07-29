@@ -5,7 +5,10 @@ from typing import Any
 import pytest
 
 from livekit.agents import llm
+from livekit.agents.evals import JudgeGroup
 from livekit.agents.evals.judge import _evaluate_with_llm
+from livekit.agents.inference import LLM as InferenceLLM
+from livekit.agents.inference.llm import min_reasoning_effort
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -108,3 +111,39 @@ async def test_evals_judge_uses_required_tool_choice() -> None:
 
     assert result.verdict == "pass"
     assert fake_llm.tool_choice == "required"
+
+
+def test_min_reasoning_effort_mapping() -> None:
+    assert min_reasoning_effort("openai/gpt-5.1") == "none"
+    assert min_reasoning_effort("openai/gpt-5") == "minimal"
+    assert min_reasoning_effort("gpt-5-mini") == "minimal"
+    assert min_reasoning_effort("openai/gpt-4o-mini") is None
+
+
+def test_judge_group_defaults_reasoning_effort_for_model_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "lk_api_key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "lk_api_secret")
+
+    group = JudgeGroup(llm="openai/gpt-5.1")
+    assert isinstance(group.llm, InferenceLLM)
+    assert group.llm._opts.extra_kwargs == {"reasoning_effort": "none"}
+
+    group = JudgeGroup(llm="openai/gpt-4o-mini")
+    assert isinstance(group.llm, InferenceLLM)
+    assert group.llm._opts.extra_kwargs == {}
+
+
+def test_judge_group_leaves_llm_instances_untouched() -> None:
+    fake_llm = _CapturingLLM(
+        FunctionToolCall(
+            type="function",
+            name="submit_verdict",
+            arguments='{"verdict": "pass", "reasoning": "ok"}',
+            call_id="call_1",
+        )
+    )
+
+    group = JudgeGroup(llm=fake_llm)
+    assert group.llm is fake_llm
