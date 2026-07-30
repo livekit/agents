@@ -26,7 +26,13 @@ HANDLED_SIGNALS = (
 )
 
 
-class _ExitCli(BaseException):
+class _ExitCli(SystemExit):
+    # Derives from SystemExit, not BaseException: _handle_exit raises this from a
+    # signal handler, and the frame the raise lands in is whatever the event loop
+    # happened to be executing. If that frame is a loop callback, asyncio's
+    # Handle._run re-raises only SystemExit/KeyboardInterrupt and reports every
+    # other BaseException to the loop exception handler - swallowing the exit and
+    # leaving the loop running (#5856).
     pass
 
 
