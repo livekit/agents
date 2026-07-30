@@ -1064,6 +1064,62 @@ async def test_stream_forwards_text_chunks_as_they_arrive(
 
 
 @pytest.mark.asyncio
+async def test_stream_forwards_whitespace_tokens_between_words(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace-only LLM deltas must be forwarded so words are not glued."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Hello")
+    stream.push_text(" ")
+    stream.push_text("world.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if recv_queue:
+            return recv_queue.pop(0)
+        raise asyncio.TimeoutError
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        async for _ev in stream:
+            pass
+
+    texts = [
+        json.loads(c.args[0]).get("text")
+        for c in mock_ws.send.call_args_list
+        if "text" in json.loads(c.args[0])
+    ]
+    assert texts == ["Hello", " ", "world."]
+
+
+@pytest.mark.asyncio
 async def test_ensure_warmed_bounds_prewarm_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

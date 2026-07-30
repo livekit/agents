@@ -928,7 +928,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                         ) from exc
                             continue
 
-                        if not data or not data.strip():
+                        if not data:
                             continue
                         if first_text_time is None:
                             first_text_time = time.monotonic()
