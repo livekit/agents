@@ -641,6 +641,9 @@ class TTS(tts.TTS):
                         timeout=DEFAULT_INLINE_WARMUP_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
+                    # Spent the inline budget once; do not re-wait on later turns.
+                    # Leave the prewarm task running — it still sets _warmed when done.
+                    self._warmup_attempted = True
                     logger.debug(
                         "[Avaz TTS] prewarm still running after %.0fs; continuing with first turn",
                         DEFAULT_INLINE_WARMUP_TIMEOUT_S,
@@ -961,7 +964,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 while not terminal.is_set():
                     if ws_closed:
                         break
-                    timeout = flush_idle if (flush_sent or send_done.is_set()) else idle
+                    # Snapshot before await: flush may flip during a short pre-flush wait.
+                    using_post_flush = flush_sent or send_done.is_set()
+                    timeout = flush_idle if using_post_flush else idle
                     # Before any text is sent, wait longer so init→first-token
                     # races do not abort the receive loop.
                     if not sent_parts and not send_done.is_set():
@@ -971,6 +976,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     except asyncio.TimeoutError:
                         # Still streaming text: keep waiting for audio.
                         if not flush_sent and not send_done.is_set():
+                            continue
+                        # Flush landed during a short pre-flush wait — honour the
+                        # full post-flush window instead of exiting early.
+                        if not using_post_flush:
                             continue
                         break
                     except websockets.exceptions.ConnectionClosed as exc:

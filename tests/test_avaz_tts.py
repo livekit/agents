@@ -851,8 +851,9 @@ async def test_ensure_warmed_bounds_prewarm_wait(
     async def slow_prewarm() -> bool:
         started.set()
         await asyncio.sleep(30.0)
+        engine._warmed = True
         engine._warmup_attempted = True
-        return False
+        return True
 
     engine._prewarm_task = asyncio.create_task(slow_prewarm())
     await started.wait()
@@ -867,10 +868,76 @@ async def test_ensure_warmed_bounds_prewarm_wait(
     elapsed = time.monotonic() - t0
 
     assert elapsed < 1.0
-    assert engine._warmup_attempted is False
+    assert engine._warmup_attempted is True
+
+    # Subsequent turns must not pay the inline budget again.
+    t1 = time.monotonic()
+    await engine._ensure_warmed()
+    assert time.monotonic() - t1 < 0.2
+
     engine._prewarm_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await engine._prewarm_task
+
+
+@pytest.mark.asyncio
+async def test_stream_honours_post_flush_window_after_short_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flush during a short pre-flush recv wait must still get the post-flush budget."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        api_key="test-api-key",
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.25,
+        post_text_drain_s=0.0,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    # Init, then a short idle (flush races in), then audio inside post-flush window.
+    timeout_sentinel = object()
+    recv_plan: list[tuple[float, object]] = [
+        (0.0, '{"status":"initialized"}'),
+        (0.0, timeout_sentinel),
+        (0.12, json.dumps({"audio": audio_b64})),
+        (0.0, '{"status":"closed","chunks_generated":1}'),
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if not recv_plan:
+            raise asyncio.TimeoutError
+        delay, item = recv_plan.pop(0)
+        if delay:
+            await asyncio.sleep(delay)
+        if item is timeout_sentinel:
+            raise asyncio.TimeoutError
+        return item  # type: ignore[return-value]
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
 
 
 @pytest.mark.asyncio
