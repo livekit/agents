@@ -45,8 +45,8 @@ passing it on — as far as they are concerned, this is you doing the work."""
 # used when `announce` is off, which is the default: nothing else acknowledges the call, so
 # the line has to come out of the same completion. it is free there — no extra round trip
 ACK_DIRECTIVE = """
-In the same turn as the call, say one short line so the user is not left in silence — "one
-sec", "let me check", "okay, looking now" — varying the wording. Do not restate the
+In the same turn as the call, say one short line so the user is not left in silence —
+"one sec", "on it", "okay, looking now", etc. — varying the wording. Do not restate the
 request and do not promise an outcome."""
 
 TOOL_DESCRIPTION_WITH_ACK = TOOL_DESCRIPTION + "\n" + ACK_DIRECTIVE
@@ -54,20 +54,14 @@ TOOL_DESCRIPTION_WITH_ACK = TOOL_DESCRIPTION + "\n" + ACK_DIRECTIVE
 DELEGATION_DIRECTIVE = """You are answering on behalf of an agent that is talking to the user.
 Return the facts it needs, not a phrased reply — it does the talking."""
 
-# with `announce` on, the conversation model answers this to acknowledge, and it stays in the
-# context afterwards — hence the raw template: UPDATE_TEMPLATE's "still running, DON'T give
-# information not included above" would read as current forever and argue against relaying
-# the answer
+# with `announce` on, the conversation model answers this to acknowledge
 DISPATCHED = (
     'Working on it. Acknowledge in a few natural words — "one moment", "sure, let me check", '
     '"hang on", "okay, looking now" — varying the wording, restating none of the request and '
     "promising nothing about the outcome."
 )
 
-# with `announce` off, nothing is generated from the note, so it must not ask for anything:
-# the acknowledgement was already said alongside the call, and an instruction left sitting
-# in the context would only ask for a second one on every later turn. all it has to do is
-# stand in as the call's result, so it states what this entry is and stays true afterwards
+# with `announce` off, nothing is generated from the note, so it must not ask for anything
 DISPATCHED_SILENT = "Started. The answer is a separate entry, not this one."
 
 DISPATCHED_TEMPLATE = "{message}"
