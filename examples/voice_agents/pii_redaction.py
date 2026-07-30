@@ -10,12 +10,13 @@ The pattern engine below is intentionally simple regexes so it reads as a
 pattern, not a dependency: swap ``redact_pii`` for Microsoft Presidio, GLiNER,
 or your own rules without touching the wiring.
 
-The rules are deliberately safety-first: any 13-19 digit sequence is redacted
-(as ``<CARD_NUMBER>`` when it passes the Luhn checksum, ``<NUMBER>`` otherwise),
-because a card number merged with neighboring digits fails the checksum as a
-whole while still containing the card. Over-redacting an order id is the
-acceptable failure mode for a privacy filter; leaking a card is not. Tune the
-rules if your domain needs long non-sensitive numbers to survive.
+The rules are deliberately safety-first: any sequence of 13 or more digits is
+redacted (as ``<CARD_NUMBER>`` when it passes the Luhn checksum, ``<NUMBER>``
+otherwise), with no upper length cap — a card number merged with neighboring
+digits fails the checksum and would slip past a length-capped pattern while
+still containing the card. Over-redacting an order id is the acceptable
+failure mode for a privacy filter; leaking a card is not. Tune the rules if
+your domain needs long non-sensitive numbers to survive.
 
 Scope note: this redacts the LLM path. The raw transcript still exists inside
 the process (e.g. ``user_input_transcribed`` events for UI display); redact at
@@ -56,18 +57,20 @@ def _luhn_valid(digits: str) -> bool:
 
 
 def _redact_long_number(match: re.Match) -> str:
-    digits = re.sub(r"[ -]", "", match.group())
-    # Safety-first: every 13-19 digit sequence is redacted. The Luhn check only
-    # refines the label - it must NOT gate redaction, because a card merged with
-    # adjacent digits (an expiry, a neighboring SSN/phone) fails the checksum as
-    # a whole while still containing the real card. Over-redacting an order id
-    # is the acceptable failure mode for a privacy filter; leaking a card is not.
+    digits = re.sub(r"[ .-]", "", match.group())
+    # Safety-first: every sequence of 13 or more digits is redacted — no upper
+    # bound, so a card concatenated with adjacent digits (an expiry, another
+    # number) is caught as one blob instead of slipping past a length cap. The
+    # Luhn check only refines the label; it must NOT gate redaction, because a
+    # merged sequence fails the checksum as a whole while still containing the
+    # real card. Over-redacting an order id is the acceptable failure mode for
+    # a privacy filter; leaking a card is not.
     return "<CARD_NUMBER>" if _luhn_valid(digits) else "<NUMBER>"
 
 
 # (pattern, replacement) pairs — replacement may be a string or a callable
 _PII_RULES: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
-    (re.compile(r"\b\d(?:[ -]?\d){12,18}\b"), _redact_long_number),
+    (re.compile(r"\b\d(?:[ .-]?\d){12,}\b"), _redact_long_number),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "<SSN>"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "<EMAIL>"),
     # phone numbers must contain separators (or a + prefix) so short plain
