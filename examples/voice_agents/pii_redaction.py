@@ -67,19 +67,27 @@ _PII_RULES: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
 
 
 def redact_pii(text: str) -> tuple[str, list[str]]:
-    """Return the redacted text and the list of rule replacements applied."""
-    applied: list[str] = []
+    """Return the redacted text and the list of rule replacements applied.
+
+    Single pass over claimed spans: earlier rules claim the regions they
+    matched even when they decline to change them, so a card-like number that
+    fails the Luhn check is left fully intact instead of being partially
+    re-matched (and half-redacted) by the phone rule that runs later.
+    """
+    claimed: list[tuple[int, int, str]] = []  # (start, end, replacement)
     for pattern, replacement in _PII_RULES:
+        for match in pattern.finditer(text):
+            if any(match.start() < end and start < match.end() for start, end, _ in claimed):
+                continue  # an earlier (higher-priority) rule already claimed this span
+            out = replacement(match) if callable(replacement) else replacement
+            claimed.append((match.start(), match.end(), out))
 
-        def _apply(
-            match: re.Match, _replacement: str | Callable[[re.Match], str] = replacement
-        ) -> str:
-            out = _replacement(match) if callable(_replacement) else _replacement
-            if out != match.group():
-                applied.append(out)
-            return out
-
-        text = pattern.sub(_apply, text)
+    applied: list[str] = []
+    for start, end, out in sorted(claimed, reverse=True):
+        if out == text[start:end]:
+            continue  # claimed but deliberately left as-is (e.g. Luhn-invalid number)
+        applied.insert(0, out)
+        text = text[:start] + out + text[end:]
     return text, applied
 
 
