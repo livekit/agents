@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import time
 import wave
 from unittest.mock import AsyncMock, patch
 
@@ -85,6 +86,24 @@ def test_derive_ws_url_from_base() -> None:
         _derive_ws_url_from_base("https://dashboard.example/api")
         == "wss://dashboard.example/api/tts/stream-input"
     )
+    assert (
+        _derive_ws_url_from_base("http://dashboard.example/api")
+        == "ws://dashboard.example/api/tts/stream-input"
+    )
+
+
+def test_rejects_plaintext_ws_with_api_key() -> None:
+    from livekit.plugins.avaz import TTS
+
+    with pytest.raises(ValueError, match="unencrypted ws://"):
+        TTS(ws_url="ws://remote.example/tts/stream-input", api_key="secret")
+
+
+def test_allows_loopback_plaintext_ws_with_api_key() -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url="ws://127.0.0.1:8080/tts/stream-input", api_key="secret")
+    assert engine._opts.api_key == "secret"
 
 
 def test_normalize_chunk_notation_replaces_question_mark() -> None:
@@ -182,7 +201,7 @@ async def test_warmup_passes_auth_headers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_warmed_retries_after_failed_prewarm(
+async def test_ensure_warmed_skips_after_failed_prewarm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.plugins.avaz import TTS
@@ -192,6 +211,7 @@ async def test_ensure_warmed_retries_after_failed_prewarm(
 
     async def failed_prewarm() -> bool:
         engine._warmed = False
+        engine._warmup_attempted = True
         return False
 
     prewarm_task = asyncio.create_task(failed_prewarm())
@@ -209,8 +229,39 @@ async def test_ensure_warmed_retries_after_failed_prewarm(
 
     await engine._ensure_warmed()
 
-    assert engine._warmed is True
-    assert warmup_calls == 1
+    assert engine._warmed is False
+    assert engine._warmup_attempted is True
+    assert warmup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_warmup_exits_on_idle_without_audio() -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS, recv_idle_timeout_s=0.3)
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+    # Init ok, then no further frames — idle should end warm-up quickly.
+    mock_ws.recv = AsyncMock(
+        side_effect=[
+            '{"status":"initialized"}',
+            asyncio.TimeoutError(),
+            asyncio.TimeoutError(),
+        ]
+    )
+    mock_ws.send = AsyncMock()
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        t0 = time.monotonic()
+        ok = await engine.warmup(timeout_s=15.0)
+        elapsed = time.monotonic() - t0
+
+    assert ok is False
+    assert elapsed < 3.0
+    sent_payloads = [json.loads(call.args[0]) for call in mock_ws.send.call_args_list]
+    assert any(p.get("text") == "warmup." for p in sent_payloads)
+    assert any(p.get("flush") is True for p in sent_payloads)
 
 
 def test_parse_init_response_error() -> None:

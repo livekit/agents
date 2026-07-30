@@ -60,6 +60,14 @@ USER_AGENT = f"livekit-plugins-avaz/{__version__}"
 
 
 def build_auth_headers(api_key: str) -> dict[str, str]:
+    """Build dashboard authentication headers for the Avaz API.
+
+    Args:
+        api_key: Avaz dashboard API token.
+
+    Returns:
+        Headers carrying the token as both ``Authorization`` bearer and ``X-API-Key``.
+    """
     return {
         "Authorization": f"Bearer {api_key}",
         "X-API-Key": api_key,
@@ -89,6 +97,30 @@ def _derive_ws_url_from_base(base_url: str) -> str:
         scheme = parsed.scheme or "wss"
     path = parsed.path.rstrip("/") + "/tts/stream-input"
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+
+
+def _is_loopback_host(hostname: str | None) -> bool:
+    host = (hostname or "").strip().lower().strip("[]")
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
+    """Refuse sending API credentials over plaintext ``ws://`` except loopback."""
+    if not api_key:
+        return
+    parsed = urlparse(ws_url)
+    if parsed.scheme != "ws":
+        return
+    if _is_loopback_host(parsed.hostname):
+        logger.warning(
+            "Avaz TTS sending API key over plaintext ws:// to loopback host %s",
+            parsed.hostname,
+        )
+        return
+    raise ValueError(
+        "Avaz TTS refuses to send API credentials over unencrypted ws://. "
+        "Use an https base_url (or wss:// ws_url), or omit api_key for local plaintext."
+    )
 
 
 def _resolve_base_url(value: NotGivenOr[str]) -> str:
@@ -267,12 +299,19 @@ class _TTSOptions:
 
 
 async def _warmup_turn(opts: _TTSOptions, *, timeout_s: float = 15.0) -> bool:
-    """Minimal Avaz synthesis to warm server-side model weights."""
+    """Minimal Avaz synthesis to warm server-side model weights.
+
+    Receive loops exit on a short idle window (not the full ``timeout_s``) so a
+    no-audio warm-up cannot stall every spoken reply for ~15s.
+    """
     uri = opts.ws_url
     init_msg = _build_init_message(opts)
-    warmup_text = opts.chunk_notation[0] if opts.chunk_notation else "."
+    # Bare chunk_notation (e.g. ".") often yields chunks_generated: 0; use a
+    # short utterance that still ends with the required boundary.
+    warmup_text = _normalize_text_for_chunk_notation("warmup", opts.chunk_notation)
     got_audio = False
     deadline = time.monotonic() + max(1.0, timeout_s)
+    idle_s = min(1.0, max(0.3, opts.recv_idle_timeout_s))
 
     async with websockets.connect(
         uri,
@@ -291,11 +330,10 @@ async def _warmup_turn(opts: _TTSOptions, *, timeout_s: float = 15.0) -> bool:
             if remaining <= 0:
                 break
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=min(0.4, remaining))
+                raw = await asyncio.wait_for(ws.recv(), timeout=min(idle_s, remaining))
             except asyncio.TimeoutError:
-                if got_audio:
-                    break
-                continue
+                # Idle window elapsed — stop waiting even if no audio arrived.
+                break
             except websockets.exceptions.ConnectionClosed as exc:
                 raise APIConnectionError(
                     f"Avaz TTS WebSocket closed during warm-up: {exc}"
@@ -318,11 +356,9 @@ async def _warmup_turn(opts: _TTSOptions, *, timeout_s: float = 15.0) -> bool:
             if remaining <= 0:
                 break
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=min(0.4, remaining))
+                raw = await asyncio.wait_for(ws.recv(), timeout=min(idle_s, remaining))
             except asyncio.TimeoutError:
-                if got_audio:
-                    break
-                continue
+                break
             except websockets.exceptions.ConnectionClosed:
                 break
             try:
@@ -371,6 +407,25 @@ class TTS(tts.TTS):
         flush_recv_timeout_s: float = DEFAULT_FLUSH_RECV_TIMEOUT_S,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
     ) -> None:
+        """Create a new Avaz dashboard / upstream WebSocket TTS instance.
+
+        Args:
+            api_key: Dashboard API token. Falls back to ``AVAZ_API_KEY``.
+            base_url: Dashboard HTTP(S) base used to derive ``/tts/stream-input``.
+            model_id: Dashboard agent/model id (UUID) or upstream name.
+            stream_model: Upstream WebSocket ``model_id`` (e.g. ``avaz3``).
+            ws_url: Explicit WebSocket URL; overrides ``base_url`` derivation.
+            speaker_id: Upstream speaker index.
+            cfg_value: Guidance scale for synthesis.
+            inference_timesteps: Diffusion / sampling steps.
+            chunk_notation: Characters treated as chunk boundaries by Avaz.
+            connect_timeout_s: WebSocket open / init timeout.
+            turn_timeout_s: Max duration for one synthesis turn.
+            post_text_drain_s: Recv idle window after text before flush.
+            recv_idle_timeout_s: Recv idle window while draining audio.
+            flush_recv_timeout_s: Recv idle window after flush.
+            sample_rate: Output PCM sample rate in Hz.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=sample_rate,
@@ -389,6 +444,7 @@ class TTS(tts.TTS):
                 "Avaz TTS API key is required when using dashboard base_url. "
                 "Pass api_key=..., or set AVAZ_API_KEY."
             )
+        _assert_secure_ws_for_credentials(resolved_ws_url, resolved_api_key)
         self._opts = _TTSOptions(
             ws_url=resolved_ws_url,
             base_url=resolved_base,
@@ -407,6 +463,9 @@ class TTS(tts.TTS):
         )
         self._prewarm_task: asyncio.Task[bool] | None = None
         self._warmed = False
+        # Separate from _warmed so a no-audio / failed warm-up is not retried
+        # before every spoken reply (each attempt can open a new WS).
+        self._warmup_attempted = False
 
     @property
     def model(self) -> str:
@@ -432,6 +491,13 @@ class TTS(tts.TTS):
         model_id: NotGivenOr[str | int | None] = NOT_GIVEN,
         speaker_id: NotGivenOr[str | int | None] = NOT_GIVEN,
     ) -> None:
+        """Update dashboard model id and/or upstream speaker at runtime.
+
+        Args:
+            model_id: Dashboard UUID (stored as ``agent_model_id``) or upstream
+                stream model name when not a UUID.
+            speaker_id: Integer speaker index for ``model_settings``.
+        """
         if is_given(model_id) and model_id is not None:
             mid = str(model_id)
             if _is_uuid(mid):
@@ -447,7 +513,9 @@ class TTS(tts.TTS):
     async def warmup(self, *, timeout_s: float = 15.0) -> bool:
         """Pre-warm WS connect, model init, and first inference before greeting.
 
-        Uses shorter drain timeouts than production turns so startup stays fast.
+        Warm-up is non-critical: failures are logged and return ``False``.
+        Uses short recv-idle windows so a no-audio response cannot burn the
+        full ``timeout_s`` window.
         """
         t0 = time.monotonic()
         try:
@@ -476,12 +544,15 @@ class TTS(tts.TTS):
             return False
 
     async def _warmup_and_mark(self) -> bool:
-        ok = await self.warmup()
-        self._warmed = ok
-        return ok
+        try:
+            ok = await self.warmup()
+            self._warmed = ok
+            return ok
+        finally:
+            self._warmup_attempted = True
 
     async def _ensure_warmed(self) -> None:
-        if self._warmed:
+        if self._warmed or self._warmup_attempted:
             return
         task = self._prewarm_task
         if task is not None:
@@ -489,13 +560,13 @@ class TTS(tts.TTS):
                 await task
             except Exception:
                 pass
-            if self._warmed:
+            if self._warmed or self._warmup_attempted:
                 return
-        self._warmed = await self.warmup()
+        await self._warmup_and_mark()
 
     def prewarm(self) -> None:
         """LiveKit AgentActivity calls this at session start."""
-        if self._warmed:
+        if self._warmed or self._warmup_attempted:
             return
         if self._prewarm_task is not None and not self._prewarm_task.done():
             return
@@ -518,7 +589,19 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
+    """Streaming synthesizer for Avaz WebSocket TTS.
+
+    Collects one agent utterance, runs a single stream-input turn, and emits
+    PCM frames through the LiveKit TTS output emitter.
+    """
+
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        """Create a stream bound to an :class:`TTS` instance.
+
+        Args:
+            tts: Parent Avaz TTS plugin.
+            conn_options: Retry / connect options from the agents framework.
+        """
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
