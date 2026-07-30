@@ -20,6 +20,21 @@ pytestmark = pytest.mark.unit
 _TEST_WS = "ws://127.0.0.1:8893/tts/stream-input"
 _TEST_UUID = "15658888-374f-4739-a0c5-4f1d1c128d2a"
 
+# Provider env vars used by resolvers; clear by default so unit tests stay hermetic.
+_AVAZ_ENV_KEYS = (
+    "AVAZ_AGENT_MODEL_ID",
+    "AVAZ_BASE_URL",
+    "AVAZ_API_KEY",
+    "AVAZ_STREAM_MODEL",
+    "TTS_WS_URI",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_avaz_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in _AVAZ_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
 
 def _minimal_wav_b64() -> str:
     buf = io.BytesIO()
@@ -31,22 +46,18 @@ def _minimal_wav_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def test_tts_init_with_ws_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tts_init_with_ws_url() -> None:
     from livekit.plugins.avaz import TTS
 
-    monkeypatch.delenv("AVAZ_AGENT_MODEL_ID", raising=False)
-    monkeypatch.delenv("AVAZ_BASE_URL", raising=False)
-    monkeypatch.delenv("AVAZ_API_KEY", raising=False)
     engine = TTS(ws_url=_TEST_WS)
     assert engine.provider == "avaz"
     assert engine.model == "avaz3"
     assert engine._opts.ws_url == _TEST_WS
 
 
-def test_tts_base_url_derives_wss(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tts_base_url_derives_wss() -> None:
     from livekit.plugins.avaz import TTS
 
-    monkeypatch.delenv("AVAZ_AGENT_MODEL_ID", raising=False)
     engine = TTS(
         api_key="test-api-key",
         base_url="https://test.example.com/api",
@@ -76,6 +87,7 @@ def test_build_init_message_uses_stream_model() -> None:
     )
     msg = _build_init_message(engine._opts)
     assert msg["model_settings"]["model_id"] == "avaz3"
+    assert msg["model_settings"]["agent_model_id"] == _TEST_UUID
     assert json.dumps(msg)
 
 
@@ -184,10 +196,20 @@ def test_resolve_stream_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_resolve_stream_model_from_agent_name() -> None:
+def test_resolve_stream_model_from_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from livekit.plugins.avaz.tts import _resolve_stream_model
 
+    monkeypatch.delenv("AVAZ_STREAM_MODEL", raising=False)
     assert _resolve_stream_model(stream_model=NOT_GIVEN, agent_model_id="Avaz3") == "avaz3"
+
+
+def test_parse_init_response_keeps_audio_payload() -> None:
+    from livekit.plugins.avaz.tts import _parse_init_response
+
+    payload = _parse_init_response(json.dumps({"audio": "AAAA", "status": "weird"}))
+    assert payload["audio"] == "AAAA"
 
 
 def test_log_server_payload_truncates_audio(caplog: pytest.LogCaptureFixture) -> None:

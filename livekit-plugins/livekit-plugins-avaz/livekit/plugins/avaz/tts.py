@@ -29,6 +29,7 @@ from urllib.parse import urlparse, urlunparse
 import websockets
 import websockets.exceptions
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -205,13 +206,18 @@ def _wav_pcm(wav_bytes: bytes) -> tuple[int, bytes]:
 
 
 def _build_init_message(opts: _TTSOptions) -> dict[str, Any]:
+    model_settings: dict[str, Any] = {
+        # Upstream synthesis model string (avaz1/2/3).
+        "model_id": opts.stream_model,
+        "speaker_id": opts.speaker_id,
+        "cfg_value": opts.cfg_value,
+        "inference_timesteps": opts.inference_timesteps,
+    }
+    # Dashboard catalog UUID — proxy uses this to select voice/config.
+    if opts.agent_model_id:
+        model_settings["agent_model_id"] = opts.agent_model_id
     return {
-        "model_settings": {
-            "model_id": opts.stream_model,
-            "speaker_id": opts.speaker_id,
-            "cfg_value": opts.cfg_value,
-            "inference_timesteps": opts.inference_timesteps,
-        },
+        "model_settings": model_settings,
         "voice_settings": {"chunk_notation": opts.chunk_notation},
     }
 
@@ -297,6 +303,9 @@ def _parse_init_response(raw: str | bytes) -> dict[str, Any]:
     _log_server_payload(init_payload, phase="init")
     if "error" in init_payload:
         raise APIConnectionError(f"Avaz TTS init error: {_summarize_server_payload(init_payload)}")
+    # Some servers may emit audio without a dedicated init ack — keep the payload.
+    if "audio" in init_payload:
+        return init_payload
     if init_payload.get("status") not in (None, "ready", "ok", "initialized"):
         logger.warning(
             "[Avaz TTS] unexpected init response: %s",
@@ -532,9 +541,12 @@ class TTS(tts.TTS):
     ) -> None:
         """Update dashboard model id and/or upstream speaker at runtime.
 
+        Takes effect on the next :meth:`stream` / :meth:`synthesize` call
+        (in-flight streams keep the options they started with).
+
         Args:
-            model_id: Dashboard UUID (stored as ``agent_model_id``) or upstream
-                stream model name when not a UUID.
+            model_id: Dashboard UUID (sent as ``agent_model_id`` in WebSocket
+                init) or upstream stream model name when not a UUID.
             speaker_id: Integer speaker index for ``model_settings``.
         """
         if is_given(model_id) and model_id is not None:
@@ -647,7 +659,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         """
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
         self._sent_text_cache: str | None = None
 
     async def _collect_text_parts(self) -> list[str]:
@@ -666,6 +677,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         return parts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # Pick up set_voice_ids / option changes made after stream() construction.
+        self._opts = replace(self._tts._opts)
         node_start = time.monotonic()
         uri = self._opts.ws_url
         init_msg = _build_init_message(self._opts)
@@ -676,11 +689,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         total_text_chars = 0
         audio_chunk_count = 0
         emitter_ready = False
-        sample_rate = self._tts.sample_rate
         declared_sample_rate = self._tts.sample_rate
+        sample_rate = declared_sample_rate
         request_id = utils.shortuuid()
         segment_id = utils.shortuuid()
         ws_closed = False
+        resampler: rtc.AudioResampler | None = None
+        input_rate: int | None = None
 
         text_parts = await self._collect_text_parts()
         sent_text = "".join(text_parts).strip()
@@ -725,17 +740,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _push_pcm(pcm: bytes, sr: int) -> None:
-            nonlocal emitter_ready, sample_rate, pcm_byte_count
+            nonlocal emitter_ready, sample_rate, pcm_byte_count, resampler, input_rate
             if not pcm:
                 return
             if not emitter_ready:
-                if sr != declared_sample_rate:
-                    logger.warning(
-                        "[Avaz TTS] WAV sample_rate=%s differs from declared %s",
-                        sr,
-                        declared_sample_rate,
-                    )
-                sample_rate = sr
+                # Always declare the constructor sample_rate so synthesize()
+                # (_ChunkedStreamFromStream) and streaming agree on playback rate.
+                sample_rate = declared_sample_rate
                 output_emitter.initialize(
                     request_id=request_id,
                     sample_rate=sample_rate,
@@ -745,15 +756,39 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
                 output_emitter.start_segment(segment_id=segment_id)
                 emitter_ready = True
-            elif sr != sample_rate:
+                input_rate = sr
+                if sr != declared_sample_rate:
+                    logger.warning(
+                        "[Avaz TTS] resampling WAV sample_rate=%s -> declared %s",
+                        sr,
+                        declared_sample_rate,
+                    )
+                    resampler = rtc.AudioResampler(
+                        input_rate=sr,
+                        output_rate=declared_sample_rate,
+                        num_channels=1,
+                    )
+            elif input_rate is not None and sr != input_rate:
                 logger.warning(
                     "[Avaz TTS] mid-turn sample_rate change %s -> %s ignored",
-                    sample_rate,
+                    input_rate,
                     sr,
                 )
-            pcm_byte_count += len(pcm)
-            # AudioEmitter frames internally; push raw PCM as it arrives.
-            output_emitter.push(pcm)
+
+            if resampler is not None:
+                frame = rtc.AudioFrame(
+                    data=pcm,
+                    sample_rate=input_rate or sr,
+                    num_channels=1,
+                    samples_per_channel=len(pcm) // 2,
+                )
+                for out in resampler.push(frame):
+                    out_bytes = out.data.tobytes()
+                    pcm_byte_count += len(out_bytes)
+                    output_emitter.push(out_bytes)
+            else:
+                pcm_byte_count += len(pcm)
+                output_emitter.push(pcm)
 
         async def _handle_audio_payload(data: dict[str, Any]) -> None:
             nonlocal first_audio_time, audio_chunk_count
@@ -837,7 +872,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal ws_closed
             await ws.send(json.dumps(init_msg))
             init_resp = await asyncio.wait_for(ws.recv(), timeout=self._opts.connect_timeout_s)
-            _parse_init_response(init_resp)
+            init_payload = _parse_init_response(init_resp)
+            if "audio" in init_payload:
+                await _handle_audio_payload(init_payload)
 
             await ws.send(json.dumps({"text": sent_text}))
             self._mark_started()
@@ -923,6 +960,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as exc:
             raise APIConnectionError(f"Avaz TTS connection failed: {exc}") from exc
+
+        if resampler is not None:
+            for out in resampler.flush():
+                out_bytes = out.data.tobytes()
+                pcm_byte_count += len(out_bytes)
+                output_emitter.push(out_bytes)
 
         if not emitter_ready:
             raise APIConnectionError(

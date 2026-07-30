@@ -34,8 +34,10 @@ tts = avaz.TTS(
 ## Protocol
 
 1. Connect to `{base_url}` → `wss://.../api/tts/stream-input`
-2. Send `model_settings` + `voice_settings` (WebSocket `model_id` is the upstream string)
+2. Send `model_settings` + `voice_settings`:
+   - `model_id` — upstream synthesis string (`stream_model`, e.g. `avaz3`)
+   - `agent_model_id` — dashboard catalog UUID when set via `model_id=` / `AVAZ_AGENT_MODEL_ID`
 3. Stream `{"text": "..."}` chunks; receive base64 WAV in `{"audio": ...}`
 4. Send `{"flush": true}` to finish the turn
 
-HTTP synthesize (`POST /tts/synthesize`) uses the UUID `model_id` from the constructor; WebSocket init uses the upstream string (`stream_model`).
+Audio is resampled to the constructor `sample_rate` when the service returns a different WAV rate.
