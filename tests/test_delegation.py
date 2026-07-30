@@ -149,9 +149,9 @@ class TestRouting:
         activity = _activity(tools=[])
         assert activity._delegation.tool is activity._delegation.tool
 
-
-class TestManagementTools:
-    """cancel_task / get_running_tasks only ever reach the delegation."""
+    def test_the_delegate_tool_is_not_cancellable(self):
+        # a delegation is the delegation LLM's to manage; the conversation model never cancels it
+        assert ToolFlag.CANCELLABLE not in _build_tool(_resolve_delegation_options()).info.flags
 
     def test_a_cancellable_tool_cannot_be_kept_on_the_voice_model(self):
         # a cancellable tool is long-running, which is what delegation moves off the voice
@@ -183,13 +183,9 @@ class TestOptions:
 
         opts = _resolve_delegation_options()
         assert opts["announce"] is False
+        assert not is_given(opts["instructions"])
         # left unresolved so `_build_tool` can pick the one that matches `announce`
         assert not is_given(opts["tool_description"])
-
-    def test_instructions_default_to_not_given(self):
-        from livekit.agents.utils import is_given
-
-        assert not is_given(_resolve_delegation_options()["instructions"])
 
     def test_agent_options_win_key_by_key(self):
         session = AgentSession(
@@ -208,13 +204,6 @@ class TestOptions:
         agent = Agent(instructions="test", delegation_llm=agent_llm)
 
         assert AgentActivity(agent, session).delegation_llm is agent_llm
-
-    def test_the_tool_name_is_the_constant(self):
-        assert _build_tool(_resolve_delegation_options()).info.name == DELEGATE_TOOL_NAME
-
-    def test_the_delegate_tool_is_not_cancellable(self):
-        # a delegation is the delegation LLM's to manage; the conversation model never cancels it
-        assert ToolFlag.CANCELLABLE not in _build_tool(_resolve_delegation_options()).info.flags
 
 
 def _reply_session() -> Any:
@@ -263,80 +252,26 @@ def _run_ctx(session: Any, *, call_id: str, name: str, modality: str = "audio") 
     )
 
 
-class TestDelegatedToolUpdates:
-    """A delegated tool's update is re-attributed to the delegate call."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
-    @pytest.mark.asyncio
-    async def test_forwarded_to_the_parent_without_releasing(self):
-        ran_to_completion: list[str] = []
-
-        @function_tool
-        async def delegated(ctx: RunContext) -> str:
-            """A tool the delegation LLM called."""
-            await ctx.update("found 3 flights")
-            ran_to_completion.append("after update")
-            return "picked the cheapest"
-
-        session = _reply_session()
-        parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
-        parent.update = AsyncMock()  # type: ignore[method-assign]
-
-        child = _run_ctx(session, call_id="c1", name="delegated")
-        child._delegation_parent = parent
-
-        result = await _ToolExecutor().execute(tool=delegated, run_ctx=child, raw_arguments={})
-
-        parent.update.assert_awaited_once_with("found 3 flights", silent=False)
-        # the delegation LLM has nobody to talk to while it waits, so the tool runs through
-        assert result == "picked the cheapest"
-        assert ran_to_completion == ["after update"]
+def _delegating_activity(session: Any) -> Any:
+    """An activity wired for `execute_delegated_tools` to run against."""
+    session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
+    activity = MagicMock()
+    activity.session = session
+    activity._tool_executor = _ToolExecutor()
+    session._activity = activity
+    return activity
 
 
-class TestDispatchedMessage:
-    """It outlives the delegation, so it must not claim the work is still pending."""
-
-    def test_it_asks_for_a_varied_content_free_acknowledgement(self):
-        # restating the request would promise a capability the delegation may reject, and a
-        # fixed phrase would repeat all call long
-        lowered = DISPATCHED.lower()
-        assert "acknowledge" in lowered
-        assert "promising nothing" in lowered
-        assert "varying the wording" in lowered
-        # several examples, so the model samples a range instead of anchoring on one
-        assert lowered.count('"') >= 8
-
-    @pytest.mark.parametrize("note", [DISPATCHED, DISPATCHED_SILENT])
-    def test_neither_claims_the_work_is_still_pending(self, note: str):
-        lowered = note.lower()
-        for stale in ("still running", "will arrive", "will follow", "wait for"):
-            assert stale not in lowered, f"{stale!r} would read as current forever"
-
-    def test_the_silent_one_asks_for_nothing(self):
-        # nothing is generated from it, so an instruction would just sit in the context
-        # asking for a second acknowledgement on every later turn
-        lowered = DISPATCHED_SILENT.lower()
-        assert "acknowledge" not in lowered
-        assert '"' not in lowered  # no phrasings to imitate
-
-    def test_it_bypasses_the_async_tool_template(self):
-        from livekit.agents.voice.delegation import DISPATCHED_TEMPLATE
-        from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE, _render
-
-        rendered = _render(
-            DISPATCHED_TEMPLATE,
-            {"function_name": DELEGATE_TOOL_NAME, "call_id": "c1", "message": DISPATCHED},
-        )
-        assert rendered == DISPATCHED
-        # the shared template asserts an ongoing state and argues against relaying anything
-        # that arrived elsewhere — both wrong once the answer is in the context
-        assert "still running" in UPDATE_TEMPLATE
-        assert "still running" not in rendered
+async def _drain(executor: _ToolExecutor) -> None:
+    """Let the tool finish and its deferred reply land."""
+    while executor.has_running_tasks:
+        await asyncio.sleep(0)
+    assert executor._reply_task is not None
+    await executor._reply_task
 
 
-class TestDelegatedToolSpeechHandle:
-    """A delegated tool gets its own handle, not the turn that dispatched the delegation."""
+class TestDelegatedTools:
+    """How a delegated tool runs: its own speech handle, and overlapping the LLM stream."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
@@ -353,13 +288,8 @@ class TestDelegatedToolSpeechHandle:
             return "done"
 
         session = _reply_session()
-        session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
+        activity = _delegating_activity(session)
         parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
-
-        activity = MagicMock()
-        activity.session = session
-        session._activity = activity
-        activity._tool_executor = _ToolExecutor()
 
         await delegation.execute_delegated_tools(
             activity,
@@ -373,12 +303,6 @@ class TestDelegatedToolSpeechHandle:
         assert seen[0].allow_interruptions is True
         # not done yet: the answer has not been spoken, so anything sequenced off it waits
         assert seen[0].done() is False
-
-
-class TestDelegationHandleCompletion:
-    """The delegated handle stands for the turn that speaks the answer."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
     async def test_it_completes_when_the_answer_speech_is_done(self):
@@ -415,12 +339,6 @@ class TestDelegationHandleCompletion:
         await child.wait_for_playout()
         parent.wait_for_playout.assert_awaited_once()
 
-
-class TestSpeechHandleTargetsTheAnswer:
-    """A delegated tool sequenced off ctx.speech_handle fires after the answer, not before."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
     @pytest.mark.asyncio
     async def test_the_delegate_reply_speech_completes_it(self):
         # the shape end_call relies on: add_done_callback on ctx.speech_handle, which must
@@ -448,21 +366,14 @@ class TestSpeechHandleTargetsTheAnswer:
         from livekit.agents.voice import delegation
 
         session = _reply_session()
-        session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
-        activity = MagicMock()
-        activity.session = session
+        activity = _delegating_activity(session)
         activity.llm = MagicMock()  # not a RealtimeModel, so a reply is generated
-        session._activity = activity
-        activity._tool_executor = _ToolExecutor()
 
         executor = _ToolExecutor()
         ctx = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
         await executor.execute(tool=delegate_like, run_ctx=ctx, raw_arguments={})
 
-        while executor.has_running_tasks:
-            await asyncio.sleep(0)
-        assert executor._reply_task is not None
-        await executor._reply_task
+        await _drain(executor)
 
         # flush any pending callbacks: the assertion below has to mean "not completed",
         # not merely "not dispatched yet"
@@ -475,12 +386,6 @@ class TestSpeechHandleTargetsTheAnswer:
         session.reply_speech.fire_done()
         await asyncio.sleep(0)
         assert fired == ["shutdown"]
-
-
-class TestCircularWaitGuard:
-    """The existing guard against awaiting your own handle covers delegated tools too."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
     async def test_awaiting_the_delegation_handle_from_inside_raises(self):
@@ -498,12 +403,7 @@ class TestCircularWaitGuard:
             return "done"
 
         session = _reply_session()
-        session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
-        activity = MagicMock()
-        activity.session = session
-        session._activity = activity
-        activity._tool_executor = _ToolExecutor()
-
+        activity = _delegating_activity(session)
         parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
         await delegation.execute_delegated_tools(
             activity,
@@ -513,6 +413,36 @@ class TestCircularWaitGuard:
         )
 
         assert caught and "circular wait" in str(caught[0])
+
+    @pytest.mark.asyncio
+    async def test_execution_starts_before_the_stream_ends(self):
+        from livekit.agents.voice import delegation
+
+        started = asyncio.Event()
+        stream_finished = False
+
+        @function_tool
+        async def slow_lookup(ctx: RunContext) -> str:
+            """A delegated tool."""
+            started.set()
+            return "found it"
+
+        async def _calls() -> Any:
+            nonlocal stream_finished
+            yield FunctionCall(call_id="c1", name="slow_lookup", arguments="{}")
+            # the LLM is still generating here; the tool must already be running
+            await asyncio.wait_for(started.wait(), timeout=1)
+            stream_finished = True
+
+        session = _reply_session()
+        activity = _delegating_activity(session)
+        parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
+        outputs = await delegation.execute_delegated_tools(
+            activity, _calls(), tool_ctx=ToolContext([slow_lookup]), ctx=parent
+        )
+
+        assert stream_finished  # the tool ran before the stream was exhausted
+        assert [o.output for o in outputs] == ["found it"]
 
 
 class TestDelegationChatCtx:
@@ -557,50 +487,32 @@ class TestDelegationChatCtx:
         ]
         assert items[-1].text_content == "look it up"
 
-
-class TestToolsOverlapGeneration:
-    """A delegated tool starts while the delegation LLM is still generating."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
     @pytest.mark.asyncio
-    async def test_execution_starts_before_the_stream_ends(self):
-        from livekit.agents.voice import delegation
+    @pytest.mark.parametrize("modality", ["audio", "text"])
+    async def test_it_follows_the_source_turn(self, modality: str):
+        from livekit.agents.llm.chat_context import Instructions
 
-        started = asyncio.Event()
-        stream_finished = False
+        seen: list[ChatContext] = []
 
-        @function_tool
-        async def slow_lookup(ctx: RunContext) -> str:
-            """A delegated tool."""
-            started.set()
-            return "found it"
+        async def _node(task, ctx, chat_ctx, tools, model_settings):
+            seen.append(chat_ctx)
+            return "answer"
 
-        async def _calls() -> Any:
-            nonlocal stream_finished
-            yield FunctionCall(call_id="c1", name="slow_lookup", arguments="{}")
-            # the LLM is still generating here; the tool must already be running
-            await asyncio.wait_for(started.wait(), timeout=1)
-            stream_finished = True
-
-        session = _reply_session()
-        session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
-        activity = MagicMock()
-        activity.session = session
-        session._activity = activity
-        activity._tool_executor = _ToolExecutor()
-
-        parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
-        outputs = await delegation.execute_delegated_tools(
-            activity, _calls(), tool_ctx=ToolContext([slow_lookup]), ctx=parent
+        await _run_delegate(
+            node=_node,
+            instructions=Instructions(
+                "You are a support agent.", audio="Keep it short.", text="Use markdown."
+            ),
+            modality=modality,
         )
 
-        assert stream_finished  # the tool ran before the stream was exhausted
-        assert [o.output for o in outputs] == ["found it"]
+        system = seen[0].items[0].text_content or ""
+        assert ("Keep it short." in system) is (modality == "audio")
+        assert ("Use markdown." in system) is (modality == "text")
 
 
-class TestNodeOverride:
-    """The node returns the answer; an override needs no streaming ceremony."""
+class TestTheAnswer:
+    """What the node returns reaches the conversation model as the delegate output."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
@@ -626,16 +538,11 @@ class TestNodeOverride:
         assert ctx._executor is None or ctx._executor._reply_task is None
         assert ctx._delegation_speech_handle is None or ctx._delegation_speech_handle.done()
 
-
-class TestNonTextAnswers:
-    """The answer is serialized like any tool output, so a dict is fine."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
     @pytest.mark.asyncio
-    async def test_a_dict_answer_reaches_the_voice_model(self):
-        answer = {"order_id": "1234", "status": "shipped"}
-
+    @pytest.mark.parametrize("answer", ["the store does not handle weather", {"order_id": "1234"}])
+    async def test_it_lands_beside_the_dispatch_note(self, answer: Any):
+        # serialized like any tool output, so a dict is fine, and the note stays alongside
+        # it — which is why the note may not read as an instruction
         @function_tool
         async def delegate_like(ctx: RunContext) -> Any:
             """Stands in for the delegate tool."""
@@ -647,77 +554,15 @@ class TestNonTextAnswers:
         executor = _ToolExecutor()
 
         await executor.execute(tool=delegate_like, run_ctx=ctx, raw_arguments={})
-        while executor.has_running_tasks:
-            await asyncio.sleep(0)
-        assert executor._reply_task is not None
-        await executor._reply_task
+        await _drain(executor)
 
-        # the framework stringified it into the tool output the conversation model reads
         inserted = session.current_agent.update_chat_ctx.await_args[0][0]
         outputs = [i.output for i in inserted.items if i.type == "function_call_output"]
         assert str(answer) in outputs
 
 
-class TestInstructionsModality:
-    """The delegation renders instructions for the modality of the turn that delegated."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("modality", ["audio", "text"])
-    async def test_it_follows_the_source_turn(self, modality: str):
-        from livekit.agents.llm.chat_context import Instructions
-
-        seen: list[ChatContext] = []
-
-        async def _node(task, ctx, chat_ctx, tools, model_settings):
-            seen.append(chat_ctx)
-            return "answer"
-
-        await _run_delegate(
-            node=_node,
-            instructions=Instructions(
-                "You are a support agent.", audio="Keep it short.", text="Use markdown."
-            ),
-            modality=modality,
-        )
-
-        system = seen[0].items[0].text_content or ""
-        assert ("Keep it short." in system) is (modality == "audio")
-        assert ("Use markdown." in system) is (modality == "text")
-
-
-class TestBothOutputsCoexist:
-    """The dispatch note and the answer both stay in the conversation model's context."""
-
-    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
-
-    @pytest.mark.asyncio
-    async def test_the_answer_lands_alongside_the_dispatch_note(self):
-        @function_tool
-        async def delegate_like(ctx: RunContext) -> str:
-            """Stands in for the delegate tool."""
-            await ctx.update(DISPATCHED)
-            return "the store does not handle weather"
-
-        session = _reply_session()
-        ctx = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
-        executor = _ToolExecutor()
-
-        await executor.execute(tool=delegate_like, run_ctx=ctx, raw_arguments={})
-        while executor.has_running_tasks:
-            await asyncio.sleep(0)
-        assert executor._reply_task is not None
-        await executor._reply_task
-
-        inserted = session.current_agent.update_chat_ctx.await_args[0][0]
-        outputs = [i.output for i in inserted.items if i.type == "function_call_output"]
-        # the answer is there; the dispatch note is too, which is why it may not instruct
-        assert "the store does not handle weather" in outputs
-
-
-class TestAnnounceIsTheOneAckSwitch:
-    """`announce` decides whether the dispatch is answered — the only ack mechanism."""
+class TestAnnounce:
+    """`announce` picks the dispatch note, and with it where the acknowledgement comes from."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
@@ -757,20 +602,43 @@ class TestAnnounceIsTheOneAckSwitch:
         released, _ = await self._dispatch(announce=True, speaks_tool_outputs=True)
         assert released == DISPATCHED
 
+    @pytest.mark.parametrize("note", [DISPATCHED, DISPATCHED_SILENT])
+    def test_neither_note_claims_the_work_is_still_pending(self, note: str):
+        # both outlive the delegation, sitting in the context after the answer arrives
+        for stale in ("still running", "will arrive", "will follow", "wait for"):
+            assert stale not in note.lower(), f"{stale!r} would read as current forever"
+
+    def test_the_silent_note_asks_for_nothing(self):
+        # nothing answers it, so an instruction would sit there asking for a second
+        # acknowledgement on every later turn
+        assert "acknowledge" not in DISPATCHED_SILENT.lower()
+        assert '"' not in DISPATCHED_SILENT  # no phrasings to imitate
+
+    def test_the_note_bypasses_the_async_tool_template(self):
+        # the shared one asserts an ongoing state and argues against relaying anything that
+        # arrived elsewhere — both wrong once the answer is in the context
+        from livekit.agents.voice.delegation import DISPATCHED_TEMPLATE
+        from livekit.agents.voice.tool_executor import _render
+
+        rendered = _render(
+            DISPATCHED_TEMPLATE,
+            {"function_name": DELEGATE_TOOL_NAME, "call_id": "c1", "message": DISPATCHED},
+        )
+        assert rendered == DISPATCHED
+
     def _description(self, *, announce: bool) -> str:
         options = _resolve_delegation_options({"announce": announce})
         return (_build_tool(options).info.description or "").lower()
 
-    def test_on_the_description_does_not_invite_a_second_ack(self):
-        # asking for a line alongside the call would double up with the dispatch reply
-        assert "same turn" not in self._description(announce=True)
-
-    def test_off_the_description_asks_for_the_line_itself(self):
-        # nothing else acknowledges the call, so the only free ack is in the same completion
-        description = self._description(announce=False)
-        assert "same turn" in description
-        # and it must not let on that a second model exists
-        assert "never mention consulting anyone" in description
+    @pytest.mark.parametrize("announce", [True, False])
+    def test_only_the_off_description_asks_for_a_line(self, announce: bool):
+        # with it on the dispatch reply is the ack, and a second one would double up; with
+        # it off the same completion is the only free place to put one
+        description = self._description(announce=announce)
+        assert ("same turn" in description) is not announce
+        if not announce:
+            # and it must not let on that a second model exists
+            assert "never mention consulting anyone" in description
 
     def test_an_explicit_description_wins_over_both(self):
         options = _resolve_delegation_options({"tool_description": "just do it"})
@@ -962,8 +830,8 @@ class TestDelegatedToolTakesTheFloor:
         assert seen == ["tool_started", "task_entered", "tool_got:dana@example.com"]
 
 
-class TestSilentUpdates:
-    """`silent` records the message for the model without voicing it — on any update."""
+class TestUpdates:
+    """What `ctx.update()` does from a delegated tool, and what `silent` changes."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
@@ -976,36 +844,23 @@ class TestSilentUpdates:
         return session
 
     @pytest.mark.asyncio
-    async def test_a_later_silent_update_is_recorded_but_not_voiced(self):
+    @pytest.mark.parametrize("silent", [True, False])
+    async def test_a_later_update_is_voiced_only_when_it_is_not_silent(self, silent: bool):
         @function_tool
         async def slow(ctx: RunContext) -> None:
             """A tool that reports twice."""
             await ctx.update("dispatched")  # releases the turn, drawing a reply
-            await ctx.update("halfway", silent=True)
+            await ctx.update("halfway", silent=silent)
 
         executor = _ToolExecutor()
         session = await self._run(executor, slow)
 
+        # recorded either way, for the model to read on its next turn...
         inserted = session.current_agent.update_chat_ctx.await_args[0][0]
         outputs = [i.output for i in inserted.items if i.type == "function_call_output"]
-
-        # recorded for the model to read on its next turn...
         assert any("halfway" in output for output in outputs)
-        # ...but nothing is queued to speak it, so no reply is delivered
-        assert executor._pending_updates == []
-        assert executor._reply_task is None
-
-    @pytest.mark.asyncio
-    async def test_a_later_loud_update_still_queues_a_reply(self):
-        @function_tool
-        async def slow(ctx: RunContext) -> None:
-            """A tool that reports twice."""
-            await ctx.update("dispatched")
-            await ctx.update("halfway")
-
-        executor = _ToolExecutor()
-        await self._run(executor, slow)
-        assert executor._reply_task is not None
+        # ...but only a loud one is queued to be spoken
+        assert (executor._reply_task is None) is silent
 
     @pytest.mark.asyncio
     async def test_the_event_says_whether_it_was_voiced(self):
@@ -1020,6 +875,31 @@ class TestSilentUpdates:
         emitted = [call.args[1].update for call in session.emit.call_args_list]
         updates = {u.message: u.silent for u in emitted if u.type == "tool_call_updated"}
         assert updates == {"dispatched": False, "quietly": True}
+
+    @pytest.mark.asyncio
+    async def test_forwarded_to_the_parent_without_releasing(self):
+        ran_to_completion: list[str] = []
+
+        @function_tool
+        async def delegated(ctx: RunContext) -> str:
+            """A tool the delegation LLM called."""
+            await ctx.update("found 3 flights")
+            ran_to_completion.append("after update")
+            return "picked the cheapest"
+
+        session = _reply_session()
+        parent = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
+        parent.update = AsyncMock()  # type: ignore[method-assign]
+
+        child = _run_ctx(session, call_id="c1", name="delegated")
+        child._delegation_parent = parent
+
+        result = await _ToolExecutor().execute(tool=delegated, run_ctx=child, raw_arguments={})
+
+        parent.update.assert_awaited_once_with("found 3 flights", silent=False)
+        # the delegation LLM has nobody to talk to while it waits, so the tool runs through
+        assert result == "picked the cheapest"
+        assert ran_to_completion == ["after update"]
 
 
 def _fake_stream(*, text: str = "", tool_call: tuple[str, str] | None = None) -> Any:
@@ -1088,7 +968,7 @@ async def _run_node(
     )
 
 
-class TestFailureReportsWhatRan:
+class TestFailure:
     """A delegation that stops partway describes what it did, so nobody buys twice."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
