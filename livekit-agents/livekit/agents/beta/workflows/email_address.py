@@ -130,19 +130,20 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
-        # NO_DELEGATE for the same reason as update_email_address: the confirmation is
-        # something the caller says, and only the model listening to them can hear it
-        @function_tool(flags=ToolFlag.NO_DELEGATE)
-        async def confirm_email_address() -> None:
+        @function_tool()
+        async def confirm_email_address() -> str | None:
             """Call after the user confirms the email address is correct."""
             if email != self._current_email:
-                self.session.generate_reply(
-                    instructions="The email has changed since confirmation was requested, ask the user to confirm the updated email."
+                # stale closure: update_email_address ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The email has changed since confirmation was requested, "
+                    "ask the user to confirm the updated email."
                 )
-                return
 
             if not self.done():
                 self.complete(GetEmailResult(email_address=email))
+            return None
 
         return confirm_email_address
 

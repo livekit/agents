@@ -68,8 +68,15 @@ InworldModels = Literal["inworld/inworld-stt-1",]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    min_volume: float  # default: not specified
-    max_silence_duration_secs: float  # default: not specified
+    min_volume: float  # ink-whisper only; default: not specified
+    max_silence_duration_secs: float  # ink-whisper only; default: not specified
+    # Turn-detection tuning for turn-detecting models (e.g. ink-2). The gateway
+    # validates these against Cartesia's documented ranges.
+    turn_start_threshold: float  # range 0.5-0.9, default 0.8
+    turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
+    turn_end_threshold: float  # range 0.05-0.5, default 0.2
+    turn_end_timeout_ms: int  # range 640-11200, default 5600
+    keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
