@@ -44,6 +44,14 @@ _RECONNECT_BASE_BACKOFF = 1.0
 # openai realtime plugin's DEFAULT_MAX_SESSION_DURATION.
 _DEFAULT_MAX_SESSION_DURATION = 20 * 60
 
+# Transcribe the user's audio unless the caller opts out with
+# input_audio_transcription=None. Without it neither side transcribes: the
+# realtime session isn't asked to, and the pipeline skips its own STT whenever a
+# realtime model advertises user_transcription, so the user's turns would never
+# reach the transcript or history. Matches the openai realtime plugin's
+# DEFAULT_INPUT_AUDIO_TRANSCRIPTION.
+_DEFAULT_INPUT_AUDIO_TRANSCRIPTION: dict[str, Any] = {"model": "gpt-4o-mini-transcribe"}
+
 
 def _build_tool_defs(tools: list[llm.Tool]) -> list[dict[str, Any]]:
     """Convert agent tools to the realtime session's tool schema.
@@ -78,13 +86,56 @@ def _to_realtime_tool_choice(tool_choice: llm.ToolChoice | None) -> Any:
     return "auto"
 
 
+def _chat_item_to_realtime_item(item: llm.ChatItem) -> dict[str, Any] | None:
+    """Render a chat item as a realtime ``conversation.item.create`` item.
+
+    Returns None for items that can't be recreated on the wire (items with no
+    text content, e.g. an assistant turn whose transcript never arrived). Content
+    types per role follow the realtime schema: user/system take ``input_text``,
+    assistant takes ``output_text``.
+    """
+    if isinstance(item, llm.FunctionCall):
+        return {
+            "type": "function_call",
+            "call_id": item.call_id,
+            "name": item.name,
+            "arguments": item.arguments,
+        }
+    if isinstance(item, llm.FunctionCallOutput):
+        return {
+            "type": "function_call_output",
+            "call_id": item.call_id,
+            "output": item.output,
+        }
+    if not isinstance(item, llm.ChatMessage):
+        return None
+
+    # Images and audio are dropped: replaying them would re-upload the original
+    # media, and the text transcript is what the conversation depends on.
+    text = "".join(c for c in item.content if isinstance(c, str)).strip()
+    if not text:
+        return None
+
+    role = item.role
+    if role == "developer":
+        role = "system"
+    if role not in ("user", "assistant", "system"):
+        return None
+
+    content_type = "output_text" if role == "assistant" else "input_text"
+    return {
+        "type": "message",
+        "role": role,
+        "content": [{"type": content_type, "text": text}],
+    }
+
+
 @dataclass
 class _STSOptions:
     model: str
     voice: str
     instructions: str
     modalities: list[str]
-    temperature: float | None
     base_url: str
     api_key: str
     api_secret: str
@@ -120,7 +171,7 @@ class STS(llm.RealtimeModel):
         voice: NotGivenOr[str] = NOT_GIVEN,
         instructions: str = "",
         modalities: list[str] | None = None,
-        temperature: float | None = None,
+        temperature: float | None = None,  # deprecated, ignored by GA Realtime
         turn_detection: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
         noise_reduction: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
@@ -134,13 +185,21 @@ class STS(llm.RealtimeModel):
             if is_given(turn_detection)
             else {"type": "server_vad", "silence_duration_ms": 300}
         )
+        transcription = (
+            input_audio_transcription
+            if is_given(input_audio_transcription)
+            else _DEFAULT_INPUT_AUDIO_TRANSCRIPTION
+        )
+        if temperature is not None:
+            logger.warning(
+                "STS: temperature is deprecated and ignored; the GA Realtime API "
+                "removed it from session configuration"
+            )
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=td is not None,
-                user_transcription=input_audio_transcription is not None
-                if is_given(input_audio_transcription)
-                else False,
+                user_transcription=transcription is not None,
                 # OpenAI Realtime (which this proxies) does not auto-reply after a
                 # function_call_output; the client must send response.create. False
                 # makes the pipeline generate the tool reply explicitly (matches the
@@ -151,9 +210,7 @@ class STS(llm.RealtimeModel):
                 manual_function_calls=False,
                 # instructions and tools are updatable mid-session via session.update
                 # (update_instructions/update_tools), which lets agent handoff patch
-                # the live session instead of tearing it down and reconnecting. Chat
-                # context stays immutable (server-managed history; update_chat_ctx only
-                # forwards function outputs).
+                # the live session instead of tearing it down and reconnecting.
                 mutable_instructions=True,
                 mutable_tools=True,
             )
@@ -185,14 +242,11 @@ class STS(llm.RealtimeModel):
             voice=voice if is_given(voice) else "alloy",
             instructions=instructions,
             modalities=modalities or ["text", "audio"],
-            temperature=temperature,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             turn_detection=td,
-            input_audio_transcription=input_audio_transcription
-            if is_given(input_audio_transcription)
-            else None,
+            input_audio_transcription=transcription,
             noise_reduction=noise_reduction if is_given(noise_reduction) else None,
             max_session_duration=max_session_duration
             if is_given(max_session_duration)
@@ -240,6 +294,9 @@ class STSSession(llm.RealtimeSession):
         # accumulates streamed user input-audio transcript deltas per item_id so
         # interim events carry the full transcript so far, not just the last chunk.
         self._input_transcripts: dict[str, str] = {}
+        # accumulates the agent's own output text per item_id, so a completed
+        # assistant turn can be recorded in _chat_ctx for replay after a reconnect.
+        self._output_transcripts: dict[str, str] = {}
         self._recv_task: asyncio.Task | None = None
         self._send_task: asyncio.Task | None = None
         # _started: lifecycle tasks have been launched (stays True across
@@ -265,7 +322,20 @@ class STSSession(llm.RealtimeSession):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
+        return self._chat_ctx.copy()
+
+    def _record_item(self, item: llm.ChatItem) -> None:
+        """Track a completed conversation item so it can be replayed on reconnect.
+
+        The realtime session's history lives on the provider and is lost when the
+        socket is replaced, which happens on every proactive recycle
+        (max_session_duration), not just on error. Keeping a local copy is also
+        what makes ``chat_ctx`` return something to callers that read history off
+        the session (``generate_reply(user_input=...)`` builds on it).
+        """
+        if item.id and self._chat_ctx.get_by_id(item.id) is not None:
+            return
+        self._chat_ctx.items.append(item)
 
     @property
     def tools(self) -> llm.ToolContext:
@@ -334,8 +404,6 @@ class STSSession(llm.RealtimeSession):
         # default, which would silently re-enable turn detection the caller
         # disabled. A null value tells the realtime API to use manual turns.
         session_create["turn_detection"] = self._opts.turn_detection
-        if self._opts.temperature is not None:
-            session_create["temperature"] = self._opts.temperature
         if self._opts.input_audio_transcription is not None:
             session_create["input_audio_transcription"] = self._opts.input_audio_transcription
         if self._opts.noise_reduction is not None:
@@ -350,9 +418,7 @@ class STSSession(llm.RealtimeSession):
             aiohttp.WSMsgType.CLOSING,
             aiohttp.WSMsgType.ERROR,
         ):
-            raise APIConnectionError(
-                f"STS connection closed during session creation: {msg.type}"
-            )
+            raise APIConnectionError(f"STS connection closed during session creation: {msg.type}")
 
         if msg.type == aiohttp.WSMsgType.TEXT:
             data = json.loads(msg.data)
@@ -362,9 +428,7 @@ class STSSession(llm.RealtimeSession):
                     f"STS session creation failed: {data.get('message', data.get('error', {}).get('message', ''))}"
                 )
             if msg_type != "session.created":
-                logger.warning(
-                    "STS: expected session.created, got %s", msg_type
-                )
+                logger.warning("STS: expected session.created, got %s", msg_type)
         else:
             logger.warning("STS: unexpected message type during session creation: %s", msg.type)
 
@@ -462,26 +526,38 @@ class STSSession(llm.RealtimeSession):
         self._response_created_futures.clear()
         self._close_current_generation()
         self._input_transcripts.clear()
-        # Server-managed context resets on reconnect, so previously forwarded
-        # function outputs may legitimately need to be re-sent by the pipeline.
-        self._sent_fnc_outputs.clear()
+        self._output_transcripts.clear()
 
         # session.create (in _establish_ws) already re-applied instructions, voice,
         # modalities and turn detection from _opts. Tools and tool_choice ride on
         # separate session.update events, so replay them onto the new session.
         if self._current_tools:
-            self._queue_event({
-                "type": "session.update",
-                "session": {
-                    "type": "realtime",
-                    "tools": _build_tool_defs(self._current_tools),
-                },
-            })
+            self._queue_event(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "realtime",
+                        "tools": _build_tool_defs(self._current_tools),
+                    },
+                }
+            )
         if self._tool_choice != "auto":
-            self._queue_event({
-                "type": "session.update",
-                "session": {"type": "realtime", "tool_choice": self._tool_choice},
-            })
+            self._queue_event(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "tool_choice": self._tool_choice},
+                }
+            )
+
+        # The provider's copy of the conversation died with the old socket, so
+        # rebuild it from the locally tracked context. Without this the agent
+        # forgets everything on every reconnect, including the proactive recycle
+        # at max_session_duration, and may re-greet a caller mid-conversation.
+        for item in self._chat_ctx.items:
+            event = _chat_item_to_realtime_item(item)
+            if event is None:
+                continue
+            self._queue_event({"type": "conversation.item.create", "item": event})
 
     async def _read_ws(self) -> None:
         if not self._ws:
@@ -518,8 +594,7 @@ class STSSession(llm.RealtimeSession):
                 self.emit(
                     "input_speech_stopped",
                     llm.InputSpeechStoppedEvent(
-                        user_transcription_enabled=self._opts.input_audio_transcription
-                        is not None
+                        user_transcription_enabled=self._opts.input_audio_transcription is not None
                     ),
                 )
 
@@ -604,11 +679,14 @@ class STSSession(llm.RealtimeSession):
         # it isn't emitted the user's turn never lands in the transcript/history.
         item_id = data.get("item_id", "")
         self._input_transcripts.pop(item_id, None)
+        transcript = data.get("transcript", "")
+        if transcript:
+            self._record_item(llm.ChatMessage(id=item_id, role="user", content=[transcript]))
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
                 item_id=item_id,
-                transcript=data.get("transcript", ""),
+                transcript=transcript,
                 is_final=True,
             ),
         )
@@ -738,6 +816,7 @@ class STSSession(llm.RealtimeSession):
         delta = data.get("delta", "")
         if delta:
             item_gen.text_ch.send_nowait(delta)
+            self._output_transcripts[item_id] = self._output_transcripts.get(item_id, "") + delta
 
     def _handle_response_output_item_done(self, data: dict[str, Any]) -> None:
         if self._current_generation is None:
@@ -753,15 +832,19 @@ class STSSession(llm.RealtimeSession):
             name = item.get("name", "")
             arguments = item.get("arguments", "")
             if call_id and name:
-                self._current_generation.function_ch.send_nowait(
-                    llm.FunctionCall(
-                        id=item_id,
-                        call_id=call_id,
-                        name=name,
-                        arguments=arguments,
-                    )
+                fnc = llm.FunctionCall(
+                    id=item_id,
+                    call_id=call_id,
+                    name=name,
+                    arguments=arguments,
                 )
+                self._record_item(fnc)
+                self._current_generation.function_ch.send_nowait(fnc)
             return
+
+        transcript = self._output_transcripts.pop(item_id, "")
+        if transcript:
+            self._record_item(llm.ChatMessage(id=item_id, role="assistant", content=[transcript]))
 
         item_gen = self._current_generation.messages.get(item_id)
         if item_gen:
@@ -788,11 +871,7 @@ class STSSession(llm.RealtimeSession):
         response_id = response.get("id", gen.response_id if gen else "")
         status = response.get("status", "")
 
-        ttft = (
-            first_token_timestamp - created_timestamp
-            if first_token_timestamp
-            else -1
-        )
+        ttft = first_token_timestamp - created_timestamp if first_token_timestamp else -1
         duration = time.time() - created_timestamp
 
         input_details = usage.get("input_token_details", {})
@@ -809,9 +888,7 @@ class STSSession(llm.RealtimeSession):
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            tokens_per_second=(
-                usage.get("output_tokens", 0) / duration if duration > 0 else 0
-            ),
+            tokens_per_second=(usage.get("output_tokens", 0) / duration if duration > 0 else 0),
             input_token_details=RealtimeModelMetrics.InputTokenDetails(
                 audio_tokens=input_details.get("audio_tokens", 0),
                 cached_tokens=input_details.get("cached_tokens", 0),
@@ -886,41 +963,52 @@ class STSSession(llm.RealtimeSession):
 
     async def update_instructions(self, instructions: str) -> None:
         self._opts.instructions = instructions
-        await self._send({
-            "type": "session.update",
-            "session": {"type": "realtime", "instructions": instructions},
-        })
+        await self._send(
+            {
+                "type": "session.update",
+                "session": {"type": "realtime", "instructions": instructions},
+            }
+        )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        # Conversation history is managed server-side, so arbitrary history sync is
-        # not supported. Function call outputs are the exception: they are
-        # client->server events (conversation.item.create) the model needs before
-        # it can produce a tool reply, so forward any not yet sent. Other item
-        # types (messages) are owned by the server and ignored. This is the path
-        # the voice pipeline uses to deliver tool results to a realtime session.
+        # Live history is owned by the provider, so this doesn't sync messages
+        # mid-session: function call outputs are the only items the model needs
+        # from the client (it can't produce a tool reply without them), so those
+        # are forwarded as conversation.item.create. This is the path the voice
+        # pipeline uses to deliver tool results to a realtime session.
+        #
+        # The caller's view is still recorded locally, because a reconnect replays
+        # this context onto the fresh session (_replay_session_state) and because
+        # callers read history back off chat_ctx.
         for item in chat_ctx.items:
+            self._record_item(item)
+
             if not isinstance(item, llm.FunctionCallOutput):
                 continue
             if item.call_id in self._sent_fnc_outputs:
                 continue
             self._sent_fnc_outputs.add(item.call_id)
-            await self._send({
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": item.call_id,
-                    "output": item.output,
-                },
-            })
+            await self._send(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        "output": item.output,
+                    },
+                }
+            )
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         # Retain the tools so _replay_session_state can re-apply them after a
         # reconnect (session.create does not carry tools).
         self._current_tools = list(tools)
-        await self._send({
-            "type": "session.update",
-            "session": {"type": "realtime", "tools": _build_tool_defs(tools)},
-        })
+        await self._send(
+            {
+                "type": "session.update",
+                "session": {"type": "realtime", "tools": _build_tool_defs(tools)},
+            }
+        )
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         if not is_given(tool_choice):
@@ -934,10 +1022,12 @@ class STSSession(llm.RealtimeSession):
         if new_choice == self._tool_choice:
             return
         self._tool_choice = new_choice
-        self._queue_event({
-            "type": "session.update",
-            "session": {"type": "realtime", "tool_choice": new_choice},
-        })
+        self._queue_event(
+            {
+                "type": "session.update",
+                "session": {"type": "realtime", "tool_choice": new_choice},
+            }
+        )
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._connected or not self._ws:
@@ -946,10 +1036,12 @@ class STSSession(llm.RealtimeSession):
         for f in self._resample_audio(frame):
             data = f.data.tobytes()
             for nf in self._bstream.write(data):
-                self._queue_event({
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(nf.data).decode("utf-8"),
-                })
+                self._queue_event(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(nf.data).decode("utf-8"),
+                    }
+                )
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
@@ -999,11 +1091,13 @@ class STSSession(llm.RealtimeSession):
         if is_given(tools):
             response_params["tools"] = _build_tool_defs(tools)
 
-        self._queue_event({
-            "type": "response.create",
-            "event_id": event_id,
-            "response": response_params,
-        })
+        self._queue_event(
+            {
+                "type": "response.create",
+                "event_id": event_id,
+                "response": response_params,
+            }
+        )
 
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
@@ -1018,10 +1112,12 @@ class STSSession(llm.RealtimeSession):
     def commit_audio(self) -> None:
         if self._ws:
             for nf in self._bstream.flush():
-                self._queue_event({
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(nf.data).decode("utf-8"),
-                })
+                self._queue_event(
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(nf.data).decode("utf-8"),
+                    }
+                )
             self._queue_event({"type": "input_audio_buffer.commit"})
 
     def clear_audio(self) -> None:
@@ -1046,12 +1142,14 @@ class STSSession(llm.RealtimeSession):
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if self._ws:
-            self._queue_event({
-                "type": "conversation.item.truncate",
-                "item_id": message_id,
-                "content_index": 0,
-                "audio_end_ms": audio_end_ms,
-            })
+            self._queue_event(
+                {
+                    "type": "conversation.item.truncate",
+                    "item_id": message_id,
+                    "content_index": 0,
+                    "audio_end_ms": audio_end_ms,
+                }
+            )
 
     async def aclose(self) -> None:
         self._closing = True

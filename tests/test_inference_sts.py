@@ -77,7 +77,15 @@ async def test_incomplete_function_call_on_done_is_skipped():
     session._current_generation = _new_generation()
 
     session._handle_response_output_item_done(
-        {"item": {"id": "fc_1", "type": "function_call", "call_id": "", "name": "", "arguments": ""}}
+        {
+            "item": {
+                "id": "fc_1",
+                "type": "function_call",
+                "call_id": "",
+                "name": "",
+                "arguments": "",
+            }
+        }
     )
     assert session._current_generation.function_ch.qsize() == 0
 
@@ -200,7 +208,7 @@ async def test_replay_session_state_resets_and_requeues():
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     session._response_created_futures["evt_1"] = fut
     session._input_transcripts["item_1"] = "partial"
-    session._sent_fnc_outputs.add("call_1")
+    session._output_transcripts["item_1"] = "partial reply"
     session._tool_choice = "required"
 
     session._replay_session_state()
@@ -210,7 +218,7 @@ async def test_replay_session_state_resets_and_requeues():
     assert isinstance(fut.exception(), llm.RealtimeError)
     assert session._response_created_futures == {}
     assert session._input_transcripts == {}
-    assert session._sent_fnc_outputs == set()
+    assert session._output_transcripts == {}
 
     # non-default tool_choice is replayed on the fresh session
     ev = session._msg_ch.recv_nowait()
@@ -218,6 +226,36 @@ async def test_replay_session_state_resets_and_requeues():
         "type": "session.update",
         "session": {"type": "realtime", "tool_choice": "required"},
     }
+    assert session._msg_ch.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_sent_fnc_outputs_survives_replay():
+    """Replay re-creates tool outputs from the recorded context, so the sent-set
+    must not be cleared or update_chat_ctx would send each output twice."""
+    session = _make_session()
+    session._started = True
+    session._connected = True
+    session._ws = object()
+
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.items.append(llm.FunctionCallOutput(call_id="call_1", output="sunny", is_error=False))
+    await session.update_chat_ctx(chat_ctx)
+    session._msg_ch.recv_nowait()  # drain the initial forward
+
+    session._replay_session_state()
+
+    assert session._sent_fnc_outputs == {"call_1"}
+    replayed = [session._msg_ch.recv_nowait() for _ in range(session._msg_ch.qsize())]
+    assert replayed == [
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        }
+    ]
+
+    # and the pipeline re-offering the same output does not duplicate it
+    await session.update_chat_ctx(chat_ctx)
     assert session._msg_ch.qsize() == 0
 
 
@@ -231,6 +269,135 @@ async def test_replay_session_state_default_tool_choice_no_requeue():
     session._replay_session_state()
 
     assert session._msg_ch.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_is_recorded_for_replay():
+    """The provider owns live history but loses it when the socket is replaced, so
+    completed user turns, agent turns and tool calls are mirrored into chat_ctx."""
+    session = _make_session()
+    session._current_generation = _new_generation()
+
+    session._handle_input_audio_transcription_completed(
+        {"item_id": "user_1", "transcript": "what's the weather"}
+    )
+    session._handle_response_created({"response": {"id": "resp_1"}})
+    session._handle_response_output_item_added({"item": {"id": "msg_1", "type": "message"}})
+    session._handle_response_text_delta({"item_id": "msg_1", "delta": "it's "})
+    session._handle_response_text_delta({"item_id": "msg_1", "delta": "sunny"})
+    session._handle_response_output_item_done({"item": {"id": "msg_1", "type": "message"}})
+
+    items = session.chat_ctx.items
+    assert [(i.role, i.text_content) for i in items] == [
+        ("user", "what's the weather"),
+        ("assistant", "it's sunny"),
+    ]
+    # the per-item accumulator is released once the turn is recorded
+    assert session._output_transcripts == {}
+
+
+@pytest.mark.asyncio
+async def test_chat_ctx_returns_a_copy():
+    """Callers mutating the returned context must not corrupt what gets replayed."""
+    session = _make_session()
+    session._record_item(llm.ChatMessage(id="user_1", role="user", content=["hello"]))
+
+    session.chat_ctx.items.clear()
+
+    assert len(session._chat_ctx.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_item_is_idempotent():
+    """update_chat_ctx re-offers the whole context on every tool call, so items are
+    keyed by id rather than appended blindly."""
+    session = _make_session()
+    item = llm.ChatMessage(id="user_1", role="user", content=["hello"])
+
+    session._record_item(item)
+    session._record_item(item)
+
+    assert len(session._chat_ctx.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_session_state_rebuilds_conversation():
+    """A reconnect (including the proactive recycle at max_session_duration) must
+    re-send the conversation, otherwise the agent re-greets a caller mid-call."""
+    session = _make_session()
+    session._connected = True
+    session._ws = object()
+
+    session._record_item(llm.ChatMessage(id="user_1", role="user", content=["hi there"]))
+    session._record_item(
+        llm.FunctionCall(id="fc_1", call_id="call_1", name="get_weather", arguments="{}")
+    )
+    session._record_item(llm.FunctionCallOutput(call_id="call_1", output="sunny", is_error=False))
+    session._record_item(llm.ChatMessage(id="msg_1", role="assistant", content=["it's sunny"]))
+    # no text content: nothing to recreate on the wire
+    session._record_item(llm.ChatMessage(id="msg_2", role="assistant", content=[]))
+
+    session._replay_session_state()
+
+    replayed = [session._msg_ch.recv_nowait() for _ in range(session._msg_ch.qsize())]
+    assert [ev["item"] for ev in replayed] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi there"}],
+        },
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "it's sunny"}],
+        },
+    ]
+    assert all(ev["type"] == "conversation.item.create" for ev in replayed)
+
+
+def test_user_transcription_on_by_default():
+    """Nobody transcribes the user otherwise: the pipeline skips its own STT when a
+    realtime model advertises user_transcription, so the default must be on."""
+    model = STS(
+        model="openai/gpt-realtime",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+
+    assert model.capabilities.user_transcription is True
+    assert model._opts.input_audio_transcription == {"model": "gpt-4o-mini-transcribe"}
+
+
+def test_user_transcription_opt_out():
+    """Passing None disables transcription explicitly, and capabilities follow so
+    the pipeline runs its own STT instead."""
+    model = STS(
+        model="openai/gpt-realtime",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        input_audio_transcription=None,
+    )
+
+    assert model.capabilities.user_transcription is False
+    assert model._opts.input_audio_transcription is None
+
+
+def test_temperature_is_not_forwarded():
+    """The GA Realtime session config dropped temperature, and an unknown session
+    field rejects the whole session.update (voice, instructions, tools included)."""
+    model = STS(
+        model="openai/gpt-realtime",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        temperature=0.8,
+    )
+
+    assert not hasattr(model._opts, "temperature")
 
 
 @pytest.mark.asyncio
