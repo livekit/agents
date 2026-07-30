@@ -177,6 +177,31 @@ def test_log_server_payload_truncates_audio(caplog: pytest.LogCaptureFixture) ->
     assert "A" * 100 not in caplog.text
 
 
+def test_log_server_payload_redacts_sensitive_fields(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from livekit.plugins.avaz.tts import _log_server_payload, _summarize_server_payload
+
+    payload = {
+        "status": "ok",
+        "api_key": "super-secret-key-value",
+        "Authorization": "Bearer leaked-credential",
+        "model_settings": {"access_token": "session-secret-xyz", "model_id": "avaz3"},
+    }
+    summary = _summarize_server_payload(payload)
+    assert summary["api_key"] == "<redacted>"
+    assert summary["Authorization"] == "<redacted>"
+    assert summary["model_settings"]["access_token"] == "<redacted>"
+    assert summary["model_settings"]["model_id"] == "avaz3"
+
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.avaz")
+    _log_server_payload(payload, phase="init")
+    assert "super-secret-key-value" not in caplog.text
+    assert "leaked-credential" not in caplog.text
+    assert "session-secret-xyz" not in caplog.text
+    assert "<redacted>" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_warmup_passes_auth_headers() -> None:
     from livekit.plugins.avaz import TTS

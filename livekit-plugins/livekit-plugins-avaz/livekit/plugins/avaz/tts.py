@@ -221,11 +221,40 @@ def _build_init_message(opts: _TTSOptions) -> dict[str, Any]:
     }
 
 
+_REDACT_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "auth",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "session",
+    "cookie",
+    "bearer",
+)
+
+
+def _is_sensitive_log_key(key: str) -> bool:
+    normalized = key.strip().lower().replace("-", "_")
+    return any(fragment in normalized for fragment in _REDACT_KEY_FRAGMENTS)
+
+
 def _summarize_server_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a DEBUG-safe summary: redact secrets, truncate large blobs."""
     summary: dict[str, Any] = {}
     for key, value in payload.items():
-        if key == "audio" and isinstance(value, str):
+        if _is_sensitive_log_key(key):
+            summary[key] = "<redacted>"
+        elif key == "audio" and isinstance(value, str):
             summary[key] = f"<base64 {len(value)} chars>"
+        elif isinstance(value, dict):
+            summary[key] = _summarize_server_payload(value)
+        elif isinstance(value, list):
+            summary[key] = f"<list len={len(value)}>"
+        elif isinstance(value, str) and len(value) > 200:
+            summary[key] = f"<str {len(value)} chars>"
         else:
             summary[key] = value
     return summary
@@ -265,18 +294,24 @@ def _normalize_text_for_chunk_notation(text: str, chunk_notation: str) -> str:
 
 def _parse_init_response(raw: str | bytes) -> dict[str, Any]:
     text = raw.decode() if isinstance(raw, bytes) else raw
-    logger.debug("[Avaz TTS] init response: %s", text[:500])
     try:
         init_payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise APIConnectionError(f"Avaz TTS invalid init response: {text[:500]}") from exc
+        raise APIConnectionError(
+            f"Avaz TTS invalid init response: {text[:120]}"
+        ) from exc
     if not isinstance(init_payload, dict):
         raise APIConnectionError(f"Avaz TTS invalid init response type: {type(init_payload)}")
     _log_server_payload(init_payload, phase="init")
     if "error" in init_payload:
-        raise APIConnectionError(f"Avaz TTS init error: {init_payload}")
+        raise APIConnectionError(
+            f"Avaz TTS init error: {_summarize_server_payload(init_payload)}"
+        )
     if init_payload.get("status") not in (None, "ready", "ok", "initialized"):
-        logger.warning("[Avaz TTS] unexpected init response: %s", init_payload)
+        logger.warning(
+            "[Avaz TTS] unexpected init response: %s",
+            _summarize_server_payload(init_payload),
+        )
     return init_payload
 
 
