@@ -260,6 +260,46 @@ def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> boo
     return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
 
 
+# Models verified to carry word timings. Unknown models stay disabled until verified.
+_WORD_ALIGNED_MODELS = frozenset(
+    {
+        "deepgram/nova-3",
+        "deepgram/nova-3-medical",
+        "deepgram/nova-2",
+        "deepgram/nova-2-medical",
+        "deepgram/nova-2-conversationalai",
+        "deepgram/nova-2-phonecall",
+        "deepgram/flux-general",
+        "deepgram/flux-general-en",
+        "deepgram/flux-general-multi",
+        "cartesia/ink-whisper",
+        "assemblyai/universal-streaming",
+        "assemblyai/universal-streaming-multilingual",
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "elevenlabs/scribe_v2_realtime",
+        "xai/stt-1",
+        "speechmatics/enhanced",
+        "speechmatics/standard",
+    }
+)
+
+
+def _aligned_transcript_for_model(
+    model: NotGivenOr[STTModels | str],
+) -> Literal["word", False]:
+    """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
+
+    False when the model sends no word timings, and for "auto", where the provider is
+    picked server-side per language and so can't be known here. Claiming alignment we
+    don't have is the costlier error: it enables adaptive interruption, which then turns
+    off the fast VAD barge-in path it can't actually replace.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    return "word" if model in _WORD_ALIGNED_MODELS else False
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -579,7 +619,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 diarization=diarization_enabled,
-                aligned_transcript="word",
+                aligned_transcript=_aligned_transcript_for_model(model),
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
@@ -705,6 +745,7 @@ class STT(stt.STT):
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
+                aligned_transcript=_aligned_transcript_for_model(self._opts.model),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
