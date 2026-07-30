@@ -100,7 +100,29 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
-| `forbid_speech_after_tool_call` | `list[str]` | Tool names after which Phonic should NOT auto-generate a spoken reply. Use for tools that always hand off/trigger an agent switch |
+| `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
+
+### Per-tool configuration
+
+`configs_for_tools` takes one entry per tool you want to customize. Each entry is keyed by the tool `name`; every other field is optional and falls back to the plugin default when omitted. Tools with no entry keep the defaults.
+
+```python
+RealtimeModel(
+    configs_for_tools=[
+        {"name": "transfer_call", "forbid_speech_after_tool_call": True},
+        {"name": "submit_form", "forbid_tool_call_after_speech": True},
+    ],
+)
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Tool this config applies to (required) |
+| `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
+| `wait_for_speech_before_tool_call` | `bool` | `True` | Hold the tool call until the agent's speech for the turn has been sent |
+| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
+| `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
+| `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
 
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 

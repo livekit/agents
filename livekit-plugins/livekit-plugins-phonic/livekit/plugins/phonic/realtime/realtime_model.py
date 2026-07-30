@@ -57,10 +57,11 @@ TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
 
 class PhonicToolConfig(TypedDict, total=False):
-    """Per-tool behavior overrides passed through to Phonic's tool_config. ``name`` is required;
+    """Per-tool behavior overrides for ``configs_for_tools`` (see README). ``name`` is required;
     every other field is optional and falls back to the plugin default when omitted."""
 
     name: str
+    require_speech_before_tool_call: bool
     wait_for_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
@@ -178,15 +179,9 @@ class RealtimeModel(llm.RealtimeModel):
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
             additional_params: Additional runtime parameters forwarded to Phonic.
-            configs_for_tools: Per-tool behavior overrides, one entry per tool
-                (``{"name": <tool>, ...}``). Each object carries up to the full behavior set —
-                ``wait_for_speech_before_tool_call``, ``forbid_speech_after_tool_call``,
-                ``forbid_tool_call_after_speech``, ``allow_tool_chaining`` — and any omitted field
-                falls back to the plugin default. ``forbid_speech_after_tool_call`` suppresses
-                Phonic's auto-generated reply after the tool (for tools that always hand off /
-                switch agents; a non-handoff tool set here would leave the agent silent).
-                ``forbid_tool_call_after_speech`` makes Phonic drop the tool call if the agent
-                already spoke that turn. Tools with no entry keep the plugin defaults.
+            configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
+                (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
+                README for the available fields.
             conn_options: Retry/backoff and connection settings.
         """
         super().__init__(
@@ -434,25 +429,22 @@ class RealtimeSession(llm.RealtimeSession):
     def _serialize_tools(self, tools: list[llm.Tool]) -> list[dict]:
         tool_definitions: list[dict] = []
         for tool_schema in llm.ToolContext(tools).parse_function_tools("openai", strict=True):
-            # Per-tool overrides from configs_for_tools; omitted fields fall back to the defaults
-            # below. Tool chaining and tool calls during agent speech are disabled by default to
-            # reduce state-management complexity in the LiveKit Realtime generations framework.
             cfg = self._configs_for_tools.get(tool_schema["function"]["name"], {})
             tool_definitions.append(
                 {
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    "require_speech_before_tool_call": cfg.get(
+                        "require_speech_before_tool_call", False
+                    ),
                     "wait_for_speech_before_tool_call": cfg.get(
                         "wait_for_speech_before_tool_call", True
                     ),
                     "allow_tool_chaining": cfg.get("allow_tool_chaining", False),
-                    # Phonic does not auto-generate a spoken reply after this tool's output
-                    # (for tools that always hand off).
                     "forbid_speech_after_tool_call": cfg.get(
                         "forbid_speech_after_tool_call", False
                     ),
-                    # Phonic drops this tool's call if the agent already spoke this turn.
                     "forbid_tool_call_after_speech": cfg.get(
                         "forbid_tool_call_after_speech", False
                     ),
