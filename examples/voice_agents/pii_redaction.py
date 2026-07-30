@@ -6,6 +6,17 @@ deterministic, code-level hook rather than a system-prompt instruction. The
 redacted text is what the LLM receives *and* what is stored in the chat
 history, so the PII never leaves your servers toward the model provider.
 
+That guarantee has a precondition: **preemptive generation must be off**
+(it is on by default). Preemptive generation issues a speculative LLM
+request built from the raw STT transcript *before* ``on_user_turn_completed``
+runs, which would transmit the unredacted text to the provider — and since
+redaction then changes the committed message, the framework discards the
+speculative reply and regenerates anyway, so speculation buys nothing for
+redacted turns. The session below disables it explicitly. The same applies
+to any other feature that consumes the raw transcript before the hook (e.g.
+LLM-based keyterm detection): leave them off, or redact at the STT layer
+instead if you need them.
+
 The pattern engine below is intentionally simple regexes so it reads as a
 pattern, not a dependency: swap ``redact_pii`` for Microsoft Presidio, GLiNER,
 or your own rules without touching the wiring.
@@ -34,6 +45,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    TurnHandlingOptions,
     cli,
     inference,
     llm,
@@ -145,6 +157,11 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),
+        # REQUIRED for the privacy boundary: preemptive generation (on by
+        # default) sends a speculative LLM request built from the raw STT
+        # transcript before on_user_turn_completed runs - the unredacted
+        # text would reach the model provider despite the redaction hook.
+        turn_handling=TurnHandlingOptions(preemptive_generation={"enabled": False}),
     )
     await session.start(agent=RedactingAgent(), room=ctx.room)
 
