@@ -10,6 +10,13 @@ The pattern engine below is intentionally simple regexes so it reads as a
 pattern, not a dependency: swap ``redact_pii`` for Microsoft Presidio, GLiNER,
 or your own rules without touching the wiring.
 
+The rules are deliberately safety-first: any 13-19 digit sequence is redacted
+(as ``<CARD_NUMBER>`` when it passes the Luhn checksum, ``<NUMBER>`` otherwise),
+because a card number merged with neighboring digits fails the checksum as a
+whole while still containing the card. Over-redacting an order id is the
+acceptable failure mode for a privacy filter; leaking a card is not. Tune the
+rules if your domain needs long non-sensitive numbers to survive.
+
 Scope note: this redacts the LLM path. The raw transcript still exists inside
 the process (e.g. ``user_input_transcribed`` events for UI display); redact at
 those sinks too if your compliance boundary includes logs and storage.
@@ -48,20 +55,24 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _redact_card(match: re.Match) -> str:
+def _redact_long_number(match: re.Match) -> str:
     digits = re.sub(r"[ -]", "", match.group())
-    # Luhn-check to avoid eating arbitrary long numbers (order ids, tracking numbers)
-    return "<CARD_NUMBER>" if _luhn_valid(digits) else match.group()
+    # Safety-first: every 13-19 digit sequence is redacted. The Luhn check only
+    # refines the label - it must NOT gate redaction, because a card merged with
+    # adjacent digits (an expiry, a neighboring SSN/phone) fails the checksum as
+    # a whole while still containing the real card. Over-redacting an order id
+    # is the acceptable failure mode for a privacy filter; leaking a card is not.
+    return "<CARD_NUMBER>" if _luhn_valid(digits) else "<NUMBER>"
 
 
 # (pattern, replacement) pairs — replacement may be a string or a callable
 _PII_RULES: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
-    (re.compile(r"\b\d(?:[ -]?\d){12,18}\b"), _redact_card),
+    (re.compile(r"\b\d(?:[ -]?\d){12,18}\b"), _redact_long_number),
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "<SSN>"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "<EMAIL>"),
-    # phone numbers must contain separators (or a + prefix) so plain digit
-    # runs like order ids are left alone; the word boundary sits inside the
-    # optional "(" because \b cannot assert between a space and a parenthesis
+    # phone numbers must contain separators (or a + prefix) so short plain
+    # digit runs are left alone; the word boundary sits inside the optional
+    # "(" because \b cannot assert between a space and a parenthesis
     (re.compile(r"(?:\+\d{1,3}[ .-]?)?\(?\b\d{2,4}\b\)?[ .-]\d{3,4}[ .-]\d{2,4}\b"), "<PHONE>"),
     (re.compile(r"\+\d{7,15}\b"), "<PHONE>"),
 ]
@@ -70,10 +81,10 @@ _PII_RULES: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
 def redact_pii(text: str) -> tuple[str, list[str]]:
     """Return the redacted text and the list of rule replacements applied.
 
-    Single pass over claimed spans: earlier rules claim the regions they
-    matched even when they decline to change them, so a card-like number that
-    fails the Luhn check is left fully intact instead of being partially
-    re-matched (and half-redacted) by the phone rule that runs later.
+    All rules match against the original text in a single pass over claimed
+    spans (earlier rules take priority on overlap), then replacements are
+    applied together — so a later rule can never half-match inside a region an
+    earlier rule already handled.
     """
     claimed: list[tuple[int, int, str]] = []  # (start, end, replacement)
     for pattern, replacement in _PII_RULES:
@@ -96,8 +107,8 @@ class RedactingAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions="You are a helpful voice assistant. Redacted placeholders like "
-            "<CARD_NUMBER> in the user's message mean sensitive data was removed for "
-            "privacy; never ask the user to repeat it."
+            "<CARD_NUMBER>, <NUMBER>, <SSN>, <EMAIL>, or <PHONE> in the user's message "
+            "mean sensitive data was removed for privacy; never ask the user to repeat it."
         )
 
     async def on_enter(self) -> None:
