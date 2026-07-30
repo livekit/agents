@@ -14,10 +14,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from livekit.agents.llm import ChatContext, ToolContext, function_tool
 from livekit.agents.telemetry import set_tracer_provider, trace_types
-from livekit.agents.voice.generation import _function_tool_definitions, perform_llm_inference
+from livekit.agents.voice.generation import _function_tool_definitions_json, perform_llm_inference
 from livekit.agents.voice.io import ModelSettings
 
 pytestmark = pytest.mark.unit
+
+
+def _definitions(tool_ctx: ToolContext) -> list[dict]:
+    return json.loads(_function_tool_definitions_json(tool_ctx))
 
 
 @function_tool
@@ -39,23 +43,40 @@ async def transfer_call(raw_arguments: dict) -> str:
 
 class TestFunctionToolDefinitions:
     def test_function_tool_definition_shape(self) -> None:
-        defs = _function_tool_definitions(ToolContext([get_weather]))
+        defs = _definitions(ToolContext([get_weather]))
         assert len(defs) == 1
         assert defs[0]["name"] == "get_weather"
         assert "weather" in defs[0]["description"].lower()
         assert defs[0]["parameters"]["properties"]["location"]["type"] == "string"
 
     def test_raw_tool_definition_shape(self) -> None:
-        defs = _function_tool_definitions(ToolContext([transfer_call]))
+        defs = _definitions(ToolContext([transfer_call]))
         assert len(defs) == 1
         assert defs[0]["name"] == "transfer_call"
         assert defs[0]["description"] == "Transfer the call to a human operator."
         assert "reason" in defs[0]["parameters"]["properties"]
 
-    def test_definitions_are_json_serializable(self) -> None:
-        defs = _function_tool_definitions(ToolContext([get_weather, transfer_call]))
-        parsed = json.loads(json.dumps(defs))
-        assert {d["name"] for d in parsed} == {"get_weather", "transfer_call"}
+    def test_multiple_tools(self) -> None:
+        defs = _definitions(ToolContext([get_weather, transfer_call]))
+        assert {d["name"] for d in defs} == {"get_weather", "transfer_call"}
+
+    def test_non_json_serializable_schema_never_raises(self) -> None:
+        # a raw schema carrying a non-JSON value must degrade (stringify),
+        # not abort the model turn (see the Devin finding on #6621)
+        @function_tool(
+            raw_schema={
+                "name": "weird_tool",
+                "description": "Has a non-serializable default.",
+                "parameters": {"type": "object", "properties": {}, "default": object()},
+            }
+        )
+        async def weird_tool(raw_arguments: dict) -> str:
+            return "ok"
+
+        defs = _definitions(ToolContext([weird_tool]))
+        assert defs[0]["name"] == "weird_tool"
+        # the non-serializable value was stringified rather than raising
+        assert isinstance(defs[0]["parameters"]["default"], str)
 
 
 class TestLLMSpanAttributes:
