@@ -62,10 +62,8 @@ class PhonicToolConfig(TypedDict, total=False):
 
     name: str
     require_speech_before_tool_call: bool
-    wait_for_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
-    allow_tool_chaining: bool
 
 
 @dataclass
@@ -435,13 +433,13 @@ class RealtimeSession(llm.RealtimeSession):
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    # fixed, not configurable: the plugin does not support tool chaining or tool
+                    # calls during agent speech within the Realtime generations framework
+                    "wait_for_speech_before_tool_call": True,
+                    "allow_tool_chaining": False,
                     "require_speech_before_tool_call": cfg.get(
                         "require_speech_before_tool_call", False
                     ),
-                    "wait_for_speech_before_tool_call": cfg.get(
-                        "wait_for_speech_before_tool_call", True
-                    ),
-                    "allow_tool_chaining": cfg.get("allow_tool_chaining", False),
                     "forbid_speech_after_tool_call": cfg.get(
                         "forbid_speech_after_tool_call", False
                     ),

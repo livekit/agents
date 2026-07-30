@@ -119,10 +119,10 @@ RealtimeModel(
 | --- | --- | --- | --- |
 | `name` | `str` | — | Tool this config applies to (required) |
 | `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
-| `wait_for_speech_before_tool_call` | `bool` | `True` | Hold the tool call until the agent's speech for the turn has been sent |
 | `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
 | `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
-| `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
+
+The plugin always sends tool calls with `wait_for_speech_before_tool_call` on and `allow_tool_chaining` off; these are not configurable per tool.
 
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 
