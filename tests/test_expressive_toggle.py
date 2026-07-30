@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.voice import presets
 from livekit.agents.voice.generation import (
@@ -61,20 +61,6 @@ def test_strip_assistant_markup() -> None:
     assert plain.content is plain_content
 
 
-def test_expressive_internal_toggle() -> None:
-    # expressive mode is not publicly exposed; the pipeline stays disabled unless
-    # the framework-internal attribute is set
-    session = AgentSession()
-    assert session._expressive is False
-
-    session._expressive = presets.CUSTOMER_SERVICE
-    assert session._expressive == presets.CUSTOMER_SERVICE
-
-    # untouched by unrelated option updates
-    session.update_options()
-    assert session._expressive == presets.CUSTOMER_SERVICE
-
-
 def test_update_and_remove_expressive_instructions() -> None:
     ctx = ChatContext.empty()
     update_expressive_instructions(ctx, text="markup guide v1")
@@ -99,7 +85,7 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
     session = create_session(actions)
-    session._expressive = presets.CUSTOMER_SERVICE
+    session._expressive = {"speech_steering": presets.CASUAL}
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide

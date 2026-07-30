@@ -1,89 +1,38 @@
-"""Expressive presets (framework-internal, not publicly exposed).
+"""Speech steering presets.
 
-A preset is a *use-case* (customer service, casual) that is provider-agnostic:
-each ``presets.*`` constant is just an ``ExpressiveOptions`` carrying a ``preset``.
-When expressive mode is active the framework resolves it against the active TTS
-provider (via ``tts.markup._provider_key()``) and injects the variant tuned for that
-provider's markup tags. A provider with no tuned preset falls back to the agnostic default,
-which still injects that provider's tag reference through the
-``{tts.markup.llm_instructions}`` placeholder — so a preset always does something sensible
-and can never disagree with the markup pipeline (both read the same provider key).
+A preset is a plain :class:`SpeechSteeringOptions` value — pass it as
+``speech_steering`` directly, or reference it by name and override individual
+fields on top (``{"preset": "casual", "pace": "slow"}``). With a ``preset``,
+the other keys are sparse overrides — ``nonverbal_sounds`` merges field-by-field,
+so ``{"preset": "casual", "nonverbal_sounds": {"laughing": True}}`` keeps the
+preset's other sounds on. The framework renders the result into per-provider
+delivery guidelines at resolution time, so the same preset works on any
+markup-capable TTS provider.
 """
 
-from __future__ import annotations
+from .agent_session import NonverbalOptions, SpeechSteeringOptions
 
-import enum
-from typing import TYPE_CHECKING
+FORMAL: SpeechSteeringOptions = {
+    "nonverbal_sounds": NonverbalOptions(),
+}
+"""Composed, natural delivery: no non-verbal sounds at all — the empty
+``NonverbalOptions()`` turns filtering on with every sound off. Light fillers
+come from the ``disfluencies`` default; override with ``disfluencies: False``."""
 
-from ..llm.chat_context import Instructions
-from ..tts import _provider_format as _pf
+CASUAL: SpeechSteeringOptions = {
+    "nonverbal_sounds": NonverbalOptions(breathing=True, sighing=True),
+}
+"""Relaxed, friendly delivery: audible breathing and sighs; no laughter or any
+other non-verbal sound. Light fillers come from the ``disfluencies`` default.
 
-if TYPE_CHECKING:
-    from .agent_session import ExpressiveOptions
+Laughter is deliberately excluded — current TTS laugh renditions sound
+unnatural; re-enable with ``laughing=True`` once they improve."""
 
-
-class Preset(enum.Enum):
-    """The domain a preset is tuned for. Used to key the per-provider registry."""
-
-    CUSTOMER_SERVICE = "customer_service"
-    CASUAL = "casual"
-
-
-# (provider key as returned by ``tts.markup._provider_key()``) -> preset -> body
-_REGISTRY: dict[str, dict[Preset, ExpressiveOptions]] = {
-    "inworld": {
-        Preset.CUSTOMER_SERVICE: _pf._INWORLD_CUSTOMER_SERVICE,
-        Preset.CASUAL: _pf._INWORLD_CASUAL,
-    },
-    "cartesia": {
-        Preset.CUSTOMER_SERVICE: _pf._CARTESIA_CUSTOMER_SERVICE,
-        Preset.CASUAL: _pf._CARTESIA_CASUAL,
-    },
-    "xai": {
-        Preset.CUSTOMER_SERVICE: _pf._XAI_CUSTOMER_SERVICE,
-        Preset.CASUAL: _pf._XAI_CASUAL,
-    },
+# name -> preset, for the ``preset`` key of SpeechSteeringOptions; keep in sync
+# with the SpeechSteeringPreset literal
+_BY_NAME: dict[str, SpeechSteeringOptions] = {
+    "formal": FORMAL,
+    "casual": CASUAL,
 }
 
-
-def _append(template: Instructions | str, extra: str) -> Instructions:
-    # concatenate the *raw* template text so any {placeholders} survive until render()
-    if isinstance(template, Instructions):
-        return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
-        )
-    return Instructions(template + "\n\n" + extra)
-
-
-def resolve_options(
-    expr: ExpressiveOptions, *, provider_key: str, default: ExpressiveOptions
-) -> ExpressiveOptions:
-    """Resolve a user ``ExpressiveOptions`` to a concrete options dict for a provider.
-
-    If ``expr`` carries a ``preset``, start from that provider's tuned preset (or
-    ``default`` when the provider has none); otherwise start from ``default``. Then apply
-    any explicit ``tts_instructions_template`` override and ``tts_instructions_append``.
-    The returned dict always has ``tts_instructions_template`` and never the ``preset`` /
-    ``tts_instructions_append`` helper keys.
-    """
-    preset = expr.get("preset")
-    if preset is not None:
-        base = _REGISTRY.get(provider_key, {}).get(preset, default)
-    else:
-        base = default
-
-    tts_tmpl = expr.get("tts_instructions_template", base["tts_instructions_template"])
-    append = expr.get("tts_instructions_append")
-    if append:
-        tts_tmpl = _append(tts_tmpl, append)
-
-    result: ExpressiveOptions = {
-        "tts_instructions_template": tts_tmpl,
-    }
-    return result
-
-
-CUSTOMER_SERVICE: ExpressiveOptions = {"preset": Preset.CUSTOMER_SERVICE}
-CASUAL: ExpressiveOptions = {"preset": Preset.CASUAL}
-
-__all__ = ["Preset", "CUSTOMER_SERVICE", "CASUAL"]
+__all__ = ["FORMAL", "CASUAL"]

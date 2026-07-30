@@ -6,7 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -29,6 +29,7 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
@@ -54,6 +55,14 @@ class TTSCapabilities:
     """Whether this TTS supports streaming (generally using websockets)"""
     aligned_transcript: bool = False
     """Whether this TTS supports aligned transcripts with word timestamps"""
+
+
+@dataclass
+class MarkupInfo:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
 
 
 class TTSError(BaseModel):
@@ -96,15 +105,26 @@ class TTS(
             """
             return ""
 
-        def llm_instructions(self) -> str | None:
+        @property
+        def info(self) -> MarkupInfo:
+            """The queryable markup matrix for this voice."""
+            from ._provider_format import supported_nonverbals
+
+            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
+
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
-            The framework injects this into the LLM system prompt when
-            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            The framework injects this into the LLM system prompt when expressive mode
+            is active. Returns ``None`` if this TTS has no markup support. When
+            *speech_steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key())
+            return llm_instructions(self._provider_key(), speech_steering)
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
