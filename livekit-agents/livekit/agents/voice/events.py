@@ -172,6 +172,9 @@ class RunContext(Generic[Userdata_T]):
 
         On enter, drains this tool's pending deferred reply first so its speech
         plays before the floor is held — keeps chat order matching code order.
+
+        The floor is the current agent's — work handed to another agent keeps its own, so
+        a tool that agent calls still gets its reply.
         """
         await self._drain_pending_reply()
         async with self._session._wait_for_idle_and_hold() as activity:
