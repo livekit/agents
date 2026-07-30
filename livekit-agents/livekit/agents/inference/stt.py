@@ -613,14 +613,14 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
-        models: NotGivenOr[list[FallbackModel]] = (
-            _normalize_fallback(fallback) if is_given(fallback) else NOT_GIVEN
-        )
-        all_models = [model]
-        if is_given(models):
-            all_models.extend(item["model"] for item in models)
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_models = _normalize_fallback(fallback)
+        models = [model]
+        if is_given(fallback_models):
+            models.extend(item["model"] for item in fallback_models)
         aligned_transcript: Literal["word", False] = (
-            "word" if all(_aligned_transcript_for_model(item) for item in all_models) else False
+            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
         )
 
         # chat_context follows the model's native support; the session decides whether to forward
@@ -667,7 +667,7 @@ class STT(stt.STT):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
-            fallback=models,
+            fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
 
@@ -748,17 +748,15 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
-            all_models = [self._opts.model]
+            models = [self._opts.model]
             if is_given(self._opts.fallback):
-                all_models.extend(item["model"] for item in self._opts.fallback)
+                models.extend(item["model"] for item in self._opts.fallback)
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
                 aligned_transcript=(
-                    "word"
-                    if all(_aligned_transcript_for_model(item) for item in all_models)
-                    else False
+                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
                 ),
             )
         if is_given(language):
