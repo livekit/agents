@@ -315,6 +315,14 @@ class STT(stt.STT):
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
         if self._credentials is not None:
+            if self._project_id is None:
+                # in-memory credentials (e.g. Workload Identity Federation) may
+                # carry the project directly; resolve it here so _get_recognizer
+                # doesn't fall back to Application Default Credentials, which
+                # such setups typically don't have
+                self._project_id = getattr(self._credentials, "project_id", None) or getattr(
+                    self._credentials, "quota_project_id", None
+                )
             client = client_cls(credentials=self._credentials, client_options=client_options)
         elif is_given(self._credentials_info):
             client = client_cls.from_service_account_info(
@@ -345,7 +353,16 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()
+            try:
+                _, project_id = ga_default()
+            except DefaultCredentialsError as e:
+                raise APIConnectionError(
+                    "google stt: could not determine the GCP project id: the supplied "
+                    "credentials expose no project_id/quota_project_id and Application "
+                    "Default Credentials are unavailable. Pass credentials that carry a "
+                    "project (e.g. with a quota_project_id) or use credentials_info / "
+                    "credentials_file."
+                ) from e
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
