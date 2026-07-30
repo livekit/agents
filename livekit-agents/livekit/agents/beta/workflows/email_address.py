@@ -15,6 +15,8 @@ from ...voice.events import RunContext
 from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
+    from ...inference.llm import LLMModels
+    from ...voice.delegation import DelegationOptions
     from ...voice.turn import TurnDetectionMode
 
 
@@ -34,6 +36,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
@@ -71,6 +75,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             stt=stt,
             vad=vad,
             llm=llm,
+            delegation_llm=delegation_llm,
+            delegation_options=delegation_options,
             tts=tts,
             allow_interruptions=allow_interruptions,
         )
@@ -82,6 +88,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
         # based on require_explicit_ask.
         flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
+        # NO_DELEGATE: this is how the task hears the address, so it belongs to whichever
+        # model is listening. handing it to a delegation LLM would leave the task with no
+        # way to capture anything
+        flags |= ToolFlag.NO_DELEGATE
 
         @function_tool(flags=flags)
         async def update_email_address(email: str, ctx: RunContext) -> str | None:
@@ -120,7 +130,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
-        @function_tool()
+        # NO_DELEGATE for the same reason as update_email_address: the confirmation is
+        # something the caller says, and only the model listening to them can hear it
+        @function_tool(flags=ToolFlag.NO_DELEGATE)
         async def confirm_email_address() -> None:
             """Call after the user confirms the email address is correct."""
             if email != self._current_email:
@@ -134,7 +146,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         return confirm_email_address
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    # NO_DELEGATE: a refusal is something the caller says, and this is what ends the task
+    # when they do — a delegation LLM never hears them and could not call it
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER | ToolFlag.NO_DELEGATE)
     async def decline_email_capture(self, reason: str) -> None:
         """Handles the case when the user explicitly declines to provide an email address.
 

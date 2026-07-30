@@ -946,6 +946,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
@@ -973,6 +975,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             stt=stt,
             vad=vad,
             llm=llm,
+            delegation_llm=delegation_llm,
+            delegation_options=delegation_options,
             tts=tts,
             mcp_servers=mcp_servers,
             turn_handling=turn_handling,

@@ -747,3 +747,82 @@ class TestAnnounceIsTheOneAckSwitch:
         description = (_build_tool(_resolve_delegation_options()).info.description or "").lower()
         assert "same turn" not in description
         assert "same completion" not in description
+
+
+class TestDelegatedToolTakesTheFloor:
+    """A delegated tool can hold the line for an AgentTask, then keep reasoning with it.
+
+    This is what lets the delegation drive a piece of the conversation itself — asking for
+    an email and confirming the spelling — instead of answering "I need their email" and
+    waiting to be delegated to again.
+    """
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    @pytest.mark.asyncio
+    async def test_foreground_and_agent_task_from_a_delegated_tool(self):
+        from livekit.agents import AgentTask
+        from livekit.agents.llm import FunctionToolCall
+
+        from .fake_llm import FakeLLM, FakeLLMResponse
+
+        seen: list[str] = []
+        answered = asyncio.Event()
+
+        class _EmailTask(AgentTask[str]):
+            def __init__(self) -> None:
+                super().__init__(instructions="collect the email")
+
+            async def on_enter(self) -> None:
+                seen.append("task_entered")
+                self.complete("dana@example.com")
+
+        @function_tool
+        async def collect_email(ctx: RunContext) -> str:
+            """Ask the caller for their email."""
+            seen.append("tool_started")
+            async with ctx.foreground():
+                email = await _EmailTask()
+            seen.append(f"tool_got:{email}")
+            answered.set()
+            return f"on file: {email}"
+
+        def _reply(text: str, *, content: str = "", calls: Any = None) -> Any:
+            return FakeLLMResponse(
+                input=text, content=content, ttft=0.0, duration=0.0, tool_calls=calls or []
+            )
+
+        conversation = FakeLLM(
+            fake_responses=[
+                _reply(
+                    "hi",
+                    calls=[
+                        FunctionToolCall(
+                            call_id="c1",
+                            name=DELEGATE_TOOL_NAME,
+                            arguments='{"task": "identify the caller"}',
+                        )
+                    ],
+                )
+            ]
+        )
+        delegation = FakeLLM(
+            fake_responses=[
+                _reply(
+                    "identify the caller",
+                    calls=[FunctionToolCall(call_id="c2", name="collect_email", arguments="{}")],
+                ),
+                _reply("on file: dana@example.com", content="the caller is dana@example.com"),
+            ]
+        )
+
+        session = AgentSession(llm=conversation, delegation_llm=delegation)
+        await session.start(agent=Agent(instructions="test agent", tools=[collect_email]))
+        try:
+            await asyncio.wait_for(session.run(user_input="hi"), timeout=15.0)
+            # the delegate call stays in flight past the run that dispatched it
+            await asyncio.wait_for(answered.wait(), timeout=15.0)
+        finally:
+            await asyncio.wait_for(session.aclose(), timeout=15.0)
+
+        assert seen == ["tool_started", "task_entered", "tool_got:dana@example.com"]
