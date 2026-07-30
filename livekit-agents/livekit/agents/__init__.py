@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    UnexpectedModelBehavior,
     create_api_error_from_http,
 )
 from .job import (
@@ -83,6 +84,7 @@ from .voice import (
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
+    AudioRecognition,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
@@ -92,8 +94,14 @@ from .voice import (
     ModelSettings,
     RecordingOptions,
     RunContext,
+    RunOutputOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTurnExceededEvent,
@@ -108,6 +116,11 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -181,6 +194,11 @@ __all__ = [
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
+    "ToolExecutionUpdatedEvent",
+    "ToolCallStarted",
+    "ToolCallUpdated",
+    "ToolCallEnded",
+    "ToolReplyUpdated",
     "MetricsCollectedEvent",
     "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
@@ -201,13 +219,16 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "AgentSession",
+    "AudioRecognition",
     "RecordingOptions",
+    "RunOutputOptions",
     "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
@@ -256,6 +277,9 @@ __all__ = [
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
     "UserTurnExceededEvent",
 ]
 

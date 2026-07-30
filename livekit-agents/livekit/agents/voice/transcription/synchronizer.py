@@ -13,6 +13,7 @@ from livekit import rtc
 
 from ... import tokenize, utils
 from ...log import logger
+from ...tts._provider_format import TranscriptMarkupStripper, strip_all_markup
 from ...types import NOT_GIVEN, NotGivenOr, TimedString
 from ...utils import is_given
 from .. import io
@@ -139,6 +140,12 @@ class _SegmentSynchronizerImpl:
         self._id = utils.shortuuid("SSI_")  # to correlate warnings to a specific impl
         self._text_data = _TextData(word_stream=self._opts.word_tokenizer.stream())
         self._audio_data = _AudioData(sr_stream=self._opts.speaking_rate_detector.stream())
+
+        # paces against the visible text only; stateful because a markup tag with
+        # spaces in its attributes (e.g. <expr type="expression" label="warm surprise"/>)
+        # is shredded across word tokens and a per-token strip can't recognize the
+        # fragments — each would otherwise be paced as if it were spoken
+        self._pacing_stripper = TranscriptMarkupStripper()
 
         self._next_in_chain = next_in_chain
         self._start_wall_time: float | None = None
@@ -289,7 +296,10 @@ class _SegmentSynchronizerImpl:
         if not self._text_data.done or not self._audio_data.done:
             return
 
-        pushed_hyphens = len(self._calc_hyphens(self._text_data.pushed_text))
+        # pushed_text carries the raw LLM markup (the room output strips it downstream);
+        # pace against the visible text only so expressive tags don't inflate the speed
+        clean_pushed_text = strip_all_markup(self._text_data.pushed_text)
+        pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
         # hyphens per second
         if self._audio_data.pushed_duration > 0:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
@@ -376,7 +386,12 @@ class _SegmentSynchronizerImpl:
                 )
                 continue
 
-            word_hyphens = len(self._opts.hyphenate_word(word))
+            # forward the raw token (the room output strips markup and surfaces the
+            # expression downstream), but pace against the visible text only so markup
+            # adds no delay. The stripper holds back an unclosed tag across tokens and
+            # releases the clean text once it completes.
+            clean_word = self._pacing_stripper.push(word)
+            word_hyphens = len(self._calc_hyphens(clean_word)) if clean_word.strip() else 0
             elapsed = time.time() - self._start_wall_time - self._paused_duration
 
             d_hyphens = 0

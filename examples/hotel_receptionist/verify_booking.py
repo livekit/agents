@@ -29,9 +29,18 @@ class VerifyBookingResult:
 
 
 class VerifyBookingTask(AgentTask[VerifyBookingResult]):
-    def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+    def __init__(
+        self,
+        db: HotelDB,
+        *,
+        allow_cancelled: bool = False,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+    ) -> None:
         self._db = db
         self._attempts = 0
+        # Reinstating a cancelled booking is the one flow that must verify against a
+        # cancelled record; every other flow only accepts a confirmed booking.
+        self._allow_cancelled = allow_cancelled
         super().__init__(
             instructions=f"{COMMON_INSTRUCTIONS}\n\n{_VERIFY_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
@@ -88,7 +97,11 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
             )
 
     def _handle(self, booking: RoomBooking | None, kind: str) -> str | None:
-        if booking is not None and booking.status == "confirmed":
+        accept = booking is not None and (
+            booking.status == "confirmed"
+            or (self._allow_cancelled and booking.status == "cancelled")
+        )
+        if accept:
             if not self.done():
                 self.complete(VerifyBookingResult(booking=booking))
             return None

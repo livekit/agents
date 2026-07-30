@@ -34,6 +34,8 @@ MIN_SILENCE_DURATION_MS = 200
 an inference request. Enforced against the caller-supplied VAD's
 ``min_silence_duration`` in ``AudioRecognition``."""
 
+DEFAULT_PREDICTION_TIMEOUT = 1.0
+
 
 @dataclass
 class TurnDetectorOptions:
@@ -139,6 +141,10 @@ class _BaseStreamingTurnDetectorStream:
     @property
     def is_fallback(self) -> bool:
         return self._is_fallback
+
+    @property
+    def prediction_timeout(self) -> float:
+        return DEFAULT_PREDICTION_TIMEOUT
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         return self._opts.thresholds.lookup(language)

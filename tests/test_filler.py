@@ -73,6 +73,10 @@ class _FakeSession:
         self._listeners.setdefault(event, []).append(callback)
         return callback
 
+    def emit(self, event: str, ev: Any) -> None:
+        for cb in list(self._listeners.get(event, [])):
+            cb(ev)
+
     def off(self, event: str, callback: Any) -> None:
         if callback in self._listeners.get(event, []):
             self._listeners[event].remove(callback)

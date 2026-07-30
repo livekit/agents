@@ -1,6 +1,14 @@
-from . import io, run_result
+from . import io, presets, run_result
 from .agent import Agent, AgentTask, ModelSettings
-from .agent_session import AgentSession, RecordingOptions, VoiceActivityVideoSampler
+from .agent_session import (
+    AgentSession,
+    NonverbalOptions,
+    RecordingOptions,
+    SpeechSteeringOptions,
+    SpeechSteeringPreset,
+    VoiceActivityVideoSampler,
+)
+from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -14,9 +22,19 @@ from .events import (
     RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTurnExceededEvent,
+)
+from .keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
 )
 from .remote_session import RemoteSession
 from .room_io import (
@@ -24,12 +42,17 @@ from .room_io import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
+from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "NonverbalOptions",
     "RecordingOptions",
+    "SpeechSteeringOptions",
+    "SpeechSteeringPreset",
+    "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
@@ -50,15 +73,25 @@ __all__ = [
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
     "RemoteSession",
+    "ToolExecutionUpdatedEvent",
+    "ToolCallStarted",
+    "ToolCallUpdated",
+    "ToolCallEnded",
+    "ToolReplyUpdated",
     "UserTurnExceededEvent",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
     "TranscriptSynchronizer",
     "io",
+    "presets",
     "room_io",
     "run_result",
     "_ParticipantAudioOutput",
     "_ParticipantTranscriptionOutput",
     "_ParticipantStreamTranscriptionOutput",
     "text_transforms",
+    "AudioRecognition",
 ]
 
 # Cleanup docs of unexported modules

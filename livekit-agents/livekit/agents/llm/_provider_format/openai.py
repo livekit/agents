@@ -52,12 +52,15 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
+                text_content += str(content)
 
         if not list_content:
             # certain providers require text-only content in a string vs a list.
@@ -171,12 +174,15 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         list_content: list[dict[str, Any]] = []
         text_content = ""
         for content in msg.content:
-            if isinstance(content, str):
+            if isinstance(content, llm.ImageContent):
+                list_content.append(_to_responses_image_content(content))
+            elif isinstance(content, llm.AudioContent):
+                pass
+            else:
+                # str or Instructions
                 if text_content:
                     text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_responses_image_content(content))
+                text_content += str(content)
 
         if not list_content:
             item: dict[str, Any] = {"role": msg.role, "content": text_content}
@@ -236,8 +242,7 @@ def to_responses_fnc_ctx(
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
-            schema = tool.info.raw_schema
-            schema["type"] = "function"
+            schema = {**tool.info.raw_schema, "type": "function"}
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)

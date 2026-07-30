@@ -109,7 +109,7 @@ class TTS(tts.TTS):
             encoding (str, optional): The audio encoding format. Defaults to "pcm".
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
             base_url (str, optional): The base URL for the Murf AI API. Defaults to "https://global.api.murf.ai".
-            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.basic.SentenceTokenizer(min_sentence_len=min_buffer_size).
+            tokenizer (tokenize.SentenceTokenizer, optional): The tokenizer to use. Defaults to tokenize.blingfire.SentenceTokenizer(min_sentence_len=min_buffer_size).
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             min_buffer_size (int, optional):Minimum characters to buffer before sending text to audio when no sentence boundary is detected. Higher values improve quality; lower values reduce TTFB. Defaults to 3.
             max_buffer_delay_in_ms (int, optional): Maximum wait time before sending buffered text if min_buffer_size isn’t reached. Defaults to 0.

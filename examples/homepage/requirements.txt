@@ -1,0 +1,3 @@
+livekit-agents[evals]>=1.6
+livekit-plugins-ai-coustics~=0.3
+python-dotenv>=1.0.0

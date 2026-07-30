@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 # already a retry mechanism in STT.recognize, don't retry in stream adapter
 DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -22,6 +25,8 @@ class StreamAdapter(STT):
                 streaming=True,
                 interim_results=False,
                 diarization=False,  # diarization requires streaming STT
+                keyterms=stt.capabilities.keyterms,
+                chat_context=stt.capabilities.chat_context,
             )
         )
         self._vad = vad
@@ -41,6 +46,12 @@ class StreamAdapter(STT):
     @property
     def provider(self) -> str:
         return self._stt.provider
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        self._stt._update_session_keyterms(keyterms)
+
+    def _push_conversation_item(self, item: ConversationItemAddedEvent) -> None:
+        self._stt._push_conversation_item(item)
 
     async def _recognize_impl(
         self,

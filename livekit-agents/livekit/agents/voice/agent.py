@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
 
@@ -166,6 +167,20 @@ class Agent:
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
 
+    @property
+    def audio_recognition(self) -> AudioRecognition:
+        """Access the audio recognition system for this agent.
+
+        The only public member is ``stt_context`` — live speaker metadata from the
+        STT stream.
+
+        Raises:
+            RuntimeError: If the agent is not running.
+        """
+        activity = self._get_activity_or_raise()
+        assert activity._audio_recognition is not None
+        return activity._audio_recognition
+
     async def update_instructions(self, instructions: str) -> None:
         """
         Updates the agent's instructions.
@@ -244,6 +259,46 @@ class Agent:
         await self._activity.update_chat_ctx(
             chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
         )
+
+    def update_options(
+        self,
+        *,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+    ) -> None:
+        """Swap the STT, VAD, LLM, or TTS on this agent. Only the models passed are changed.
+
+        Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
+        Strings resolve to inference models like the constructor. Pass ``None`` to disable a
+        model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
+        the swap applies to the live pipeline.
+
+        Raises:
+            RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
+                running; use ``AgentSession.update_agent`` instead.
+        """
+        if isinstance(stt, str):
+            stt = inference.STT.from_model_string(stt)
+        if isinstance(llm, str):
+            llm = inference.LLM.from_model_string(llm)
+        if isinstance(tts, str):
+            tts = inference.TTS.from_model_string(tts)
+
+        if self._activity is None:
+            # not running: replace stored config, applied on the next start
+            if is_given(stt):
+                self._stt = stt
+            if is_given(vad):
+                self._vad = vad
+            if is_given(llm):
+                self._llm = llm
+            if is_given(tts):
+                self._tts = tts
+            return
+
+        self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -491,7 +546,9 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
@@ -501,13 +558,25 @@ class Agent:
                     "`session.output.set_audio_enabled(False)`."
                 )
 
+            expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                        retain_format=True,
+                        # markup only exists in the stream when expressive is active
+                        xml_aware=expressive_active,
+                    ),
                 )
+
+            # Mark whether expressive is active for this synthesis, synchronously
+            # just before stream() snapshots it. Doing it here (the single synthesis
+            # choke point for both generate_reply and say()) scopes it to this turn
+            # rather than leaving stale state on the instance. The provider's chunk
+            # defaults then drive the TTS's input tokenizer.
+            activity.tts._set_expressive(expressive_active)
 
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
@@ -872,6 +941,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # register before any await so a concurrent drain (e.g. session close)
         # won't wait for tasks blocked on this handoff
         old_activity._add_drain_blocked_tasks(blocked_tasks)
+
+        # watch the blocked tasks so an active run won't complete mid-handoff
+        # (the parent speech may predate the run, e.g. created in on_enter)
+        if (run_state := session._global_run_state) and not run_state.done():
+            for task in blocked_tasks:
+                run_state._watch_handle(task)
 
         if (
             task_info.function_call

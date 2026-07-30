@@ -103,6 +103,24 @@ BOOKINGS = [
     ("Marcus", "Johnson", "m.johnson@outlook.com", "+1 628 555 0199", "CD34", "205", 9, 3, 4, ["breakfast", "valet"], "1881", "confirmed"),
     # Smoking room (203 is the only smoking-permitted room)
     ("Mei", "Chen", "mei.chen@gmail.com", "+1 415 555 0222", "MN42", "203", 14, 2, 2, ["breakfast"], "4477", "confirmed"),
+    # --- Completely sold out one night (offset 25 = Fri Jul 3, July-4th weekend) ---
+    # Every one of the 13 rooms is taken for this single night, so a fresh
+    # booking inquiry for that date honestly comes up empty: the "we're full,
+    # politely deny the walk-in" scenario. One-nighters (nights=1) so the
+    # block doesn't bleed into adjacent dates or other scenarios.
+    ("Owen", "Carver", "owen.carver@gmail.com", "+1 415 555 0501", "SO01", "201", 25, 1, 2, [], "1101", "confirmed"),
+    ("Bianca", "Ross", "bianca.ross@gmail.com", "+1 415 555 0502", "SO02", "202", 25, 1, 2, [], "1102", "confirmed"),
+    ("Caleb", "Nguyen", "caleb.nguyen@gmail.com", "+1 415 555 0503", "SO03", "203", 25, 1, 2, [], "1103", "confirmed"),
+    ("Delia", "Brooks", "delia.brooks@gmail.com", "+1 415 555 0504", "SO04", "204", 25, 1, 3, [], "1104", "confirmed"),
+    ("Ezra", "Flynn", "ezra.flynn@gmail.com", "+1 415 555 0505", "SO05", "205", 25, 1, 3, [], "1105", "confirmed"),
+    ("Farah", "Haddad", "farah.haddad@gmail.com", "+1 415 555 0506", "SO06", "206", 25, 1, 4, [], "1106", "confirmed"),
+    ("Gideon", "Park", "gideon.park@gmail.com", "+1 415 555 0507", "SO07", "301", 25, 1, 2, [], "1107", "confirmed"),
+    ("Helena", "Cruz", "helena.cruz@gmail.com", "+1 415 555 0508", "SO08", "302", 25, 1, 2, [], "1108", "confirmed"),
+    ("Ivan", "Sokolov", "ivan.sokolov@gmail.com", "+1 415 555 0509", "SO09", "303", 25, 1, 3, [], "1109", "confirmed"),
+    ("Jana", "Novak", "jana.novak@gmail.com", "+1 415 555 0510", "SO10", "304", 25, 1, 4, [], "1110", "confirmed"),
+    ("Kofi", "Mensah", "kofi.mensah@gmail.com", "+1 415 555 0511", "SO11", "401", 25, 1, 4, [], "1111", "confirmed"),
+    ("Lara", "Conti", "lara.conti@gmail.com", "+1 415 555 0512", "SO12", "402", 25, 1, 2, [], "1112", "confirmed"),
+    ("Mateo", "Rivas", "mateo.rivas@gmail.com", "+1 415 555 0513", "SO13", "PH", 25, 1, 5, [], "1113", "confirmed"),
     # Departed (last week / weeks ago) - source of disputes + invoice lookups
     ("Daniel", "Lee", "daniel.lee@gmail.com", "+1 415 555 0104", "GH78", "302", -6, 2, 2, ["late_checkout"], "9999", "confirmed"),
     ("Olivia", "Brandt", "olivia.brandt@me.com", "+1 415 555 0288", "QT55", "204", -10, 3, 2, ["breakfast"], "6677", "confirmed"),
@@ -146,6 +164,11 @@ DISPUTES = [
     # Open / unresolved
     ("DSP-2H6T", "HTL-ZP19", "Room service", 8800, "room_service_restaurant", "Charged for a dinner they didn't order.", "escalated_to_manager", 0, "open"),
 ]
+# (last_name, preferences) - read-only guest history for returning-guest personalization.
+GUEST_HISTORY = [
+    ("Lee", "Prefers a high, quiet floor away from the elevator, and feather-free "
+            "(hypoallergenic) pillows. Had a noise complaint on a previous stay."),
+]
 # fmt: on
 
 
@@ -160,6 +183,10 @@ def populate(db: HotelDB, today: date) -> None:
     conn.executemany(
         "INSERT INTO restaurant_tables (label, capacity, location, description) VALUES (?,?,?,?)",
         TABLES,
+    )
+    conn.executemany(
+        "INSERT INTO guest_history (last_name, preferences) VALUES (?,?)",
+        GUEST_HISTORY,
     )
 
     for (

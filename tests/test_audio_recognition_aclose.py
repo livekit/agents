@@ -38,7 +38,11 @@ class TestAudioRecognitionAclose:
         audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
         audio_recognition._end_of_turn_task = None
+        audio_recognition._vad_ch = None
+        audio_recognition._interruption_ch = None
+        audio_recognition._audio_input_atask = None
         audio_recognition._backchannel_boundary_timer = None
+        audio_recognition._AudioRecognition__stt_context = None
 
         return audio_recognition
 
@@ -139,7 +143,7 @@ class TestAudioRecognitionAclose:
         audio_recognition._end_of_turn_task = end_of_turn_task
 
         # With the fix, aclose() completes without raising
-        await audio_recognition.aclose()
+        await audio_recognition._aclose()
 
         # Verify cleanup completed
         assert audio_recognition._closing.is_set()

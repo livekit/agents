@@ -11,13 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from typing import Literal
 
 TTSModels = Literal[
     "simba-english",
     "simba-multilingual",
+    "simba-3.0",
+    "simba-3.2",
 ]
 
+# Deprecated: output is fixed to 24 kHz PCM; kept for import compatibility.
 TTSEncoding = Literal[
     "mp3_24000",
     "wav_48000",

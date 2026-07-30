@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -73,6 +72,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
+_MODEL_THINK_TAGS = {
+    "google/gemma-4-31b-it": ("<|channel>thought", "<channel|>"),
+}
+
 
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
@@ -92,6 +95,27 @@ def drop_unsupported_params(
     ):
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
     return params
+
+
+# lowest supported reasoning effort per model; "none" requires gpt-5.1+
+_MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
+    "gpt-5.1": "none",
+    "gpt-5.2": "none",
+    "gpt-5.4": "none",
+    "gpt-5.4-mini": "none",
+    "gpt-5": "minimal",
+    "gpt-5-mini": "minimal",
+    "gpt-5-nano": "minimal",
+}
+
+
+def min_reasoning_effort(model: str) -> ReasoningEffort | None:
+    """Lowest reasoning effort the model supports, or None if the model has no
+    reasoning-effort control.
+
+    Strips any provider prefix (e.g. ``openai/gpt-5`` -> ``gpt-5``) before matching.
+    """
+    return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
 
 
 OpenAIModels = Literal[
@@ -243,6 +267,7 @@ class LLM(llm.LLM):
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -252,7 +277,11 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         await self._client.close()
 
     @classmethod
@@ -426,11 +455,15 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
-            thinking = asyncio.Event()
+            thinking_filter = llm_utils.ThinkingTokenFilter(
+                *_MODEL_THINK_TAGS.get(
+                    self._model, (llm_utils.THINK_TAG_START, llm_utils.THINK_TAG_END)
+                )
+            )
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
+                        chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
                             retryable = False
                             self._event_ch.send_nowait(chat_chunk)
@@ -465,7 +498,7 @@ class LLMStream(llm.LLMStream):
             raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(
-        self, id: str, choice: Choice, thinking: asyncio.Event
+        self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter
     ) -> llm.ChatChunk | None:
         delta = choice.delta
 
@@ -473,6 +506,10 @@ class LLMStream(llm.LLMStream):
         # the delta can be None when using Azure OpenAI (content filtering)
         if delta is None:
             return None
+
+        delta.content = llm_utils.strip_thinking_tokens(
+            delta.content, thinking_filter, final=choice.finish_reason is not None
+        )
 
         if delta.tool_calls:
             for tool in delta.tool_calls:
@@ -533,8 +570,6 @@ class LLMStream(llm.LLMStream):
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             self._tool_extra = None
             return call_chunk
-
-        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)

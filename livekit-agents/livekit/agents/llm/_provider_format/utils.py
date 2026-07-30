@@ -35,7 +35,7 @@ def convert_mid_conversation_instructions(
             item.type == "message"
             and item.role in ("system", "developer")
             and first_system_seen
-            and (text := item.text_content)
+            and (text := item.raw_text_content)
         ):
             items.append(
                 llm.ChatMessage(

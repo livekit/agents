@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 from collections.abc import Sequence
 from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm.chat_context import Instructions
 from livekit.agents.types import (
     NotGivenOr,
 )
@@ -128,6 +130,17 @@ def to_turn_detection(
     return turn_detection
 
 
+_MAX_CALL_ID_LEN = 32
+
+
+def _shorten_call_id(call_id: str) -> str:
+    # OpenAI caps call_id at 32 chars; deterministically shorten longer ids (e.g. from another
+    # provider replayed after a fallback swap) so a call and its output still map to the same id
+    if len(call_id) <= _MAX_CALL_ID_LEN:
+        return call_id
+    return hashlib.sha256(call_id.encode()).hexdigest()[:_MAX_CALL_ID_LEN]
+
+
 def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem:
     conversation_item: realtime.ConversationItem
 
@@ -135,7 +148,7 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCall(
             id=item.id,
             type="function_call",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             name=item.name,
             arguments=item.arguments,
         )
@@ -144,22 +157,22 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCallOutput(
             id=item.id,
             type="function_call_output",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             output=item.output,
         )
         conversation_item.type = "function_call_output"
-        conversation_item.call_id = item.call_id
+        conversation_item.call_id = _shorten_call_id(item.call_id)
         conversation_item.output = item.output
 
     elif item.type == "message":
         if item.role == "system" or item.role == "developer":
             system_content: list[realtime.realtime_conversation_item_system_message.Content] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     system_content.append(
                         realtime.realtime_conversation_item_system_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemSystemMessage(
@@ -172,11 +185,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
                 realtime.realtime_conversation_item_assistant_message.Content
             ] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     assistant_content.append(
                         realtime.realtime_conversation_item_assistant_message.Content(
                             type="output_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemAssistantMessage(
@@ -188,11 +201,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
             user_content: list[realtime.realtime_conversation_item_user_message.Content] = []
             # only user messages could be a list of content
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
                 elif isinstance(c, llm.ImageContent):

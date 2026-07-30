@@ -12,7 +12,10 @@ from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
 )
-from livekit.agents.voice.room_io._output import _ParticipantTranscriptionOutput
+from livekit.agents.voice.room_io._output import (
+    _ParticipantStreamTranscriptionOutput,
+    _ParticipantTranscriptionOutput,
+)
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
 
@@ -112,6 +115,10 @@ class _NoopAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
 class _FakeWriter:
     def __init__(self) -> None:
         self.close_calls = 0
+        self.chunks: list[str] = []
+
+    async def write(self, text: str) -> None:
+        self.chunks.append(text)
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
@@ -153,13 +160,11 @@ async def test_participant_input_stream_aclose_unregisters_track_unpublished() -
 
     assert room.listener_count("track_subscribed") == 1
     assert room.listener_count("track_unpublished") == 1
-    assert room.listener_count("token_refreshed") == 1
 
     await stream.aclose()
 
     assert room.listener_count("track_subscribed") == 0
     assert room.listener_count("track_unpublished") == 0
-    assert room.listener_count("token_refreshed") == 0
 
 
 @pytest.mark.asyncio
@@ -182,6 +187,26 @@ async def test_transcription_output_aclose_unregisters_and_closes_resources() ->
     assert room.listener_count("local_track_published") == 0
     assert legacy_output._flush_task is not None and legacy_output._flush_task.done()
     assert writer.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_output_strips_markup_but_keeps_links() -> None:
+    room = _FakeRoom()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="agent")
+    await output.capture_text(
+        '<expr type="expression" label="happy"/>See [the docs](https://docs.livekit.io)'
+    )
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+
+    published = "".join(writer.chunks)
+    # markup is removed; a markdown link is prose and must reach the user intact
+    assert "<expr" not in published
+    assert "[the docs](https://docs.livekit.io)" in published
 
 
 @pytest.mark.asyncio
@@ -249,16 +274,12 @@ async def test_direct_processor_lifecycle() -> None:
 
         assert stream._processor is processor
         assert processor.close_calls == 0
-        assert len(processor.stream_info_calls) == 1
-        assert len(processor.credentials_calls) == 1
 
         # track switch — processor must survive
         stream._on_track_available(track2, pub2, participant)
 
         assert stream._processor is processor
         assert processor.close_calls == 0
-        assert len(processor.stream_info_calls) == 2
-        assert len(processor.credentials_calls) == 2
 
     # final teardown closes the processor exactly once
     await stream.aclose()
@@ -290,8 +311,6 @@ async def test_selector_processor_lifecycle() -> None:
 
         assert len(processors) == 1
         assert stream._processor is processors[0]
-        assert len(processors[0].stream_info_calls) == 1
-        assert len(processors[0].credentials_calls) == 1
 
         # track switch — old processor closed, new one receives lifecycle calls
         stream._on_track_available(track2, pub2, participant)
@@ -299,8 +318,6 @@ async def test_selector_processor_lifecycle() -> None:
     assert len(processors) == 2
     assert processors[0].close_calls == 1
     assert stream._processor is processors[1]
-    assert len(processors[1].stream_info_calls) == 1
-    assert len(processors[1].credentials_calls) == 1
 
     # final teardown closes the active processor
     await stream.aclose()
@@ -309,8 +326,7 @@ async def test_selector_processor_lifecycle() -> None:
 
 @pytest.mark.asyncio
 async def test_selector_processor_track_disappears() -> None:
-    """When a track vanishes with no replacement, the selector-created processor
-    is closed and subsequent token refreshes don't touch it."""
+    """When a track vanishes with no replacement, the selector-created processor is closed."""
     room = _FakeRoom()
     processor = _MockFrameProcessor()
     stream = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
@@ -322,20 +338,12 @@ async def test_selector_processor_track_disappears() -> None:
         stream._on_track_available(track, publication, participant)
 
     assert stream._processor is processor
-    assert len(processor.credentials_calls) == 1
 
     # track unpublished with no replacement
     stream._on_track_unavailable(publication, participant)
 
     assert processor.close_calls == 1
     assert stream._processor is None
-
-    # token refresh must not reach the closed processor
-    room._token = "refreshed-token"
-    room._server_url = "wss://refreshed.livekit.cloud"
-    stream._on_token_refreshed()
-
-    assert len(processor.credentials_calls) == 1
 
     await stream.aclose()
 

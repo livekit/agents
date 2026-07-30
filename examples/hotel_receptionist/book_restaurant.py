@@ -57,9 +57,6 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         )
 
     def _status(self) -> str:
-        # See book_room.py - status describes the next *action*, not a list
-        # of missing field names. A "still need: phone" string gets parroted
-        # as "What's your phone number?".
         if self._date is None:
             return "no party yet - ask the caller for date and party size, then call set_party"
         if self._time is None:
@@ -71,17 +68,27 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return "all required details captured - call confirm_reservation() now to finalize the reservation"
 
     @function_tool()
-    async def set_party(
-        self, on_date: date, party_size: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)]
-    ) -> str:
+    async def set_party(self, on_date: date, party_size: Annotated[int, Field(ge=1)]) -> str:
         """Record the date + party size. The return lists the open time slots - offer them to the caller and let them pick; don't choose a slot yourself.
 
         Args:
             on_date: Reservation date in ISO YYYY-MM-DD format (e.g. "2026-01-20").
-            party_size: Number of guests (must be >= 1; ask the caller if not specified).
+            party_size: Number of guests, exactly as the caller stated it - never shrink it to fit; if it's too big to seat, that's handled below.
         """
         if on_date < TODAY:
             raise ToolError("the date can't be in the past")
+        if party_size > MAX_PARTY_SIZE:
+            # The largest table seats MAX_PARTY_SIZE; a bigger party (and the
+            # private-room / set-menu asks that come with it) is the restaurant's
+            # to arrange, not a desk table booking. Bail out of this flow and
+            # transfer rather than quietly booking a too-small table.
+            raise ToolError(
+                f"{party_size} guests is beyond a normal table - we seat up to {MAX_PARTY_SIZE}. "
+                "Don't book it here and don't reduce the number to fit: this is a large-party / "
+                "private-dining request the restaurant handles directly. Call give_up, then tell "
+                "the caller you'll put them on hold to connect them and, once they agree, "
+                "transfer_call(destination='restaurant') with a one-line summary."
+            )
 
         slots = await self._db.list_restaurant_availability(on_date=on_date, party_size=party_size)
         open_times = {s.time for s in slots if s.available_table_ids}

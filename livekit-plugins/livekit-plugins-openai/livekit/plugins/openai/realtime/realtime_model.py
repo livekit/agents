@@ -275,6 +275,30 @@ class _ResponseGeneration:
         self.message_ch.close()
 
 
+class _DiscardedGeneration:
+    """Marks a response cancelled before it surfaced, so its trailing events are skipped."""
+
+    pass
+
+
+# error codes that can never succeed on retry: the socket reconnects fine (the key is
+# valid), but every generation fails and the server closes the connection again, so
+# retrying loops forever. When one of these is received, the reconnect loop must stop.
+_FATAL_ERROR_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "invalid_api_key",
+        "account_deactivated",
+        "billing_hard_limit_reached",
+    }
+)
+
+
+def _is_fatal_error(error: object | None) -> bool:
+    code = getattr(error, "code", None) or getattr(error, "type", None)
+    return isinstance(code, str) and code in _FATAL_ERROR_CODES
+
+
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -433,6 +457,7 @@ class RealtimeModel(llm.RealtimeModel):
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
+                can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
@@ -647,10 +672,13 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(input_audio_transcription):
             input_audio_transcription = AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
 
+        # capture intent before applying the azure default, so the framework can still
+        # auto-disable server-side turn detection when the user didn't configure it
+        can_disable_turn_detection = not is_given(turn_detection)
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        return RealtimeModel(
+        model = RealtimeModel(
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
@@ -667,6 +695,8 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
             max_session_duration=max_session_duration,
         )
+        model._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        return model
 
     def update_options(
         self,
@@ -722,7 +752,9 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                # only propagate when the caller set it, so a session that opted out of
+                # server-side turn detection isn't force-synced back on by an unrelated update
+                turn_detection=self._opts.turn_detection if is_given(turn_detection) else NOT_GIVEN,
                 tool_choice=tool_choice,
                 input_audio_transcription=self._opts.input_audio_transcription,
                 input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
@@ -743,8 +775,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -817,16 +849,23 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         # per-session copy of opts so update_options can diff against session's own state
-        self._opts = replace(realtime_model._opts)
+        self._opts = replace(
+            realtime_model._opts,
+            turn_detection=None if turn_detection_disabled else realtime_model._opts.turn_detection,
+        )
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._instructions: str | None = None
+        # set on aclose; trailing server events are ignored while it's set
+        self._closing = False
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self.send_event(self._create_session_update_event())
 
@@ -834,10 +873,13 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
-        # accumulates partial input-audio transcripts per (item_id, content_index)
-        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+        # generate_reply event_ids cancelled or timed out before response.created arrived; the
+        # response is cancelled by id and discarded when it finally arrives
+        self._discarded_event_ids: set[str] = set()
 
-        self._current_generation: _ResponseGeneration | None = None
+        self._reset_input_turn_state()
+
+        self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
 
         self._update_chat_ctx_lock = asyncio.Lock()
@@ -852,6 +894,20 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _reset_input_turn_state(self) -> None:
+        """Per-turn input state, keyed by item_id and valid only within one connection.
+
+        Every field here must be discarded on reconnect: the server assigns new item ids,
+        so a stale entry can never be matched again.
+        """
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+
+        # when serverside VAD detected speech onset, per item_id. Correlating through the
+        # item keeps each turn paired with its own start; a single "last speech started"
+        # value cannot, because a late transcript would consume the next turn's value.
+        self._input_speech_started_at: dict[str, float] = {}
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -884,7 +940,7 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._input_transcript_accumulators.clear()
+            self._reset_input_turn_state()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -914,46 +970,58 @@ class RealtimeSession(
                         llm.RealtimeError("pending response discarded due to session reconnection")
                     )
             self._response_created_futures.clear()
+            self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
 
             logger.debug(f"reconnected to {self._realtime_model._provider_label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
         reconnecting = False
-        while not self._msg_ch.closed:
-            try:
-                ws_conn = await self._create_ws_conn()
-                if reconnecting:
-                    await _reconnect()
-                    num_retries = 0  # reset the retry counter
-                await self._run_ws(ws_conn)
+        try:
+            while not self._msg_ch.closed:
+                try:
+                    ws_conn = await self._create_ws_conn()
+                    if reconnecting:
+                        await _reconnect()
+                        num_retries = 0  # reset the retry counter
+                    await self._run_ws(ws_conn)
 
-            except APIError as e:
-                if max_retries == 0 or not e.retryable:
+                except APIError as e:
+                    if max_retries == 0 or not e.retryable:
+                        self._emit_error(e, recoverable=False)
+                        raise
+                    elif num_retries == max_retries:
+                        self._emit_error(e, recoverable=False)
+                        raise APIConnectionError(
+                            f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
+                        ) from e
+                    else:
+                        self._emit_error(e, recoverable=True)
+
+                        retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
+                        logger.warning(
+                            f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
+                            exc_info=e,
+                            extra={"attempt": num_retries, "max_retries": max_retries},
+                        )
+                        await asyncio.sleep(retry_interval)
+                    num_retries += 1
+
+                except Exception as e:
                     self._emit_error(e, recoverable=False)
                     raise
-                elif num_retries == max_retries:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
-                    ) from e
-                else:
-                    self._emit_error(e, recoverable=True)
 
-                    retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
-                    logger.warning(
-                        f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
-                        exc_info=e,
-                        extra={"attempt": num_retries, "max_retries": max_retries},
-                    )
-                    await asyncio.sleep(retry_interval)
-                num_retries += 1
-
-            except Exception as e:
-                self._emit_error(e, recoverable=False)
-                raise
-
-            reconnecting = True
+                reconnecting = True
+        finally:
+            # the session loop has exited (fatal server error, retries exhausted, or
+            # close); close any in-progress generation and fail any pending
+            # generate_reply futures so consumers don't hang and callers don't wait
+            # out their timeout
+            self._close_current_generation("session closed")
+            for fut in self._response_created_futures.values():
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError("realtime session closed"))
+            self._response_created_futures.clear()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents"}
@@ -1047,6 +1115,10 @@ class RealtimeSession(
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
+                if self._closing:
+                    # draining after aclose; the generation is already discarded
+                    continue
+
                 event = json.loads(msg.data)
 
                 # Azure OpenAI uses old-style event names from the beta API.
@@ -1128,7 +1200,12 @@ class RealtimeSession(
                         self._handle_error(RealtimeErrorEvent.construct(**event))
                     elif lk_oai_debug:
                         logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
-                except Exception:
+                except Exception as e:
+                    # terminal server errors (e.g. insufficient_quota) must break the recv
+                    # loop so _main_task stops reconnecting; every other handler failure is
+                    # logged and skipped
+                    if isinstance(e, APIError) and not e.retryable:
+                        raise
                     if event["type"] == "response.output_audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"event": event})
@@ -1152,7 +1229,11 @@ class RealtimeSession(
                 if task != wait_reconnect_task:
                     task.result()
 
-            if wait_reconnect_task and wait_reconnect_task in done and self._current_generation:
+            if (
+                wait_reconnect_task
+                and wait_reconnect_task in done
+                and isinstance(self._current_generation, _ResponseGeneration)
+            ):
                 # wait for the current generation to complete before reconnecting
                 await self._current_generation._done_fut
                 closing = True
@@ -1414,11 +1495,6 @@ class RealtimeSession(
             return False
 
         for msg_id in diff_ops.to_remove:
-            # we don't have content synced down for some types of content (audio/images)
-            # these won't be present in the Agent's view of the context
-            # so in those cases, we do not want to remove them from the server context
-            if _is_content_empty(msg_id):
-                continue
             _delete_item(msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_create:
@@ -1426,7 +1502,7 @@ class RealtimeSession(
 
         # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # likewise, empty content almost always means the content is not synced down
+            # empty content almost always means the content is not synced down
             # we don't want to recreate these items there
             if _is_content_empty(msg_id):
                 continue
@@ -1583,6 +1659,8 @@ class RealtimeSession(
         def _on_timeout() -> None:
             self._response_created_futures.pop(event_id, None)
             if fut and not fut.done():
+                # discard the response if the server still creates it after the timeout
+                self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
@@ -1593,6 +1671,9 @@ class RealtimeSession(
             if f.cancelled():
                 # response.create was already sent; cancel the response server-side
                 self.send_event(ResponseCancelEvent(type="response.cancel"))
+                # the cancel above is a no-op if the response isn't created yet; discard it by id
+                # when it arrives
+                self._discarded_event_ids.add(event_id)
 
         fut.add_done_callback(_on_fut_done)
         return fut
@@ -1615,14 +1696,23 @@ class RealtimeSession(
         audio_transcript: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if "audio" in modalities:
-            self.send_event(
-                ConversationItemTruncateEvent(
-                    type="conversation.item.truncate",
-                    content_index=0,
-                    item_id=message_id,
-                    audio_end_ms=audio_end_ms,
+            if audio_end_ms > 0:
+                self.send_event(
+                    ConversationItemTruncateEvent(
+                        type="conversation.item.truncate",
+                        content_index=0,
+                        item_id=message_id,
+                        audio_end_ms=audio_end_ms,
+                    )
                 )
-            )
+            else:
+                self.send_event(
+                    ConversationItemDeleteEvent(
+                        type="conversation.item.delete",
+                        item_id=message_id,
+                        event_id=utils.shortuuid("chat_ctx_delete_"),
+                    )
+                )
         elif utils.is_given(audio_transcript):
             # sync the forwarded text to the remote chat ctx
             chat_ctx = self.chat_ctx.copy(
@@ -1640,6 +1730,7 @@ class RealtimeSession(
                     self.send_event(ev)
 
     async def aclose(self) -> None:
+        self._closing = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask
@@ -1650,6 +1741,10 @@ class RealtimeSession(
         This prevents consumers from hanging indefinitely when a generation is
         interrupted by a reconnection or session close.
         """
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            self._current_generation = None
+            return
+
         if self._current_generation is None or self._current_generation._done_fut.done():
             return
 
@@ -1691,8 +1786,10 @@ class RealtimeSession(
             yield frame
 
     def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
+        self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
+        if event.item_id:
+            self._input_speech_started_at[event.item_id] = time.time()
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
@@ -1706,6 +1803,21 @@ class RealtimeSession(
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"
+
+        client_event_id: str | None = None
+        if isinstance(event.response.metadata, dict):
+            client_event_id = event.response.metadata.get("client_event_id")
+
+        if client_event_id and client_event_id in self._discarded_event_ids:
+            # interrupted or timed out before the server created it: cancel by id and mark it
+            # discarded so its trailing events are skipped, instead of surfacing it
+            self._discarded_event_ids.discard(client_event_id)
+            self.send_event(
+                ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
+            )
+            self._current_generation = _DiscardedGeneration()
+            logger.warning("discarding response that arrived after it was timed out or interrupted")
+            return
 
         self._current_generation = _ResponseGeneration(
             message_ch=utils.aio.Chan(),
@@ -1722,11 +1834,7 @@ class RealtimeSession(
             response_id=event.response.id,
         )
 
-        if (
-            isinstance(event.response.metadata, dict)
-            and (client_event_id := event.response.metadata.get("client_event_id"))
-            and (fut := self._response_created_futures.pop(client_event_id, None))
-        ):
+        if client_event_id and (fut := self._response_created_futures.pop(client_event_id, None)):
             if not fut.done():
                 generation_ev.user_initiated = True
                 fut.set_result(generation_ev)
@@ -1736,6 +1844,8 @@ class RealtimeSession(
         self.emit("generation_created", generation_ev)
 
     def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -1762,6 +1872,8 @@ class RealtimeSession(
             self._current_generation.messages[item_id] = item_generation
 
     def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item_id) is not None, "item_id is None"
         assert (item_type := event.part.type) is not None, "part.type is None"
@@ -1801,6 +1913,7 @@ class RealtimeSession(
         assert event.item_id is not None, "item_id is None"
 
         self._input_transcript_accumulators.pop(event.item_id, None)
+        self._input_speech_started_at.pop(event.item_id, None)
 
         try:
             self._remote_chat_ctx.delete(event.item_id)
@@ -1861,6 +1974,7 @@ class RealtimeSession(
                 transcript=event.transcript,
                 is_final=True,
                 confidence=confidence,
+                turn_started_at=self._input_speech_started_at.pop(event.item_id, None),
             ),
         )
 
@@ -1874,16 +1988,22 @@ class RealtimeSession(
 
         # close any open partial stream so consumers waiting for is_final don't hang
         partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+        turn_started_at = self._input_speech_started_at.pop(event.item_id, None)
         if partial is None:
             return
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
-                item_id=event.item_id, transcript=partial, is_final=True
+                item_id=event.item_id,
+                transcript=partial,
+                is_final=True,
+                turn_started_at=turn_started_at,
             ),
         )
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
         if (
@@ -1897,9 +2017,13 @@ class RealtimeSession(
         item_generation.audio_transcript += event.delta
 
     def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
         item_id = event["item_id"]
@@ -1913,6 +2037,8 @@ class RealtimeSession(
         item_generation.audio_transcript += delta
 
     def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         item_generation = self._current_generation.messages[event.item_id]
         if self._current_generation._first_token_timestamp is None:
@@ -1932,9 +2058,13 @@ class RealtimeSession(
         )
 
     def _handle_response_audio_done(self, _: ResponseAudioDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            return
         assert self._current_generation is not None, "current_generation is None"
         assert (item_id := event.item.id) is not None, "item.id is None"
         assert (item_type := event.item.type) is not None, "item.type is None"
@@ -1953,7 +2083,9 @@ class RealtimeSession(
                 item_generation.modalities.set_result(self._opts.modalities)
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
-        assert self._current_generation is not None, "current_generation is None"
+        assert isinstance(self._current_generation, _ResponseGeneration), (
+            "current_generation is None"
+        )
 
         assert item.id is not None, "item.id is None"
         assert item.call_id is not None, "call_id is None"
@@ -1970,6 +2102,10 @@ class RealtimeSession(
         )
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
+        if isinstance(self._current_generation, _DiscardedGeneration):
+            self._current_generation = None
+            return
+
         if self._current_generation is None:
             return  # OpenAI has a race condition where we could receive response.done without any previous response.created (This happens generally during interruption)  # noqa: E501
 
@@ -2070,16 +2206,18 @@ class RealtimeSession(
             else:
                 error_body = None
                 message = f"{provider_label} response failed with unknown error"
-            self._emit_error(
-                APIError(
-                    message=message,
-                    body=error_body,
-                    retryable=True,
-                ),
-                # all possible faulures undocumented by openai,
-                # so we assume optimistically all retryable/recoverable
-                recoverable=True,
+            # failures are largely undocumented by openai, so we assume optimistically
+            # recoverable unless the code is a known-fatal one (quota / auth / billing),
+            # which is raised so the recv loop breaks and _main_task stops reconnecting
+            recoverable = not _is_fatal_error(error_body)
+            error = APIError(
+                message=message,
+                body=error_body,
+                retryable=recoverable,
             )
+            if not recoverable:
+                raise error
+            self._emit_error(error, recoverable=True)
         elif event.response.status in {"cancelled", "incomplete"}:
             status_details = event.response.status_details
             if isinstance(status_details, str):
@@ -2113,14 +2251,18 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
-        self._emit_error(
-            APIError(
-                message=f"{provider_label} returned an error",
-                body=event.error,
-                retryable=True,
-            ),
-            recoverable=True,
+        recoverable = not _is_fatal_error(event.error)
+        error = APIError(
+            message=f"{provider_label} returned an error",
+            body=event.error,
+            retryable=recoverable,
         )
+        if not recoverable:
+            # terminal (e.g. insufficient_quota): raise instead of emitting; the recv loop
+            # re-raises it so _main_task emits it with recoverable=False and stops
+            # reconnecting
+            raise error
+        self._emit_error(error, recoverable=True)
 
         # response errors are handled by _handle_response_done via _done_fut.
         # error events here are for non-response errors (e.g. invalid request).

@@ -71,6 +71,7 @@ class _ArcanaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
+    speed_alpha: NotGivenOr[float] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
@@ -79,6 +80,7 @@ class _CodaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
+    speed_alpha: NotGivenOr[float] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
@@ -118,6 +120,8 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["top_p"] = ao.top_p
         if is_given(ao.max_tokens):
             params["max_tokens"] = ao.max_tokens
+        if is_given(ao.speed_alpha):
+            params["speedAlpha"] = ao.speed_alpha
         if is_given(ao.time_scale_factor):
             params["timeScaleFactor"] = ao.time_scale_factor
     elif opts.model == "coda" and opts.coda_options is not None:
@@ -126,6 +130,8 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["lang"] = co.lang
         if is_given(co.max_tokens):
             params["max_tokens"] = co.max_tokens
+        if is_given(co.speed_alpha):
+            params["speedAlpha"] = co.speed_alpha
         if is_given(co.time_scale_factor):
             params["timeScaleFactor"] = co.time_scale_factor
     elif _is_mist_model(opts.model) and opts.mist_options is not None:
@@ -166,11 +172,12 @@ class TTS(tts.TTS):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        # Shared by arcana, mistv3, and coda
+        # Shared by arcana, mistv3, and coda (HTTP only; use speed_alpha on WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
+        # Supported by all models; the only speed param that works over WebSocket
+        speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 options
         sample_rate: int = 22050,
-        speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -223,6 +230,7 @@ class TTS(tts.TTS):
                 max_tokens=max_tokens,
                 lang=lang,
                 sample_rate=sample_rate,
+                speed_alpha=speed_alpha,
                 time_scale_factor=time_scale_factor,
             )
         elif model == "coda":
@@ -230,6 +238,7 @@ class TTS(tts.TTS):
                 max_tokens=max_tokens,
                 lang=lang,
                 sample_rate=sample_rate,
+                speed_alpha=speed_alpha,
                 time_scale_factor=time_scale_factor,
             )
         elif _is_mist_model(model):
@@ -394,6 +403,8 @@ class TTS(tts.TTS):
                 self._opts.arcana_options.lang = lang
             if is_given(sample_rate):
                 self._opts.arcana_options.sample_rate = sample_rate
+            if is_given(speed_alpha):
+                self._opts.arcana_options.speed_alpha = speed_alpha
             if is_given(time_scale_factor):
                 self._opts.arcana_options.time_scale_factor = time_scale_factor
 
@@ -404,6 +415,8 @@ class TTS(tts.TTS):
                 self._opts.coda_options.lang = lang
             if is_given(sample_rate):
                 self._opts.coda_options.sample_rate = sample_rate
+            if is_given(speed_alpha):
+                self._opts.coda_options.speed_alpha = speed_alpha
             if is_given(time_scale_factor):
                 self._opts.coda_options.time_scale_factor = time_scale_factor
 
