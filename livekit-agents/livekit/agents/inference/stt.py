@@ -393,7 +393,7 @@ class STTOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
-    fallback: list[FallbackModel]
+    fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
 
 
@@ -613,8 +613,12 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
-        fallback_models = _normalize_fallback(fallback) if is_given(fallback) else []
-        all_models = [model, *(item["model"] for item in fallback_models)]
+        models: NotGivenOr[list[FallbackModel]] = (
+            _normalize_fallback(fallback) if is_given(fallback) else NOT_GIVEN
+        )
+        all_models = [model]
+        if is_given(models):
+            all_models.extend(item["model"] for item in models)
         aligned_transcript: Literal["word", False] = (
             "word" if all(_aligned_transcript_for_model(item) for item in all_models) else False
         )
@@ -663,7 +667,7 @@ class STT(stt.STT):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
-            fallback=fallback_models,
+            fallback=models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
 
@@ -744,10 +748,9 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
-            all_models = [
-                self._opts.model,
-                *(item["model"] for item in self._opts.fallback),
-            ]
+            all_models = [self._opts.model]
+            if is_given(self._opts.fallback):
+                all_models.extend(item["model"] for item in self._opts.fallback)
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
