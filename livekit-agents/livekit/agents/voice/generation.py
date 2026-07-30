@@ -169,6 +169,31 @@ def perform_llm_inference(
     return llm_task, data
 
 
+def _function_tool_definitions(tool_ctx: ToolContext) -> list[dict[str, Any]]:
+    """Serialize tool definitions (name, description, parameters) for the llm span.
+
+    Backends like Langfuse can then show what the LLM was actually offered on a
+    turn; tool names alone can't explain a badly-worded description or a schema
+    mismatch. Telemetry must never break generation, so a tool whose schema
+    fails to build is recorded by name only.
+    """
+    from ..llm.tool_context import is_function_tool, is_raw_function_tool
+    from ..llm.utils import build_legacy_openai_schema
+
+    definitions: list[dict[str, Any]] = []
+    for name, tool in tool_ctx.function_tools.items():
+        try:
+            if is_raw_function_tool(tool):
+                definitions.append({**tool.info.raw_schema, "name": tool.info.name})
+            elif is_function_tool(tool):
+                definitions.append(build_legacy_openai_schema(tool, internally_tagged=True))
+            else:
+                definitions.append({"name": name})
+        except Exception:
+            definitions.append({"name": name})
+    return definitions
+
+
 @utils.log_exceptions(logger=logger)
 @tracer.start_as_current_span("llm_node")
 async def _llm_inference_task(
@@ -197,6 +222,9 @@ async def _llm_inference_task(
             )
         ),
         trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+        trace_types.ATTR_FUNCTION_TOOL_DEFINITIONS: json.dumps(
+            _function_tool_definitions(tool_ctx)
+        ),
         trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
         trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
     }
