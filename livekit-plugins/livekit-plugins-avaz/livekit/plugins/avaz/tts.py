@@ -92,15 +92,14 @@ def _stream_model_from_agent_name(name: str) -> str:
 
 def _derive_ws_url_from_base(base_url: str) -> str:
     raw = base_url.strip().rstrip("/")
+    # urlparse treats "host:port/path" as scheme=host; require a real URL scheme.
+    if "://" not in raw:
+        raw = f"https://{raw}"
     parsed = urlparse(raw)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        # Accept host/path without scheme by assuming https.
-        if not parsed.scheme:
-            parsed = urlparse(f"https://{raw}")
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(
-                f"Avaz base_url must include http:// or https:// and a host (got {base_url!r})"
-            )
+        raise ValueError(
+            f"Avaz base_url must include http:// or https:// and a host (got {base_url!r})"
+        )
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = parsed.path.rstrip("/") + "/tts/stream-input"
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
@@ -611,7 +610,18 @@ class TTS(tts.TTS):
             task = self._prewarm_task
             if task is not None:
                 try:
-                    await task
+                    # Bound the wait so a slow prewarm cannot stall the greeting.
+                    # Leave the task running; it still marks attempted when finished.
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=DEFAULT_INLINE_WARMUP_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    logger.debug(
+                        "[Avaz TTS] prewarm still running after %.0fs; continuing with first turn",
+                        DEFAULT_INLINE_WARMUP_TIMEOUT_S,
+                    )
+                    return
                 except Exception:
                     pass
                 if self._warmed or self._warmup_attempted:
@@ -646,7 +656,7 @@ class TTS(tts.TTS):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming synthesizer for Avaz WebSocket TTS.
 
-    Collects one agent utterance, runs a single stream-input turn, and emits
+    Forwards agent text chunks as they arrive over stream-input, then emits
     PCM frames through the LiveKit TTS output emitter.
     """
 
@@ -661,27 +671,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
         self._sent_text_cache: str | None = None
 
-    async def _collect_text_parts(self) -> list[str]:
-        """Drain agent text before WebSocket synthesis.
-
-        Tokens are joined into one utterance for Avaz chunk-boundary handling and
-        retry replay via ``_sent_text_cache``. Connection/init overlaps warm-up
-        via ``_ensure_warmed`` before connect.
-        """
-        parts: list[str] = []
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
-                continue
-            if data:
-                parts.append(data)
-        return parts
-
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Pick up set_voice_ids / option changes made after stream() construction.
         self._opts = replace(self._tts._opts)
         node_start = time.monotonic()
         uri = self._opts.ws_url
         init_msg = _build_init_message(self._opts)
+        notation = self._opts.chunk_notation or "."
 
         pcm_byte_count = 0
         first_text_time: float | None = None
@@ -696,48 +692,46 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws_closed = False
         resampler: rtc.AudioResampler | None = None
         input_rate: int | None = None
+        flush_status: dict[str, Any] | None = None
 
-        text_parts = await self._collect_text_parts()
-        sent_text = "".join(text_parts).strip()
-        if sent_text:
-            self._sent_text_cache = sent_text
-        elif self._sent_text_cache:
-            sent_text = self._sent_text_cache
-            logger.debug(
-                "[Avaz TTS] retry using cached text (%d chars)",
-                len(sent_text),
-            )
-        else:
-            # Tool-only / empty turns: framework still starts TTS. Produce no audio.
-            output_emitter.initialize(
-                request_id=request_id,
-                sample_rate=sample_rate,
-                num_channels=1,
-                mime_type="audio/pcm",
-                stream=True,
-            )
-            output_emitter.start_segment(segment_id=segment_id)
-            logger.debug("[Avaz TTS] no text for this turn; skipping synthesis")
-            return
+        # Buffer only until the first non-empty token so empty/tool turns skip
+        # connect, while real replies start the WebSocket as soon as LLM text
+        # begins (instead of waiting for end_input).
+        pending: list[str | SynthesizeStream._FlushSentinel] = []
+        has_text = False
+        async for data in self._input_ch:
+            pending.append(data)
+            if isinstance(data, str) and data:
+                has_text = True
+                break
+
+        if not has_text:
+            if self._sent_text_cache:
+                pending = [self._sent_text_cache, self._FlushSentinel()]
+                has_text = True
+                logger.debug(
+                    "[Avaz TTS] retry using cached text (%d chars)",
+                    len(self._sent_text_cache),
+                )
+            else:
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    mime_type="audio/pcm",
+                    stream=True,
+                )
+                output_emitter.start_segment(segment_id=segment_id)
+                logger.debug("[Avaz TTS] no text for this turn; skipping synthesis")
+                return
 
         await self._tts._ensure_warmed()
-        raw_sent_text = sent_text
-        sent_text = _normalize_text_for_chunk_notation(sent_text, self._opts.chunk_notation)
-        if sent_text != raw_sent_text:
-            logger.debug(
-                "[Avaz TTS] normalized text for chunk_notation=%r (%d -> %d chars)",
-                self._opts.chunk_notation,
-                len(raw_sent_text),
-                len(sent_text),
-            )
-        total_text_chars = len(sent_text)
-        first_text_time = time.monotonic()
-        logger.debug(
-            "[Avaz TTS] synthesizing %d chars (%d chunks) after %.0fms",
-            total_text_chars,
-            len(text_parts) if text_parts else 1,
-            (first_text_time - node_start) * 1000,
-        )
+
+        async def _input_events() -> Any:
+            for item in pending:
+                yield item
+            async for item in self._input_ch:
+                yield item
 
         async def _push_pcm(pcm: bytes, sr: int) -> None:
             nonlocal emitter_ready, sample_rate, pcm_byte_count, resampler, input_rate
@@ -822,117 +816,168 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
             await _push_pcm(pcm, sr)
 
-        async def _drain_audio(ws: Any, *, timeout: float) -> tuple[bool, bool]:
-            """Drain until recv idle elapses.
-
-            Returns ``(got_audio, connection_closed)``.
-            """
-            nonlocal ws_closed
-            got_audio = False
-            idle = max(0.0, timeout)
-            deadline = time.monotonic() + idle
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                except asyncio.TimeoutError:
-                    break
-                except websockets.exceptions.ConnectionClosed as exc:
-                    ws_closed = True
-                    if (
-                        isinstance(exc, websockets.exceptions.ConnectionClosedOK)
-                        or got_audio
-                        or emitter_ready
-                    ):
-                        logger.debug("[Avaz TTS] WebSocket closed during drain: %s", exc)
-                        return got_audio, True
-                    raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
-                deadline = time.monotonic() + idle
-                try:
-                    payload = json.loads(raw)
-                except (TypeError, json.JSONDecodeError):
-                    logger.debug("[Avaz TTS] non-JSON frame ignored: %r", raw[:120])
-                    continue
-                if not isinstance(payload, dict):
-                    logger.debug("[Avaz TTS] non-dict JSON frame ignored: %r", payload)
-                    continue
-                _log_server_payload(payload, phase="drain")
-                if "audio" in payload:
-                    got_audio = True
-                    await _handle_audio_payload(payload)
-                elif "error" in payload:
-                    raise APIConnectionError(
-                        f"Avaz TTS server error: {_summarize_server_payload(payload)}"
-                    )
-            return got_audio, False
+        async def _handle_payload(payload: dict[str, Any], *, phase: str) -> bool:
+            """Handle one server frame. Returns True when the turn is finished."""
+            nonlocal flush_status
+            _log_server_payload(payload, phase=phase)
+            if "audio" in payload:
+                await _handle_audio_payload(payload)
+                return False
+            if "error" in payload:
+                raise APIConnectionError(
+                    f"Avaz TTS server error: {_summarize_server_payload(payload)}"
+                )
+            if payload.get("status") in ("closed", "done", "complete"):
+                flush_status = payload
+                return True
+            if "status" in payload:
+                flush_status = payload
+            return False
 
         async def _run_turn(ws: Any) -> None:
-            nonlocal ws_closed
+            nonlocal ws_closed, first_text_time, total_text_chars
             await ws.send(json.dumps(init_msg))
             init_resp = await asyncio.wait_for(ws.recv(), timeout=self._opts.connect_timeout_s)
             init_payload = _parse_init_response(init_resp)
             if "audio" in init_payload:
                 await _handle_audio_payload(init_payload)
 
-            await ws.send(json.dumps({"text": sent_text}))
-            self._mark_started()
-            _, closed = await _drain_audio(ws, timeout=self._opts.recv_idle_timeout_s)
-            if not closed and self._opts.post_text_drain_s > 0:
-                _, closed = await _drain_audio(ws, timeout=self._opts.post_text_drain_s)
+            sent_parts: list[str] = []
+            flush_sent = False
+            send_done = asyncio.Event()
+            terminal = asyncio.Event()
 
-            flush_status: dict[str, Any] | None = None
-            if not closed and not ws_closed:
+            async def send_task() -> None:
+                nonlocal first_text_time, total_text_chars, flush_sent, ws_closed
                 try:
-                    await ws.send(json.dumps({"flush": True}))
-                except websockets.exceptions.ConnectionClosed as exc:
-                    ws_closed = True
-                    if emitter_ready:
-                        logger.debug("[Avaz TTS] WebSocket already closed before flush: %s", exc)
-                        return
-                    raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
+                    async for data in _input_events():
+                        if isinstance(data, self._FlushSentinel):
+                            if not sent_parts:
+                                continue
+                            joined = "".join(sent_parts)
+                            normalized = _normalize_text_for_chunk_notation(joined, notation)
+                            if normalized != joined:
+                                suffix = normalized[len(joined) :]
+                                if suffix:
+                                    await ws.send(json.dumps({"text": suffix}))
+                                    sent_parts.append(suffix)
+                                    logger.debug(
+                                        "[Avaz TTS] appended chunk boundary %r",
+                                        suffix,
+                                    )
+                            if not ws_closed and not flush_sent:
+                                try:
+                                    await ws.send(json.dumps({"flush": True}))
+                                    flush_sent = True
+                                except websockets.exceptions.ConnectionClosed as exc:
+                                    ws_closed = True
+                                    if emitter_ready:
+                                        logger.debug(
+                                            "[Avaz TTS] WebSocket already closed before flush: %s",
+                                            exc,
+                                        )
+                                    else:
+                                        raise APIConnectionError(
+                                            f"Avaz TTS WebSocket closed: {exc}"
+                                        ) from exc
+                            continue
 
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=self._opts.flush_recv_timeout_s)
-                    flush_text = raw.decode() if isinstance(raw, bytes) else raw
-                    payload = json.loads(flush_text)
-                    if isinstance(payload, dict):
-                        _log_server_payload(payload, phase="flush")
-                        if "audio" in payload:
-                            await _handle_audio_payload(payload)
-                        elif "error" in payload:
-                            raise APIConnectionError(
-                                f"Avaz TTS server error: {_summarize_server_payload(payload)}"
+                        if not data:
+                            continue
+                        if first_text_time is None:
+                            first_text_time = time.monotonic()
+                            self._mark_started()
+                            logger.debug(
+                                "[Avaz TTS] first text after %.0fms",
+                                (first_text_time - node_start) * 1000,
                             )
-                        elif "status" in payload:
-                            flush_status = payload
-                    else:
-                        logger.debug("[Avaz TTS] non-dict flush response ignored: %r", payload)
-                except asyncio.TimeoutError:
-                    pass
-                except websockets.exceptions.ConnectionClosed as exc:
-                    ws_closed = True
-                    if isinstance(exc, websockets.exceptions.ConnectionClosedOK) or emitter_ready:
-                        logger.debug("[Avaz TTS] WebSocket closed during flush recv: %s", exc)
-                    else:
-                        raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
-                except json.JSONDecodeError as exc:
-                    raise APIConnectionError(
-                        f"Avaz TTS invalid flush response: {flush_text[:120]!r}"
-                    ) from exc
+                        sent_parts.append(data)
+                        await ws.send(json.dumps({"text": data}))
+                finally:
+                    if sent_parts:
+                        joined = "".join(sent_parts)
+                        self._sent_text_cache = joined
+                        total_text_chars = len(joined)
+                        if not flush_sent and not ws_closed:
+                            normalized = _normalize_text_for_chunk_notation(joined, notation)
+                            if normalized != joined:
+                                suffix = normalized[len(joined) :]
+                                if suffix:
+                                    try:
+                                        await ws.send(json.dumps({"text": suffix}))
+                                        sent_parts.append(suffix)
+                                    except websockets.exceptions.ConnectionClosed:
+                                        ws_closed = True
+                            if not ws_closed:
+                                try:
+                                    await ws.send(json.dumps({"flush": True}))
+                                    flush_sent = True
+                                except websockets.exceptions.ConnectionClosed as exc:
+                                    ws_closed = True
+                                    if not emitter_ready:
+                                        raise APIConnectionError(
+                                            f"Avaz TTS WebSocket closed: {exc}"
+                                        ) from exc
+                    send_done.set()
 
-                if not ws_closed:
-                    await _drain_audio(ws, timeout=self._opts.flush_recv_timeout_s)
-                if not emitter_ready and not ws_closed:
-                    await _drain_audio(ws, timeout=self._opts.flush_recv_timeout_s)
+            async def recv_task() -> None:
+                nonlocal ws_closed
+                idle = max(0.05, self._opts.recv_idle_timeout_s)
+                # After flush, allow a longer idle before giving up on trailing audio.
+                flush_idle = max(idle, self._opts.flush_recv_timeout_s)
+                while not terminal.is_set():
+                    if ws_closed:
+                        break
+                    timeout = flush_idle if (flush_sent or send_done.is_set()) else idle
+                    # Before any text is sent, wait longer so init→first-token
+                    # races do not abort the receive loop.
+                    if not sent_parts and not send_done.is_set():
+                        timeout = max(timeout, self._opts.connect_timeout_s)
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        # Still streaming text: keep waiting for audio.
+                        if not flush_sent and not send_done.is_set():
+                            continue
+                        break
+                    except websockets.exceptions.ConnectionClosed as exc:
+                        ws_closed = True
+                        if (
+                            isinstance(exc, websockets.exceptions.ConnectionClosedOK)
+                            or emitter_ready
+                        ):
+                            logger.debug("[Avaz TTS] WebSocket closed during recv: %s", exc)
+                            break
+                        raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
+
+                    try:
+                        payload = json.loads(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        logger.debug("[Avaz TTS] non-JSON frame ignored: %r", raw[:120])
+                        continue
+                    if not isinstance(payload, dict):
+                        logger.debug("[Avaz TTS] non-dict JSON frame ignored: %r", payload)
+                        continue
+                    if await _handle_payload(payload, phase="recv"):
+                        terminal.set()
+                        break
+
+            send_t = asyncio.create_task(send_task())
+            recv_t = asyncio.create_task(recv_task())
+            try:
+                await asyncio.gather(send_t, recv_t)
+            finally:
+                for t in (send_t, recv_t):
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(send_t, recv_t, return_exceptions=True)
 
             if not emitter_ready and flush_status is not None:
                 chunks_gen = int(flush_status.get("chunks_generated", -1))
                 if chunks_gen == 0:
                     logger.error(
                         "[Avaz TTS] server returned 0 chunks for text (%d chars)",
-                        len(sent_text),
+                        total_text_chars,
                     )
                     raise APIConnectionError(
                         f"Avaz TTS produced no audio: {_summarize_server_payload(flush_status)}"
