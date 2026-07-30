@@ -33,9 +33,9 @@ load_dotenv()
 # cheapest to dearest — the order the rules compare buckets in
 FARE_BUCKETS = ("BASIC", "SAVER", "FLEX", "BUSINESS")
 
-# what a caller is entitled to, by loyalty status and the fare they hold. deliberately not
-# in the policy: reading a number off a table is not reasoning, and a model that reads it
-# wrong is wrong within the legal range. the desk decides whether to give one, not how much
+# what a caller is entitled to on a new fare, by loyalty status and the bucket they buy.
+# deliberately not in the policy: reading a number off a table is not reasoning, and a model
+# that reads it wrong is wrong within the legal range. the desk decides whether, not how much
 # fmt: off
 DISCOUNT_TIERS: dict[str, dict[str, int]] = {
     "Blue":   {"BASIC": 0,  "SAVER": 5,  "FLEX": 5,  "BUSINESS": 10},
@@ -67,46 +67,45 @@ whether a flight is running and the weather are public: search_flights, flight_s
 check_weather never want an address. Answer those and do not ask who is calling.
 An address is needed only to reach an account — to see, price or change a booking, or to
 sell one. Start with lookup_caller, which either comes back with the caller and their
-bookings or tells you there is no address yet; only then run collect_email. Never open
-with collect_email, and do not call it a second time to be sure: someone already
-identified is handed straight back, and asking twice in one call is the rudest thing you
-can do to them.
-Bookings are found from that address, never from a reference read out loud, and never
-from a guess off the transcript. A first-time caller needs one too — it is what
-book_flight opens their account with — but collect it when they are ready to buy, not
-while they are still looking.
+bookings or tells you there is no address yet; only then run collect_email. Never open with
+collect_email, and never call it twice to be sure: asking again in one call is the rudest
+thing you can do to them. A first-time caller needs an address too — it is what book_flight
+opens their account with — but collect it when they are ready to buy, not while they are
+still looking.
 If the caller has more than one booking, do not pick one for them. Hand back the list by
 route, date and flight number — never the reference — and say what to ask.
 
 FARE BUCKETS, cheapest to dearest: BASIC, SAVER, FLEX, BUSINESS.
-  BASIC     no changes, no refund. 1 cabin bag, checked bags 45 USD each.
-  SAVER     changes for 75 USD plus the fare difference; refund as travel credit.
+  BASIC     no changes unless we are at fault, and never refundable — say so plainly
+            rather than offering to try. 1 cabin bag, checked bags 45 USD each.
+  SAVER     changes for 75 USD plus the fare difference; refunds as travel credit.
             1 cabin bag, checked bags 35 USD each.
   FLEX      free changes, refundable to the original card, 1 checked bag included.
   BUSINESS  free changes, refundable, 2 checked bags included.
 
-CHANGES
-The change fee is waived when we cancelled the flight or delayed it more than three
-hours, and on any fare for a Gold member. A fare difference is never waived.
-Quote before you commit: quote_change first, rebook second. Never rebook into a cheaper
-bucket than the one held, and never into a flight with no seats in that bucket.
+DISRUPTION
+A flight we cancelled, or delayed more than three hours, is our fault, and we put that right
+in kind rather than with a discount: the change fee is waived on any fare, the seat they hold
+moves across for nothing however the new flight is priced — only a dearer bucket is charged,
+and only for the step up — and a SAVER refund goes back to the card instead of out as credit.
+Check the weather at both ends before you recommend an alternative — putting someone on the
+next flight into a storm is worse than the delay. Say what you checked.
 
-REFUNDS
-A BASIC ticket is never refundable — say so plainly rather than offering to try. A SAVER
-refund is travel credit, unless we cancelled the flight or delayed it more than three
-hours, in which case it goes back to the card.
+CHANGES
+A Gold member's change fee is waived on any fare too; a fare difference falls away only when
+we are at fault. Quote before you commit: quote_change first, rebook second. Never rebook
+into a cheaper bucket than the one held, and never into a flight with no seats in that bucket.
 
 GOODWILL DISCOUNTS
-Only when the caller asks for one, or when we cancelled on them. Never volunteer one.
-Whether they get one is your call; how much is not, and you do not know the figure — the
-desk works it out from their status, their fare and whether we disrupted the flight, and
-tells you what it gave. Never name a number before then. It comes off what they owe on a
-change or a new booking, never off a segment already flown, so quote the change first.
-
-DISRUPTION
-When a flight is delayed or cancelled, check the weather at both ends before you
-recommend an alternative — putting someone on the next flight into a storm is worse than
-the delay. Say what you checked."""
+Only on a new booking, and only when the caller asks or when we broke a flight of theirs;
+never volunteered. Whether they get one is your call; how much is not, and you do not know
+the figure — book_flight works it out from their status, the bucket and what we still owe them
+for a disruption, refuses the flag when there is nothing to give, and tells you what it gave.
+Never name a number before then. A change is never discounted, however they ask and whatever
+we did to them: not the fee, not the fare difference, not for someone who had one on the fare
+they are leaving — no tool of yours will do it, and after a disruption the seat they hold
+already moves for nothing. Where the fare is refundable, refunding and booking again is the
+route that carries one; price both and say which leaves them better off."""
 
 
 @dataclass
@@ -177,9 +176,11 @@ class Booking:
     checked_bags: int
     paid_usd: float
     state: str = "confirmed"
-    # set by quote_change and apply_discount, consumed by rebook
+    # a disruption on this booking has been made up for, so it stops earning goodwill
+    compensated: bool = False
+    # set by quote_change, consumed by rebook. a change is never discounted, so there is
+    # nothing else for the desk to put on a booking between the quote and the reissue
     pending_quote_usd: float | None = None
-    discount_pct: int = 0
 
 
 @dataclass
@@ -228,9 +229,9 @@ def seed_airline() -> Airline:
     ]
     # fmt: on
     travelers = [
-        Traveler("dana.whitfield@example.com", "Dana Whitfield", "Gold"),
-        Traveler("m.ortiz@example.com", "Miguel Ortiz", "Blue"),
-        Traveler("priya.raman@example.com", "Priya Raman", "Silver", credit_usd=120.0),
+        Traveler("dana@example.com", "Dana Whitfield", "Gold"),
+        Traveler("ortiz@example.com", "Miguel Ortiz", "Blue"),
+        Traveler("raman@example.com", "Priya Raman", "Silver", credit_usd=120.0),
     ]
 
     def day(offset: int) -> str:
@@ -238,10 +239,10 @@ def seed_airline() -> Airline:
 
     bookings = [
         # two bookings on one address: the desk has to ask which one
-        Booking("NW7Q2K", "dana.whitfield@example.com", "NW808", day(1), "SAVER", 1, 0, 742.0),
-        Booking("NW3H8L", "dana.whitfield@example.com", "NW441", day(30), "BASIC", 1, 1, 566.0),
-        Booking("NW5T4P", "m.ortiz@example.com", "NW812", day(5), "BASIC", 2, 0, 1230.0),
-        Booking("NW8W6C", "priya.raman@example.com", "NW620", day(12), "BUSINESS", 1, 2, 3620.0),
+        Booking("NW7Q2K", "dana@example.com", "NW808", day(1), "SAVER", 1, 0, 742.0),
+        Booking("NW3H8L", "dana@example.com", "NW441", day(30), "BASIC", 1, 1, 566.0),
+        Booking("NW5T4P", "ortiz@example.com", "NW812", day(5), "BASIC", 2, 0, 1230.0),
+        Booking("NW8W6C", "raman@example.com", "NW620", day(12), "BUSINESS", 1, 2, 3620.0),
     ]
     airline = Airline(
         routes={r.flight_no: r for r in routes},
@@ -311,10 +312,10 @@ def _short(text: str | None, limit: int = 90) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
-def _discount_percent(traveler: Traveler, bucket: str, disrupted: bool) -> int:
-    """The caller's tier, plus a bump when the flight was our fault."""
+def _discount_percent(traveler: Traveler, bucket: str, owed: bool) -> int:
+    """The caller's tier, plus a bump when we have broken a flight of theirs."""
     percent = DISCOUNT_TIERS[traveler.status][bucket]
-    if disrupted:
+    if owed:
         percent += DISRUPTION_BONUS
     return min(percent, MAX_DISCOUNT)
 
@@ -561,10 +562,16 @@ class SupportAgent(Agent):
         traveler = userdata.airline.travelers[booking.email]
         waived = old.disrupted or traveler.status == "Gold"
         fee = 0.0 if booking.fare in ("FLEX", "BUSINESS") or waived else 75.0
-        difference = max(0.0, new.route.fares[bucket] * booking.passengers - booking.paid_usd)
+        if old.disrupted:
+            # our fault, so the seat they hold moves for nothing however this flight is
+            # priced; only a dearer bucket is charged, and only for the step up. a bucket the
+            # new flight does not sell prices at the one they are taking, which comes to zero
+            held = new.route.fares.get(booking.fare, new.route.fares[bucket])
+            difference = max(0.0, (new.route.fares[bucket] - held) * booking.passengers)
+        else:
+            difference = max(0.0, new.route.fares[bucket] * booking.passengers - booking.paid_usd)
 
         booking.pending_quote_usd = round(fee + difference, 2)
-        booking.discount_pct = 0
         return {
             "booking_ref": booking.ref,
             "new_flight": new.route.flight_no,
@@ -573,50 +580,11 @@ class SupportAgent(Agent):
             "seats_left": new.seats.get(bucket, 0),
             "change_fee_usd": fee,
             "fee_waived": waived,
+            # why it was waived, since a Gold member gets that anyway
+            "airline_at_fault": old.disrupted,
             "fare_difference_usd": round(difference, 2),
             "total_due_usd": booking.pending_quote_usd,
             "hold_expires_in_minutes": 20,
-        }
-
-    @function_tool
-    async def apply_discount(
-        self, ctx: RunContext[Userdata], booking_ref: str, reason: str
-    ) -> dict[str, Any]:
-        """Take the caller's goodwill discount off what a quoted change costs.
-
-        How much is not yours to pick: it comes out of the caller's status, the fare they
-        hold and whether we disrupted the flight. Whether to offer one at all is yours.
-        Refuses until quote_change has run.
-
-        Args:
-            booking_ref: from lookup_caller.
-            reason: what the caller is being compensated for. It prints on the invoice.
-        """
-        userdata = ctx.userdata
-        booking = _booking(userdata, booking_ref)
-        if booking.pending_quote_usd is None:
-            raise ToolError("nothing is quoted on this booking yet — run quote_change first")
-
-        traveler = userdata.airline.travelers[booking.email]
-        disrupted = _booked_departure(userdata, booking).disrupted
-        percent = _discount_percent(traveler, booking.fare, disrupted)
-        if percent == 0:
-            raise ToolError(
-                f"a {traveler.status} member on a {booking.fare} fare has nothing to give"
-            )
-
-        booking.discount_pct = percent
-        return {
-            "booking_ref": booking.ref,
-            "discount_percent": percent,
-            "based_on": {
-                "loyalty_status": traveler.status,
-                "fare_bucket": booking.fare,
-                "airline_disrupted": disrupted,
-            },
-            "was_due_usd": booking.pending_quote_usd,
-            "now_due_usd": round(booking.pending_quote_usd * (1 - percent / 100), 2),
-            "reason": reason,
         }
 
     # cancellable and replaceable: "actually, make it Thursday" halfway through cancels this
@@ -656,13 +624,13 @@ class SupportAgent(Agent):
         old.seats[booking.fare] = old.seats.get(booking.fare, 0) + booking.passengers
         new.seats[bucket] -= booking.passengers
 
-        charged = round((booking.pending_quote_usd or 0.0) * (1 - booking.discount_pct / 100), 2)
+        # what quote_change said, in full: a change carries no discount, whoever is asking
+        charged = round(booking.pending_quote_usd or 0.0, 2)
         booking.flight_no = new.route.flight_no
         booking.date = new.date
         booking.fare = bucket
         booking.paid_usd += charged
         booking.pending_quote_usd = None
-        booking.discount_pct = 0
 
         userdata.events.append(f"{booking.ref} moved to {new.departs} for {charged} USD")
         return {
@@ -693,7 +661,8 @@ class SupportAgent(Agent):
             bucket: the fare bucket to sell.
             passengers: how many seats.
             goodwill_discount: whether to take the caller's discount off this fare. How
-                much comes from their status and the bucket, not from you.
+                much comes from their status, the bucket and what we still owe them for a
+                disruption, not from you. Refuses if there is nothing to give.
         """
         userdata = ctx.userdata
         departure = _departure(userdata, flight_no, _day(date))
@@ -711,9 +680,23 @@ class SupportAgent(Agent):
         traveler = userdata.airline.travelers.setdefault(
             userdata.email, Traveler(userdata.email, "new customer", "Blue")
         )
-        percent = (
-            _discount_percent(traveler, bucket, departure.disrupted) if goodwill_discount else 0
-        )
+        percent = 0
+        owed: list[Booking] = []
+        if goodwill_discount:
+            # the bump is for a flight of theirs we broke, not for the one they are buying, and
+            # it is paid once. a refunded booking still counts: being cancelled on is why they
+            # are buying again
+            owed = [
+                b
+                for b in userdata.airline.bookings.values()
+                if b.email == traveler.email
+                and not b.compensated
+                and _booked_departure(userdata, b).disrupted
+            ]
+            percent = _discount_percent(traveler, bucket, bool(owed))
+            # before the seat is sold, so the desk can offer full price instead of promising
+            if percent == 0:
+                raise ToolError(f"a {traveler.status} member buying {bucket} has nothing to give")
 
         await ctx.update(f"holding {passengers} on {departure.route.flight_no}")
         await asyncio.sleep(4)  # inventory hold, payment capture
@@ -722,6 +705,8 @@ class SupportAgent(Agent):
         credit_used = min(traveler.credit_usd, fare)
         traveler.credit_usd -= credit_used
         departure.seats[bucket] -= passengers
+        for settled in owed:
+            settled.compensated = True
 
         booking = Booking(
             ref=f"NW{uuid.uuid4().hex[:4].upper()}",
