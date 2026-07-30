@@ -1,74 +1,4 @@
-"""Fast brain / slow brain: a realtime model talks, a text model reasons.
-
-Northwind Air's support line. The realtime model owns the conversation — turn-taking,
-latency, barge-in — and is given exactly one tool, `lk_agents_delegate`. Every lookup,
-fare rule, price and booking change goes to `delegation_llm`, which never speaks: it
-returns facts the realtime model phrases.
-
-The split is what makes this work. A realtime model asked to turn "next Monday" into a
-date, identify a caller, read a disruption waiver off a fare table, price the change and
-then call `rebook` with the right four arguments will get it wrong. A frontier text model
-asked to hold a natural spoken conversation is slow and stilted. Here each does the half
-it is good at, and none of the thirteen tools below reaches the model holding the
-microphone — its list is exactly `[lk_agents_delegate]`. Nothing here is flagged
-NO_DELEGATE; that is for tools too latency-critical to route through a frontier model,
-like a DTMF digit that has to land while an IVR prompt is still playing.
-
-Points worth reading:
-  - the fare rules and the identification policy live in `policy()`, the delegation's
-    instructions. The voice persona holds no domain knowledge at all, and is deliberately
-    not told that a second model exists — call the other half "the fare desk" in its
-    prompt and it starts deciding for itself that a weather question is out of scope.
-    Everything goes to the tool; nothing is off-topic for it.
-  - nothing here asks the voice model to say "let me check". `announce` defaults to off,
-    which selects a `delegate` description that asks for one short line in the same turn
-    as the call — free, in the same completion, and phrased so the caller never learns
-    anyone was consulted. A model that already volunteers a line just keeps its own.
-  - where the line falls between the two: the policy carries judgment — whether a caller
-    has earned a goodwill discount at all — and DISCOUNT_TIERS carries entitlement.
-    Putting the table in the prompt would only let a model read it wrong, and wrong
-    inside the legal range is exactly what a ceiling check cannot catch. So
-    `apply_discount` takes no percentage; it works one out and reports what it gave.
-  - dates are the same shape of split. The timetable repeats every day, and both models
-    are told what day it is — the desk so it can turn "next Monday" into the YYYY-MM-DD
-    the tools accept, the voice model only so it can say "Friday" rather than read a date
-    back. The arithmetic is the desk's, and the voice model is told to leave it alone.
-  - `collect_email` is delegated even though it talks. It runs a GetEmailTask, which
-    takes the conversation over to spell an address back and confirm it — so the desk
-    reaches out and drives a piece of the conversation itself, then keeps reasoning with
-    the answer in the same loop. `ctx.foreground()` is what makes that safe: it waits for
-    the line to go quiet and holds it, so the spelling never collides with the voice
-    model. The caller is never asked to read out a booking reference.
-  - a delegation is stateless — built fresh from the conversation each time, and its own
-    tool calls are recorded in neither history — so the desk cannot remember having asked
-    for anything. A tool that talks to the caller therefore has to be idempotent about it:
-    `collect_email` answers off `Userdata` when an address is already on file, which is
-    what stops the second delegation asking all over again. Anything a tool says out loud
-    needs that guard; anything it merely computes does not.
-  - `rebook` and `book_flight` are CANCELLABLE with on_duplicate="replace", so "actually,
-    make it Thursday" cancels the booking in flight instead of making a second one. Their
-    `ctx.update()` reaches the caller as a progress line the voice model rephrases, and
-    the delegation is given lk_agents_cancel_task automatically because of them.
-  - the mock airline is per session, in Userdata. Seats are per departure and really do
-    get decremented, and the seeded bookings sit a few days out from whenever you run it.
-
-Try it with `python delegation.py console`:
-  - "my flight to Tokyo is delayed, can you get me out tomorrow instead"
-    → one delegation that asks for the address itself, then looks the caller up, checks
-      the flight, checks the Haneda forecast — there is a typhoon warning — searches,
-      quotes with the delay waiver applied, and rebooks. Eight seconds that narrate
-      themselves.
-  - "can I get a refund on my other trip"
-    → two bookings, so the desk hands back the list and the voice model asks which;
-      the answer for the BASIC one back from Paris is no, and it says so without
-      offering to try.
-  - "that's really disappointing, is there anything you can do on the price"
-    → the desk decides they have earned one and asks for it; 15 for Gold on a SAVER
-      fare, plus 5 because we delayed them, comes back from the tool rather than from it.
-  - "I need to get to Beijing a week on Tuesday"
-    → the desk does the calendar arithmetic and searches that day. Westbound out of SFO
-      it also has to say you land the following afternoon.
-"""
+"""Fast brain / slow brain: a realtime model talks, a text model reasons."""
 
 import asyncio
 import json
@@ -462,7 +392,9 @@ class SupportAgent(Agent):
         # foreground() waits for the line to go quiet and then holds it, so the spelling
         # never collides with whatever the voice model is in the middle of saying
         async with ctx.foreground():
-            result = await GetEmailTask(chat_ctx=self.chat_ctx, llm=self.llm)
+            result = await GetEmailTask(
+                chat_ctx=self.chat_ctx, llm=self.llm, delegation_llm=self.delegation_llm
+            )
 
         userdata.email = result.email_address.strip().lower()
         logger.info(f"caller identified as {userdata.email}")

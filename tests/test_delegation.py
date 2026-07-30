@@ -21,7 +21,13 @@ from livekit.agents import (
     function_tool,
     utils,
 )
+from livekit.agents.beta.workflows.utils import (
+    DELEGATED_SPEAKER_DIRECTIVE,
+    DELEGATED_TOOL_CALLER_DIRECTIVE,
+    WorkflowInstructions,
+)
 from livekit.agents.llm import DELEGATE_TOOL_NAME, ToolContext, ToolError, ToolFlag, Toolset
+from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.delegation import (
@@ -250,6 +256,56 @@ def _run_ctx(session: Any, *, call_id: str, name: str, modality: str = "audio") 
         speech_handle=speech_handle,
         function_call=FunctionCall(call_id=call_id, name=name, arguments="{}"),
     )
+
+
+class TestWorkflowPrompts:
+    """A builtin workflow prompt is written for one model; delegation splits it between two."""
+
+    def _task(self, *, delegating: bool = True, **kwargs: Any) -> Any:
+        from livekit.agents.beta.workflows import GetEmailTask
+
+        task = GetEmailTask(**kwargs)
+        session = AgentSession(delegation_llm=MagicMock() if delegating else None)
+        task._activity = AgentActivity(task, session)
+        return task
+
+    def _rendered(self, instructions: Any) -> str:
+        return (
+            instructions if isinstance(instructions, str) else instructions.render(modality="audio")
+        )
+
+    @pytest.mark.parametrize(
+        "given", [NOT_GIVEN, "collect the email", WorkflowInstructions(persona="you")]
+    )
+    def test_each_model_gets_the_prompt_with_its_own_directive(self, given: Any):
+        task = self._task(instructions=given)
+
+        speaking = self._rendered(task.instructions)
+        assert DELEGATED_SPEAKER_DIRECTIVE in speaking
+        assert DELEGATED_TOOL_CALLER_DIRECTIVE not in speaking
+        # the delegation runs the tools, so it is the one told the agent cannot see them
+        calling = self._rendered(task._delegation_options["instructions"])
+        assert DELEGATED_TOOL_CALLER_DIRECTIVE in calling
+        assert DELEGATED_SPEAKER_DIRECTIVE not in calling
+
+    def test_the_directive_is_absent_without_delegation(self):
+        task = self._task(delegating=False)
+
+        assert DELEGATED_SPEAKER_DIRECTIVE not in self._rendered(task.instructions)
+
+    def test_the_callers_own_delegation_prompt_is_left_alone(self):
+        task = self._task(delegation_options={"instructions": "mine", "announce": True})
+
+        assert task._delegation_options["instructions"] == "mine"
+        assert task._delegation_options["announce"] is True
+
+    def test_other_delegation_options_survive_the_prompt_being_filled_in(self):
+        task = self._task(delegation_options={"announce": True})
+
+        assert DELEGATED_TOOL_CALLER_DIRECTIVE in self._rendered(
+            task._delegation_options["instructions"]
+        )
+        assert task._delegation_options["announce"] is True
 
 
 def _delegating_activity(session: Any) -> Any:
