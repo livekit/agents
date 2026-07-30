@@ -271,8 +271,7 @@ class ServerOptions:
     When None (default), multiprocess mode is disabled and only main process metrics are collected.
     Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
     entrypoint_shutdown_timeout: float = 15.0
-    """Maximum time to wait for a job entrypoint to exit before cancelling it."""
-
+    """Maximum time to wait for a job to shutdown upon shutdown request before force-cancelling it."""
     def __post_init__(self) -> None:
         self.log_level = _validate_and_normalize_log_level(self.log_level)
 
