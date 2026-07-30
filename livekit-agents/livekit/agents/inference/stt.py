@@ -1096,8 +1096,6 @@ class SpeechStream(stt.SpeechStream):
 
         if not text and not is_final:
             return
-        # fallback onset for providers that send no start_of_speech; a transcript is the
-        # earliest evidence of speech we have, so it is late by a word-decode
         self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
