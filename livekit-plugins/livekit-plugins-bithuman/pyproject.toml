@@ -25,10 +25,11 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-# bithuman builds only for Python 3.11 through 3.13. Both marker bounds are
-# load-bearing while the floor stays at 0.5.25: 2.3.10 ships cp310 and cp314
-# wheels and declares no upper bound, so either bound dropped lets an install
-# outside 3.11-3.13 backtrack onto it instead of resolving bithuman away.
+# bithuman 2.x builds only for Python 3.11 through 3.13, so the marker keeps
+# 3.10 and 3.14 from resolving it at all rather than backtracking onto 2.3.10,
+# which ships cp310 and cp314 wheels and declares no upper bound. The floor
+# stays wide so platforms 2.x dropped (Windows, x86_64 macOS, macOS < 14) can
+# still resolve the 1.x line, which satisfies everything avatar.py calls.
 dependencies = [
     "livekit-agents>=1.6.7",
     "bithuman>=0.5.25,<3; python_version >= '3.11' and python_version < '3.14'",
