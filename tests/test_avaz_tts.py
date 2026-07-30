@@ -126,11 +126,11 @@ def test_rejects_plaintext_ws_with_api_key() -> None:
         TTS(ws_url="ws://remote.example/tts/stream-input", api_key="secret")
 
 
-def test_allows_loopback_plaintext_ws_with_api_key() -> None:
+def test_rejects_loopback_plaintext_ws_with_api_key() -> None:
     from livekit.plugins.avaz import TTS
 
-    engine = TTS(ws_url="ws://127.0.0.1:8080/tts/stream-input", api_key="secret")
-    assert engine._opts.api_key == "secret"
+    with pytest.raises(ValueError, match="unencrypted ws://"):
+        TTS(ws_url="ws://127.0.0.1:8080/tts/stream-input", api_key="secret")
 
 
 def test_explicit_ws_url_skips_dashboard_api_key_requirement(
@@ -190,7 +190,6 @@ async def test_stream_appends_boundary_when_text_ends_with_space(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
         post_text_drain_s=0.0,
@@ -251,6 +250,20 @@ def test_set_voice_ids_uuid() -> None:
     engine = TTS(ws_url=_TEST_WS)
     engine.set_voice_ids(model_id=_TEST_UUID)
     assert engine._opts.agent_model_id == _TEST_UUID
+
+
+def test_set_voice_ids_non_uuid_clears_agent_model_id() -> None:
+    from livekit.plugins.avaz import TTS
+    from livekit.plugins.avaz.tts import _build_init_message
+
+    engine = TTS(ws_url=_TEST_WS)
+    engine.set_voice_ids(model_id=_TEST_UUID)
+    engine.set_voice_ids(model_id="avaz2")
+    assert engine._opts.stream_model == "avaz2"
+    assert engine._opts.agent_model_id == ""
+    msg = _build_init_message(engine._opts)
+    assert msg["model_settings"]["model_id"] == "avaz2"
+    assert "agent_model_id" not in msg["model_settings"]
 
 
 def test_resolve_stream_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -322,7 +335,10 @@ def test_log_server_payload_redacts_sensitive_fields(caplog: pytest.LogCaptureFi
 async def test_warmup_passes_auth_headers() -> None:
     from livekit.plugins.avaz import TTS
 
-    engine = TTS(ws_url=_TEST_WS, api_key="test-api-key")
+    engine = TTS(
+        ws_url="wss://127.0.0.1:8893/tts/stream-input",
+        api_key="test-api-key",
+    )
     mock_ws = AsyncMock()
     mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
     mock_ws.__aexit__ = AsyncMock(return_value=None)
@@ -339,6 +355,7 @@ async def test_warmup_passes_auth_headers() -> None:
         connect.assert_called_once()
         _, kwargs = connect.call_args
         assert kwargs["additional_headers"]["X-API-Key"] == "test-api-key"
+        assert "ssl" in kwargs
 
 
 @pytest.mark.asyncio
@@ -419,7 +436,6 @@ async def test_stream_run_drains_audio_with_ws(monkeypatch: pytest.MonkeyPatch) 
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         post_text_drain_s=0.01,
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
@@ -471,7 +487,7 @@ async def test_stream_empty_text_is_noop_without_error(
     """Tool-only / empty turns must not raise APIConnectionError or open a WS."""
     from livekit.plugins.avaz import TTS
 
-    engine = TTS(ws_url=_TEST_WS, api_key="test-api-key")
+    engine = TTS(ws_url=_TEST_WS)
     stream = engine.stream()
     stream.end_input()
 
@@ -498,7 +514,6 @@ async def test_stream_run_turn_sends_flush_after_text(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         post_text_drain_s=0.01,
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
@@ -554,7 +569,6 @@ async def test_stream_clean_ws_close_after_audio_succeeds(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         post_text_drain_s=0.01,
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
@@ -612,7 +626,6 @@ async def test_stream_skips_flush_when_ws_closed_after_audio(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         post_text_drain_s=0.01,
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
@@ -665,6 +678,72 @@ async def test_stream_skips_flush_when_ws_closed_after_audio(
 
 
 @pytest.mark.asyncio
+async def test_stream_tolerates_closed_ws_while_sending_text_after_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hang-up while sending later text must not fail a turn that already got audio."""
+    import websockets.exceptions
+
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        post_text_drain_s=0.0,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Hello. ")
+    stream.push_text("More text.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue: list[object] = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+    audio_seen = asyncio.Event()
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if not recv_queue:
+            raise asyncio.TimeoutError
+        item = recv_queue.pop(0)
+        if isinstance(item, str) and '"audio"' in item:
+            audio_seen.set()
+        return item  # type: ignore[return-value]
+
+    async def send_side_effect(payload: str) -> None:
+        data = json.loads(payload)
+        if data.get("text") == "More text.":
+            await audio_seen.wait()
+            # Let _handle_audio_payload mark emitter_ready before we hang up.
+            await asyncio.sleep(0.05)
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock(side_effect=send_side_effect)
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
+
+
+@pytest.mark.asyncio
 async def test_stream_drain_idle_timeout_extends_on_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -674,7 +753,6 @@ async def test_stream_drain_idle_timeout_extends_on_audio(
     idle_timeout = 0.12
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         post_text_drain_s=0.0,
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=idle_timeout,
@@ -739,7 +817,6 @@ async def test_stream_ends_promptly_on_terminal_status(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         recv_idle_timeout_s=2.0,
         flush_recv_timeout_s=5.0,
         turn_timeout_s=10.0,
@@ -791,7 +868,6 @@ async def test_stream_forwards_text_chunks_as_they_arrive(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.05,
         turn_timeout_s=5.0,
@@ -889,7 +965,6 @@ async def test_stream_honours_post_flush_window_after_short_idle(
 
     engine = TTS(
         ws_url=_TEST_WS,
-        api_key="test-api-key",
         recv_idle_timeout_s=0.05,
         flush_recv_timeout_s=0.25,
         post_text_drain_s=0.0,
@@ -988,7 +1063,7 @@ async def test_stream_connect_errors_raise_api_connection_error(
 ) -> None:
     from livekit.plugins.avaz import TTS
 
-    engine = TTS(ws_url=_TEST_WS, api_key="test-api-key", turn_timeout_s=5.0)
+    engine = TTS(ws_url=_TEST_WS, turn_timeout_s=5.0)
     stream = engine.stream()
     stream.push_text("Merhaba.")
     stream.end_input()

@@ -106,30 +106,16 @@ def _derive_ws_url_from_base(base_url: str) -> str:
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
-def _is_loopback_host(hostname: str | None) -> bool:
-    host = (hostname or "").strip().lower().strip("[]")
-    return host in ("localhost", "127.0.0.1", "::1")
-
-
 def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
-    """Refuse sending API credentials over plaintext ``ws://`` except loopback.
+    """Refuse sending API credentials over any plaintext ``ws://`` URL.
 
-    Loopback plaintext is allowed only for local dashboard/dev proxies. The API
-    token still crosses the local stack in cleartext — prefer ``wss://`` whenever
-    possible. Hostname matching is intentionally narrow (``localhost`` /
-    ``127.0.0.1`` / ``::1``); other loopback forms are rejected.
+    Dashboard tokens must use ``wss://`` (or an ``https`` ``base_url``). Local
+    TTS without auth can still use ``ws://`` by omitting ``api_key``.
     """
     if not api_key:
         return
     parsed = urlparse(ws_url)
     if parsed.scheme != "ws":
-        return
-    if _is_loopback_host(parsed.hostname):
-        logger.warning(
-            "Avaz TTS sending API key over plaintext ws:// to loopback host %s; "
-            "prefer wss:// — the token is transmitted in cleartext on this machine",
-            parsed.hostname,
-        )
         return
     raise ValueError(
         "Avaz TTS refuses to send API credentials over unencrypted ws://. "
@@ -569,7 +555,9 @@ class TTS(tts.TTS):
 
         Args:
             model_id: Dashboard UUID (sent as ``agent_model_id`` in WebSocket
-                init) or upstream stream model name when not a UUID.
+                init) or upstream stream model name when not a UUID. A non-UUID
+                value clears any previous ``agent_model_id`` so the dashboard
+                does not keep the old catalog voice.
             speaker_id: Integer speaker index for ``model_settings``.
         """
         if is_given(model_id) and model_id is not None:
@@ -578,6 +566,7 @@ class TTS(tts.TTS):
                 self._opts.agent_model_id = mid
             else:
                 self._opts.stream_model = mid
+                self._opts.agent_model_id = ""
         if is_given(speaker_id) and speaker_id is not None:
             try:
                 self._opts.speaker_id = int(speaker_id)
@@ -928,7 +917,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 (first_text_time - node_start) * 1000,
                             )
                         sent_parts.append(data)
-                        await ws.send(json.dumps({"text": data}))
+                        try:
+                            await ws.send(json.dumps({"text": data}))
+                        except websockets.exceptions.ConnectionClosed as exc:
+                            ws_closed = True
+                            if emitter_ready:
+                                logger.debug(
+                                    "[Avaz TTS] WebSocket closed while sending text: %s",
+                                    exc,
+                                )
+                                break
+                            raise APIConnectionError(f"Avaz TTS WebSocket closed: {exc}") from exc
                 finally:
                     if sent_parts:
                         joined = "".join(sent_parts)
