@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import json
+import time
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 from multidict import CIMultiDict
 
-from livekit.agents import stt
+from livekit import rtc
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -177,6 +186,96 @@ async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected
     await stream._connect_ws()
 
     assert f"enable_logging={expected}" in captured["url"]
+
+
+class _FakeWS:
+    """Records outgoing messages. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive(self) -> Any:
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def _live_stream(ws: _FakeWS) -> elevenlabs_stt.SpeechStream:
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    opts = dataclasses.replace(instance._opts, sample_rate=16000)
+    stream = elevenlabs_stt.SpeechStream(
+        stt=instance,
+        opts=opts,
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        language=None,
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+    )
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect  # type: ignore[method-assign]
+    return stream
+
+
+def _frame(ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * samples,
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_flush_commits_the_turn_when_no_audio_is_left_to_send() -> None:
+    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # The commit must still go out: Scribe v2 does not finalize a turn without one, and
+    # gating it on the per-frame loop dropped it here (roughly 1 flush in 5).
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: len(ws.sent) == 1)
+
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert ws.sent[-1]["audio_base_64"] == ""
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_commits_after_the_buffered_audio() -> None:
+    # a partial chunk is still pending: it has to reach the server before the commit,
+    # otherwise the tail of the turn is transcribed against the next one
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(30))
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert ws.sent[0]["audio_base_64"] != ""
+    finally:
+        await stream.aclose()
 
 
 def test_trace_id_from_headers() -> None:
