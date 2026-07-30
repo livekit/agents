@@ -365,20 +365,6 @@ def _normalize_fallback(
     return [_make_fallback(fallback)]
 
 
-def _aligned_transcript_for_models(
-    model: NotGivenOr[STTModels | str],
-    fallback: NotGivenOr[list[FallbackModel]],
-) -> Literal["word", False]:
-    models = [model]
-    if is_given(fallback):
-        models.extend(item["model"] for item in fallback)
-    return (
-        "word"
-        if all(_aligned_transcript_for_model(candidate) == "word" for candidate in models)
-        else False
-    )
-
-
 STTModels = (
     DeepgramModels
     | DeepgramFluxModels
@@ -630,6 +616,12 @@ class STT(stt.STT):
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
             fallback_models = _normalize_fallback(fallback)
+        models = [model]
+        if is_given(fallback_models):
+            models.extend(item["model"] for item in fallback_models)
+        aligned_transcript: Literal["word", False] = (
+            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+        )
 
         # chat_context follows the model's native support; the session decides whether to forward
         super().__init__(
@@ -637,7 +629,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 diarization=diarization_enabled,
-                aligned_transcript=_aligned_transcript_for_models(model, fallback_models),
+                aligned_transcript=aligned_transcript,
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
@@ -756,12 +748,15 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            models = [self._opts.model]
+            if is_given(self._opts.fallback):
+                models.extend(item["model"] for item in self._opts.fallback)
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
-                aligned_transcript=_aligned_transcript_for_models(
-                    self._opts.model, self._opts.fallback
+                aligned_transcript=(
+                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
                 ),
             )
         if is_given(language):
