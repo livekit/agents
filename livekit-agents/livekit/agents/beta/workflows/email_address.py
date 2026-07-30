@@ -121,16 +121,19 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
     def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_email_address() -> None:
+        async def confirm_email_address() -> str | None:
             """Call after the user confirms the email address is correct."""
             if email != self._current_email:
-                self.session.generate_reply(
-                    instructions="The email has changed since confirmation was requested, ask the user to confirm the updated email."
+                # stale closure: update_email_address ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The email has changed since confirmation was requested, "
+                    "ask the user to confirm the updated email."
                 )
-                return
 
             if not self.done():
                 self.complete(GetEmailResult(email_address=email))
+            return None
 
         return confirm_email_address
 

@@ -283,8 +283,13 @@ class _PrimarySpeakerDetector:
         return float(np.median(self._rms_buffer[start:end]))
 
     def _update_primary_speaker(self, sd: SpeechData) -> None:
-        if sd.speaker_id is None or not self._detect_primary:
+        if not self._detect_primary:
             self._primary_speaker = None
+            return
+
+        if sd.speaker_id is None:
+            # an unattributed segment carries no evidence about who is primary,
+            # so leave the current primary in place rather than clearing it
             return
 
         rms = self._get_rms_for_timerange(sd.start_time, sd.end_time)

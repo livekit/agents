@@ -18,7 +18,7 @@ import asyncio
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -29,6 +29,9 @@ from .. import utils, vad
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
+
+if TYPE_CHECKING:
+    from concurrent.futures import Executor
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 _MODEL_SAMPLE_RATE = 16000
@@ -51,7 +54,8 @@ class VAD(vad.VAD):
 
     The native model singleton is loaded once at module import (via the
     pybind11 ``.so`` constructor); each stream allocates its own per-instance
-    LSTM/context state.
+    LSTM/context state. Pass ``executor`` to isolate inference from the event
+    loop's default executor; the caller remains responsible for shutting it down.
     """
 
     def __init__(
@@ -64,6 +68,7 @@ class VAD(vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        executor: Executor | None = None,
     ) -> None:
         super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
         if model != "silero":
@@ -71,6 +76,7 @@ class VAD(vad.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
         self._model = model
+        self._executor = executor
         self._opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,
@@ -97,7 +103,7 @@ class VAD(vad.VAD):
         # max_buffered_speech before mutating it. Sharing the dataclass would
         # let VAD.update_options() mutate the stream's view first, and the
         # stream would never observe an increase.
-        stream = _VADStream(self, replace(self._opts))
+        stream = _VADStream(self, replace(self._opts), executor=self._executor)
         self._streams.add(stream)
         return stream
 
@@ -140,9 +146,10 @@ class VAD(vad.VAD):
 
 
 class _VADStream(vad.VADStream):
-    def __init__(self, parent: VAD, opts: _VADOptions) -> None:
+    def __init__(self, parent: VAD, opts: _VADOptions, *, executor: Executor | None) -> None:
         super().__init__(parent)
         self._opts = opts
+        self._executor = executor
         self._native_vad = _NativeVAD()
 
         self._input_sample_rate = 0
@@ -313,7 +320,9 @@ class _VADStream(vad.VADStream):
                 )
 
                 # run the inference
-                p = await asyncio.to_thread(self._native_vad.predict, inference_window)
+                p = await asyncio.get_running_loop().run_in_executor(
+                    self._executor, self._native_vad.predict, inference_window
+                )
 
                 window_duration = VAD_WINDOW_SAMPLES / _MODEL_SAMPLE_RATE
 

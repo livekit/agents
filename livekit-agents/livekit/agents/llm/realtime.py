@@ -70,6 +70,9 @@ class RealtimeCapabilities:
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
     """Whether function call items already in the chat context can be resumed"""
+    can_disable_turn_detection: bool = False
+    """Whether server-side turn detection can be disabled for a session so the client drives
+    turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -113,7 +116,12 @@ class RealtimeModel:
         return self._label
 
     @abstractmethod
-    def session(self) -> RealtimeSession: ...
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        ``turn_detection_disabled`` is honored only by plugins reporting
+        ``can_disable_turn_detection``; the model itself is left unchanged and reusable."""
+        ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
