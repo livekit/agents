@@ -20,17 +20,16 @@ import re
 from typing import TYPE_CHECKING, TypedDict
 
 from ..llm.chat_context import Instructions
-from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
+from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from .markup_utils import convert_expression_tags, extract_and_strip
 
 
 class ExpressiveTag(TypedDict):
     """An expressive markup tag stripped from a transcript, surfaced for the frontend.
 
-    ``type`` is the markup tag name (``"emotion"``, ``"expression"``, ``"sound"``, ...),
-    or ``""`` for square-bracket tags which carry no name. ``value`` is the spoken or
-    semantic payload (the ``value="..."`` attribute, the tag's inner text, or the bracket
-    content).
+    ``type`` is the markup tag name (``"emotion"``, ``"expression"``, ``"sound"``, ...) or
+    the expr marker type. ``value`` is the spoken or semantic payload (the ``value="..."``
+    attribute, the expr ``label``, or the tag's inner text).
     """
 
     type: str
@@ -761,63 +760,40 @@ def llm_instructions(provider: str) -> str | None:
     return _EXPR_LLM_INSTRUCTIONS.get(provider)
 
 
-# Per-provider markup spec: (xml tag names, whether square-bracket tags are used).
-_PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
-    "cartesia": (_CARTESIA_TAGS, False),
-    "inworld": (_INWORLD_TAGS, True),
-    # every tag the LLM is taught is XML (expr markers; native sounds/pauses become
-    # [..] only for the TTS in convert_markup), so the transcript has no brackets to strip
-    "xai": (_XAI_TAGS, False),
+# Per-provider native XML tag names. Membership also marks a provider as markup-capable
+# (see :func:`normalize_markup` / :func:`convert_markup`); the LLM only ever writes expr
+# markers, so these names exist to lower expr onto and to catch hallucinated natives.
+_PROVIDER_MARKUP: dict[str, list[str]] = {
+    "cartesia": _CARTESIA_TAGS,
+    "inworld": _INWORLD_TAGS,
+    "xai": _XAI_TAGS,
 }
-
-
-def split_markup(provider: str, text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip provider markup and collect the stripped tags in a single pass.
-
-    Returns ``(clean_text, tags)`` — the user-visible transcript plus the expressive
-    tags that were removed (in document order), the single source of truth for both
-    :func:`strip_markup` and :func:`extract_markup`. ``([], text)`` for providers
-    without markup support.
-    """
-    spec = _PROVIDER_MARKUP.get(provider)
-    if spec is None:
-        return text, []
-    text, expr_tags = _split_expr(text)
-    xml_tags, brackets = spec
-    clean, raw_tags = extract_and_strip(text, xml_tags=xml_tags, brackets=brackets)
-    return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
-
-
-def strip_markup(provider: str, text: str) -> str:
-    """Strip provider-specific markup tags from text, preserving content."""
-    return split_markup(provider, text)[0]
-
-
-def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
-    """Extract the markup tags that :func:`strip_markup` would remove, in order.
-
-    Lets the framework surface stripped expressive tags (e.g. as ``lk.transcription``
-    attributes for the frontend) instead of discarding them. Returns ``[]`` for
-    providers without markup support.
-    """
-    return split_markup(provider, text)[1]
-
 
 # Union of every provider's XML tag names — used by the transcript sinks to strip markup
 # without knowing which provider produced it (see :class:`TranscriptMarkupStripper`).
-_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags, _ in _PROVIDER_MARKUP.values() for tag in tags})
+_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
 
 def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip the union of every provider's expressive markup (provider-agnostic).
+    """Strip the union of every provider's expressive XML markup (provider-agnostic).
 
     The transcript sinks strip downstream, where the originating TTS/provider is no
-    longer in scope, so they remove every provider's tags (XML + square brackets) at
-    once. These tag shapes never appear in real spoken text — the LLM only emits them
-    as audio directives — so a universal strip is safe.
+    longer in scope, so they remove every provider's XML tags at once: expr markers
+    (all the LLM is ever taught) plus every native tag name, so a hallucinated native
+    tag is stripped rather than leaked.
+
+    Square-bracket spans are *not* stripped: the LLM only writes expr, so brackets in its
+    output are prose (a ``[text](url)`` link) that a strip would mangle. Provider-native
+    brackets never arrive here — :func:`drop_bracket_cues` removes them at their source.
     """
+    # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
+    # sinks call this per streamed chunk and expressive is off by default, making this the
+    # overwhelmingly common case — skip the tag-union scan entirely
+    if "<" not in text:
+        return text, []
+
     text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS, brackets=True)
+    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS)
     return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
@@ -829,8 +805,8 @@ def strip_all_markup(text: str) -> str:
 def strip_expr_markup(text: str) -> str:
     """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
 
-    Unlike :func:`strip_all_markup`, provider-native tags and square-bracket spans
-    survive.
+    Unlike :func:`strip_all_markup`, provider-native tags survive (both leave
+    square-bracket spans alone).
     """
     return _split_expr(text)[0]
 
@@ -854,11 +830,10 @@ class TranscriptMarkupStripper:
     """Stateful, provider-agnostic markup stripper for one transcript segment.
 
     Fed text chunk-by-chunk, it returns the user-visible text and accumulates the
-    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` or ``[...``
-    arriving split across chunks) is held back until it closes, so a tag straddling a
-    chunk boundary is never emitted half-stripped. Shared by the transcript sinks (room
-    output + transcript synchronizer) so stripping and expression extraction stay
-    identical across them.
+    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` arriving split
+    across chunks) is held back until it closes, so a tag straddling a chunk boundary is
+    never emitted half-stripped. Shared by the transcript sinks (room output + transcript
+    synchronizer) so stripping and expression extraction stay identical across them.
     """
 
     def __init__(self) -> None:
@@ -866,14 +841,15 @@ class TranscriptMarkupStripper:
         self._tags: list[ExpressiveTag] = []
 
     def _has_open_tag(self) -> bool:
-        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled, and
-        # any unclosed "[" (bracket tags have no such ambiguity)
+        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled. An
+        # unclosed "[" is not held: brackets aren't markup here, and stalling on one would
+        # delay every markdown link until its "]" arrives
         last_lt = self._buf.rfind("<")
         if last_lt > self._buf.rfind(">"):
             nxt = self._buf[last_lt + 1 : last_lt + 2]
             if not nxt or nxt == "/" or nxt.isalpha():
                 return True
-        return self._buf.rfind("[") > self._buf.rfind("]")
+        return False
 
     def push(self, text: str) -> str:
         """Feed a chunk; return the clean text ready to emit (may be empty)."""
@@ -902,6 +878,76 @@ class TranscriptMarkupStripper:
     def expression_attribute(self) -> dict[str, str] | None:
         """The ``lk.expression`` attribute for the tags stripped so far, if any."""
         return expression_attribute(self._tags)
+
+
+_BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
+# cap on how long an unclosed "[" is held before it is released as plain text
+_MAX_HELD_CHARS = 256
+
+
+def _retext(token: TimedString, text: str) -> TimedString:
+    """A copy of *token* carrying *text*, keeping the alignment metadata."""
+    return TimedString(
+        text,
+        start_time=token.start_time,
+        end_time=token.end_time,
+        confidence=token.confidence,
+        start_time_offset=token.start_time_offset,
+        speaker_id=token.speaker_id,
+    )
+
+
+def drop_bracket_cues(
+    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
+) -> list[TimedString]:
+    """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
+
+    ``use_tts_aligned_transcript`` makes the provider's alignment of the text it was sent
+    the transcript, and that text is post-``convert_markup``, so it carries native
+    ``[laugh]``/``[speak calmly]`` cues as words the agent never spoke. Every bracket span
+    goes: the provider reads them all as cues, so none is ever audio, and markdown links
+    are already gone (``filter_markdown`` runs on TTS input by default).
+
+    Alignment arrives in messages finer-grained than a cue — often one word at a time — so
+    *held* carries the tail of an unclosed span across calls; pass the same list every time
+    and call once more with ``final=True`` at end of stream to release it.
+    """
+    tokens = held + tokens
+    held.clear()
+    text = "".join(tokens)
+    if "[" not in text:
+        return tokens
+
+    dropped: set[int] = set()
+    for match in _BRACKET_SPAN_RE.finditer(text):
+        start, end = match.span()
+        # take one of the spaces the cue sat between, so it leaves a single separator
+        if start > 0 and text[start - 1] == " " and (end == len(text) or text[end] == " "):
+            start -= 1
+        elif start == 0 and end < len(text) and text[end] == " ":
+            end += 1
+        dropped.update(range(start, end))
+
+    # hold from an unclosed "[" so a cue straddling messages is still judged as a whole;
+    # past _MAX_HELD_CHARS give up, since a lone bracket must not stall the transcript
+    hold_from = len(text)
+    if not final and (open_at := text.rfind("[")) > text.rfind("]"):
+        if len(text) - open_at <= _MAX_HELD_CHARS:
+            hold_from = open_at
+
+    out: list[TimedString] = []
+    pos = 0
+    for token in tokens:
+        emit = "".join(
+            c for i, c in enumerate(token, start=pos) if i < hold_from and i not in dropped
+        )
+        keep = "".join(c for i, c in enumerate(token, start=pos) if i >= hold_from)
+        pos += len(token)
+        if emit:
+            out.append(token if emit == str(token) else _retext(token, emit))
+        if keep:
+            held.append(token if keep == str(token) else _retext(token, keep))
+    return out
 
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {

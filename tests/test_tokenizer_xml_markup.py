@@ -12,7 +12,7 @@ import pytest
 
 from livekit.agents.tokenize.blingfire import SentenceTokenizer
 from livekit.agents.tokenize.token_stream import _XML_TAG_RE
-from livekit.agents.tts.markup_utils import strip_xml_tags
+from livekit.agents.tts.markup_utils import extract_and_strip
 
 pytestmark = pytest.mark.unit
 
@@ -56,24 +56,40 @@ async def _stream_tokenize_tiktoken(tok: SentenceTokenizer, text: str) -> list[s
 
 
 # ===========================================================================
-# strip_xml_tags
+# extract_and_strip
 # ===========================================================================
 
 
-class TestStripXmlTags:
+def _strip(text: str, tags: list[str]) -> str:
+    return extract_and_strip(text, xml_tags=tags)[0]
+
+
+class TestExtractAndStrip:
     def test_self_closing(self) -> None:
-        assert strip_xml_tags('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
+        assert _strip('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
 
     def test_wrapping_preserves_content(self) -> None:
-        assert strip_xml_tags("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
+        assert _strip("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
 
     def test_preserves_unrelated_tags(self) -> None:
         text = '<emotion value="happy"/> <custom>keep</custom>'
-        assert strip_xml_tags(text, ["emotion"]) == " <custom>keep</custom>"
+        assert _strip(text, ["emotion"]) == " <custom>keep</custom>"
 
     def test_empty_tags_list(self) -> None:
         text = '<emotion value="happy"/> Hi'
-        assert strip_xml_tags(text, []) == text
+        assert _strip(text, []) == text
+
+    def test_square_brackets_are_never_markup(self) -> None:
+        # only XML is markup here — bracket spans reach transcripts as prose/markdown
+        text = 'Press [Enter] <emotion value="happy"/> to open [the docs](https://lk.io)'
+        assert _strip(text, ["emotion"]) == "Press [Enter]  to open [the docs](https://lk.io)"
+
+    def test_reports_stripped_tags(self) -> None:
+        clean, tags = extract_and_strip(
+            '<emotion value="happy"/>hi <spell>A7</spell>', xml_tags=["emotion", "spell"]
+        )
+        assert clean == "hi A7"
+        assert tags == [("emotion", "happy"), ("spell", "A7")]
 
 
 # ===========================================================================
@@ -98,11 +114,11 @@ class TestXaiDialect:
         assert '<expr type="sound" label="laugh"/>' in instr
         assert '<expr type="prosody" label="' in instr
 
-    def test_split_markup_strips_inline_keeps_wrapping_inner(self) -> None:
+    def test_strip_removes_inline_keeps_wrapping_inner(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
         raw = 'So I walked in and <break time="500ms"/> there it was. <sound value="laugh"/> <whisper>a secret</whisper> <emphasis>wow</emphasis>.'
-        clean, tags = pf.split_markup("xai", raw)
+        clean, tags = pf.split_all_markup(raw)
         # inline sounds/pauses removed entirely; wrapping tags keep their inner text
         assert "<break" not in clean and "<sound" not in clean and "laugh" not in clean
         assert "<whisper>" not in clean and "a secret" in clean and "wow" in clean
@@ -114,7 +130,7 @@ class TestXaiDialect:
         from livekit.agents.tts import _provider_format as pf
 
         raw = "<happy>Great to hear from you!</happy> <sad>I'm sorry about that.</sad>"
-        clean, tags = pf.split_markup("xai", raw)
+        clean, tags = pf.split_all_markup(raw)
         # emotion is the tag name; delimiters removed, spoken words preserved
         assert "<happy>" not in clean and "</sad>" not in clean
         assert "Great to hear from you!" in clean and "I'm sorry about that." in clean
@@ -130,7 +146,7 @@ class TestXaiDialect:
         for tag in pf._XAI_WRAPPING:
             assert tag in pf._XAI_EXPR_LLM_INSTRUCTIONS, f"{tag} not documented"
             assert tag in pf._XAI_TAGS
-            clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
+            clean, _ = pf.split_all_markup(f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
 
     def test_emotion_tags_stripped_though_unprompted(self) -> None:
@@ -140,7 +156,7 @@ class TestXaiDialect:
         # stripped from the transcript rather than leaking to the user
         for tag in pf._XAI_EMOTIONS:
             assert tag in pf._XAI_TAGS
-            clean, _ = pf.split_markup("xai", f"<{tag}>hello there</{tag}>")
+            clean, _ = pf.split_all_markup(f"<{tag}>hello there</{tag}>")
             assert clean.strip() == "hello there", f"{tag} not stripped: {clean!r}"
 
     def test_documented_inline_tags_present(self) -> None:
@@ -175,7 +191,7 @@ class TestXaiDialect:
         # combining emotion + prosody means nesting; the transcript must come out clean
         # (no leaked inner markup) — this is what the fixed-point strip guarantees
         raw = '<excited><loud><higher-pitch>no way</higher-pitch></loud></excited> <sound value="laugh"/> okay'
-        clean, _ = pf.split_markup("xai", raw)
+        clean, _ = pf.split_all_markup(raw)
         assert "<" not in clean and ">" not in clean and "[" not in clean
         assert clean.strip() == "no way  okay".replace("  ", " ") or "no way" in clean
         assert "no way" in clean and "okay" in clean
@@ -426,82 +442,30 @@ class TestPlainTextAngleBrackets:
 
 
 # ===========================================================================
-# Markup.to_text_stream (transcript stripping)
-# ===========================================================================
-
-
-async def _achunks(items: list[str]):
-    for it in items:
-        yield it
-
-
-class TestToTextStreamBareLt:
-    """Regression: the transcript-strip path must not stall on a bare "<" either.
-
-    to_text_stream buffered on a naive `rfind("<") > rfind(">")` check, so a "<"
-    in prose (e.g. "3 < 5") froze every following transcript chunk of the segment
-    until a ">" arrived or the stream ended — the same stall fixed in the tokenizer.
-    """
-
-    def _markup(self):
-        from livekit.agents.tts.tts import TTS
-
-        class _DialectMarkup(TTS.Markup):
-            def _provider_key(self) -> str:
-                return "cartesia"
-
-        return _DialectMarkup(None)  # type: ignore[arg-type]  # _provider_key ignores tts
-
-    @pytest.mark.asyncio
-    async def test_bare_lt_does_not_hold_following_chunk(self) -> None:
-        out = [
-            c
-            async for c in self._markup().to_text_stream(_achunks(["The value 3 < 5 ", "is true."]))
-        ]
-        # fixed: the first chunk is emitted incrementally (>= 2 items); the buggy
-        # version held everything and emitted a single item at end-of-stream
-        assert len(out) >= 2
-        assert "3 < 5" in out[0]
-        assert "".join(out).replace(" ", "") == "Thevalue3<5istrue."
-
-    @pytest.mark.asyncio
-    async def test_partial_tag_still_buffered(self) -> None:
-        # a genuinely partial tag split across chunks must still be held and stripped
-        out = [
-            c
-            async for c in self._markup().to_text_stream(
-                _achunks(["Hi <emo", 'tion value="happy"/> there'])
-            )
-        ]
-        joined = "".join(out)
-        assert "<emotion" not in joined
-        assert "Hi" in joined and "there" in joined
-
-
-# ===========================================================================
 # Universal transcript stripping (provider-agnostic, used by the transcript sinks)
 # ===========================================================================
 
 
 class TestUniversalMarkupStrip:
     """The transcript sinks strip downstream without knowing the provider, so they remove
-    the union of every provider's tags. See split_all_markup / TranscriptMarkupStripper."""
+    the union of every provider's XML tags — but never square brackets, which reach the
+    transcript as markdown/prose. See split_all_markup / TranscriptMarkupStripper."""
 
     def test_split_all_markup_across_providers(self) -> None:
         from livekit.agents.tts._provider_format import split_all_markup
 
-        # Cartesia <emotion>, Inworld/xAI <expression>/<sound>, and bracket tags all strip
-        # regardless of which provider produced them
+        # Cartesia <emotion> and Inworld/xAI <expression>/<sound> all strip regardless of
+        # which provider produced them; a [bracket] span is left for the reader
         clean, tags = split_all_markup(
             '<emotion value="happy"/>Hi <expression value="warm"/>there '
             '<sound value="giggle"/>[pause] friend'
         )
-        assert clean == "Hi there  friend"
+        assert clean == "Hi there [pause] friend"
         types = [(t["type"], t["value"]) for t in tags]
         assert ("emotion", "happy") in types
         assert ("expression", "warm") in types
         assert ("sound", "giggle") in types
-        assert ("", "pause") in types
+        assert ("", "pause") not in types
 
     def test_expression_attribute_shape(self) -> None:
         from livekit.agents.tts._provider_format import expression_attribute, split_all_markup
@@ -510,8 +474,8 @@ class TestUniversalMarkupStrip:
         attr = expression_attribute(tags)
         assert attr == {"lk.expression": '{"value":"sad"}'}
 
-        # no expression/emotion tag -> no attribute (bracket sounds don't count)
-        _, tags = split_all_markup("[pause]hi")
+        # no expression/emotion tag -> no attribute
+        _, tags = split_all_markup('<break time="1s"/>hi')
         assert expression_attribute(tags) is None
 
     def test_streaming_stripper_holds_partial_tags(self) -> None:
@@ -526,6 +490,17 @@ class TestUniversalMarkupStrip:
         assert "<emotion" not in out
         assert out.replace(" ", "") == "Hithere"
         assert s.expression_attribute() == {"lk.expression": '{"value":"happy"}'}
+
+    def test_streaming_stripper_markdown_link_survives(self) -> None:
+        from livekit.agents.tts._provider_format import TranscriptMarkupStripper
+
+        s = TranscriptMarkupStripper()
+        # an unclosed "[" must not stall the chunk (brackets aren't markup), and the link
+        # must arrive intact rather than collapsed to its (url) tail
+        first = s.push("Read [the docs](https:")
+        assert first == "Read [the docs](https:"
+        rest = s.push("//docs.livekit.io) now.") + s.flush()
+        assert first + rest == "Read [the docs](https://docs.livekit.io) now."
 
     def test_streaming_stripper_bare_lt_not_stalled(self) -> None:
         from livekit.agents.tts._provider_format import TranscriptMarkupStripper
