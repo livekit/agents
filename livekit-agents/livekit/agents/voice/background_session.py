@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from .. import llm, utils
 from ..llm.chat_context import ChatMessage
+from ..llm.utils import _is_valid_function_output
 from ..log import logger
 from .events import (
     BackgroundMessageReceived,
@@ -55,6 +56,8 @@ _BACKGROUND_HANDLING_DEFAULTS: BackgroundHandlingOptions = {
     "reply_maybe_covered_template": REPLY_MAYBE_COVERED_TEMPLATE,
 }
 _BACKGROUND_SEND_TOOL_NAME = "lk_background_send"
+_BACKGROUND_STATE_TOOL_NAME = "lk_background_state"
+_RESERVED_BACKGROUND_TOOL_NAMES = (_BACKGROUND_SEND_TOOL_NAME, _BACKGROUND_STATE_TOOL_NAME)
 
 _PromptArgs = TypeVar("_PromptArgs")
 
@@ -159,8 +162,25 @@ class BackgroundContext:
     def message_stream(self) -> AsyncIterable[str]:
         return self._runtime.message_stream()
 
-    async def send(self, content: str) -> None:
-        await self._runtime.send(content)
+    async def send(self, content: str, *, silent: bool = False) -> None:
+        """Publish an update to the voice conversation.
+
+        With ``silent=True`` the rendered message is inserted into the current
+        Agent's chat context and the session history, but no reply is scheduled —
+        context-only insertion the voice agent can draw on later.
+        """
+        await self._runtime.send(content, silent=silent)
+
+    def set_state(self, state: Any) -> None:
+        """Report the real-time state of this background session.
+
+        The state is returned verbatim when the voice LLM calls the generated
+        ``lk_background_state`` tool, so it must be a valid function-tool return
+        value: a string, number, bool, None, or a JSON-serializable
+        list/dict/tuple/set of those. Setting state never inserts context and
+        never triggers a reply.
+        """
+        self._runtime.set_state(state)
 
 
 @dataclass(frozen=True, init=False)
@@ -211,6 +231,7 @@ class _BackgroundRuntime:
             definition._background_handling_snapshot, background_handling
         )
         self._incoming: asyncio.Queue[str] = asyncio.Queue()
+        self._state: Any = None
         self._closed = False
         self._task: asyncio.Task[None] | None = None
         self._started = asyncio.Event()
@@ -238,7 +259,7 @@ class _BackgroundRuntime:
         while True:
             yield await self._incoming.get()
 
-    async def send(self, content: str) -> None:
+    async def send(self, content: str, *, silent: bool = False) -> None:
         if self._closed:
             raise RuntimeError(f"background session {self.definition.id!r} is closed")
 
@@ -257,12 +278,17 @@ class _BackgroundRuntime:
                 "background_message_id": message_id,
             },
         )
-        accepted = await self._reply_scheduler.enqueue(
-            session=self._session,
-            items=[message],
-            item_ids=[message_id],
-            source={"background_session_id": self.definition.id},
-        )
+        if silent:
+            accepted = await self._reply_scheduler.insert_only(
+                session=self._session, items=[message]
+            )
+        else:
+            accepted = await self._reply_scheduler.enqueue(
+                session=self._session,
+                items=[message],
+                item_ids=[message_id],
+                source={"background_session_id": self.definition.id},
+            )
         if not accepted:
             raise RuntimeError(f"background session {self.definition.id!r} is closed")
         self._session.emit(
@@ -272,9 +298,24 @@ class _BackgroundRuntime:
                     background_id=self.definition.id,
                     message_id=message_id,
                     content=content,
+                    silent=silent,
                 )
             ),
         )
+
+    def set_state(self, state: Any) -> None:
+        if self._closed:
+            raise RuntimeError(f"background session {self.definition.id!r} is closed")
+        if not _is_valid_function_output(state):
+            raise ValueError(
+                "background state must be a valid function-tool return value: a string, "
+                "number, bool, None, or a JSON-serializable list/dict/tuple/set of those"
+            )
+        self._state = state
+
+    @property
+    def state(self) -> Any:
+        return self._state
 
     async def aclose(self) -> None:
         self._mark_closed()
@@ -406,6 +447,9 @@ class _BackgroundRuntimeManager:
             raise RuntimeError("background runtime manager is closed")
         self._runtimes[background_session_id].enqueue(content)
 
+    def get_state(self, background_session_id: str) -> Any:
+        return self._runtimes[background_session_id].state
+
     async def aclose(self) -> None:
         self._closed = True
         runtimes = list(self._runtimes.values())
@@ -445,6 +489,35 @@ def _create_background_send_tool(
 
     return llm.function_tool(name=_BACKGROUND_SEND_TOOL_NAME, description=description)(
         lk_background_send
+    )
+
+
+def _create_background_state_tool(
+    manager: _BackgroundRuntimeManager,
+    definitions: Sequence[BackgroundDefinition],
+) -> llm.Tool:
+    ordered = sorted(definitions, key=lambda definition: definition.id)
+    valid_ids = [definition.id for definition in ordered]
+    description = (
+        "Get the real-time state reported by a background session — what it is working on "
+        "right now. Use this when the user asks about the progress or status of background "
+        "work.\n\nAvailable background sessions:\n"
+        + "\n".join(f"- {definition.id}: {definition.description}" for definition in ordered)
+    )
+
+    async def lk_background_state(background_session_id: str) -> Any:
+        if background_session_id not in valid_ids:
+            raise llm.ToolError(
+                f"Unknown background session ID {background_session_id!r}. "
+                f"Valid IDs: {', '.join(valid_ids)}"
+            )
+        state = manager.get_state(background_session_id)
+        if state is None:
+            return "The background session has not reported any state yet."
+        return state
+
+    return llm.function_tool(name=_BACKGROUND_STATE_TOOL_NAME, description=description)(
+        lk_background_state
     )
 
 

@@ -106,6 +106,11 @@ class _ReplyScheduler:
     def _mark_closed(self) -> None:
         self._closed = True
 
+    async def insert_only(self, *, session: AgentSession, items: list[ChatItem]) -> bool:
+        """Insert items into the target Agent context and session history without
+        buffering them for a scheduled reply — silent, context-only insertion."""
+        return await self._insert(session, items, source="silent_insert", item_ids=[])
+
     async def enqueue(
         self,
         *,
@@ -114,6 +119,29 @@ class _ReplyScheduler:
         source: object,
         item_ids: list[str] | None = None,
     ) -> bool:
+        """Insert items and buffer them for a coalesced reply once the session is idle."""
+        if item_ids is None:
+            item_ids = [item.call_id for item in items if item.type == "function_call_output"]
+        return await self._insert(
+            session, items, source=source, item_ids=item_ids, schedule_reply=True
+        )
+
+    async def _insert(
+        self,
+        session: AgentSession,
+        items: list[ChatItem],
+        *,
+        source: object,
+        item_ids: list[str],
+        schedule_reply: bool = False,
+    ) -> bool:
+        """Eagerly insert items into the target Agent context and session history.
+
+        With ``schedule_reply`` the entry is buffered and the deferred delivery task
+        (which retargets across handoffs before replying) is started. Without it,
+        no later delivery pass would copy the items over, so retarget inline until
+        the current Agent is stable.
+        """
         async with self._lock:
             if self._closed:
                 return False
@@ -130,11 +158,13 @@ class _ReplyScheduler:
                 return False
             session.history.insert(items)
 
-            if item_ids is None:
-                item_ids = [item.call_id for item in items if item.type == "function_call_output"]
-            self._pending.append(
-                _PendingReply(items=items, item_ids=item_ids, source=source, target=target)
+            entry = _PendingReply(
+                items=list(items), item_ids=item_ids, source=source, target=target
             )
+            if not schedule_reply:
+                return await self._retarget_until_stable(session, [entry], target) is not None
+
+            self._pending.append(entry)
             if self._reply_task is None or self._reply_task.done():
                 self._reply_task = asyncio.create_task(
                     self._deliver_reply(session), name="reply_scheduler_deliver"

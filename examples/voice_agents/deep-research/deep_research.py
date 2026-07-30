@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from html import unescape
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
 
 import aiohttp
@@ -482,9 +482,14 @@ async def deep_research(ctx: BackgroundContext) -> None:
     reader = asyncio.create_task(_read_inbox())
     http = aiohttp.ClientSession()
     prior_context: str | None = None
+    # the state shown while blocked on the inbox; end-of-round outcomes update it
+    # so "done, last report at ..." stays visible until the next question arrives
+    idle_state: dict[str, Any] = {"phase": "waiting for a research question"}
     try:
         while True:
+            ctx.set_state(idle_state)
             state = ResearchState(question=await inbox.get())
+            ctx.set_state({"phase": "clarifying scope", "topic": state.question})
             if prior_context:
                 # follow-up round: give the clarify/plan LLM the previous result so
                 # "narrow it to X" style requests need no re-clarification
@@ -518,6 +523,13 @@ async def deep_research(ctx: BackgroundContext) -> None:
             try:
                 # ── Scope ──
                 angles = await _plan_angles(llm_client, state)
+                ctx.set_state(
+                    {
+                        "phase": "searching the web",
+                        "topic": state.question,
+                        "angles": [a.label for a in angles],
+                    }
+                )
                 await ctx.send(
                     f"Starting deep research on: {state.question}\n"
                     f"Covering {len(angles)} angles: {', '.join(a.label for a in angles)}."
@@ -575,6 +587,14 @@ async def deep_research(ctx: BackgroundContext) -> None:
                         qual_rank[sc.quality],
                     ),
                 )[:MAX_VERIFY_CLAIMS]
+                ctx.set_state(
+                    {
+                        "phase": "adversarially verifying claims",
+                        "topic": state.question,
+                        "sources_read": len(sources),
+                        "claims_under_review": len(all_claims),
+                    }
+                )
                 await ctx.send(
                     f"Read {len(sources)} sources and extracted "
                     f"{sum(len(g) for g in extracted)} claims. "
@@ -586,6 +606,10 @@ async def deep_research(ctx: BackgroundContext) -> None:
                         "I couldn't extract any usable claims — the sources were empty, "
                         "paywalled, or irrelevant. Try rephrasing the question."
                     )
+                    idle_state = {
+                        "phase": "waiting — last research found no usable sources",
+                        "last_topic": state.question,
+                    }
                     continue  # keep listening for a rephrased question
 
                 # ── Verify: N adversarial votes per claim ──
@@ -610,9 +634,14 @@ async def deep_research(ctx: BackgroundContext) -> None:
                         "No claims survived adversarial verification — the research is "
                         "inconclusive. The sources may be low quality or the claims overstated."
                     )
+                    idle_state = {
+                        "phase": "waiting — last research was inconclusive",
+                        "last_topic": state.question,
+                    }
                     continue  # keep listening for a refined question
 
                 # ── Synthesize + write the report to disk ──
+                ctx.set_state({"phase": "writing the report", "topic": state.question})
                 report = await _synthesize(llm_client, state, confirmed)
                 report_path = await asyncio.to_thread(
                     _write_report_file, state, report, confirmed, refuted
@@ -634,6 +663,11 @@ async def deep_research(ctx: BackgroundContext) -> None:
                 ]
                 await ctx.send("\n".join(lines))
                 prior_context = report.summary
+                idle_state = {
+                    "phase": "done, listening for follow-ups",
+                    "last_topic": state.question,
+                    "last_report": str(report_path),
+                }
             finally:
                 steering_task.cancel()
     finally:
