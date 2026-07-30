@@ -272,6 +272,21 @@ def _log_server_payload(payload: dict[str, Any], *, phase: str = "") -> None:
     )
 
 
+def _chunk_boundary_to_append(text: str, chunk_notation: str) -> str:
+    """Return the chunk-boundary character to send before flush, or empty.
+
+    Uses ``strip()`` so leading/trailing whitespace on streamed tokens does not
+    hide a missing boundary (unlike slicing ``normalized[len(raw):]``).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    notation = chunk_notation or "."
+    if stripped[-1] in notation:
+        return ""
+    return notation[0]
+
+
 def _normalize_text_for_chunk_notation(text: str, chunk_notation: str) -> str:
     """Ensure text ends with a chunk_notation boundary Avaz will synthesize.
 
@@ -283,12 +298,8 @@ def _normalize_text_for_chunk_notation(text: str, chunk_notation: str) -> str:
     normalized = text.strip()
     if not normalized:
         return normalized
-    notation = chunk_notation or "."
-    if normalized[-1] in notation:
-        return normalized
-    primary = notation[0]
-    # Preserve ?/! for intonation; append boundary (e.g. "How are you?.").
-    return normalized + primary
+    boundary = _chunk_boundary_to_append(normalized, chunk_notation)
+    return normalized + boundary if boundary else normalized
 
 
 def _parse_init_response(raw: str | bytes) -> dict[str, Any]:
@@ -423,9 +434,9 @@ class TTS(tts.TTS):
     Dashboard mode: pass ``api_key``, ``base_url``, and ``model_id`` (UUID).
     Override WebSocket URL via ``ws_url=`` or ``AVAZ_BASE_URL``.
 
-    Timing: ``recv_idle_timeout_s`` and ``post_text_drain_s`` are WebSocket recv
-    idle windows (not fixed sleeps). Tune them if the server needs longer gaps
-    between audio chunks before ``flush``.
+    Timing: ``recv_idle_timeout_s``, ``flush_recv_timeout_s``, and
+    ``post_text_drain_s`` are WebSocket recv idle windows (not fixed sleeps).
+    Tune them if the server needs longer gaps between audio chunks after flush.
     """
 
     def __init__(
@@ -461,9 +472,9 @@ class TTS(tts.TTS):
             chunk_notation: Characters treated as chunk boundaries by Avaz.
             connect_timeout_s: WebSocket open / init timeout.
             turn_timeout_s: Max duration for one synthesis turn.
-            post_text_drain_s: Recv idle window after text before flush.
-            recv_idle_timeout_s: Recv idle window while draining audio.
-            flush_recv_timeout_s: Recv idle window after flush.
+            post_text_drain_s: Extra recv idle after flush for trailing audio.
+            recv_idle_timeout_s: Recv idle window while text is still streaming.
+            flush_recv_timeout_s: Base recv idle window after flush.
             sample_rate: Output PCM sample rate in Hz.
         """
         super().__init__(
@@ -854,17 +865,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                         if isinstance(data, self._FlushSentinel):
                             if not sent_parts:
                                 continue
-                            joined = "".join(sent_parts)
-                            normalized = _normalize_text_for_chunk_notation(joined, notation)
-                            if normalized != joined:
-                                suffix = normalized[len(joined) :]
-                                if suffix:
-                                    await ws.send(json.dumps({"text": suffix}))
-                                    sent_parts.append(suffix)
-                                    logger.debug(
-                                        "[Avaz TTS] appended chunk boundary %r",
-                                        suffix,
-                                    )
+                            boundary = _chunk_boundary_to_append("".join(sent_parts), notation)
+                            if boundary:
+                                await ws.send(json.dumps({"text": boundary}))
+                                sent_parts.append(boundary)
+                                logger.debug(
+                                    "[Avaz TTS] appended chunk boundary %r",
+                                    boundary,
+                                )
                             if not ws_closed and not flush_sent:
                                 try:
                                     await ws.send(json.dumps({"flush": True}))
@@ -899,15 +907,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._sent_text_cache = joined
                         total_text_chars = len(joined)
                         if not flush_sent and not ws_closed:
-                            normalized = _normalize_text_for_chunk_notation(joined, notation)
-                            if normalized != joined:
-                                suffix = normalized[len(joined) :]
-                                if suffix:
-                                    try:
-                                        await ws.send(json.dumps({"text": suffix}))
-                                        sent_parts.append(suffix)
-                                    except websockets.exceptions.ConnectionClosed:
-                                        ws_closed = True
+                            boundary = _chunk_boundary_to_append(joined, notation)
+                            if boundary:
+                                try:
+                                    await ws.send(json.dumps({"text": boundary}))
+                                    sent_parts.append(boundary)
+                                except websockets.exceptions.ConnectionClosed:
+                                    ws_closed = True
                             if not ws_closed:
                                 try:
                                     await ws.send(json.dumps({"flush": True}))
@@ -924,7 +930,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 nonlocal ws_closed
                 idle = max(0.05, self._opts.recv_idle_timeout_s)
                 # After flush, allow a longer idle before giving up on trailing audio.
-                flush_idle = max(idle, self._opts.flush_recv_timeout_s)
+                flush_idle = max(idle, self._opts.flush_recv_timeout_s) + max(
+                    0.0, self._opts.post_text_drain_s
+                )
                 while not terminal.is_set():
                     if ws_closed:
                         break
