@@ -29,6 +29,7 @@ from .llm import LLM, LLMStream
 from .models import (
     OpenRouterProviderPreferences,
     OpenRouterWebPlugin,
+    STTDelay,
     STTModels,
     TTSModels,
     TTSVoices,
@@ -44,6 +45,7 @@ __all__ = [
     "LLMStream",
     "OpenRouterProviderPreferences",
     "OpenRouterWebPlugin",
+    "STTDelay",
     "STTModels",
     "TTSModels",
     "TTSVoices",

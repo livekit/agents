@@ -4,6 +4,12 @@ from typing import Literal, TypedDict
 from openai.types import AudioModel
 
 STTModels = AudioModel
+STTDelay = Literal["minimal", "low", "medium", "high", "xhigh"]
+"""How long a streaming transcription model waits before emitting text.
+
+Higher values give the model more audio context and can improve accuracy at the cost of
+latency. See https://developers.openai.com/api/docs/guides/realtime-transcription
+"""
 TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 TTSVoices = Literal[
     "alloy",

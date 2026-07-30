@@ -52,7 +52,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
 )
 
 from .log import logger
-from .models import STTModels
+from .models import STTDelay, STTModels
 from .utils import AsyncAzureADTokenProvider
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
@@ -70,6 +70,30 @@ def _is_whisper_realtime(model: str) -> bool:
     return model.startswith("gpt-realtime-whisper")
 
 
+def _supports_transcription_context(model: str) -> bool:
+    # `keywords` and `languages` are only accepted by the GPT transcribe models.
+    return model.startswith(("gpt-live-transcribe", "gpt-transcribe"))
+
+
+def _uses_language_list(model: str) -> bool:
+    # gpt-live-transcribe replaces the singular `language` field with `languages` and
+    # rejects the session update when both are present.
+    return model.startswith("gpt-live-transcribe")
+
+
+# the Realtime API rejects the session update when a keyword contains one of these
+_KEYWORD_FORBIDDEN_CHARS = ("<", ">", "\r", "\n")
+
+
+def _validate_keywords(keywords: list[str]) -> None:
+    for keyword in keywords:
+        if any(char in keyword for char in _KEYWORD_FORBIDDEN_CHARS):
+            raise ValueError(
+                f"keyword {keyword!r} contains a forbidden character; keywords must be "
+                "single-line and cannot contain '<' or '>'"
+            )
+
+
 @dataclass
 class _STTOptions:
     model: STTModels | str
@@ -79,6 +103,9 @@ class _STTOptions:
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
+    keywords: NotGivenOr[list[str]] = NOT_GIVEN
+    languages: NotGivenOr[list[str]] = NOT_GIVEN
+    delay: NotGivenOr[STTDelay] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -89,6 +116,9 @@ class STT(stt.STT):
         detect_language: bool = False,
         model: STTModels | str = "gpt-4o-mini-transcribe",
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        delay: NotGivenOr[STTDelay] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -103,9 +133,19 @@ class STT(stt.STT):
 
         Args:
             language: The language code to use for transcription (e.g., "en" for English).
+                Ignored when `languages` is set, and sent as a single-entry `languages` list
+                for models that only accept the plural field (e.g. `gpt-live-transcribe`).
             detect_language: Whether to automatically detect the language.
             model: The OpenAI model to use for transcription.
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+            keywords: Words or phrases to bias recognition towards, such as product names and
+                acronyms. Only supported by `gpt-transcribe` and `gpt-live-transcribe`.
+                Keywords must be single-line and cannot contain "<" or ">".
+            languages: Expected input languages, in ISO-639-1 (e.g. "en"), selected ISO-639-3
+                (e.g. "yue") or regional `zh` (e.g. "zh-tw") format. Only supported by
+                `gpt-transcribe` and `gpt-live-transcribe`.
+            delay: How long the model waits before emitting transcript text. Higher values give
+                the model more audio context and can improve accuracy at the cost of latency.
             turn_detection: When using realtime transcription, this controls how model detects the user is done speaking.
                 Final transcripts are generated only after the turn is over. See: https://platform.openai.com/docs/guides/realtime-vad
                 Ignored for `gpt-realtime-whisper`, which does not support server-side turn detection.
@@ -131,6 +171,25 @@ class STT(stt.STT):
             )
             temperature = NOT_GIVEN
 
+        supports_context = use_realtime and _supports_transcription_context(model)
+        if not supports_context:
+            for name, value in (("keywords", keywords), ("languages", languages)):
+                if is_given(value):
+                    logger.warning(
+                        "'%s' is not supported for %s; ignoring the provided value", name, model
+                    )
+            keywords = NOT_GIVEN
+            languages = NOT_GIVEN
+
+        if is_given(keywords):
+            _validate_keywords(keywords)
+
+        if not use_realtime and is_given(delay):
+            logger.warning(
+                "'delay' is only supported for realtime transcription; ignoring the provided value"
+            )
+            delay = NOT_GIVEN
+
         whisper_realtime = use_realtime and _is_whisper_realtime(model)
         if whisper_realtime:
             if is_given(turn_detection):
@@ -151,7 +210,10 @@ class STT(stt.STT):
 
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=use_realtime, interim_results=use_realtime, aligned_transcript=False
+                streaming=use_realtime,
+                interim_results=use_realtime,
+                aligned_transcript=False,
+                keyterms=supports_context,
             )
         )
         if detect_language:
@@ -172,9 +234,15 @@ class STT(stt.STT):
             prompt=prompt,
             turn_detection=turn_detection,
             temperature=temperature,
+            keywords=keywords,
+            languages=languages,
+            delay=delay,
         )
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
+
+        self._user_keywords: list[str] = list(keywords) if is_given(keywords) else []
+        self._session_keyterms: list[str] = []
 
         self._vad = vad if is_given(vad) else None
 
@@ -222,6 +290,9 @@ class STT(stt.STT):
         detect_language: bool = False,
         model: STTModels | str = "gpt-4o-mini-transcribe",
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        delay: NotGivenOr[STTDelay] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -271,6 +342,9 @@ class STT(stt.STT):
             detect_language=detect_language,
             model=model,
             prompt=prompt,
+            keywords=keywords,
+            languages=languages,
+            delay=delay,
             turn_detection=turn_detection,
             noise_reduction_type=noise_reduction_type,
             temperature=temperature,
@@ -335,6 +409,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        delay: NotGivenOr[STTDelay] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
         noise_reduction_type: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -343,11 +420,19 @@ class STT(stt.STT):
         Update the options for the speech stream. Most options are updated at the
         connection level. SpeechStreams will be recreated when options are updated.
 
+        The transcription context (`prompt`, `keywords`, `languages` and `delay`) is applied
+        in-band on live realtime sessions, without dropping the connection.
+
         Args:
             language: The language to transcribe in.
             detect_language: Whether to automatically detect the language.
             model: The model to use for transcription.
             prompt: Optional text prompt to guide the transcription. Only supported for whisper-1.
+            keywords: Words or phrases to bias recognition towards. Replaces the keywords set on
+                the constructor. Only supported by `gpt-transcribe` and `gpt-live-transcribe`.
+            languages: Expected input languages. Only supported by `gpt-transcribe` and
+                `gpt-live-transcribe`.
+            delay: How long the model waits before emitting transcript text.
             turn_detection: When using realtime, this controls how model detects the user is done speaking.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
             temperature: Sampling temperature between 0 and 1. Not supported for realtime transcription.
@@ -361,6 +446,35 @@ class STT(stt.STT):
             self._opts.language = LanguageCode("")
         if is_given(prompt):
             self._opts.prompt = prompt
+        supports_context = self.capabilities.streaming and _supports_transcription_context(
+            self._opts.model
+        )
+        if is_given(keywords):
+            if supports_context:
+                _validate_keywords(keywords)
+                self._user_keywords = list(keywords)
+                self._opts.keywords = self._merged_keywords()
+            else:
+                logger.warning(
+                    "'keywords' is not supported for %s; ignoring the provided value",
+                    self._opts.model,
+                )
+        if is_given(languages):
+            if supports_context:
+                self._opts.languages = list(languages)
+            else:
+                logger.warning(
+                    "'languages' is not supported for %s; ignoring the provided value",
+                    self._opts.model,
+                )
+        if is_given(delay):
+            if self.capabilities.streaming:
+                self._opts.delay = delay
+            else:
+                logger.warning(
+                    "'delay' is only supported for realtime transcription; "
+                    "ignoring the provided value"
+                )
         if is_given(turn_detection):
             self._opts.turn_detection = turn_detection
         if is_given(noise_reduction_type):
@@ -378,22 +492,62 @@ class STT(stt.STT):
             if is_given(language):
                 stream.update_options(language=language)
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        prompt = self._opts.prompt if is_given(self._opts.prompt) else ""
+        if is_given(prompt) or is_given(keywords) or is_given(languages) or is_given(delay):
+            self._apply_transcription_context()
+
+    def _merged_keywords(self) -> NotGivenOr[list[str]]:
+        merged = list(dict.fromkeys([*self._user_keywords, *self._session_keyterms]))
+        return merged or NOT_GIVEN
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        self._opts.keywords = self._merged_keywords()
+        self._apply_transcription_context()
+
+    def _apply_transcription_context(self) -> None:
+        """Push the current transcription context to the live realtime sessions."""
+        if not self.capabilities.streaming:
+            return
+        session_update = self._build_session_update()
+        for stream in self._streams:
+            stream._send_session_update(session_update)
+
+    def _build_transcription_config(self) -> dict[str, Any]:
         transcription_config: dict[str, Any] = {
             "model": self._opts.model,
         }
-        if prompt:
-            transcription_config["prompt"] = prompt
-        if self._opts.language:
+        if is_given(self._opts.prompt) and self._opts.prompt:
+            transcription_config["prompt"] = self._opts.prompt
+        if is_given(self._opts.keywords) and self._opts.keywords:
+            transcription_config["keywords"] = list(self._opts.keywords)
+        if is_given(self._opts.delay):
+            transcription_config["delay"] = self._opts.delay
+
+        languages: list[str] = []
+        if is_given(self._opts.languages):
+            languages = list(self._opts.languages)
+        elif _uses_language_list(self._opts.model) and self._opts.language:
+            # the plural field replaces the singular one on these models, so carry the
+            # configured language over instead of dropping it
+            languages = [self._opts.language.language]
+
+        if languages:
+            # sending both `languages` and `language` is rejected
+            transcription_config["languages"] = languages
+        elif self._opts.language:
             transcription_config["language"] = self._opts.language.language
 
+        return transcription_config
+
+    def _build_session_update(self) -> dict[str, Any]:
         input_config: dict[str, Any] = {
             "format": {
                 "type": "audio/pcm",
                 "rate": SAMPLE_RATE,
             },
-            "transcription": transcription_config,
+            "transcription": self._build_transcription_config(),
         }
         # gpt-realtime-whisper rejects any turn_detection config — omit the key entirely.
         # For other models, send the configured turn_detection (server-side VAD).
@@ -403,7 +557,7 @@ class STT(stt.STT):
         if self._opts.noise_reduction_type:
             input_config["noise_reduction"] = {"type": self._opts.noise_reduction_type}
 
-        realtime_config: dict[str, Any] = {
+        return {
             "type": "session.update",
             "session": {
                 "type": "transcription",
@@ -412,6 +566,9 @@ class STT(stt.STT):
                 },
             },
         }
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        realtime_config = self._build_session_update()
 
         query_params: dict[str, str] = {
             "intent": "transcription",
@@ -515,6 +672,9 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._vad = vad_instance
         self._speaking = False
+        # active connection for in-band session.update; None while disconnected
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._session_update_atask: asyncio.Task[None] | None = None
 
     def update_options(
         self,
@@ -524,6 +684,33 @@ class SpeechStream(stt.SpeechStream):
         self._language = LanguageCode(language)
         self._pool.invalidate()
         self._reconnect_event.set()
+
+    def _send_session_update(self, session_update: dict[str, Any]) -> None:
+        """Re-send the session configuration on the live connection.
+
+        The transcription config can be changed mid-session, so context updates don't need a
+        reconnect (which would cut the ongoing utterance).
+        """
+        # chain off the previous send so updates reach the server in order
+        self._session_update_atask = asyncio.create_task(
+            self._send_session_update_task(session_update, self._session_update_atask)
+        )
+
+    async def _send_session_update_task(
+        self, session_update: dict[str, Any], prev: asyncio.Task[None] | None
+    ) -> None:
+        if prev is not None:
+            await asyncio.gather(prev, return_exceptions=True)
+
+        ws = self._ws
+        if ws is None or ws.closed:
+            # not connected; the next connection carries the latest options
+            return
+        try:
+            await ws.send_json(session_update)
+        except Exception:
+            # closing; the next connection carries the latest options
+            logger.debug("failed to send session.update to OpenAI Realtime STT")
 
     def _start_speaking(self) -> None:
         if self._speaking:
@@ -740,6 +927,7 @@ class SpeechStream(stt.SpeechStream):
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
+                self._ws = ws
                 vad_stream = self._vad.stream() if self._vad is not None else None
                 tasks = [
                     asyncio.create_task(send_task(ws, vad_stream)),
@@ -765,6 +953,10 @@ class SpeechStream(stt.SpeechStream):
 
                     self._reconnect_event.clear()
                 finally:
+                    self._ws = None
+                    if self._session_update_atask is not None:
+                        await utils.aio.gracefully_cancel(self._session_update_atask)
+                        self._session_update_atask = None
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
