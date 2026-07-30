@@ -349,6 +349,31 @@ async def test_stream_run_drains_audio_with_ws(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_stream_empty_text_is_noop_without_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool-only / empty turns must not raise APIConnectionError or open a WS."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS, api_key="test-api-key")
+    stream = engine.stream()
+    stream.end_input()
+
+    async def fail_warmup(timeout_s: float = 10.0) -> bool:
+        raise AssertionError("warmup should not run for empty text turns")
+
+    monkeypatch.setattr(engine, "warmup", fail_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect") as connect:
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames == 0
+    connect.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
