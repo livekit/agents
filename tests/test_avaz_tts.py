@@ -140,15 +140,36 @@ def test_derive_ws_url_rejects_empty_host() -> None:
 def test_rejects_plaintext_ws_with_api_key() -> None:
     from livekit.plugins.avaz import TTS
 
-    with pytest.raises(ValueError, match="unencrypted ws://"):
+    with pytest.raises(ValueError, match="non-TLS WebSocket"):
         TTS(ws_url="ws://remote.example/tts/stream-input", api_key="secret")
 
 
 def test_rejects_loopback_plaintext_ws_with_api_key() -> None:
     from livekit.plugins.avaz import TTS
 
-    with pytest.raises(ValueError, match="unencrypted ws://"):
+    with pytest.raises(ValueError, match="non-TLS WebSocket"):
         TTS(ws_url="ws://127.0.0.1:8080/tts/stream-input", api_key="secret")
+
+
+def test_rejects_http_ws_url_with_api_key() -> None:
+    from livekit.plugins.avaz import TTS
+
+    with pytest.raises(ValueError, match="non-TLS WebSocket"):
+        TTS(ws_url="http://remote.example/tts/stream-input", api_key="secret")
+
+
+def test_rejects_schemeless_ws_url_with_api_key() -> None:
+    from livekit.plugins.avaz import TTS
+
+    with pytest.raises(ValueError, match="non-TLS WebSocket"):
+        TTS(ws_url="remote.example/tts/stream-input", api_key="secret")
+
+
+def test_allows_wss_with_api_key() -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url="wss://remote.example/tts/stream-input", api_key="secret")
+    assert engine._opts.api_key == "secret"
 
 
 def test_explicit_ws_url_skips_dashboard_api_key_requirement(

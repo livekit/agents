@@ -107,20 +107,21 @@ def _derive_ws_url_from_base(base_url: str) -> str:
 
 
 def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
-    """Refuse sending API credentials over any plaintext ``ws://`` URL.
+    """Refuse sending API credentials unless the WebSocket URL is ``wss://``.
 
-    Dashboard tokens must use ``wss://`` (or an ``https`` ``base_url``). Local
-    TTS without auth can still use ``ws://`` by omitting ``api_key`` or passing
-    ``api_key=""`` to suppress ``AVAZ_API_KEY``.
+    Allowlist (not a ``ws`` denylist): ``http://``, empty/odd schemes, and
+    ``ws://`` are all rejected when a key is present. Local plaintext TTS can
+    still use ``ws://`` by omitting ``api_key`` or passing ``api_key=""``.
     """
     if not api_key:
         return
     parsed = urlparse(ws_url)
-    if parsed.scheme != "ws":
+    if parsed.scheme == "wss" and parsed.netloc:
         return
     raise ValueError(
-        "Avaz TTS refuses to send API credentials over unencrypted ws://. "
-        "Use an https base_url (or wss:// ws_url), or omit api_key for local plaintext."
+        "Avaz TTS refuses to send API credentials over a non-TLS WebSocket URL. "
+        "Use an https base_url (or wss:// ws_url), or omit api_key / pass "
+        'api_key="" for local plaintext.'
     )
 
 
