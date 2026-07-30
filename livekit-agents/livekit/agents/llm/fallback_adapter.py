@@ -88,6 +88,12 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def preemptive_generation_safe(self) -> bool:
+        # a speculative chat() may run on any wrapped instance, so speculation
+        # is only safe when every one of them declares it safe
+        return all(inst.preemptive_generation_safe for inst in self._llm_instances)
+
     def chat(
         self,
         *,
