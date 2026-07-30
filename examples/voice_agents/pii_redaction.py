@@ -60,8 +60,9 @@ _PII_RULES: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
     (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "<SSN>"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"), "<EMAIL>"),
     # phone numbers must contain separators (or a + prefix) so plain digit
-    # runs like order ids are left alone
-    (re.compile(r"(?:\+\d{1,3}[ .-])?\b\(?\d{2,4}\)?[ .-]\d{3,4}[ .-]\d{2,4}\b"), "<PHONE>"),
+    # runs like order ids are left alone; the word boundary sits inside the
+    # optional "(" because \b cannot assert between a space and a parenthesis
+    (re.compile(r"(?:\+\d{1,3}[ .-]?)?\(?\b\d{2,4}\b\)?[ .-]\d{3,4}[ .-]\d{2,4}\b"), "<PHONE>"),
     (re.compile(r"\+\d{7,15}\b"), "<PHONE>"),
 ]
 
