@@ -132,6 +132,20 @@ class LLM(
         """
         return "unknown"
 
+    @property
+    def preemptive_generation_safe(self) -> bool:
+        """Whether ``chat()`` may be invoked speculatively.
+
+        Preemptive generation calls the LLM before the user's turn is committed
+        and discards the result when the final context differs. That is only
+        safe when ``chat()`` has no side effects. Adapters that execute
+        application logic inside ``chat()`` — e.g. a LangGraph graph running
+        its own tools — should return ``False``; the session then skips
+        preemptive generation for them instead of mutating state on a run that
+        may be thrown away.
+        """
+        return True
+
     @abstractmethod
     def chat(
         self,
