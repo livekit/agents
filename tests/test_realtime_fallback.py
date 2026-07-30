@@ -557,3 +557,65 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+# ---------------------------------------------------------------------------
+# provider-specific child-session handlers (#6556)
+# ---------------------------------------------------------------------------
+
+
+def test_active_session_exposes_current_child() -> None:
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+
+    assert session.active_session is primary.active_session
+
+
+async def test_child_handlers_survive_swap() -> None:
+    # handlers attached via on_active_session must keep firing after a
+    # failover replaces the child session (#6556)
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary, backup]).session()
+
+    received: list[object] = []
+    session.on_active_session("provider_specific_event", received.append)
+
+    primary.active_session.emit("provider_specific_event", "before-swap")
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    assert session.active_session is backup.active_session
+    backup.active_session.emit("provider_specific_event", "after-swap")
+
+    assert received == ["before-swap", "after-swap"]
+
+
+async def test_off_active_session_detaches_across_swaps() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary, backup]).session()
+
+    received: list[object] = []
+    handler = session.on_active_session("provider_specific_event", received.append)
+    session.off_active_session("provider_specific_event", handler)
+
+    primary.active_session.emit("provider_specific_event", "before-swap")
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+    backup.active_session.emit("provider_specific_event", "after-swap")
+
+    assert received == []
+
+
+def test_handlers_attached_directly_to_child_do_not_survive() -> None:
+    # documents the difference: direct child attachment is the failure mode
+    # from #6559/#6556, the registry is the supported path
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+
+    received: list[object] = []
+    session.active_session.on("provider_specific_event", received.append)
+    session.active_session.emit("provider_specific_event", "direct")
+
+    assert received == ["direct"]
