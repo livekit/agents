@@ -877,13 +877,7 @@ class RealtimeSession(
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
 
-        # accumulates partial input-audio transcripts per (item_id, content_index)
-        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
-
-        # when serverside VAD detected speech onset, per item_id. Correlating through the
-        # item keeps each turn paired with its own start; a single "last speech started"
-        # value cannot, because a late transcript would consume the next turn's value.
-        self._input_speech_started_at: dict[str, float] = {}
+        self._reset_input_turn_state()
 
         self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -900,6 +894,20 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _reset_input_turn_state(self) -> None:
+        """Per-turn input state, keyed by item_id and valid only within one connection.
+
+        Every field here must be discarded on reconnect: the server assigns new item ids,
+        so a stale entry can never be matched again.
+        """
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+
+        # when serverside VAD detected speech onset, per item_id. Correlating through the
+        # item keeps each turn paired with its own start; a single "last speech started"
+        # value cannot, because a late transcript would consume the next turn's value.
+        self._input_speech_started_at: dict[str, float] = {}
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -932,8 +940,7 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._input_transcript_accumulators.clear()
-            self._input_speech_started_at.clear()
+            self._reset_input_turn_state()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
