@@ -297,6 +297,36 @@ def test_resolve_stream_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_resolve_stream_model_explicit_name_beats_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.avaz.tts import _resolve_stream_model
+
+    monkeypatch.setenv("AVAZ_STREAM_MODEL", "avaz1")
+    assert (
+        _resolve_stream_model(
+            stream_model=NOT_GIVEN,
+            agent_model_id="avaz2",
+            model_id_explicit=True,
+        )
+        == "avaz2"
+    )
+
+
+def test_ctor_explicit_model_name_beats_stream_model_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.avaz import TTS
+
+    monkeypatch.setenv("AVAZ_STREAM_MODEL", "avaz1")
+    engine = TTS(
+        api_key="test-api-key",
+        base_url="https://test.example.com/api",
+        model_id="avaz2",
+    )
+    assert engine._opts.stream_model == "avaz2"
+
+
 def test_resolve_stream_model_from_agent_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -741,6 +771,70 @@ async def test_stream_tolerates_closed_ws_while_sending_text_after_audio(
         if data.get("text") == "More text.":
             await audio_seen.wait()
             # Let _handle_audio_payload mark emitter_ready before we hang up.
+            await asyncio.sleep(0.05)
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock(side_effect=send_side_effect)
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
+
+
+@pytest.mark.asyncio
+async def test_stream_tolerates_closed_ws_while_sending_boundary_after_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hang-up while sending the chunk-boundary frame must not fail after audio."""
+    import websockets.exceptions
+
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        post_text_drain_s=0.0,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Merhaba")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue: list[object] = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+    audio_seen = asyncio.Event()
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if not recv_queue:
+            raise asyncio.TimeoutError
+        item = recv_queue.pop(0)
+        if isinstance(item, str) and '"audio"' in item:
+            audio_seen.set()
+        return item  # type: ignore[return-value]
+
+    async def send_side_effect(payload: str) -> None:
+        data = json.loads(payload)
+        if data.get("text") == ".":
+            await audio_seen.wait()
             await asyncio.sleep(0.05)
             raise websockets.exceptions.ConnectionClosedOK(None, None)
 

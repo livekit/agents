@@ -163,14 +163,17 @@ def _resolve_stream_model(
     *,
     stream_model: NotGivenOr[str],
     agent_model_id: str,
+    model_id_explicit: bool = False,
 ) -> str:
     """Resolve upstream WebSocket model string (avaz1/2/3).
 
-    ``agent_model_id`` is the dashboard catalog id (usually a UUID). When it is
-    a non-UUID agent name, derive the upstream stream model from it.
+    Precedence: explicit ``stream_model`` > explicit non-UUID ``model_id`` >
+    ``AVAZ_STREAM_MODEL`` > non-UUID env/catalog name > default.
     """
     if is_given(stream_model) and stream_model:
         return str(stream_model).strip()
+    if model_id_explicit and agent_model_id and not _is_uuid(agent_model_id):
+        return _stream_model_from_agent_name(agent_model_id)
     env = os.environ.get("AVAZ_STREAM_MODEL", "").strip()
     if env:
         return env
@@ -486,6 +489,7 @@ class TTS(tts.TTS):
         resolved_stream_model = _resolve_stream_model(
             stream_model=stream_model,
             agent_model_id=resolved_model_id,
+            model_id_explicit=is_given(model_id) and bool(model_id),
         )
         explicit_ws = is_given(ws_url) and bool(ws_url)
         resolved_ws_url = _resolve_ws_url(ws_url, base_url)
@@ -883,13 +887,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if not sent_parts:
                                 continue
                             boundary = _chunk_boundary_to_append("".join(sent_parts), notation)
-                            if boundary:
-                                await ws.send(json.dumps({"text": boundary}))
-                                sent_parts.append(boundary)
-                                logger.debug(
-                                    "[Avaz TTS] appended chunk boundary %r",
-                                    boundary,
-                                )
+                            if boundary and not ws_closed:
+                                try:
+                                    await ws.send(json.dumps({"text": boundary}))
+                                    sent_parts.append(boundary)
+                                    logger.debug(
+                                        "[Avaz TTS] appended chunk boundary %r",
+                                        boundary,
+                                    )
+                                except websockets.exceptions.ConnectionClosed as exc:
+                                    ws_closed = True
+                                    if emitter_ready:
+                                        logger.debug(
+                                            "[Avaz TTS] WebSocket closed while "
+                                            "sending chunk boundary: %s",
+                                            exc,
+                                        )
+                                    else:
+                                        raise APIConnectionError(
+                                            f"Avaz TTS WebSocket closed: {exc}"
+                                        ) from exc
                             if not ws_closed and not flush_sent:
                                 try:
                                     await ws.send(json.dumps({"flush": True}))
@@ -939,8 +956,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 try:
                                     await ws.send(json.dumps({"text": boundary}))
                                     sent_parts.append(boundary)
-                                except websockets.exceptions.ConnectionClosed:
+                                except websockets.exceptions.ConnectionClosed as exc:
                                     ws_closed = True
+                                    if not emitter_ready:
+                                        raise APIConnectionError(
+                                            f"Avaz TTS WebSocket closed: {exc}"
+                                        ) from exc
                             if not ws_closed:
                                 try:
                                     await ws.send(json.dumps({"flush": True}))
