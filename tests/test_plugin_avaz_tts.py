@@ -19,9 +19,7 @@ def _integration_env_ready() -> bool:
 
 def _skip_unless_dashboard_env() -> None:
     if not _integration_env_ready():
-        pytest.skip(
-            "Set AVAZ_API_KEY, AVAZ_BASE_URL, and AVAZ_AGENT_MODEL_ID for dashboard integration tests"
-        )
+        pytest.skip("Set AVAZ_API_KEY, AVAZ_BASE_URL, AVAZ_AGENT_MODEL_ID for integration")
 
 
 def _dashboard_ws_url() -> str:

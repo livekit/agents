@@ -90,6 +90,17 @@ def test_derive_ws_url_from_base() -> None:
         _derive_ws_url_from_base("http://dashboard.example/api")
         == "ws://dashboard.example/api/tts/stream-input"
     )
+    assert (
+        _derive_ws_url_from_base("dashboard.example/api")
+        == "wss://dashboard.example/api/tts/stream-input"
+    )
+
+
+def test_derive_ws_url_rejects_empty_host() -> None:
+    from livekit.plugins.avaz.tts import _derive_ws_url_from_base
+
+    with pytest.raises(ValueError, match="http:// or https://"):
+        _derive_ws_url_from_base("/only/path")
 
 
 def test_rejects_plaintext_ws_with_api_key() -> None:
@@ -106,17 +117,30 @@ def test_allows_loopback_plaintext_ws_with_api_key() -> None:
     assert engine._opts.api_key == "secret"
 
 
-def test_normalize_chunk_notation_replaces_question_mark() -> None:
+def test_explicit_ws_url_skips_dashboard_api_key_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.avaz import TTS
+
+    monkeypatch.setenv("AVAZ_BASE_URL", "https://dashboard.example/api")
+    monkeypatch.delenv("AVAZ_API_KEY", raising=False)
+    engine = TTS(ws_url=_TEST_WS)
+    assert engine._opts.ws_url == _TEST_WS
+    assert engine._opts.base_url == ""
+    assert engine._opts.api_key == ""
+
+
+def test_normalize_chunk_notation_preserves_question_mark() -> None:
     from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
 
-    # Appending "?" before "." yields chunks_generated: 0 on Avaz dashboard builds.
-    assert _normalize_text_for_chunk_notation("How are you?", ".") == "How are you."
+    # Keep ? for prosody; append chunk boundary without a space.
+    assert _normalize_text_for_chunk_notation("How are you?", ".") == "How are you?."
 
 
-def test_normalize_chunk_notation_replaces_exclamation() -> None:
+def test_normalize_chunk_notation_preserves_exclamation() -> None:
     from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
 
-    assert _normalize_text_for_chunk_notation("Harika!", ".") == "Harika."
+    assert _normalize_text_for_chunk_notation("Harika!", ".") == "Harika!."
 
 
 def test_normalize_chunk_notation_appends_boundary() -> None:
@@ -374,10 +398,10 @@ async def test_stream_empty_text_is_noop_without_error(
 
 
 @pytest.mark.asyncio
-async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
+async def test_stream_run_turn_sends_flush_after_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pre-flush path uses recv idle drains, not fixed asyncio.sleep padding."""
+    """Protocol: init → text → flush; no fixed pre-flush sleeps in the plugin."""
     from livekit.plugins.avaz import TTS
 
     engine = TTS(
@@ -411,13 +435,6 @@ async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
     mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
     mock_ws.send = AsyncMock()
 
-    sleep_calls: list[float] = []
-
-    async def track_sleep(delay: float) -> None:
-        sleep_calls.append(delay)
-
-    monkeypatch.setattr(asyncio, "sleep", track_sleep)
-
     async def fake_warmup(timeout_s: float = 10.0) -> bool:
         engine._warmed = True
         return True
@@ -428,7 +445,10 @@ async def test_stream_run_turn_avoids_fixed_pre_flush_sleeps(
         async for _ev in stream:
             pass
 
-    assert sleep_calls == []
+    payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
+    assert any("model_settings" in p for p in payloads)
+    assert any(p.get("text") == "Merhaba." for p in payloads)
+    assert any(p.get("flush") is True for p in payloads)
 
 
 @pytest.mark.asyncio
@@ -474,6 +494,69 @@ async def test_stream_clean_ws_close_after_audio_succeeds(
 
     mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
     mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames >= 1
+
+
+@pytest.mark.asyncio
+async def test_stream_skips_flush_when_ws_closed_after_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the server hangs up after audio, do not fail the turn on flush send."""
+    import websockets.exceptions
+
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        api_key="test-api-key",
+        post_text_drain_s=0.01,
+        recv_idle_timeout_s=0.05,
+        flush_recv_timeout_s=0.05,
+        turn_timeout_s=5.0,
+    )
+    stream = engine.stream()
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue: list[object] = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        websockets.exceptions.ConnectionClosedOK(None, None),
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if not recv_queue:
+            raise asyncio.TimeoutError
+        item = recv_queue.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item  # type: ignore[return-value]
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+
+    async def send_side_effect(payload: str) -> None:
+        data = json.loads(payload)
+        if data.get("flush"):
+            raise websockets.exceptions.ConnectionClosedOK(None, None)
+
+    mock_ws.send = AsyncMock(side_effect=send_side_effect)
 
     async def fake_warmup(timeout_s: float = 10.0) -> bool:
         engine._warmed = True
