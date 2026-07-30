@@ -102,6 +102,29 @@ def test_unknown_models_do_not_claim_alignment(_fake_credentials: None) -> None:
     assert stt_impl.capabilities.aligned_transcript is False
 
 
+@pytest.mark.parametrize(
+    ("fallback", "expected"),
+    [
+        pytest.param("cartesia/ink-whisper", "word", id="aligned-fallback"),
+        pytest.param("cartesia/ink-2", False, id="unaligned-fallback"),
+        pytest.param("new-provider/new-turn-model", False, id="unknown-fallback"),
+    ],
+)
+def test_fallback_models_constrain_alignment_claim(
+    fallback: str, expected: object, _fake_credentials: None
+) -> None:
+    stt_impl = inference.STT(model="deepgram/nova-3", fallback=fallback)
+    assert stt_impl.capabilities.aligned_transcript == expected
+
+
+def test_alignment_update_still_accounts_for_fallback(_fake_credentials: None) -> None:
+    stt_impl = inference.STT(model="cartesia/ink-2", fallback="new-provider/new-turn-model")
+
+    stt_impl.update_options(model="deepgram/nova-3")
+
+    assert stt_impl.capabilities.aligned_transcript is False
+
+
 def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     """The advertised word alignment is not in the data the gateway sends."""
     stream = InferenceSpeechStream.__new__(InferenceSpeechStream)
