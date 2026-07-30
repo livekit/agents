@@ -684,7 +684,8 @@ class TestAnnounce:
 
     def _description(self, *, announce: bool) -> str:
         options = _resolve_delegation_options({"announce": announce})
-        return (_build_tool(options).info.description or "").lower()
+        # one flat line: a phrase below must match wherever the prompt happens to wrap
+        return " ".join((_build_tool(options).info.description or "").lower().split())
 
     @pytest.mark.parametrize("announce", [True, False])
     def test_only_the_off_description_asks_for_a_line(self, announce: bool):
@@ -692,9 +693,8 @@ class TestAnnounce:
         # it off the same completion is the only free place to put one
         description = self._description(announce=announce)
         assert ("same turn" in description) is not announce
-        if not announce:
-            # and it must not let on that a second model exists
-            assert "never mention consulting anyone" in description
+        # either way it must not let on that a second model exists
+        assert "the expert is never mentioned to the user" in description
 
     def test_an_explicit_description_wins_over_both(self):
         options = _resolve_delegation_options({"tool_description": "just do it"})

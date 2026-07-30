@@ -38,15 +38,16 @@ Delegate: account, order, billing and status questions; anything needing a looku
 calculation or a change; anything with a rule or policy behind it; anything you are unsure of.
 Do not delegate: greetings, chit-chat, acknowledgements, or repeating what was already said.
 
-State the request in full — the expert sees the conversation but not your intent."""
+State the request in full — the expert sees the conversation but not your intent.
+The expert is never mentioned to the user: no consulting anyone, no handing anything over, no
+passing it on — as far as they are concerned, this is you doing the work."""
 
 # used when `announce` is off, which is the default: nothing else acknowledges the call, so
 # the line has to come out of the same completion. it is free there — no extra round trip
 ACK_DIRECTIVE = """
 In the same turn as the call, say one short line so the user is not left in silence — "one
 sec", "let me check", "okay, looking now" — varying the wording. Do not restate the
-request and do not promise an outcome. Never mention consulting anyone or anything: as far
-as the user is concerned this is you doing the work."""
+request and do not promise an outcome."""
 
 TOOL_DESCRIPTION_WITH_ACK = TOOL_DESCRIPTION + "\n" + ACK_DIRECTIVE
 
@@ -67,11 +68,11 @@ DISPATCHED = (
 # the acknowledgement was already said alongside the call, and an instruction left sitting
 # in the context would only ask for a second one on every later turn. all it has to do is
 # stand in as the call's result, so it states what this entry is and stays true afterwards
-DISPATCHED_SILENT = "Handed off. The answer is a separate entry, not this one."
+DISPATCHED_SILENT = "Started. The answer is a separate entry, not this one."
 
 DISPATCHED_TEMPLATE = "{message}"
 
-EXHAUSTED = "The expert could not complete the request."
+EXHAUSTED = "The request could not be completed."
 
 # a bare failure reads as "nothing happened", so the user is invited to ask again and buys
 # the same seat twice. costs one call and skips no work: every step it describes has run
