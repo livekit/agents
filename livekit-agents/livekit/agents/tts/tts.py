@@ -59,11 +59,9 @@ class TTSCapabilities:
 
 
 @dataclass
-class MarkupCapabilities:
+class MarkupInfo:
     """What the expressive markup pipeline can do with a given voice."""
 
-    expressive: bool = False
-    """Whether this TTS declares an expressive markup dialect"""
     nonverbals: dict[str, list[str]] = field(default_factory=dict)
     """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
 
@@ -106,27 +104,25 @@ class TTS(
             return ""
 
         @property
-        def capabilities(self) -> MarkupCapabilities:
-            """The queryable markup capabilities matrix for this voice."""
-            from ._provider_format import llm_instructions, supported_nonverbals
+        def info(self) -> MarkupInfo:
+            """The queryable markup matrix for this voice."""
+            from ._provider_format import supported_nonverbals
 
-            key = self._provider_key()
-            return MarkupCapabilities(
-                expressive=llm_instructions(key) is not None,
-                nonverbals=supported_nonverbals(key),
-            )
+            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
 
-        def llm_instructions(self, steering: SpeechSteeringOptions | None = None) -> str | None:
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
-            The framework injects this into the LLM system prompt when
-            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
-            When *steering* is given, sounds it disables are omitted from the
+            The framework injects this into the LLM system prompt when expressive mode
+            is active. Returns ``None`` if this TTS has no markup support. When
+            *speech_steering* is given, sounds it disables are omitted from the
             advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key(), steering)
+            return llm_instructions(self._provider_key(), speech_steering)
 
         def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
             """Strip markup and collect the stripped tags in one pass."""

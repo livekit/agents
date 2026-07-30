@@ -2442,7 +2442,7 @@ class AgentActivity(RecognitionHooks):
         """
         from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
-        if not isinstance(self.tts, inference.TTS) or not self.tts.markup.capabilities.expressive:
+        if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
             return None
 
         expr = self._session._expressive
@@ -2471,7 +2471,9 @@ class AgentActivity(RecognitionHooks):
         turn_modality = speech_handle.input_details.modality if speech_handle else None
 
         tts_instructions = (
-            self.tts.markup.llm_instructions(options.get("speech_steering")) if self.tts else None
+            self.tts.markup.llm_instructions(speech_steering=options.get("speech_steering"))
+            if self.tts
+            else None
         )
         if tts_instructions:
             tts_template = _to_instructions(options["tts_instructions_template"])
