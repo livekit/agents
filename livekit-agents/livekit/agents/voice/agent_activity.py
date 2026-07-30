@@ -3918,7 +3918,12 @@ class AgentActivity(RecognitionHooks):
             )
         )
 
+        # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
+            # function call is created during the realtime generation, before the assistant
+            # message it belongs to is placed at `started_speaking_at`
+            # reset the `created_at` to the start time of the tool execution
+            fnc_call.created_at = time.time()
             speech_handle._item_added([fnc_call])
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
