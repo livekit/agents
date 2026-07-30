@@ -92,7 +92,7 @@ def test_build_init_message_uses_stream_model() -> None:
 
 
 def test_ctor_non_uuid_model_id_not_sent_as_agent_model_id() -> None:
-    """Plain model names belong in stream_model only — match set_voice_ids."""
+    """Plain model names belong in stream_model only — match update_options."""
     from livekit.plugins.avaz import TTS
     from livekit.plugins.avaz.tts import _build_init_message
 
@@ -273,26 +273,35 @@ def test_auth_headers() -> None:
     assert headers["Authorization"] == "Bearer test-api-key"
 
 
-def test_set_voice_ids_uuid() -> None:
+def test_update_options_uuid() -> None:
     from livekit.plugins.avaz import TTS
 
     engine = TTS(ws_url=_TEST_WS)
-    engine.set_voice_ids(model_id=_TEST_UUID)
+    engine.update_options(model_id=_TEST_UUID)
     assert engine._opts.agent_model_id == _TEST_UUID
 
 
-def test_set_voice_ids_non_uuid_clears_agent_model_id() -> None:
+def test_update_options_non_uuid_clears_agent_model_id() -> None:
     from livekit.plugins.avaz import TTS
     from livekit.plugins.avaz.tts import _build_init_message
 
     engine = TTS(ws_url=_TEST_WS)
-    engine.set_voice_ids(model_id=_TEST_UUID)
-    engine.set_voice_ids(model_id="avaz2")
+    engine.update_options(model_id=_TEST_UUID)
+    engine.update_options(model_id="avaz2")
     assert engine._opts.stream_model == "avaz2"
     assert engine._opts.agent_model_id == ""
     msg = _build_init_message(engine._opts)
     assert msg["model_settings"]["model_id"] == "avaz2"
     assert "agent_model_id" not in msg["model_settings"]
+
+
+def test_set_voice_ids_alias_calls_update_options() -> None:
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS)
+    engine.set_voice_ids(model_id=_TEST_UUID, speaker_id=2)
+    assert engine._opts.agent_model_id == _TEST_UUID
+    assert engine._opts.speaker_id == 2
 
 
 def test_resolve_stream_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -375,19 +384,26 @@ def test_log_server_payload_redacts_sensitive_fields(caplog: pytest.LogCaptureFi
         "api_key": "super-secret-key-value",
         "Authorization": "Bearer leaked-credential",
         "model_settings": {"access_token": "session-secret-xyz", "model_id": "avaz3"},
+        "signed_url": "https://example.com/tmp?sig=abc",
+        "jwt": "eyJhbGciOiJIUzI1NiJ9.payload.sig",
     }
     summary = _summarize_server_payload(payload)
     assert summary["api_key"] == "<redacted>"
     assert summary["Authorization"] == "<redacted>"
-    assert summary["model_settings"]["access_token"] == "<redacted>"
-    assert summary["model_settings"]["model_id"] == "avaz3"
+    # Unknown / nested blobs are omitted; denylist keys are redacted.
+    assert summary["model_settings"] == "<omitted>"
+    assert summary["signed_url"] == "<redacted>"
+    assert summary["jwt"] == "<redacted>"
+    assert summary["status"] == "ok"
 
     caplog.set_level(logging.DEBUG, logger="livekit.plugins.avaz")
     _log_server_payload(payload, phase="init")
     assert "super-secret-key-value" not in caplog.text
     assert "leaked-credential" not in caplog.text
     assert "session-secret-xyz" not in caplog.text
+    assert "https://example.com/tmp?sig=abc" not in caplog.text
     assert "<redacted>" in caplog.text
+    assert "<omitted>" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1294,3 +1310,83 @@ async def test_stream_connect_errors_raise_api_connection_error(
     with pytest.raises(APIConnectionError, match="connection failed"):
         async for _ in stream:
             pass
+
+
+@pytest.mark.asyncio
+async def test_stream_init_timeout_not_reported_as_turn_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Init-ack timeout must not be labelled as a whole-turn timeout."""
+    from livekit.agents.types import APIConnectOptions
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(
+        ws_url=_TEST_WS,
+        connect_timeout_s=0.05,
+        turn_timeout_s=120.0,
+    )
+    stream = engine.stream(conn_options=APIConnectOptions(timeout=0.05, max_retry=0))
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+    mock_ws.send = AsyncMock()
+    mock_ws.recv = AsyncMock(side_effect=asyncio.TimeoutError)
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws):
+        with pytest.raises(APIConnectionError, match="init ack timed out"):
+            async for _ in stream:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_stream_uses_conn_options_timeout_for_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.types import APIConnectOptions
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS, connect_timeout_s=30.0, turn_timeout_s=60.0)
+    stream = engine.stream(conn_options=APIConnectOptions(timeout=1.5, max_retry=0))
+    stream.push_text("Merhaba.")
+    stream.end_input()
+
+    audio_b64 = _minimal_wav_b64()
+    recv_queue = [
+        '{"status":"initialized"}',
+        json.dumps({"audio": audio_b64}),
+        '{"status":"closed","chunks_generated":1}',
+    ]
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+
+    async def recv_side_effect() -> str:
+        if recv_queue:
+            return recv_queue.pop(0)
+        raise asyncio.TimeoutError
+
+    mock_ws.recv = AsyncMock(side_effect=recv_side_effect)
+    mock_ws.send = AsyncMock()
+
+    async def fake_warmup(timeout_s: float = 10.0) -> bool:
+        engine._warmed = True
+        return True
+
+    monkeypatch.setattr(engine, "warmup", fake_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect", return_value=mock_ws) as connect:
+        async for _ev in stream:
+            pass
+
+    _, kwargs = connect.call_args
+    assert kwargs["open_timeout"] == 1.5
