@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Agent Framework plugin for services from BitHuman Avatar Rendering"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10.0"
+requires-python = ">=3.11"
 authors = [{ name = "LiveKit", email = "support@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
 classifiers = [
@@ -18,14 +18,18 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-# bithuman builds only for Python 3.11 through 3.13
+# bithuman builds only for Python 3.11 through 3.13. requires-python holds the lower
+# bound; the upper bound has to be a marker here, since the virtual workspace root
+# intersects requires-python over all members and would cap the whole workspace.
 dependencies = [
     "livekit-agents>=1.6.7",
-    "bithuman>=0.5.25,<3; python_version >= '3.11' and python_version < '3.14'",
+    "bithuman>=0.5.25,<3; python_version < '3.14'",
 ]
 
 [project.urls]
