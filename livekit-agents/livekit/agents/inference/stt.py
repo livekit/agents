@@ -931,6 +931,8 @@ class SpeechStream(stt.SpeechStream):
                 msg_type = data.get("type")
                 if msg_type == "session.created":
                     pass
+                elif msg_type == "start_of_speech":
+                    self._process_start_of_speech()
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
                 elif msg_type == "preflight_transcript":
@@ -1077,17 +1079,26 @@ class SpeechStream(stt.SpeechStream):
         )
         self._event_ch.send_nowait(event)
 
+    def _process_start_of_speech(self) -> None:
+        """Onset reported by a provider that detects it server-side (e.g. Cartesia Ink-2).
+
+        Without this the first transcript has to stand in for onset, which lands about
+        800ms late because it waits for a word to be decoded.
+        """
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
 
         if not text and not is_final:
             return
-        # We'll have a more accurate way of detecting when speech started when we have VAD
-        if not self._speaking:
-            self._speaking = True
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+        # fallback onset for providers that send no start_of_speech; a transcript is the
+        # earliest evidence of speech we have, so it is late by a word-decode
+        self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 
