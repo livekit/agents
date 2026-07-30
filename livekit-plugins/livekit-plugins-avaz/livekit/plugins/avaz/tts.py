@@ -20,6 +20,7 @@ import io
 import json
 import os
 import re
+import ssl
 import time
 import wave
 from dataclasses import dataclass, replace
@@ -111,7 +112,13 @@ def _is_loopback_host(hostname: str | None) -> bool:
 
 
 def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
-    """Refuse sending API credentials over plaintext ``ws://`` except loopback."""
+    """Refuse sending API credentials over plaintext ``ws://`` except loopback.
+
+    Loopback plaintext is allowed only for local dashboard/dev proxies. The API
+    token still crosses the local stack in cleartext — prefer ``wss://`` whenever
+    possible. Hostname matching is intentionally narrow (``localhost`` /
+    ``127.0.0.1`` / ``::1``); other loopback forms are rejected.
+    """
     if not api_key:
         return
     parsed = urlparse(ws_url)
@@ -119,7 +126,8 @@ def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
         return
     if _is_loopback_host(parsed.hostname):
         logger.warning(
-            "Avaz TTS sending API key over plaintext ws:// to loopback host %s",
+            "Avaz TTS sending API key over plaintext ws:// to loopback host %s; "
+            "prefer wss:// — the token is transmitted in cleartext on this machine",
             parsed.hostname,
         )
         return
@@ -185,10 +193,15 @@ def _resolve_stream_model(
     return DEFAULT_STREAM_MODEL
 
 
-def _ws_connect_kwargs(api_key: str) -> dict[str, Any]:
-    if not api_key:
-        return {}
-    return {"additional_headers": build_auth_headers(api_key)}
+def _ws_connect_kwargs(api_key: str, *, ws_url: str = "") -> dict[str, Any]:
+    """Build ``websockets.connect`` kwargs (auth headers + explicit TLS context)."""
+    kwargs: dict[str, Any] = {}
+    if api_key:
+        kwargs["additional_headers"] = build_auth_headers(api_key)
+    if ws_url and urlparse(ws_url).scheme == "wss":
+        # Explicit default context so certificate verification is not implicit.
+        kwargs["ssl"] = ssl.create_default_context()
+    return kwargs
 
 
 def _wav_pcm(wav_bytes: bytes) -> tuple[int, bytes]:
@@ -361,7 +374,7 @@ async def _warmup_turn(opts: _TTSOptions, *, timeout_s: float = 15.0) -> bool:
         uri,
         open_timeout=opts.connect_timeout_s,
         max_size=_WS_MAX_SIZE,
-        **_ws_connect_kwargs(opts.api_key),
+        **_ws_connect_kwargs(opts.api_key, ws_url=uri),
     ) as ws:
         await ws.send(json.dumps(init_msg))
         init_resp = await asyncio.wait_for(ws.recv(), timeout=opts.connect_timeout_s)
@@ -638,7 +651,19 @@ class TTS(tts.TTS):
                 if self._warmed or self._warmup_attempted:
                     return
             # Bound inline warm-up so the first spoken turn cannot stall ~15s.
-            await self._warmup_and_mark(timeout_s=DEFAULT_INLINE_WARMUP_TIMEOUT_S)
+            # wait_for is required: timeout_s alone does not cover WS connect /
+            # init-ack waits (governed by connect_timeout_s).
+            try:
+                await asyncio.wait_for(
+                    self._warmup_and_mark(timeout_s=DEFAULT_INLINE_WARMUP_TIMEOUT_S),
+                    timeout=DEFAULT_INLINE_WARMUP_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                self._warmup_attempted = True
+                logger.debug(
+                    "[Avaz TTS] inline warm-up exceeded %.0fs; continuing with first turn",
+                    DEFAULT_INLINE_WARMUP_TIMEOUT_S,
+                )
 
     def prewarm(self) -> None:
         """LiveKit AgentActivity calls this at session start."""
@@ -996,7 +1021,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 uri,
                 open_timeout=self._opts.connect_timeout_s,
                 max_size=_WS_MAX_SIZE,
-                **_ws_connect_kwargs(self._opts.api_key),
+                **_ws_connect_kwargs(self._opts.api_key, ws_url=uri),
             ) as ws:
                 await _run_turn(ws)
 

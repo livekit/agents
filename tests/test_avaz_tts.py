@@ -874,6 +874,48 @@ async def test_ensure_warmed_bounds_prewarm_wait(
 
 
 @pytest.mark.asyncio
+async def test_ensure_warmed_bounds_inline_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline warm-up must be capped even when connect_timeout_s is larger."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS, connect_timeout_s=10.0)
+    started = asyncio.Event()
+
+    async def slow_warmup(timeout_s: float = 10.0) -> bool:
+        started.set()
+        await asyncio.sleep(30.0)
+        return True
+
+    monkeypatch.setattr(engine, "warmup", slow_warmup)
+    monkeypatch.setattr(
+        "livekit.plugins.avaz.tts.DEFAULT_INLINE_WARMUP_TIMEOUT_S",
+        0.05,
+    )
+
+    t0 = time.monotonic()
+    await engine._ensure_warmed()
+    elapsed = time.monotonic() - t0
+
+    assert started.is_set()
+    assert elapsed < 1.0
+    assert engine._warmup_attempted is True
+    assert engine._warmed is False
+
+
+def test_ws_connect_kwargs_sets_ssl_for_wss() -> None:
+    from livekit.plugins.avaz.tts import _ws_connect_kwargs
+
+    kwargs = _ws_connect_kwargs("secret", ws_url="wss://dashboard.example/api/tts/stream-input")
+    assert "ssl" in kwargs
+    assert kwargs["additional_headers"]["X-API-Key"] == "secret"
+
+    plain = _ws_connect_kwargs("secret", ws_url="ws://127.0.0.1:8080/tts/stream-input")
+    assert "ssl" not in plain
+
+
+@pytest.mark.asyncio
 async def test_stream_connect_errors_raise_api_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
