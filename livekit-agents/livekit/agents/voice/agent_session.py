@@ -560,12 +560,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_turn_released: asyncio.Event = asyncio.Event()
         self._user_turn_released.set()
 
-        # count of active `_wait_for_idle_and_hold` scopes; while > 0, non-holder
-        # `wait_for_idle` callers block until release. holder bypasses via contextvar.
-        self._idle_holds: int = 0
-        self._idle_released: asyncio.Event = asyncio.Event()
-        self._idle_released.set()
-
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
@@ -1492,20 +1486,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @asynccontextmanager
     async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+        """Wait for idle, then block other ``wait_for_idle`` callers on that activity.
+
+        Per-activity, not per-session: work handed to another agent keeps its own floor,
+        or its replies would wait on the work that is waiting for them.
+        """
         from .agent_activity import _IdleHoldContextVar
 
         activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
+        activity._idle_holds += 1
+        activity._idle_released.clear()
         token = _IdleHoldContextVar.set(True)
         try:
             yield activity
         finally:
             _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            activity._idle_holds -= 1
+            if activity._idle_holds == 0:
+                activity._idle_released.set()
 
     async def _update_activity(
         self,

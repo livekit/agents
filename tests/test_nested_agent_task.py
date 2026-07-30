@@ -152,6 +152,88 @@ async def test_handoff_from_pre_run_speech():
         assert isinstance(sess.current_agent, EnterHandoffAgent)
 
 
+class LookupTask(AgentTask[None]):
+    """A task whose LLM calls an async tool — one that releases the turn mid-run."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="lookup task")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="lookup_greeting")
+
+    @function_tool
+    async def slow_lookup(self, ctx: RunContext) -> str:
+        """Look something up, reporting progress before the result."""
+        await ctx.update("one moment")
+        return "found it"
+
+
+class ForegroundAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def take_floor(self, ctx: RunContext) -> str:
+        """Holds the floor for an interactive task."""
+        async with ctx.foreground():
+            await LookupTask()
+        return "task completed"
+
+
+@pytest.mark.asyncio
+async def test_async_tool_reply_inside_a_foregrounded_task():
+    """A tool called by an AgentTask under ctx.foreground() must still get its deferred
+    reply: a session-wide hold makes the reply wait for the task and the task for the
+    reply."""
+    llm = FakeLLM(
+        fake_responses=[
+            # user says "go" -> the tool takes the floor and hands off to LookupTask
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="take_floor", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(
+                input="lookup_greeting", content="what do you need?", ttft=0, duration=0
+            ),
+            # the task's own turn calls the async tool
+            FakeLLMResponse(
+                input="look it up",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="slow_lookup", arguments="{}", call_id="call_2")],
+            ),
+        ]
+    )
+
+    delivered = asyncio.Event()
+
+    async with AgentSession(llm=llm) as sess:
+
+        @sess.on("tool_execution_updated")
+        def _on_update(ev) -> None:
+            update = ev.update
+            if (
+                update.type == "tool_reply_updated"
+                and update.status == "scheduled"
+                and "call_2_final" in update.update_ids
+            ):
+                delivered.set()
+
+        await sess.start(ForegroundAgent())
+        sess.generate_reply(user_input="go")
+
+        while not isinstance(sess.current_agent, LookupTask):
+            await asyncio.sleep(0.05)
+
+        # the task's turn, arriving from outside the held floor as a real one does
+        sess.generate_reply(user_input="look it up")
+        await asyncio.wait_for(delivered.wait(), timeout=5.0)
+
+
 def _build_fake_llm() -> FakeLLM:
     return FakeLLM(
         fake_responses=[
