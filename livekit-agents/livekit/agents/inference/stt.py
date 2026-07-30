@@ -260,6 +260,32 @@ def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> boo
     return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
 
 
+# Models whose transcripts carry no word timings. Cartesia's Turns API sends only
+# {type, transcript, turn_id, request_id} per turn, verified against the live service.
+_UNALIGNED_MODEL_PREFIXES = (
+    "cartesia/ink-2",
+    "inworld/",
+    "google/",
+)
+
+
+def _aligned_transcript_for_model(
+    model: NotGivenOr[STTModels | str],
+) -> Literal["word"] | bool:
+    """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
+
+    False when the model sends no word timings, and for "auto", where the provider is
+    picked server-side per language and so can't be known here. Claiming alignment we
+    don't have is the costlier error: it enables adaptive interruption, which then turns
+    off the fast VAD barge-in path it can't actually replace.
+    """
+    if not (is_given(model) and isinstance(model, str)) or model == "auto":
+        return False
+    if model.startswith(_UNALIGNED_MODEL_PREFIXES):
+        return False
+    return "word"
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -579,7 +605,7 @@ class STT(stt.STT):
                 streaming=True,
                 interim_results=True,
                 diarization=diarization_enabled,
-                aligned_transcript="word",
+                aligned_transcript=_aligned_transcript_for_model(model),
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
@@ -705,6 +731,7 @@ class STT(stt.STT):
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
+                aligned_transcript=_aligned_transcript_for_model(self._opts.model),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
