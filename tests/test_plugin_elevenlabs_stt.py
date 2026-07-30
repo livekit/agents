@@ -35,6 +35,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         keyterms=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
+        previous_text=None,
     )
     stream._language = None
     stream._event_ch = _EventSink()
@@ -134,6 +135,22 @@ def test_enable_logging_defaults_to_true() -> None:
 
 def test_enable_logging_can_be_disabled() -> None:
     assert _stt(enable_logging=False)._opts.enable_logging is False
+
+
+def test_previous_text_is_kept_for_realtime_model() -> None:
+    assert _stt(previous_text="prior context")._opts.previous_text == "prior context"
+
+
+def test_previous_text_is_ignored_for_non_realtime_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key",
+            model="scribe_v2",
+            previous_text="prior context",
+        )
+
+    assert instance._opts.previous_text is None
+    assert any("previous_text" in record.message for record in caplog.records)
 
 
 @pytest.mark.parametrize(("enable_logging", "expected"), [(True, "true"), (False, "false")])

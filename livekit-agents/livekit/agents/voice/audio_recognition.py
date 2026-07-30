@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+_NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
@@ -72,6 +73,8 @@ class _EndOfTurnInfo:
     new_transcript: str
     transcript_confidence: float
     metrics: _EndOfTurnMetrics
+    backchannel_over_agent: bool = False
+    """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
 
 
 def _compute_end_of_turn_metrics(
@@ -131,6 +134,7 @@ class _UserTurnTracker:
 
 class RecognitionHooks(Protocol):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
+    def on_backchannel_confirmed(self) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
@@ -293,6 +297,9 @@ class AudioRecognition:
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         self._agent_speaking: bool = False
         self._agent_speech_started_at: float | None = None
+        # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
+        self._overlap_in_current_turn: bool = False
+        self._turn_backchannel_over_agent: bool = False
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -361,6 +368,13 @@ class AudioRecognition:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
+
+    def _update_last_language(self, language: LanguageCode, transcript: str) -> None:
+        if not language or language.language in _NON_SPECIFIC_LANGUAGE_CODES:
+            return
+
+        if not self._last_language or len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH:
+            self._last_language = language
 
     @property
     def _input_started_at(self) -> float | None:
@@ -473,7 +487,7 @@ class AudioRecognition:
         if self._agent_speaking:
             # no interruption is detected, end the inference (idempotent)
             if not is_given(self._ignore_user_transcript_until):
-                self._on_end_of_overlap_speech(ended_at=time.time())
+                self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
 
             end_cooldown: float = (
                 self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
@@ -509,8 +523,15 @@ class AudioRecognition:
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
         )
+        # every speech onset clears the prior backchannel verdict; an overlap re-derives it below
+        self._turn_backchannel_over_agent = False
+        if not self._agent_speaking:
+            self._overlap_in_current_turn = False
+
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
+        # overlap over agent speech started this turn; gates verdict acceptance below
+        self._overlap_in_current_turn = True
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
@@ -538,8 +559,14 @@ class AudioRecognition:
         self,
         ended_at: float,
         user_speaking_span: trace.Span | None = None,
+        agent_ended: bool = False,
     ) -> None:
-        """End interruption inference when agent is speaking and overlap speech ends."""
+        """End interruption inference when agent is speaking and overlap speech ends.
+
+        agent_ended is True when the overlap is force-ended because the agent finished
+        speaking (the user may still be talking), in which case the synthesized verdict
+        is inconclusive and must not be treated as a confirmed backchannel.
+        """
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
 
@@ -555,7 +582,7 @@ class AudioRecognition:
                 user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
 
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
-            _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time())
+            _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time(), agent_ended=agent_ended)
         )
 
     @property
@@ -1144,10 +1171,7 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
             self._final_transcript_received.set()
             if not transcript:
@@ -1217,10 +1241,7 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
             if not transcript:
                 return
@@ -1380,6 +1401,14 @@ class AudioRecognition:
                 "ignoring backchannel event during backchannel boundary cooldown, falling back to vad"
             )
             return
+
+        # only honor the verdict while this turn's overlap is unresolved so a late verdict
+        # can't leak into the next turn; an interruption supersedes a prior backchannel
+        if self._overlap_in_current_turn and not ev.agent_ended:
+            self._turn_backchannel_over_agent = not ev.is_interruption
+            # clear the backchannel audio, but only between segments — else we'd clip a real turn
+            if not ev.is_interruption and not self._speaking:
+                self._hooks.on_backchannel_confirmed()
 
         if ev.is_interruption:
             self._hooks.on_interruption(ev)
@@ -1629,6 +1658,7 @@ class AudioRecognition:
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
                     metrics=metrics,
+                    backchannel_over_agent=self._turn_backchannel_over_agent,
                 )
             )
             if committed:
@@ -1677,6 +1707,9 @@ class AudioRecognition:
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
 
+            # reset turn-scoped barge-in state once per logical turn (commit or drop)
+            self._turn_backchannel_over_agent = False
+            self._overlap_in_current_turn = False
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:

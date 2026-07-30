@@ -22,6 +22,12 @@ session = AgentSession(
 
 ## 📁 Example Categories
 
+### 🏠 [Homepage](./homepage/)
+
+A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
+knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
+streaming TTS filters, and a split unit/eval test suite.
+
 ### 🎙️ [Voice Agents](./voice_agents/)
 
 A collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, real-time models, and tracing.

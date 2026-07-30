@@ -6,7 +6,7 @@ This example demonstrates how to integrate Krisp noise cancellation
 into a LiveKit voice agent for human-to-bot conversations.
 
 The audio pipeline:
-    Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM → TTS → Room
+    Room → RoomIO (with voice_isolation) → VAD → STT → LLM → TTS → Room
 
 Authentication:
     By default the plugin uses ``krisp.auth.livekit_cloud()`` — auth + metering
@@ -84,20 +84,21 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Starting agent session with RoomIO and Krisp noise cancellation")
 
-    # Create Krisp FrameProcessor for noise cancellation.
+    # Create the Krisp voice isolation FrameProcessor.
     # Defaults to krisp.auth.livekit_cloud() — the framework pushes the room's
     # JWT to the FrameProcessor via _on_credentials_updated and auto-refreshes
-    # it on token rotation. No manual credential plumbing required.
-    processor = krisp.KrispVivaFilterFrameProcessor(
+    # it on token rotation. No manual credential plumbing required. Input frames
+    # of any size and sample rate are buffered and adapted automatically.
+    noise_cancellation = krisp.voice_isolation(
         noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
-        frame_duration_ms=10,
-        sample_rate=16000,  # Pre-load model at this sample rate
     )
+    # For telephony audio (for example, SIP participants), use
+    # krisp.voice_isolation_telephony() instead.
 
     # To use a Krisp license key + .kef model file instead, supply an explicit
     # auth provider:
     #
-    #     processor = krisp.KrispVivaFilterFrameProcessor(
+    #     noise_cancellation = krisp.KrispVivaFilterFrameProcessor(
     #         auth_provider=krisp.auth.krisp_license(
     #             # Both default to env vars KRISP_VIVA_SDK_LICENSE_KEY and
     #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted.
@@ -105,21 +106,15 @@ async def entrypoint(ctx: JobContext):
     #             model_path="/path/to/model.kef",
     #         ),
     #         noise_suppression_level=100,
-    #         frame_duration_ms=10,
-    #         sample_rate=16000,
     #     )
 
-    # Start the session with RoomIO configuration
-    # IMPORTANT: frame_size_ms must match Krisp's frame_duration_ms
+    # Start the session with RoomIO configuration.
     await session.start(
         agent=KrispAgent(),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                sample_rate=16000,  # Krisp supports: 8k, 16k, 24k, 32k, 44.1k, 48k
-                num_channels=1,
-                frame_size_ms=10,  # Must match Krisp frame_duration_ms (10, 15, 20, 30, or 32)
-                noise_cancellation=processor,  # Pass FrameProcessor directly
+                noise_cancellation=noise_cancellation,  # Pass the FrameProcessor directly
             ),
         ),
     )

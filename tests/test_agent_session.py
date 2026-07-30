@@ -125,6 +125,45 @@ def test_realtime_user_input_transcription_preserves_item_id() -> None:
     assert captured_events[0].item_id == "item_123"
 
 
+@pytest.mark.parametrize(
+    ("has_local_vad", "should_interrupt"),
+    [
+        (False, True),
+        (True, False),
+    ],
+)
+def test_interim_transcript_interrupts_only_without_local_vad(
+    has_local_vad: bool, should_interrupt: bool
+) -> None:
+    captured_events: list[UserInputTranscribedEvent] = []
+    activity = object.__new__(AgentActivity)
+    activity._agent = SimpleNamespace(llm=NOT_GIVEN, vad=NOT_GIVEN)
+    activity._session = SimpleNamespace(
+        _text_only=False,
+        llm=None,
+        vad=Mock(spec=vad.VAD) if has_local_vad else None,
+        _user_input_transcribed=captured_events.append,
+    )
+    activity._turn_detection = None
+    activity._paused_speech = None
+    activity._interrupt_by_audio_activity = Mock()
+
+    activity.on_interim_transcript(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="hello", language=LanguageCode("en"))],
+        ),
+        speaking=None,
+    )
+
+    assert len(captured_events) == 1
+    assert captured_events[0].transcript == "hello"
+    if should_interrupt:
+        activity._interrupt_by_audio_activity.assert_called_once_with()
+    else:
+        activity._interrupt_by_audio_activity.assert_not_called()
+
+
 async def test_events_and_metrics() -> None:
     speed = 1
     actions = FakeActions()
@@ -1776,6 +1815,9 @@ class _TestRecognitionHooks:
 
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         self.interruptions.append(ev)
+
+    def on_backchannel_confirmed(self) -> None:
+        pass
 
     def on_start_of_speech(self, ev: object, speech_start_time: float) -> None:
         pass
