@@ -91,6 +91,24 @@ def test_build_init_message_uses_stream_model() -> None:
     assert json.dumps(msg)
 
 
+def test_ctor_non_uuid_model_id_not_sent_as_agent_model_id() -> None:
+    """Plain model names belong in stream_model only — match set_voice_ids."""
+    from livekit.plugins.avaz import TTS
+    from livekit.plugins.avaz.tts import _build_init_message
+
+    engine = TTS(
+        api_key="test-api-key",
+        base_url="https://test.example.com/api",
+        model_id="avaz2",
+    )
+    assert engine._opts.stream_model == "avaz2"
+    assert engine._opts.agent_model_id == ""
+    assert engine.model == "avaz2"
+    msg = _build_init_message(engine._opts)
+    assert msg["model_settings"]["model_id"] == "avaz2"
+    assert "agent_model_id" not in msg["model_settings"]
+
+
 def test_derive_ws_url_from_base() -> None:
     from livekit.plugins.avaz.tts import _derive_ws_url_from_base
 

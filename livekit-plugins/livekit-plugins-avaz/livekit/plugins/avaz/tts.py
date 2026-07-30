@@ -505,7 +505,7 @@ class TTS(tts.TTS):
             ws_url=resolved_ws_url,
             base_url=resolved_base,
             api_key=resolved_api_key,
-            agent_model_id=resolved_model_id,
+            agent_model_id=resolved_model_id if _is_uuid(resolved_model_id) else "",
             stream_model=resolved_stream_model,
             speaker_id=int(speaker_id),
             cfg_value=cfg_value,
