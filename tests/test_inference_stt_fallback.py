@@ -175,9 +175,9 @@ class TestSTTConstructorFallbackAndConnectOptions:
     """Tests for STT constructor focusing on fallback and connect_options args."""
 
     def test_fallback_not_given(self):
-        """When fallback is not provided, _opts.fallback is NOT_GIVEN."""
+        """When fallback is not provided, _opts.fallback is empty."""
         stt = _make_stt()
-        assert stt._opts.fallback is NOT_GIVEN
+        assert stt._opts.fallback == []
 
     def test_fallback_single_string(self):
         """Single string fallback is normalized to list of FallbackModel."""

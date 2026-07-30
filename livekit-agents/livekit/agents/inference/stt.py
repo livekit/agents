@@ -393,7 +393,7 @@ class STTOptions:
     api_key: str
     api_secret: str
     extra_kwargs: dict[str, Any]
-    fallback: NotGivenOr[list[FallbackModel]]
+    fallback: list[FallbackModel]
     conn_options: NotGivenOr[APIConnectOptions]
 
 
@@ -613,14 +613,10 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
-        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
-        if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)
-        models = [model]
-        if is_given(fallback_models):
-            models.extend(item["model"] for item in fallback_models)
+        fallback_models = _normalize_fallback(fallback) if is_given(fallback) else []
+        all_models = [model, *(item["model"] for item in fallback_models)]
         aligned_transcript: Literal["word", False] = (
-            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+            "word" if all(_aligned_transcript_for_model(item) for item in all_models) else False
         )
 
         # chat_context follows the model's native support; the session decides whether to forward
@@ -748,15 +744,18 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
-            models = [self._opts.model]
-            if is_given(self._opts.fallback):
-                models.extend(item["model"] for item in self._opts.fallback)
+            all_models = [
+                self._opts.model,
+                *(item["model"] for item in self._opts.fallback),
+            ]
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
                 aligned_transcript=(
-                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+                    "word"
+                    if all(_aligned_transcript_for_model(item) for item in all_models)
+                    else False
                 ),
             )
         if is_given(language):
