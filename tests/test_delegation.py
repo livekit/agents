@@ -26,6 +26,7 @@ from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.delegation import (
     DISPATCHED,
+    DISPATCHED_SILENT,
     _build_tool,
     _resolve_delegation_options,
 )
@@ -178,9 +179,12 @@ class TestManagementTools:
 
 class TestOptions:
     def test_defaults_are_filled_in(self):
+        from livekit.agents.utils import is_given
+
         opts = _resolve_delegation_options()
-        assert opts["announce"] is True
-        assert opts["tool_description"]
+        assert opts["announce"] is False
+        # left unresolved so `_build_tool` can pick the one that matches `announce`
+        assert not is_given(opts["tool_description"])
 
     def test_instructions_default_to_not_given(self):
         from livekit.agents.utils import is_given
@@ -284,7 +288,7 @@ class TestDelegatedToolUpdates:
 
         result = await _ToolExecutor().execute(tool=delegated, run_ctx=child, raw_arguments={})
 
-        parent.update.assert_awaited_once_with("found 3 flights")
+        parent.update.assert_awaited_once_with("found 3 flights", silent=False)
         # the delegation LLM has nobody to talk to while it waits, so the tool runs through
         assert result == "picked the cheapest"
         assert ran_to_completion == ["after update"]
@@ -303,10 +307,18 @@ class TestDispatchedMessage:
         # several examples, so the model samples a range instead of anchoring on one
         assert lowered.count('"') >= 8
 
-    def test_it_never_claims_the_work_is_still_pending(self):
-        lowered = DISPATCHED.lower()
+    @pytest.mark.parametrize("note", [DISPATCHED, DISPATCHED_SILENT])
+    def test_neither_claims_the_work_is_still_pending(self, note: str):
+        lowered = note.lower()
         for stale in ("still running", "will arrive", "will follow", "wait for"):
             assert stale not in lowered, f"{stale!r} would read as current forever"
+
+    def test_the_silent_one_asks_for_nothing(self):
+        # nothing is generated from it, so an instruction would just sit in the context
+        # asking for a second acknowledgement on every later turn
+        lowered = DISPATCHED_SILENT.lower()
+        assert "acknowledge" not in lowered
+        assert '"' not in lowered  # no phrasings to imitate
 
     def test_it_bypasses_the_async_tool_template(self):
         from livekit.agents.voice.delegation import DISPATCHED_TEMPLATE
@@ -598,7 +610,9 @@ class TestNodeOverride:
             return f"answered: {task}"
 
         released, _ = await _run_delegate(node=_node)
-        assert released == DISPATCHED  # the answer follows as its own reply
+        # default options mean `announce` off, so the silent note stands in as the
+        # first result; the answer follows as its own reply
+        assert released == DISPATCHED_SILENT
 
     @pytest.mark.asyncio
     async def test_none_answers_the_call_without_speaking(self):
@@ -607,7 +621,7 @@ class TestNodeOverride:
 
         released, ctx = await _run_delegate(node=_node, options={"announce": False})
 
-        assert released == DISPATCHED
+        assert released == DISPATCHED_SILENT
         # no deferred reply is scheduled, and the handle is finished so nothing waits on one
         assert ctx._executor is None or ctx._executor._reply_task is None
         assert ctx._delegation_speech_handle is None or ctx._delegation_speech_handle.done()
@@ -727,7 +741,8 @@ class TestAnnounceIsTheOneAckSwitch:
     @pytest.mark.asyncio
     async def test_off_releases_without_speaking(self):
         released, ctx = await self._dispatch(announce=False)
-        assert released == DISPATCHED
+        # a different note: nothing answers it, so it asks for nothing
+        assert released == DISPATCHED_SILENT
         assert ctx._suppress_reply is True
 
     @pytest.mark.asyncio
@@ -742,11 +757,24 @@ class TestAnnounceIsTheOneAckSwitch:
         released, _ = await self._dispatch(announce=True, speaks_tool_outputs=True)
         assert released == DISPATCHED
 
-    def test_the_description_does_not_invite_a_second_ack(self):
+    def _description(self, *, announce: bool) -> str:
+        options = _resolve_delegation_options({"announce": announce})
+        return (_build_tool(options).info.description or "").lower()
+
+    def test_on_the_description_does_not_invite_a_second_ack(self):
         # asking for a line alongside the call would double up with the dispatch reply
-        description = (_build_tool(_resolve_delegation_options()).info.description or "").lower()
-        assert "same turn" not in description
-        assert "same completion" not in description
+        assert "same turn" not in self._description(announce=True)
+
+    def test_off_the_description_asks_for_the_line_itself(self):
+        # nothing else acknowledges the call, so the only free ack is in the same completion
+        description = self._description(announce=False)
+        assert "same turn" in description
+        # and it must not let on that a second model exists
+        assert "never mention consulting anyone" in description
+
+    def test_an_explicit_description_wins_over_both(self):
+        options = _resolve_delegation_options({"tool_description": "just do it"})
+        assert _build_tool(options).info.description == "just do it"
 
 
 class TestDelegatedToolTakesTheFloor:
@@ -826,3 +854,63 @@ class TestDelegatedToolTakesTheFloor:
             await asyncio.wait_for(session.aclose(), timeout=15.0)
 
         assert seen == ["tool_started", "task_entered", "tool_got:dana@example.com"]
+
+
+class TestSilentUpdates:
+    """`silent` records the message for the model without voicing it — on any update."""
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    async def _run(self, executor: _ToolExecutor, tool: Any) -> Any:
+        session = _reply_session()
+        ctx = _run_ctx(session, call_id="c1", name="slow")
+        await executor.execute(tool=tool, run_ctx=ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await asyncio.sleep(0)
+        return session
+
+    @pytest.mark.asyncio
+    async def test_a_later_silent_update_is_recorded_but_not_voiced(self):
+        @function_tool
+        async def slow(ctx: RunContext) -> None:
+            """A tool that reports twice."""
+            await ctx.update("dispatched")  # releases the turn, drawing a reply
+            await ctx.update("halfway", silent=True)
+
+        executor = _ToolExecutor()
+        session = await self._run(executor, slow)
+
+        inserted = session.current_agent.update_chat_ctx.await_args[0][0]
+        outputs = [i.output for i in inserted.items if i.type == "function_call_output"]
+
+        # recorded for the model to read on its next turn...
+        assert any("halfway" in output for output in outputs)
+        # ...but nothing is queued to speak it, so no reply is delivered
+        assert executor._pending_updates == []
+        assert executor._reply_task is None
+
+    @pytest.mark.asyncio
+    async def test_a_later_loud_update_still_queues_a_reply(self):
+        @function_tool
+        async def slow(ctx: RunContext) -> None:
+            """A tool that reports twice."""
+            await ctx.update("dispatched")
+            await ctx.update("halfway")
+
+        executor = _ToolExecutor()
+        await self._run(executor, slow)
+        assert executor._reply_task is not None
+
+    @pytest.mark.asyncio
+    async def test_the_event_says_whether_it_was_voiced(self):
+        @function_tool
+        async def slow(ctx: RunContext) -> None:
+            """A tool that reports twice."""
+            await ctx.update("dispatched")
+            await ctx.update("quietly", silent=True)
+
+        session = await self._run(_ToolExecutor(), slow)
+
+        emitted = [call.args[1].update for call in session.emit.call_args_list]
+        updates = {u.message: u.silent for u in emitted if u.type == "tool_call_updated"}
+        assert updates == {"dispatched": False, "quietly": True}

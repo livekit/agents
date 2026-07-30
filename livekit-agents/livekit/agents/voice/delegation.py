@@ -39,17 +39,35 @@ Do not delegate: greetings, chit-chat, acknowledgements, or repeating what was a
 
 State the request in full — the expert sees the conversation but not your intent."""
 
+# used when `announce` is off, which is the default: nothing else acknowledges the call, so
+# the line has to come out of the same completion. it is free there — no extra round trip
+ACK_DIRECTIVE = """
+In the same turn as the call, say one short line so the user is not left in silence — "one
+sec", "let me check", "okay, looking now" — varying the wording. Do not restate the
+request and do not promise an outcome. Never mention consulting anyone or anything: as far
+as the user is concerned this is you doing the work."""
+
+TOOL_DESCRIPTION_WITH_ACK = TOOL_DESCRIPTION + "\n" + ACK_DIRECTIVE
+
 DELEGATION_DIRECTIVE = """You are answering on behalf of an agent that is talking to the user.
 Return the facts it needs, not a phrased reply — it does the talking."""
 
-# the conversation model answers this to acknowledge, and it stays in the context afterwards — hence the
-# raw template: UPDATE_TEMPLATE's "still running, DON'T give information not included above"
-# would read as current forever and argue against relaying the answer
+# with `announce` on, the conversation model answers this to acknowledge, and it stays in the
+# context afterwards — hence the raw template: UPDATE_TEMPLATE's "still running, DON'T give
+# information not included above" would read as current forever and argue against relaying
+# the answer
 DISPATCHED = (
     'Working on it. Acknowledge in a few natural words — "one moment", "sure, let me check", '
     '"hang on", "okay, looking now" — varying the wording, restating none of the request and '
     "promising nothing about the outcome."
 )
+
+# with `announce` off, nothing is generated from the note, so it must not ask for anything:
+# the acknowledgement was already said alongside the call, and an instruction left sitting
+# in the context would only ask for a second one on every later turn. all it has to do is
+# stand in as the call's result, so it states what this entry is and stays true afterwards
+DISPATCHED_SILENT = "Handed off. The answer is a separate entry, not this one."
+
 DISPATCHED_TEMPLATE = "{message}"
 
 EXHAUSTED = "The expert could not complete the request."
@@ -60,20 +78,28 @@ class DelegationOptions(TypedDict, total=False):
 
     instructions: NotGivenOr[str | Instructions]
     """The delegation LLM's prompt. Defaults to the agent's instructions."""
-    tool_description: str
-    """What the conversation model reads on the ``delegate`` tool."""
-    announce: bool
-    """Whether the conversation model acknowledges when it delegates, at the cost of one model turn.
+    tool_description: NotGivenOr[str]
+    """What the conversation model reads on the ``delegate`` tool.
 
-    Defaults to True. On a model that answers tool outputs itself, False makes the call block
-    for the whole delegation: releasing it means pushing the dispatch note, and that model
-    speaks whatever is pushed."""
+    Defaults to a description matching ``announce``: with it off, one that asks for a short
+    line in the same turn as the call, since nothing else will acknowledge it; with it on,
+    one that does not, since the dispatch note already draws an acknowledgement and two
+    would double up."""
+    announce: bool
+    """Whether the dispatch note is voiced, drawing an acknowledgement out of the conversation
+    model at the cost of one model turn.
+
+    Defaults to False, which leaves the acknowledgement to the line the model writes alongside
+    the call — free, in the same completion, and the only option a model that emits one anyway
+    can take without saying it twice. On a model that answers tool outputs itself, False makes
+    the call block for the whole delegation: releasing it means pushing the dispatch note, and
+    that model speaks whatever is pushed."""
 
 
 _DEFAULTS: DelegationOptions = {
     "instructions": NOT_GIVEN,
-    "tool_description": TOOL_DESCRIPTION,
-    "announce": True,
+    "tool_description": NOT_GIVEN,
+    "announce": False,
 }
 
 
@@ -177,7 +203,8 @@ def _build_tool(options: DelegationOptions) -> FunctionTool:
             announce or rt_session is None or not rt_session.capabilities.auto_tool_reply_generation
         )
         if released:
-            await ctx.update(DISPATCHED, template=DISPATCHED_TEMPLATE, silent=not announce)
+            note = DISPATCHED if announce else DISPATCHED_SILENT
+            await ctx.update(note, template=DISPATCHED_TEMPLATE, silent=not announce)
 
         # tool traffic only for the delegation's own tools: the delegate pairs are the voice
         # model's, and a tool this LLM cannot call would read as one it can
@@ -219,7 +246,11 @@ def _build_tool(options: DelegationOptions) -> FunctionTool:
             if not reply_follows and (handle := ctx._delegation_speech_handle) is not None:
                 handle._mark_done()
 
-    return function_tool(delegate, name=DELEGATE_TOOL_NAME, description=options["tool_description"])
+    description = options["tool_description"]
+    if not is_given(description):
+        description = TOOL_DESCRIPTION if announce else TOOL_DESCRIPTION_WITH_ACK
+
+    return function_tool(delegate, name=DELEGATE_TOOL_NAME, description=description)
 
 
 async def execute_delegated_tools(

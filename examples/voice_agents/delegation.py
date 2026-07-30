@@ -16,7 +16,14 @@ like a DTMF digit that has to land while an IVR prompt is still playing.
 
 Points worth reading:
   - the fare rules and the identification policy live in `policy()`, the delegation's
-    instructions. The voice persona stays four sentences long.
+    instructions. The voice persona holds no domain knowledge at all, and is deliberately
+    not told that a second model exists — call the other half "the fare desk" in its
+    prompt and it starts deciding for itself that a weather question is out of scope.
+    Everything goes to the tool; nothing is off-topic for it.
+  - nothing here asks the voice model to say "let me check". `announce` defaults to off,
+    which selects a `delegate` description that asks for one short line in the same turn
+    as the call — free, in the same completion, and phrased so the caller never learns
+    anyone was consulted. A model that already volunteers a line just keeps its own.
   - where the line falls between the two: the policy carries judgment — whether a caller
     has earned a goodwill discount at all — and DISCOUNT_TIERS carries entitlement.
     Putting the table in the prompt would only let a model read it wrong, and wrong
@@ -46,21 +53,25 @@ Points worth reading:
     get decremented, and the seeded bookings sit a few days out from whenever you run it.
 
 Try it with `python delegation.py console`:
-  - "my flight to Denver is delayed, can you get me out tomorrow instead"
+  - "my flight to Tokyo is delayed, can you get me out tomorrow instead"
     → one delegation that asks for the address itself, then looks the caller up, checks
-      the flight, checks the Denver forecast, searches, quotes with the delay waiver
-      applied, and rebooks — eight seconds that narrate themselves.
+      the flight, checks the Haneda forecast — there is a typhoon warning — searches,
+      quotes with the delay waiver applied, and rebooks. Eight seconds that narrate
+      themselves.
   - "can I get a refund on my other trip"
     → two bookings, so the desk hands back the list and the voice model asks which;
-      the answer for the BASIC one is no, and it says so without offering to try.
+      the answer for the BASIC one back from Paris is no, and it says so without
+      offering to try.
   - "that's really disappointing, is there anything you can do on the price"
     → the desk decides they have earned one and asks for it; 15 for Gold on a SAVER
       fare, plus 5 because we delayed them, comes back from the tool rather than from it.
-  - "I need to get to New York a week on Tuesday"
-    → the desk does the calendar arithmetic and searches that day.
+  - "I need to get to Beijing a week on Tuesday"
+    → the desk does the calendar arithmetic and searches that day. Westbound out of SFO
+      it also has to say you land the following afternoon.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -73,18 +84,15 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
-    FunctionToolsExecutedEvent,
     JobContext,
-    MetricsCollectedEvent,
     RunContext,
     ToolError,
     ToolExecutionUpdatedEvent,
     cli,
     inference,
-    metrics,
 )
 from livekit.agents.beta.workflows import GetEmailTask
-from livekit.agents.llm import ToolFlag, function_tool
+from livekit.agents.llm import DELEGATE_TOOL_NAME, ToolFlag, function_tool
 from livekit.plugins import openai
 
 logger = logging.getLogger("delegation")
@@ -182,6 +190,9 @@ class Route:
     arrives: str
     seats: dict[str, int]  # what a day starts with, before anyone books
     fares: dict[str, float]
+    # westbound out of SFO lands the next calendar day; coming back east you arrive the
+    # same day you left, and the desk has to be able to tell a caller which
+    arrives_next_day: bool = False
 
 
 @dataclass
@@ -197,6 +208,11 @@ class Departure:
     @property
     def departs(self) -> str:
         return f"{self.date} {self.route.departs}"
+
+    @property
+    def arrives(self) -> str:
+        landing = date.fromisoformat(self.date) + timedelta(days=int(self.route.arrives_next_day))
+        return f"{landing} {self.route.arrives}"
 
     @property
     def disrupted(self) -> bool:
@@ -255,28 +271,30 @@ class Airline:
 def seed_airline() -> Airline:
     """A fresh mock airline, dated off today. One per session, since the tools mutate it."""
     today = date.today()
+    # long-haul out of San Francisco: Tokyo, Paris and Beijing, each with a return leg
     # fmt: off
     routes = [
-        Route("NW118", "SFO", "DEN", "07:20", "11:05",
-              {"BASIC": 4, "SAVER": 2}, {"BASIC": 168.0, "SAVER": 214.0}),
-        Route("NW870", "SFO", "DEN", "11:15", "15:00",
-              {"BASIC": 0, "SAVER": 6, "FLEX": 4},
-              {"BASIC": 151.0, "SAVER": 198.0, "FLEX": 365.0}),
-        Route("NW204", "SFO", "DEN", "13:05", "16:50",
-              {"SAVER": 1, "FLEX": 3}, {"SAVER": 229.0, "FLEX": 388.0}),
-        Route("NW552", "SFO", "DEN", "19:40", "23:20",
-              {"FLEX": 5, "BUSINESS": 2}, {"FLEX": 402.0, "BUSINESS": 915.0}),
-        Route("NW119", "DEN", "SFO", "12:30", "14:20",
-              {"BASIC": 3, "SAVER": 4, "FLEX": 2},
-              {"BASIC": 159.0, "SAVER": 205.0, "FLEX": 372.0}),
-        Route("NW412", "DEN", "JFK", "06:45", "12:20",
-              {"BASIC": 2, "SAVER": 5, "BUSINESS": 1},
-              {"BASIC": 181.0, "SAVER": 236.0, "BUSINESS": 840.0}),
-        Route("NW418", "DEN", "JFK", "15:10", "20:45",
-              {"SAVER": 4, "FLEX": 3}, {"SAVER": 244.0, "FLEX": 399.0}),
-        Route("NW330", "JFK", "SFO", "17:15", "20:40",
+        Route("NW808", "SFO", "HND", "11:30", "14:45",
+              {"SAVER": 1, "FLEX": 3}, {"SAVER": 742.0, "FLEX": 1180.0},
+              arrives_next_day=True),
+        Route("NW812", "SFO", "HND", "17:40", "21:05",
+              {"BASIC": 4, "SAVER": 6, "FLEX": 2},
+              {"BASIC": 615.0, "SAVER": 698.0, "FLEX": 1120.0}, arrives_next_day=True),
+        Route("NW809", "HND", "SFO", "17:00", "10:30",
               {"SAVER": 3, "FLEX": 2, "BUSINESS": 2},
-              {"SAVER": 262.0, "FLEX": 430.0, "BUSINESS": 1180.0}),
+              {"SAVER": 755.0, "FLEX": 1210.0, "BUSINESS": 3480.0}),
+        Route("NW440", "SFO", "CDG", "15:20", "11:05",
+              {"BASIC": 0, "SAVER": 5, "FLEX": 4, "BUSINESS": 2},
+              {"BASIC": 588.0, "SAVER": 690.0, "FLEX": 1340.0, "BUSINESS": 3960.0},
+              arrives_next_day=True),
+        Route("NW441", "CDG", "SFO", "13:10", "15:40",
+              {"BASIC": 2, "SAVER": 4, "FLEX": 3},
+              {"BASIC": 566.0, "SAVER": 705.0, "FLEX": 1290.0}),
+        Route("NW620", "SFO", "PEK", "13:45", "17:20",
+              {"BASIC": 2, "SAVER": 5, "BUSINESS": 1},
+              {"BASIC": 640.0, "SAVER": 735.0, "BUSINESS": 3620.0}, arrives_next_day=True),
+        Route("NW621", "PEK", "SFO", "16:30", "12:15",
+              {"SAVER": 4, "FLEX": 2}, {"SAVER": 748.0, "FLEX": 1265.0}),
     ]
     # fmt: on
     travelers = [
@@ -290,28 +308,29 @@ def seed_airline() -> Airline:
 
     bookings = [
         # two bookings on one address: the desk has to ask which one
-        Booking("NW7Q2K", "dana.whitfield@example.com", "NW204", day(1), "SAVER", 1, 0, 229.0),
-        Booking("NW3H8L", "dana.whitfield@example.com", "NW412", day(30), "BASIC", 1, 1, 226.0),
-        Booking("NW5T4P", "m.ortiz@example.com", "NW118", day(5), "BASIC", 2, 0, 336.0),
-        Booking("NW8W6C", "priya.raman@example.com", "NW330", day(12), "BUSINESS", 1, 2, 1180.0),
+        Booking("NW7Q2K", "dana.whitfield@example.com", "NW808", day(1), "SAVER", 1, 0, 742.0),
+        Booking("NW3H8L", "dana.whitfield@example.com", "NW441", day(30), "BASIC", 1, 1, 566.0),
+        Booking("NW5T4P", "m.ortiz@example.com", "NW812", day(5), "BASIC", 2, 0, 1230.0),
+        Booking("NW8W6C", "priya.raman@example.com", "NW620", day(12), "BUSINESS", 1, 2, 3620.0),
     ]
     airline = Airline(
         routes={r.flight_no: r for r in routes},
         travelers={t.email: t for t in travelers},
         bookings={b.ref: b for b in bookings},
     )
-    # the one broken flight in the schedule: tomorrow's NW204, which Dana is on
-    airline.departure(airline.routes["NW204"], day(1)).delay_minutes = 245
+    # the one broken flight in the schedule: tomorrow's Tokyo run, which Dana is on
+    airline.departure(airline.routes["NW808"], day(1)).delay_minutes = 245
     return airline
 
 
 # stand-in for a forecast service, by airport and days from today, so the storm that makes
 # the disrupted flight interesting lands on the same day the caller is asking about
 FORECASTS: dict[tuple[str, int], tuple[str, int, int, str]] = {
-    ("DEN", 1): ("severe thunderstorms", 21, 12, "high"),
-    ("DEN", 2): ("clearing, breezy", 27, 14, "low"),
+    ("HND", 1): ("typhoon warning", 28, 24, "high"),
+    ("HND", 2): ("clearing, humid", 31, 25, "low"),
     ("SFO", 1): ("morning fog", 19, 13, "moderate"),
-    ("JFK", 30): ("humid, scattered showers", 29, 21, "moderate"),
+    ("CDG", 30): ("cool and drizzly", 16, 11, "moderate"),
+    ("PEK", 12): ("hazy, light wind", 33, 23, "low"),
 }
 DEFAULT_FORECAST = ("clear", 24, 14, "low")
 
@@ -356,6 +375,12 @@ def _booked_departure(userdata: Userdata, booking: Booking) -> Departure:
     return userdata.airline.departure(userdata.airline.routes[booking.flight_no], booking.date)
 
 
+def _short(text: str | None, limit: int = 90) -> str:
+    """One clipped line. Tool payloads are long and it is the shape of the call that reads."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
 def _discount_percent(traveler: Traveler, bucket: str, disrupted: bool) -> int:
     """The caller's tier, plus a bump when the flight was our fault."""
     percent = DISCOUNT_TIERS[traveler.status][bucket]
@@ -384,26 +409,30 @@ class SupportAgent(Agent):
         # model so it can say "Friday" instead of reading a date back
         today = date.today()
         super().__init__(
-            # purely conversational: the rules, the prices, the dates and the judgment are
-            # all the desk's
+            # purely conversational, and deliberately not told who does the rest. calling the
+            # other half "the fare desk" here would invite it to decide a weather question is
+            # out of scope and answer from memory instead of delegating
             instructions=(
                 f"Today is {today:%A, %Y-%m-%d}. "
                 "You are the voice of Northwind Air's support line. Keep every reply to one "
                 "or two short sentences. You are on the phone, so no emojis, asterisks or "
-                "markdown, and never read a booking reference out loud. You do not know the "
-                "fare rules, the prices or the state of any booking — the fare desk does, so "
-                "delegate and then say what it tells you in your own words. Say dates the way "
-                "a person would, 'Friday the 31st', but never work one out yourself: pass on "
-                "what the caller said, in their words, and let the desk turn it into a "
-                "calendar date. The desk asks the caller for their email itself when it needs "
-                "to identify them, so let it. When it comes back with more than one booking, "
-                "ask which flight they mean by route and date."
+                "markdown, and never read a booking reference out loud. "
+                "You do not look anything up or work anything out yourself. Every request "
+                "goes to the delegate tool — flights, prices, rules, bookings, dates, "
+                "baggage, the weather, whatever the caller asks — and you say what comes "
+                "back in your own words. Nothing is off-topic for it, so never decide by "
+                "yourself that something is out of scope or cannot be done, and never ask "
+                "the caller for personal details: if any are needed they will be asked for "
+                "as part of the work. "
+                "Say dates the way a person would, 'Friday the 31st', but never convert one "
+                "yourself — pass on the caller's own words. If what comes back lists more "
+                "than one booking, ask which flight they mean by route and date."
             ),
             # # the conversation model. its tool list is just lk_agents_delegate
-            # llm=openai.realtime.RealtimeModel(voice="alloy"),
-            # # the reasoning model: every tool below belongs to it
-            # delegation_llm=inference.LLM("google/gemma-4-31b-it"),
-            delegation_options={"instructions": policy(today)},
+            llm=openai.realtime.RealtimeModel(model="gpt-realtime-2"),
+            # the reasoning model: every tool below belongs to it
+            delegation_llm=inference.LLM("google/gemma-4-31b-it"),
+            delegation_options={"instructions": policy(today), "announce": False},
         )
 
     async def on_enter(self) -> None:
@@ -433,7 +462,7 @@ class SupportAgent(Agent):
         # foreground() waits for the line to go quiet and then holds it, so the spelling
         # never collides with whatever the voice model is in the middle of saying
         async with ctx.foreground():
-            result = await GetEmailTask(chat_ctx=self.chat_ctx)
+            result = await GetEmailTask(chat_ctx=self.chat_ctx, llm=self.llm)
 
         userdata.email = result.email_address.strip().lower()
         logger.info(f"caller identified as {userdata.email}")
@@ -512,7 +541,7 @@ class SupportAgent(Agent):
                     {
                         "flight": route.flight_no,
                         "departs": departure.departs,
-                        "arrives": f"{day} {route.arrives}",
+                        "arrives": departure.arrives,
                         "status": departure.status,
                         "available": available,
                     }
@@ -883,29 +912,52 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     userdata = Userdata(airline=seed_airline())
-    session = AgentSession[Userdata](
-        userdata=userdata,
-        # the conversation model. its tool list is just lk_agents_delegate
-        llm=openai.realtime.RealtimeModel(voice="alloy"),
-        # the reasoning model: every tool below belongs to it
-        delegation_llm=inference.LLM("google/gemma-4-31b-it"),
-    )
+    session = AgentSession[Userdata](userdata=userdata, max_tool_steps=8)
 
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
-        metrics.log_metrics(ev.metrics)
+    # Both levels come through this one event, so it reads as a trace of the hand-off:
+    # what the voice model asked for, each step the desk took, and what went back. The
+    # desk's own calls are here and nowhere else — they land in neither chat history.
+    #
+    #   ── delegated: caller's flight to Tokyo is delayed, find them something tomorrow
+    #        desk → lookup_caller({})
+    #             ← done: {'name': 'Dana Whitfield', 'loyalty_status': 'Gold', ...}
+    #        desk → check_weather({"airport": "HND", "date": "2026-07-31"})
+    #             ← done: {'conditions': 'typhoon warning', ...}
+    #        desk → rebook({"booking_ref": "NW7Q2K", "new_flight_no": "NW812", ...})
+    #             … rebook: holding a seat on NW812
+    #             ← done: {'booking_ref': 'NW7Q2K', 'charged_usd': 302.4}
+    #   ── answered: moved to NW812, 302.40 charged, the delay waived the fee
+    tool_names: dict[str, str] = {}
 
-    # the delegate call shows up here like any other tool: started when the realtime model
-    # dispatches, updated as the fare desk reports progress, ended with the answer
     @session.on("tool_execution_updated")
     def _on_tool_execution_updated(ev: ToolExecutionUpdatedEvent) -> None:
-        logger.info(f"tool {ev.update.type}: {ev.update}")
-
-    # the fare desk's own tool calls land in neither conversation history — this event is
-    # where they surface, alongside the delegation trace span
-    @session.on("function_tools_executed")
-    def _on_function_tools_executed(ev: FunctionToolsExecutedEvent) -> None:
-        logger.info(f"desk ran {[call.name for call in ev.function_calls]}")
+        update = ev.update
+        if update.type == "tool_call_started":
+            call = update.function_call
+            tool_names[call.call_id] = call.name
+            if call.name != DELEGATE_TOOL_NAME:
+                logger.info(f"     desk → {call.name}({_short(call.arguments)})")
+                return
+            try:
+                task = json.loads(call.arguments or "{}").get("task", "")
+            except ValueError:
+                task = call.arguments
+            logger.info(f"── delegated: {_short(task, 200)}")
+        elif update.type == "tool_call_updated":
+            name = tool_names.get(update.call_id, "?")
+            # a delegated tool's progress is emitted twice: once under the tool's own call,
+            # then again re-attributed to the delegate call, which is the copy the voice
+            # model rephrases. the first names the tool, so the second only repeats it.
+            # a silent update is recorded for the model but never spoken — the dispatch
+            # note with `announce` off — and is not worth a line either way
+            if update.silent or name == DELEGATE_TOOL_NAME:
+                return
+            logger.info(f"          … {name}: {_short(update.message)}")
+        elif update.type == "tool_call_ended":
+            if tool_names.pop(update.call_id, "") == DELEGATE_TOOL_NAME:
+                logger.info(f"── answered: {_short(update.message, 200)}")
+            else:
+                logger.info(f"          ← {update.status}: {_short(update.message)}")
 
     async def log_usage() -> None:
         logger.info(f"Usage: {session.usage}, events: {userdata.events}")

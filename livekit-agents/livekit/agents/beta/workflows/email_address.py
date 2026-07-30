@@ -88,10 +88,6 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
         # based on require_explicit_ask.
         flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
-        # NO_DELEGATE: this is how the task hears the address, so it belongs to whichever
-        # model is listening. handing it to a delegation LLM would leave the task with no
-        # way to capture anything
-        flags |= ToolFlag.NO_DELEGATE
 
         @function_tool(flags=flags)
         async def update_email_address(email: str, ctx: RunContext) -> str | None:
@@ -147,9 +143,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         return confirm_email_address
 
-    # NO_DELEGATE: a refusal is something the caller says, and this is what ends the task
-    # when they do — a delegation LLM never hears them and could not call it
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER | ToolFlag.NO_DELEGATE)
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_email_capture(self, reason: str) -> None:
         """Handles the case when the user explicitly declines to provide an email address.
 
