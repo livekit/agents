@@ -260,18 +260,34 @@ def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> boo
     return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
 
 
-# Models whose transcripts carry no word timings. Cartesia's Turns API sends only
-# {type, transcript, turn_id, request_id} per turn, verified against the live service.
-_UNALIGNED_MODEL_PREFIXES = (
-    "cartesia/ink-2",
-    "inworld/",
-    "google/",
+# Models verified to carry word timings. Unknown models stay disabled until verified.
+_WORD_ALIGNED_MODELS = frozenset(
+    {
+        "deepgram/nova-3",
+        "deepgram/nova-3-medical",
+        "deepgram/nova-2",
+        "deepgram/nova-2-medical",
+        "deepgram/nova-2-conversationalai",
+        "deepgram/nova-2-phonecall",
+        "deepgram/flux-general",
+        "deepgram/flux-general-en",
+        "deepgram/flux-general-multi",
+        "cartesia/ink-whisper",
+        "assemblyai/universal-streaming",
+        "assemblyai/universal-streaming-multilingual",
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "elevenlabs/scribe_v2_realtime",
+        "xai/stt-1",
+        "speechmatics/enhanced",
+        "speechmatics/standard",
+    }
 )
 
 
 def _aligned_transcript_for_model(
     model: NotGivenOr[STTModels | str],
-) -> Literal["word"] | bool:
+) -> Literal["word", False]:
     """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
 
     False when the model sends no word timings, and for "auto", where the provider is
@@ -279,11 +295,9 @@ def _aligned_transcript_for_model(
     don't have is the costlier error: it enables adaptive interruption, which then turns
     off the fast VAD barge-in path it can't actually replace.
     """
-    if not (is_given(model) and isinstance(model, str)) or model == "auto":
+    if not (is_given(model) and isinstance(model, str)):
         return False
-    if model.startswith(_UNALIGNED_MODEL_PREFIXES):
-        return False
-    return "word"
+    return "word" if model in _WORD_ALIGNED_MODELS else False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]

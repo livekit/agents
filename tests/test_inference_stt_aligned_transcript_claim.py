@@ -97,6 +97,11 @@ def test_alignment_is_recomputed_when_the_model_changes(_fake_credentials: None)
     assert stt_impl.capabilities.aligned_transcript is False
 
 
+def test_unknown_models_do_not_claim_alignment(_fake_credentials: None) -> None:
+    stt_impl = inference.STT(model="new-provider/new-turn-model")
+    assert stt_impl.capabilities.aligned_transcript is False
+
+
 def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     """The advertised word alignment is not in the data the gateway sends."""
     stream = InferenceSpeechStream.__new__(InferenceSpeechStream)
