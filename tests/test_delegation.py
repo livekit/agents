@@ -21,7 +21,7 @@ from livekit.agents import (
     function_tool,
     utils,
 )
-from livekit.agents.llm import DELEGATE_TOOL_NAME, ToolContext, ToolFlag, Toolset
+from livekit.agents.llm import DELEGATE_TOOL_NAME, ToolContext, ToolError, ToolFlag, Toolset
 from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.delegation import (
@@ -855,6 +855,112 @@ class TestDelegatedToolTakesTheFloor:
 
         assert seen == ["tool_started", "task_entered", "tool_got:dana@example.com"]
 
+    @pytest.mark.asyncio
+    async def test_a_delegation_from_inside_the_task_is_still_answered(self):
+        # the task delegates too, and its answer comes back as a deferred reply. the floor
+        # is held for as long as the task runs, so an answer that waits for the line to go
+        # quiet waits for the task, and the task waits for the answer to be spoken
+        from livekit.agents import AgentTask
+        from livekit.agents.llm import FunctionToolCall
+
+        from .fake_llm import FakeLLM, FakeLLMResponse
+
+        seen: list[str] = []
+        entered = asyncio.Event()
+        released = asyncio.Event()
+        answered = asyncio.Event()
+
+        class _EmailTask(AgentTask[str]):
+            def __init__(self) -> None:
+                super().__init__(instructions="collect the email")
+
+            async def on_enter(self) -> None:
+                seen.append("task_entered")
+                self.session.generate_reply(instructions="ask_for_email")
+                entered.set()
+
+            # the caller's confirmation, kept on the conversation model so the third turn
+            # needs no second delegation to finish the task
+            @function_tool(flags=ToolFlag.NO_DELEGATE)
+            async def confirm(self, email: str) -> None:
+                """The caller confirmed the address is right."""
+                self.complete(email)
+
+        @function_tool
+        async def collect_email(ctx: RunContext) -> str:
+            """Ask the caller for their email."""
+            seen.append("tool_started")
+            async with ctx.foreground():
+                email = await _EmailTask()
+            seen.append(f"tool_got:{email}")
+            answered.set()
+            return f"on file: {email}"
+
+        def _reply(text: str, *, content: str = "", calls: Any = None) -> Any:
+            return FakeLLMResponse(
+                input=text, content=content, ttft=0.0, duration=0.0, tool_calls=calls or []
+            )
+
+        def _delegate(call_id: str, task: str) -> FunctionToolCall:
+            return FunctionToolCall(
+                call_id=call_id, name=DELEGATE_TOOL_NAME, arguments=f'{{"task": "{task}"}}'
+            )
+
+        conversation = FakeLLM(
+            fake_responses=[
+                _reply("hi", calls=[_delegate("c1", "identify the caller")]),
+                _reply("ask_for_email", content="what's your email?"),
+                _reply("dana at example dot com", calls=[_delegate("c3", "note the address")]),
+                _reply(
+                    "that's right",
+                    calls=[
+                        FunctionToolCall(
+                            call_id="c4",
+                            name="confirm",
+                            arguments='{"email": "dana@example.com"}',
+                        )
+                    ],
+                ),
+            ]
+        )
+        delegation = FakeLLM(
+            fake_responses=[
+                _reply(
+                    "identify the caller",
+                    calls=[FunctionToolCall(call_id="c2", name="collect_email", arguments="{}")],
+                ),
+                # the task's own delegation only answers; nothing else will voice it
+                _reply("note the address", content="ask them to confirm dana@example.com"),
+                _reply("on file: dana@example.com", content="the caller is dana@example.com"),
+            ]
+        )
+
+        session = AgentSession(llm=conversation, delegation_llm=delegation)
+
+        @session.on("tool_execution_updated")
+        def _on_update(ev: Any) -> None:
+            update = ev.update
+            if (
+                update.type == "tool_reply_updated"
+                and update.status == "scheduled"
+                and "c3_final" in update.update_ids
+            ):
+                released.set()
+
+        await session.start(agent=Agent(instructions="test agent", tools=[collect_email]))
+        try:
+            session.generate_reply(user_input="hi")
+            await asyncio.wait_for(entered.wait(), timeout=15.0)
+            session.generate_reply(user_input="dana at example dot com")
+            # the answer reached the task's model rather than waiting on the held floor
+            await asyncio.wait_for(released.wait(), timeout=15.0)
+            session.generate_reply(user_input="that's right")
+            await asyncio.wait_for(answered.wait(), timeout=15.0)
+        finally:
+            await asyncio.wait_for(session.aclose(), timeout=15.0)
+
+        assert seen == ["tool_started", "task_entered", "tool_got:dana@example.com"]
+
 
 class TestSilentUpdates:
     """`silent` records the message for the model without voicing it — on any update."""
@@ -914,3 +1020,231 @@ class TestSilentUpdates:
         emitted = [call.args[1].update for call in session.emit.call_args_list]
         updates = {u.message: u.silent for u in emitted if u.type == "tool_call_updated"}
         assert updates == {"dispatched": False, "quietly": True}
+
+
+def _fake_stream(*, text: str = "", tool_call: tuple[str, str] | None = None) -> Any:
+    """A one-chunk LLM stream, shaped like what `delegation_llm.chat()` returns."""
+    from livekit.agents.llm import ChatChunk, ChoiceDelta, FunctionToolCall
+
+    calls = (
+        [FunctionToolCall(call_id=tool_call[0], name=tool_call[1], arguments="{}")]
+        if tool_call
+        else []
+    )
+    chunk = ChatChunk(
+        id="chunk", delta=ChoiceDelta(role="assistant", content=text or None, tool_calls=calls)
+    )
+
+    class _Stream:
+        async def collect(self) -> Any:
+            from livekit.agents.llm import CollectedResponse
+
+            return CollectedResponse(text=text, tool_calls=calls)
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+        def __aiter__(self) -> Any:
+            async def _gen() -> Any:
+                yield chunk
+
+            return _gen()
+
+    return _Stream()
+
+
+async def _run_node(
+    delegation_llm: Any,
+    *,
+    tools: list[Any],
+    max_tool_steps: int,
+    history: ChatContext | None = None,
+) -> Any:
+    """Drive the default delegation_node against a mocked activity."""
+    from livekit.agents.types import APIConnectOptions
+    from livekit.agents.voice.agent import Agent as _Agent, ModelSettings
+
+    session = _reply_session()
+    session.options.max_tool_steps = max_tool_steps
+    session.conn_options.llm_conn_options = APIConnectOptions()
+    session._delegation_executor = lambda: _ToolExecutor(owning_activity=None)
+
+    agent = session.current_agent
+    activity = MagicMock()
+    activity.session = session
+    activity.agent = agent
+    activity.delegation_llm = delegation_llm
+    activity.tools = tools
+    activity._tool_executor = _ToolExecutor()
+    agent._get_activity_or_raise = lambda: activity
+    session._activity = activity
+
+    ctx = _run_ctx(session, call_id="p1", name=DELEGATE_TOOL_NAME)
+    return await _Agent.default.delegation_node(
+        agent, "do it", ctx, history or ChatContext.empty(), tools, ModelSettings()
+    )
+
+
+class TestFailureReportsWhatRan:
+    """A delegation that stops partway describes what it did, so nobody buys twice."""
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    def _llm(self, script: list[Any], *, summary: str = "") -> Any:
+        """A delegation LLM that plays `script` step by step, then summarizes on demand."""
+        from livekit.agents.voice.delegation import SUMMARIZE_ON_FAILURE
+
+        steps = iter(script)
+        calls: list[Any] = []
+        llm = MagicMock()
+
+        def chat(*, chat_ctx: ChatContext, tool_choice: Any = None, **kw: Any) -> Any:
+            calls.append(tool_choice)
+            if any(
+                i.type == "message" and SUMMARIZE_ON_FAILURE in (i.text_content or "")
+                for i in chat_ctx.items
+            ):
+                return _fake_stream(text=summary)
+            step = next(steps, None)
+            if isinstance(step, Exception):
+                raise step
+            return step if step is not None else _fake_stream(text="")
+
+        llm.chat = chat
+        llm.tool_choices = calls
+        return llm
+
+    def _booking_tools(self, ran: list[str]) -> list[Any]:
+        """The scenario: the seat is sold, then the receipt fails to go out."""
+
+        @function_tool
+        async def book_flight(ctx: RunContext) -> str:
+            """Book a flight."""
+            ran.append("book_flight")
+            return "booked NW1A92"
+
+        @function_tool
+        async def email_itinerary(ctx: RunContext) -> str:
+            """Email the itinerary."""
+            ran.append("email_itinerary")
+            raise ToolError("the mail server refused it")
+
+        return [book_flight, email_itinerary]
+
+    @pytest.mark.asyncio
+    async def test_the_summary_reaches_the_conversation_model(self):
+        from livekit.agents.voice.delegation import EXHAUSTED
+
+        ran: list[str] = []
+        delegation_llm = self._llm(
+            [
+                _fake_stream(tool_call=("t1", "book_flight")),
+                _fake_stream(tool_call=("t2", "email_itinerary")),
+            ],
+            summary="NW1A92 is booked; the itinerary email did not go out.",
+        )
+
+        with pytest.raises(ToolError) as raised:
+            await _run_node(delegation_llm, tools=self._booking_tools(ran), max_tool_steps=1)
+
+        assert ran == ["book_flight", "email_itinerary"]  # both really happened
+        answer = str(raised.value)
+        assert EXHAUSTED in answer  # the conversation model knows it failed...
+        assert "NW1A92 is booked" in answer  # ...and that the seat is sold anyway
+        assert "did not go out" in answer  # ...and what still needs doing
+
+    @pytest.mark.asyncio
+    async def test_only_the_summary_call_withholds_the_tools(self):
+        ran: list[str] = []
+        delegation_llm = self._llm(
+            [
+                _fake_stream(tool_call=("t1", "book_flight")),
+                _fake_stream(tool_call=("t2", "email_itinerary")),
+            ],
+            summary="Booked.",
+        )
+
+        with pytest.raises(ToolError):
+            await _run_node(delegation_llm, tools=self._booking_tools(ran), max_tool_steps=1)
+
+        # the steps run with whatever was asked for; forcing "none" earlier would skip work
+        assert delegation_llm.tool_choices[-1] == "none"
+        assert "none" not in delegation_llm.tool_choices[:-1]
+
+    @pytest.mark.asyncio
+    async def test_a_failure_partway_is_summarized_too(self):
+        # not only exhaustion: anything that stops the delegation owes the same account
+        ran: list[str] = []
+        delegation_llm = self._llm(
+            [_fake_stream(tool_call=("t1", "book_flight")), RuntimeError("provider exploded")],
+            summary="NW1A92 is booked.",
+        )
+
+        with pytest.raises(ToolError) as raised:
+            await _run_node(delegation_llm, tools=self._booking_tools(ran), max_tool_steps=4)
+
+        assert ran == ["book_flight"]
+        assert "NW1A92 is booked" in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_a_failure_before_anything_ran_is_left_alone(self):
+        # nothing to describe, so the real error propagates instead of a summary
+        delegation_llm = self._llm([RuntimeError("provider exploded")])
+
+        with pytest.raises(RuntimeError, match="provider exploded"):
+            await _run_node(delegation_llm, tools=self._booking_tools([]), max_tool_steps=4)
+
+        assert "none" not in delegation_llm.tool_choices  # no summary was attempted
+
+    @pytest.mark.asyncio
+    async def test_the_summary_only_sees_this_delegations_steps(self):
+        """Earlier turns hold work other delegations did; this one must not claim it."""
+        from livekit.agents.voice.delegation import SUMMARIZE_ON_FAILURE
+
+        seen: list[ChatContext] = []
+        # text alongside the call: what it said it was doing, which is how the summary
+        # learns what was lined up but never carried out
+        steps = iter(
+            [
+                _fake_stream(
+                    text="booking the seat, then the receipt", tool_call=("t1", "book_flight")
+                )
+            ]
+        )
+        delegation_llm = MagicMock()
+
+        def chat(*, chat_ctx: ChatContext, tool_choice: Any = None, **kw: Any) -> Any:
+            seen.append(chat_ctx.copy())
+            if tool_choice == "none":
+                return _fake_stream(text="NW1A92 is booked.")
+            step = next(steps, None)
+            if step is None:
+                raise RuntimeError("provider exploded")
+            return step
+
+        delegation_llm.chat = chat
+
+        # a prior turn in which something else was already done for this caller
+        history = ChatContext.empty()
+        history.add_message(role="user", content="did you refund my other trip?")
+        history.add_message(role="assistant", content="Yes, NW3H8L was refunded earlier.")
+
+        with pytest.raises(ToolError):
+            await _run_node(
+                delegation_llm,
+                tools=self._booking_tools([]),
+                max_tool_steps=4,
+                history=history,
+            )
+
+        summary_ctx = seen[-1]
+        text = " ".join(i.text_content or "" for i in summary_ctx.items if i.type == "message")
+        assert SUMMARIZE_ON_FAILURE in text  # it is the summary call...
+        assert "NW3H8L was refunded" not in text  # ...and the earlier work is not in it
+        assert "do it" in text  # only this delegation's own request
+        assert "then the receipt" in text  # ...and its own narration of what it was doing
+        names = [i.name for i in summary_ctx.items if i.type == "function_call"]
+        assert names == ["book_flight"]

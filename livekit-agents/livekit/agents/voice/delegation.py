@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 from typing_extensions import TypedDict
 
-from ..llm.chat_context import FunctionCall, FunctionCallOutput, Instructions
+from ..llm.chat_context import ChatContext, FunctionCall, FunctionCallOutput, Instructions
 from ..llm.tool_context import (
     DELEGATE_TOOL_NAME,
     FunctionTool,
@@ -24,6 +24,7 @@ from .events import RunContext
 
 if TYPE_CHECKING:
     from ..llm import LLM
+    from .agent import ModelSettings
     from .agent_activity import AgentActivity
 
 
@@ -71,6 +72,25 @@ DISPATCHED_SILENT = "Handed off. The answer is a separate entry, not this one."
 DISPATCHED_TEMPLATE = "{message}"
 
 EXHAUSTED = "The expert could not complete the request."
+
+# a bare failure reads as "nothing happened", so the user is invited to ask again and buys
+# the same seat twice. costs one call and skips no work: every step it describes has run
+SUMMARIZE_ON_FAILURE = """A request was handed to you and you stopped before answering it.
+You cannot call another tool now.
+
+Below is that request and everything you did about it — what you said as you worked, the
+tools you called and what they returned, and nothing else. In one or two sentences, say
+what now stands and what never happened, so that whoever picks this up neither redoes
+finished work nor promises work that was never done.
+
+Read the steps together rather than one at a time, and judge by what they mean: a call
+that failed and then went through on a later attempt has succeeded, while two calls that
+each went through have each taken effect. Claim nothing the results do not show, and do
+not apologise or say what should happen next."""
+
+
+class StepsExhausted(Exception):
+    """The delegation LLM spent every step on tools and never answered."""
 
 
 class DelegationOptions(TypedDict, total=False):
@@ -251,6 +271,85 @@ def _build_tool(options: DelegationOptions) -> FunctionTool:
         description = TOOL_DESCRIPTION if announce else TOOL_DESCRIPTION_WITH_ACK
 
     return function_tool(delegate, name=DELEGATE_TOOL_NAME, description=description)
+
+
+async def run_steps(
+    activity: AgentActivity,
+    ctx: RunContext,
+    chat_ctx: ChatContext,
+    tools: list[Tool],
+    model_settings: ModelSettings,
+) -> str:
+    """Run the delegation LLM until it answers, raising ``StepsExhausted`` if it never does.
+
+    Each step's calls and outputs are appended to ``chat_ctx`` in the order they ran. Split
+    out of the default ``delegation_node`` so an override can reuse the loop.
+    """
+    from .. import utils
+
+    delegation_llm = activity.delegation_llm
+    assert delegation_llm is not None, "run_steps needs a delegation LLM"
+
+    # keep the toolsets so AsyncToolset members still route to their own executor
+    tool_ctx = ToolContext(activity.tools)
+    tool_ctx._sync_flattened(tools)
+    conn_options = activity.session.conn_options.llm_conn_options
+
+    # one LLM call per step; a step that only calls tools loops back for the answer
+    for _ in range(activity.session.options.max_tool_steps + 1):
+        text = ""
+        fnc_calls: list[FunctionCall] = []
+        # opened on the first tool call so an answer-only step runs no machinery
+        fnc_ch: utils.aio.Chan[FunctionCall] | None = None
+        exe_task: asyncio.Task[list[FunctionCallOutput]] | None = None
+        try:
+            async with delegation_llm.chat(
+                chat_ctx=chat_ctx,
+                tools=tools,
+                tool_choice=model_settings.tool_choice,
+                conn_options=conn_options,
+            ) as stream:
+                async for chunk in stream:
+                    if chunk.delta is None:
+                        continue
+                    if chunk.delta.content:
+                        text += chunk.delta.content
+                    for tool in chunk.delta.tool_calls:
+                        if tool.type != "function":
+                            continue
+                        fnc_call = FunctionCall(
+                            call_id=tool.call_id,
+                            name=tool.name,
+                            arguments=tool.arguments,
+                            extra=tool.extra or {},
+                        )
+                        fnc_calls.append(fnc_call)
+                        if fnc_ch is None:
+                            fnc_ch = utils.aio.Chan[FunctionCall]()
+                            exe_task = asyncio.create_task(
+                                execute_delegated_tools(
+                                    activity, fnc_ch, tool_ctx=tool_ctx, ctx=ctx
+                                )
+                            )
+                        # dispatched now, so it runs while the LLM keeps generating
+                        fnc_ch.send_nowait(fnc_call)
+        finally:
+            if fnc_ch is not None:
+                fnc_ch.close()
+
+        if exe_task is None:
+            return text
+
+        if text:
+            # reaches the conversation model as progress, and stays here so the next step
+            # sees what it said
+            await ctx.update(text)
+            chat_ctx.add_message(role="assistant", content=text)
+
+        chat_ctx.items.extend(fnc_calls)
+        chat_ctx.items.extend(await exe_task)
+
+    raise StepsExhausted(f"no answer after {activity.session.options.max_tool_steps} tool steps")
 
 
 async def execute_delegated_tools(

@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
@@ -600,7 +600,7 @@ class Agent:
             model_settings: ModelSettings,
         ) -> Any:
             """Default implementation for `Agent.delegation_node`"""
-            from .delegation import EXHAUSTED, execute_delegated_tools
+            from .delegation import EXHAUSTED, SUMMARIZE_ON_FAILURE, StepsExhausted, run_steps
 
             activity = agent._get_activity_or_raise()
             delegation_llm = activity.delegation_llm
@@ -611,70 +611,50 @@ class Agent:
                     "`delegation_node`."
                 )
 
-            # keep the toolsets so AsyncToolset members still route to their own executor
-            tool_ctx = llm.ToolContext(activity.tools)
-            tool_ctx._sync_flattened(tools)
-            conn_options = activity.session.conn_options.llm_conn_options
+            call_id = ctx.function_call.call_id
+            # what run_steps appends is this delegation's own work; the conversation before
+            # it holds what earlier ones did, which this one must not claim
+            steps_start = len(chat_ctx.items)
+            try:
+                return await run_steps(activity, ctx, chat_ctx, tools, model_settings)
+            except ToolError:
+                raise  # already phrased for the conversation model
+            except StepsExhausted as e:
+                failure: Exception = e
+                logger.warning(f"delegation stopped: {e}", extra={"call_id": call_id})
+            except Exception as e:
+                failure = e
+                logger.error("delegation failed", exc_info=e, extra={"call_id": call_id})
 
-            # one LLM call per step; a step that only calls tools loops back for the answer
-            for _ in range(activity.session.options.max_tool_steps + 1):
-                text = ""
-                fnc_calls: list[llm.FunctionCall] = []
-                # opened on the first tool call so an answer-only step runs no machinery
-                fnc_ch: utils.aio.Chan[llm.FunctionCall] | None = None
-                exe_task: asyncio.Task[list[llm.FunctionCallOutput]] | None = None
-                try:
-                    async with delegation_llm.chat(
-                        chat_ctx=chat_ctx,
-                        tools=tools,
-                        tool_choice=model_settings.tool_choice,
-                        conn_options=conn_options,
-                    ) as stream:
-                        async for chunk in stream:
-                            if chunk.delta is None:
-                                continue
-                            if chunk.delta.content:
-                                text += chunk.delta.content
-                            for tool in chunk.delta.tool_calls:
-                                if tool.type != "function":
-                                    continue
-                                fnc_call = llm.FunctionCall(
-                                    call_id=tool.call_id,
-                                    name=tool.name,
-                                    arguments=tool.arguments,
-                                    extra=tool.extra or {},
-                                )
-                                fnc_calls.append(fnc_call)
-                                if fnc_ch is None:
-                                    fnc_ch = utils.aio.Chan[llm.FunctionCall]()
-                                    exe_task = asyncio.create_task(
-                                        execute_delegated_tools(
-                                            activity, fnc_ch, tool_ctx=tool_ctx, ctx=ctx
-                                        )
-                                    )
-                                # dispatched now, so it runs while the LLM keeps generating
-                                fnc_ch.send_nowait(fnc_call)
-                finally:
-                    if fnc_ch is not None:
-                        fnc_ch.close()
+            steps = chat_ctx.items[steps_start:]
+            if not steps:
+                raise failure  # nothing ran, so there is nothing to report
 
-                if exe_task is None:
-                    return text
+            # one more call with the tools withheld, purely to describe what it did
+            summary_ctx = llm.ChatContext.empty()
+            summary_ctx.add_message(role="system", content=SUMMARIZE_ON_FAILURE)
+            summary_ctx.add_message(role="user", content=task)
+            summary_ctx.items.extend(steps)
+            try:
+                summary = (
+                    await delegation_llm.chat(
+                        chat_ctx=summary_ctx,
+                        tools=tools,  # kept: the steps above refer to them
+                        tool_choice="none",
+                        # no retries: whatever broke the delegation will likely break this
+                        conn_options=replace(
+                            activity.session.conn_options.llm_conn_options, max_retry=0
+                        ),
+                    ).collect()
+                ).text
+            except Exception:
+                logger.exception(
+                    "delegation could not describe what it had already done",
+                    extra={"call_id": call_id},
+                )
+                summary = ""
 
-                if text:
-                    # reaches the conversation model as progress, and stays here so the next
-                    # step sees what it said
-                    await ctx.update(text)
-                    chat_ctx.add_message(role="assistant", content=text)
-
-                chat_ctx.items.extend(fnc_calls)
-                chat_ctx.items.extend(await exe_task)
-
-            logger.warning(
-                "delegation reached max_tool_steps without an answer",
-                extra={"call_id": ctx.function_call.call_id},
-            )
-            raise ToolError(EXHAUSTED)
+            raise ToolError(f"{EXHAUSTED} {summary}" if summary else EXHAUSTED) from failure
 
         @staticmethod
         async def tts_node(
