@@ -303,6 +303,7 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
+    "background_message_updated",
     "error",
     "close",
     "debug_message",
@@ -524,6 +525,30 @@ class ToolExecutionUpdatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class BackgroundMessageReceived(BaseModel):
+    type: Literal["background_message_received"] = "background_message_received"
+    background_id: str
+    message_id: str
+    content: str
+
+
+class BackgroundReplyUpdated(BaseModel):
+    type: Literal["background_reply_updated"] = "background_reply_updated"
+    background_id: str
+    message_ids: list[str]
+    status: Literal["scheduled", "completed", "interrupted", "skipped"]
+    speech_id: str
+
+
+class BackgroundMessageUpdatedEvent(BaseModel):
+    type: Literal["background_message_updated"] = "background_message_updated"
+    update: Annotated[
+        BackgroundMessageReceived | BackgroundReplyUpdated,
+        Field(discriminator="type"),
+    ]
+    created_at: float = Field(default_factory=time.time)
+
+
 class UserTurnExceededEvent(BaseModel):
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
@@ -589,6 +614,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
+    | BackgroundMessageUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,
