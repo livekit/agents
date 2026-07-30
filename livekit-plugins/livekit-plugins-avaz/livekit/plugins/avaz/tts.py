@@ -110,7 +110,8 @@ def _assert_secure_ws_for_credentials(ws_url: str, api_key: str) -> None:
     """Refuse sending API credentials over any plaintext ``ws://`` URL.
 
     Dashboard tokens must use ``wss://`` (or an ``https`` ``base_url``). Local
-    TTS without auth can still use ``ws://`` by omitting ``api_key``.
+    TTS without auth can still use ``ws://`` by omitting ``api_key`` or passing
+    ``api_key=""`` to suppress ``AVAZ_API_KEY``.
     """
     if not api_key:
         return
@@ -148,8 +149,10 @@ def _resolve_ws_url(
 
 
 def _resolve_api_key(api_key: NotGivenOr[str]) -> str:
-    if is_given(api_key) and api_key:
-        return str(api_key).strip()
+    # An explicitly passed value (including "") opts out of the env fallback so a
+    # local plaintext ws:// upstream stays usable when AVAZ_API_KEY is exported.
+    if is_given(api_key):
+        return str(api_key or "").strip()
     return os.environ.get("AVAZ_API_KEY", "").strip()
 
 
@@ -733,7 +736,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         has_text = False
         async for data in self._input_ch:
             pending.append(data)
-            if isinstance(data, str) and data:
+            if isinstance(data, str) and data.strip():
                 has_text = True
                 break
 
@@ -796,10 +799,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
             elif input_rate is not None and sr != input_rate:
                 logger.warning(
-                    "[Avaz TTS] mid-turn sample_rate change %s -> %s ignored",
+                    "[Avaz TTS] mid-turn sample_rate change %s -> %s; dropping chunk",
                     input_rate,
                     sr,
                 )
+                return
 
             if resampler is not None:
                 frame = rtc.AudioFrame(
@@ -924,7 +928,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                         ) from exc
                             continue
 
-                        if not data:
+                        if not data or not data.strip():
                             continue
                         if first_text_time is None:
                             first_text_time = time.monotonic()

@@ -164,6 +164,17 @@ def test_explicit_ws_url_skips_dashboard_api_key_requirement(
     assert engine._opts.api_key == ""
 
 
+def test_explicit_empty_api_key_opts_out_of_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """api_key=\"\" must not pick up AVAZ_API_KEY (needed for local ws://)."""
+    from livekit.plugins.avaz import TTS
+
+    monkeypatch.setenv("AVAZ_API_KEY", "env-secret")
+    engine = TTS(ws_url=_TEST_WS, api_key="")
+    assert engine._opts.api_key == ""
+
+
 def test_normalize_chunk_notation_preserves_question_mark() -> None:
     from livekit.plugins.avaz.tts import _normalize_text_for_chunk_notation
 
@@ -541,6 +552,32 @@ async def test_stream_empty_text_is_noop_without_error(
 
     async def fail_warmup(timeout_s: float = 10.0) -> bool:
         raise AssertionError("warmup should not run for empty text turns")
+
+    monkeypatch.setattr(engine, "warmup", fail_warmup)
+
+    with patch("livekit.plugins.avaz.tts.websockets.connect") as connect:
+        frames = 0
+        async for _ev in stream:
+            frames += 1
+
+    assert frames == 0
+    connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stream_whitespace_only_text_is_noop_without_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace-only turns must follow the empty-text no-op path."""
+    from livekit.plugins.avaz import TTS
+
+    engine = TTS(ws_url=_TEST_WS)
+    stream = engine.stream()
+    stream.push_text("   ")
+    stream.end_input()
+
+    async def fail_warmup(timeout_s: float = 10.0) -> bool:
+        raise AssertionError("warmup should not run for whitespace-only turns")
 
     monkeypatch.setattr(engine, "warmup", fail_warmup)
 
