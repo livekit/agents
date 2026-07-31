@@ -1509,10 +1509,31 @@ class AgentActivity(RecognitionHooks):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
+        Speeches that disallow interruptions are left running unless ``force``
+        is set; the playing one is reported instead of being skipped silently.
+
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated
+
+        Raises:
+            RuntimeError: If the playing speech disallows interruptions and
+                ``force`` is False. Nothing is interrupted in that case.
         """
+        # checked up-front: SpeechHandle.interrupt() raises for a protected
+        # handle, and letting that happen mid-sequence would leave the
+        # background speeches interrupted, the queue untouched, the realtime
+        # session untold and the returned future unresolved
+        if (
+            not force
+            and self._current_speech is not None
+            and not self._current_speech.allow_interruptions
+        ):
+            raise RuntimeError(
+                "the current speech does not allow interruptions, "
+                "use interrupt(force=True) to interrupt it anyway"
+            )
+
         self._cancel_preemptive_generation()
 
         future = asyncio.Future[None]()
@@ -1523,9 +1544,13 @@ class AgentActivity(RecognitionHooks):
             self._current_speech.interrupt(force=force)
             interrupted_speeches.append(self._current_speech)
 
+        # skip queued handles that disallow interruptions, like the background
+        # speeches above: raising mid-loop would leave the remaining queue
+        # playing, the realtime session untold and the future unresolved
         for _, _, speech in self._speech_q:
-            speech.interrupt(force=force)
-            interrupted_speeches.append(speech)
+            if force or speech.allow_interruptions:
+                speech.interrupt(force=force)
+                interrupted_speeches.append(speech)
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
