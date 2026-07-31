@@ -117,38 +117,25 @@ class TestStartCommandLogLevel:
         assert mock_run_worker.call_args.kwargs["args"].log_level == "DEBUG"
 
 
-class TestDevCommandLogLevel:
+class TestRemovedCommands:
+    @pytest.mark.parametrize("command", ["console", "dev"])
     @patch("livekit.agents.cli.cli._run_worker")
-    def test_default_log_level_is_debug(self, mock_run_worker, runner):
-        server = _make_server()
-        app = _build_cli(server)
-        result = runner.invoke(app, ["dev", "--no-reload"])
-        assert result.exit_code == 0
-        assert mock_run_worker.call_args.kwargs["args"].log_level == "DEBUG"
+    def test_exits_without_starting_a_worker(self, mock_run_worker, runner, command):
+        app = _build_cli(_make_server())
+        result = runner.invoke(app, [command])
+        assert result.exit_code == 1
+        mock_run_worker.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "argv",
+        [["console", "--text"], ["dev", "--no-reload", "--log-level", "info"]],
+    )
     @patch("livekit.agents.cli.cli._run_worker")
-    def test_cli_arg_overrides_default(self, mock_run_worker, runner):
-        server = _make_server()
-        app = _build_cli(server)
-        result = runner.invoke(app, ["dev", "--no-reload", "--log-level", "info"])
-        assert result.exit_code == 0
-        assert mock_run_worker.call_args.kwargs["args"].log_level == "INFO"
-
-    @patch("livekit.agents.cli.cli._run_worker")
-    def test_env_var_overrides_default(self, mock_run_worker, runner):
-        server = _make_server()
-        app = _build_cli(server)
-        result = runner.invoke(app, ["dev", "--no-reload"], env={"LIVEKIT_LOG_LEVEL": "ERROR"})
-        assert result.exit_code == 0
-        assert mock_run_worker.call_args.kwargs["args"].log_level == "ERROR"
-
-    @patch("livekit.agents.cli.cli._run_worker")
-    def test_server_opts_log_level_used_when_no_cli_or_env(self, mock_run_worker, runner):
-        server = _make_server(log_level="CRITICAL")
-        app = _build_cli(server)
-        result = runner.invoke(app, ["dev", "--no-reload"])
-        assert result.exit_code == 0
-        assert mock_run_worker.call_args.kwargs["args"].log_level == "CRITICAL"
+    def test_legacy_flags_still_reach_the_notice(self, mock_run_worker, runner, argv):
+        app = _build_cli(_make_server())
+        result = runner.invoke(app, argv)
+        assert result.exit_code == 1
+        mock_run_worker.assert_not_called()
 
 
 class TestLogLevelValidation:

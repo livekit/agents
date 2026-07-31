@@ -56,7 +56,6 @@ dependencies = [
     # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
     "typer>=0.15.1",
     "click~=8.1",
-    "sounddevice>=0.5",
     "watchfiles>=1.0",
 ]
 
