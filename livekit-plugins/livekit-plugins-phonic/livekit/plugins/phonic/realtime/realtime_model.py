@@ -87,6 +87,7 @@ class _RealtimeOptions:
     no_input_end_conversation_sec: NotGivenOr[float]
     additional_params: NotGivenOr[dict[str, typing.Any]]
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
+    forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
     instructions: NotGivenOr[str] = NOT_GIVEN
 
@@ -144,6 +145,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
+        forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -180,6 +182,10 @@ class RealtimeModel(llm.RealtimeModel):
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
                 README for the available fields.
+            forbid_speech_after_tool_call: Deprecated. Use ``configs_for_tools`` with
+                ``forbid_speech_after_tool_call`` per tool instead. When set, each listed tool is
+                merged into ``configs_for_tools`` as ``forbid_speech_after_tool_call=True`` (an
+                explicit ``configs_for_tools`` entry for the same tool takes precedence).
             conn_options: Retry/backoff and connection settings.
         """
         super().__init__(
@@ -239,8 +245,16 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_end_conversation_sec=no_input_end_conversation_sec,
             additional_params=additional_params,
             configs_for_tools=configs_for_tools,
+            forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
+
+        if is_given(forbid_speech_after_tool_call):
+            logger.warning(
+                "`forbid_speech_after_tool_call` is deprecated and will be removed in a future "
+                "release; set `forbid_speech_after_tool_call` per tool via `configs_for_tools` "
+                "instead."
+            )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
@@ -459,11 +473,26 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = llm.ToolContext(tools)
-        self._configs_for_tools = (
-            {c["name"]: c for c in self._opts.configs_for_tools}
-            if is_given(self._opts.configs_for_tools)
-            else {}
-        )
+        self._configs_for_tools = {
+            c["name"]: c
+            for c in (
+                self._opts.configs_for_tools if is_given(self._opts.configs_for_tools) else []
+            )
+        }
+        # Deprecated: fold forbid_speech_after_tool_call (list of tool names) into the per-tool
+        # configs; an explicit configs_for_tools entry for the same tool wins.
+        if is_given(self._opts.forbid_speech_after_tool_call):
+            for name in self._opts.forbid_speech_after_tool_call:
+                cfg = self._configs_for_tools.get(name)
+                if cfg is None:
+                    self._configs_for_tools[name] = {
+                        "name": name,
+                        "forbid_speech_after_tool_call": True,
+                    }
+                elif "forbid_speech_after_tool_call" not in cfg:
+                    self._configs_for_tools[name] = typing.cast(
+                        PhonicToolConfig, {**cfg, "forbid_speech_after_tool_call": True}
+                    )
         self._tool_definitions = self._serialize_tools(tools)
         self._tools_ready.set()
 
