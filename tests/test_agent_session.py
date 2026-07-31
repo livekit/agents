@@ -1517,15 +1517,15 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
     assert agent_state_events[3].new_state == "listening"
 
 
-async def test_preemptive_generation_skipped_for_unsafe_llm(
+async def test_preemptive_generation_skipped_for_stateful_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # an LLM that declares chat() unsafe to run speculatively (e.g. the
-    # LangGraph adapter, whose graph turns execute tools with side effects)
-    # must not be called preemptively: latency matches the disabled path
+    # an LLM that declares chat() stateful (e.g. the LangGraph adapter, whose
+    # graph turns execute tools with side effects) must not be called
+    # preemptively: latency matches the disabled path
     from .fake_llm import FakeLLM
 
-    monkeypatch.setattr(FakeLLM, "preemptive_generation_safe", property(lambda self: False))
+    monkeypatch.setattr(FakeLLM, "stateful", property(lambda self: True))
 
     speed = 1
     actions = FakeActions()
