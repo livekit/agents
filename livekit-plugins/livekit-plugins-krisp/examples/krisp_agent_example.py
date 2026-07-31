@@ -23,7 +23,7 @@ Prerequisites:
        - livekit-plugins-openai (or your preferred STT/LLM/TTS)
 
 Usage:
-    python krisp_agent_example.py dev
+    lk agent dev krisp_agent_example.py
 """
 
 import logging

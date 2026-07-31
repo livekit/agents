@@ -91,7 +91,7 @@ uv sync --all-extras --dev
 Run an example agent:
 
 ```bash
-uv run examples/voice_agents/basic_agent.py console
+lk agent console examples/voice_agents/basic_agent.py
 ```
 
 Your agent is now running in the console.

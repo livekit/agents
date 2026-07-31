@@ -25,10 +25,10 @@ credentials in `../.env` or the environment:
 
 ```bash
 pip install -r requirements.txt
-python agent.py console
+lk agent console agent.py
 ```
 
-Use `python agent.py dev` to connect the agent to LiveKit Cloud for a frontend or
+Use `lk agent dev agent.py` to connect the agent to LiveKit Cloud for a frontend or
 telephony session.
 
 ## Tests and evals

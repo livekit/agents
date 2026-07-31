@@ -16,7 +16,7 @@ is not enabled for this project".
 Env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LEMONSLICE_IMAGE_URL.
 
 Run:
-    python inference_agent.py dev
+    lk agent dev inference_agent.py
 """
 
 import logging

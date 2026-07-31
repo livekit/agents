@@ -74,7 +74,7 @@ if __name__ == "__main__":
 
 ```bash
 cd examples
-uv run voice_agents/phonic_realtime_agent.py dev
+lk agent dev voice_agents/phonic_realtime_agent.py
 ```
 
 ## Configuration

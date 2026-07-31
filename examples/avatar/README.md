@@ -13,7 +13,7 @@ Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 > authenticates with your LiveKit credentials and the gateway creates the
 > provider session with LiveKit's wholesale key. Requires the
 > `avatar_lemonslice` feature flag on your project. Run with
-> `python inference_agent.py dev` and set `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+> `lk agent dev inference_agent.py` and set `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
 > `LIVEKIT_API_SECRET`, and `LEMONSLICE_IMAGE_URL`.
 
 ## What's in here
@@ -44,7 +44,7 @@ Then:
 
 ```bash
 pip install -r requirements.txt
-python agent.py dev
+lk agent dev agent.py
 ```
 
 Connect from any LiveKit client. The agent reads the starting persona
