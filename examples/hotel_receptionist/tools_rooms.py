@@ -511,11 +511,10 @@ class RoomToolsMixin:
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
             f"{items}. The quoted labels are the exact line-item names dispute_charge takes - "
-            "the label only, never with the amount appended. | This turn: read the total and "
-            "every line item; do not call dispute_charge yet. Caller is questioning a charge "
-            "or asked for a copy of their bill: also offer to email the itemized folio to the "
-            f"address on file, {booking.email}. Any other reason you pulled the invoice up: "
-            "don't mention emailing it."
+            "the label only, never with the amount appended. I can email an itemized copy to "
+            f"the address on file, {booking.email}, "
+            "if you'd like - just say the word. | This turn: read the total and every line "
+            "item and offer to email the itemized folio; do not call dispute_charge yet."
         )
 
     @function_tool
