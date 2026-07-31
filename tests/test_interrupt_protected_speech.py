@@ -107,6 +107,64 @@ class TestInterruptWalk:
         finally:
             await _close_test_session(activity._session)
 
+    async def test_a_finished_protected_speech_does_not_block_the_walk(self) -> None:
+        # a done handle lingers in _current_speech until the scheduling task
+        # drops it; it will never play, so it cannot leave a gap and must not
+        # shield the speeches behind it
+        activity = _make_activity()
+        activity._rt_session = Mock()
+        finished = SpeechHandle.create(allow_interruptions=False)
+        finished._mark_done()
+        queued = SpeechHandle.create(allow_interruptions=True)
+        activity._current_speech = finished
+        _enqueue(activity, queued)
+
+        try:
+            activity.interrupt()
+
+            assert queued.interrupted
+            activity._rt_session.interrupt.assert_called_once()
+        finally:
+            await _close_test_session(activity._session)
+
+    async def test_a_force_interrupted_queue_entry_does_not_block_the_walk(self) -> None:
+        # interrupt(force=True) leaves handles in _speech_q until the
+        # scheduling task pops and skips them
+        activity = _make_activity()
+        activity._rt_session = Mock()
+        cancelled = SpeechHandle.create(allow_interruptions=False)
+        cancelled.interrupt(force=True)
+        behind = SpeechHandle.create(allow_interruptions=True)
+        for speech in (cancelled, behind):
+            _enqueue(activity, speech)
+
+        try:
+            activity.interrupt()
+
+            assert behind.interrupted
+            activity._rt_session.interrupt.assert_called_once()
+        finally:
+            await _close_test_session(activity._session)
+
+    async def test_a_live_protected_speech_behind_a_stale_one_is_still_kept(self) -> None:
+        # walking past the stale handle must not make the live protected one
+        # look like something we interrupted: the streaming response is its own
+        activity = _make_activity()
+        activity._rt_session = Mock()
+        stale = SpeechHandle.create(allow_interruptions=False)
+        stale._mark_done()
+        live = SpeechHandle.create(allow_interruptions=False)
+        activity._current_speech = stale
+        _enqueue(activity, live)
+
+        try:
+            activity.interrupt()
+
+            assert not live.interrupted
+            activity._rt_session.interrupt.assert_not_called()
+        finally:
+            await _close_test_session(activity._session)
+
     async def test_realtime_is_cancelled_when_the_playing_speech_is_done(self) -> None:
         # SpeechHandle._cancel() is a no-op once the handle is done, so
         # `interrupted` stays False while the scheduling task has not cleared
