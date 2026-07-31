@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from typing import Any
 
@@ -11,7 +12,13 @@ from livekit.agents import APIConnectOptions, stt
 from livekit.agents.metrics import STTMetrics
 from livekit.plugins.aws import stt as aws_stt
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(
+        sys.version_info < (3, 12),
+        reason="AWS Transcribe Streaming SDK requires Python 3.12 or later",
+    ),
+]
 
 
 class _FakeAudioStream:
