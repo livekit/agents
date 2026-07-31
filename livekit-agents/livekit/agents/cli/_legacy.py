@@ -1525,6 +1525,13 @@ def _run_console(
     _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
+    c.print(
+        "console mode is deprecated and will be removed in a future release. "
+        "Use [bold]lk agent console[/bold] instead.",
+        tag="Deprecated",
+        tag_style=Style.parse("black on yellow"),
+    )
+
     if c.record:
         c.print(
             f"Session recording will be saved to {c.session_directory}",
@@ -1653,6 +1660,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
+
+        [red]Deprecated[/red]: use [bold]lk agent console[/bold] instead.
         """
         if list_devices:
             _print_audio_devices()
