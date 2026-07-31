@@ -201,6 +201,93 @@ async def test_restart_preserves_wrapper_subscribers() -> None:
     assert received == ["after-restart"]
 
 
+# a provider-specific event the adapter knows nothing about ahead of time, standing in for
+# e.g. openai's "openai_server_event_received"
+_PLUGIN_EVENT = "provider_specific_event"
+
+
+async def test_restart_preserves_plugin_event_subscribers() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    received: list[object] = []
+    session.on(_PLUGIN_EVENT, lambda ev: received.append(ev))
+
+    await adapter.restart_session()
+
+    # plugin-specific subscribers are re-attached to the new child, same as the generic ones
+    session._active.emit(_PLUGIN_EVENT, "after-restart")
+    assert received == ["after-restart"]
+
+
+async def test_fallback_preserves_plugin_event_subscribers() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    received: list[object] = []
+    session.on(_PLUGIN_EVENT, lambda ev: received.append(ev))
+
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    # the subscriber follows an availability swap too, not just an explicit restart
+    assert session._active is backup.active_session
+    session._active.emit(_PLUGIN_EVENT, "after-fallback")
+    assert received == ["after-fallback"]
+
+
+async def test_plugin_event_detached_from_discarded_child() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    received: list[object] = []
+    session.on(_PLUGIN_EVENT, lambda ev: received.append(ev))
+    old_child = primary.active_session
+
+    await adapter.restart_session()
+
+    # the discarded child is fully unbound, so a late event from it is not re-emitted
+    old_child.emit(_PLUGIN_EVENT, "from-dead-child")
+    assert received == []
+
+
+async def test_plugin_event_subscribed_mid_swap_binds_to_new_child() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    old_child = primary.active_session
+
+    gate = asyncio.Event()
+    old_child.block_aclose = gate
+
+    restart = asyncio.create_task(adapter.restart_session())
+    await old_child.aclose_entered.wait()  # swap is mid-flight, no child bound
+
+    received: list[object] = []
+    session.on(_PLUGIN_EVENT, lambda ev: received.append(ev))
+    old_child.emit(_PLUGIN_EVENT, "from-dead-child")
+
+    gate.set()
+    await restart
+
+    # subscribing mid-swap attaches to the incoming child, never the one being discarded
+    session._active.emit(_PLUGIN_EVENT, "from-new-child")
+    assert received == ["from-new-child"]
+
+
+def test_forwards_multi_arg_plugin_events() -> None:
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    received: list[tuple[object, ...]] = []
+    session.on(_PLUGIN_EVENT, lambda *args: received.append(args))
+
+    primary.active_session.emit(_PLUGIN_EVENT, "a", "b")
+
+    # forwarders are varargs: a plugin event carrying several payload args keeps them all
+    assert received == [("a", "b")]
+
+
 async def test_restart_emits_no_error() -> None:
     primary = FakeRealtimeModel()
     adapter = RealtimeModelFallbackAdapter([primary])
