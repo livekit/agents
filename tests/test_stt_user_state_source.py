@@ -8,12 +8,16 @@ VAD-based interruption sensing. STT is now the authoritative ``user_state``
 source in that mode, while VAD keeps its interruption/endpointing roles.
 """
 
+import asyncio
 import time
+from collections.abc import AsyncIterable, AsyncIterator
 
 import pytest
 
-from livekit.agents import vad
+from livekit.agents import APIError, vad
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.audio_recognition import AudioRecognition, _STTPipeline
+from livekit.agents.voice.endpointing import BaseEndpointing
 
 from .fake_session import FakeActions, create_session
 from .test_agent_session import MyAgent, _close_test_session
@@ -34,6 +38,19 @@ def _vad_event(type_: vad.VADEventType) -> vad.VADEvent:
 def _make_activity(turn_detection: str | None) -> AgentActivity:
     session = create_session(FakeActions(), turn_handling={"turn_detection": turn_detection})
     return AgentActivity(MyAgent(), session)
+
+
+def _make_recognition(activity: AgentActivity, turn_detection: str) -> AudioRecognition:
+    return AudioRecognition(
+        activity._session,
+        hooks=activity,
+        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection=turn_detection,
+    )
 
 
 class TestSttDrivenUserState:
@@ -129,3 +146,65 @@ class TestSttDrivenUserState:
             assert session.user_state == "listening"
         finally:
             await _close_test_session(session)
+
+    async def test_clear_user_turn_closes_open_stt_segment(self) -> None:
+        # clear_user_turn() tears down and recreates the STT stream, so a
+        # pending STT end-of-speech will never arrive; the open segment must
+        # be closed on the way out or user_state stays "speaking" forever
+        activity = _make_activity("stt")
+        session = activity._session
+        try:
+            recognition = _make_recognition(activity, "stt")
+            activity.on_start_of_speech(None, time.time())
+            recognition._speaking = True  # as the STT START branch would have set
+            assert session.user_state == "speaking"
+
+            recognition._clear_user_turn()
+
+            assert session.user_state == "listening"
+            assert activity._stt_user_speaking is False
+            assert recognition._speaking is False
+        finally:
+            await _close_test_session(session)
+
+    async def test_clear_user_turn_leaves_state_to_vad_outside_stt_mode(self) -> None:
+        # outside stt mode the VAD end-of-speech still owns the transition;
+        # clearing the turn must not touch user_state
+        activity = _make_activity(None)
+        session = activity._session
+        try:
+            recognition = _make_recognition(activity, "vad")
+            activity.on_start_of_speech(_vad_event(vad.VADEventType.START_OF_SPEECH), time.time())
+            recognition._speaking = True
+            assert session.user_state == "speaking"
+
+            recognition._clear_user_turn()
+            assert session.user_state == "speaking"
+
+            activity.on_end_of_speech(_vad_event(vad.VADEventType.END_OF_SPEECH))
+            assert session.user_state == "listening"
+        finally:
+            await _close_test_session(session)
+
+    async def test_stt_reconnect_notifies_stream_reset(self) -> None:
+        # a reconnect after an APIError drops the in-flight utterance's
+        # END_OF_SPEECH with the old stream; the pipeline must notify its
+        # owner so the open segment can be closed
+        calls: list[int] = []
+
+        def _failing_node(audio_ch: object, settings: object) -> AsyncIterable[object]:
+            async def _gen() -> AsyncIterator[object]:
+                raise APIError("connection dropped")
+                yield  # unreachable; makes this an async generator
+
+            return _gen()
+
+        pipeline = _STTPipeline(_failing_node, on_stream_reset=lambda: calls.append(1))  # type: ignore[arg-type]
+        try:
+            for _ in range(100):
+                if calls:
+                    break
+                await asyncio.sleep(0.01)
+            assert calls, "on_stream_reset was not invoked on reconnect"
+        finally:
+            await pipeline.aclose()

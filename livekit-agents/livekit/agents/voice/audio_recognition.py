@@ -155,11 +155,18 @@ class _STTPipeline:
     """
 
     def __init__(
-        self, stt_node: io.STTNode, *, is_closing: Callable[[], bool] | None = None
+        self,
+        stt_node: io.STTNode,
+        *,
+        is_closing: Callable[[], bool] | None = None,
+        on_stream_reset: Callable[[], None] | None = None,
     ) -> None:
         self._stt_node = stt_node
         # don't recreate the stream while the session is closing
         self._is_closing = is_closing or (lambda: False)
+        # notified when the stream is recreated mid-flight: events of the old
+        # stream (e.g. a pending END_OF_SPEECH) are lost with it
+        self._on_stream_reset = on_stream_reset
         self._audio_ch = aio.Chan[rtc.AudioFrame]()
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
@@ -209,6 +216,8 @@ class _STTPipeline:
                     "STT stream ended on an unrecoverable error, recreating",
                     exc_info=True,
                 )
+                if self._on_stream_reset is not None:
+                    self._on_stream_reset()
                 await asyncio.sleep(_STT_RECONNECT_INTERVAL)
                 # the session may have started closing during the backoff
                 if self._is_closing():
@@ -218,11 +227,15 @@ class _STTPipeline:
             # node ended without error (audio input closed): stop
             return
 
-    def _rebind_node(self, stt_node: io.STTNode) -> None:
+    def _rebind_node(
+        self, stt_node: io.STTNode, *, on_stream_reset: Callable[[], None] | None = None
+    ) -> None:
         # the pipeline outlives the agent that created it (reused across handoff);
         # recreation must call the currently-active node, not the previous agent's
-        # bound node whose activity is torn down (would raise, stopping the pump)
+        # bound node whose activity is torn down (would raise, stopping the pump).
+        # The reset callback is rebound for the same reason.
         self._stt_node = stt_node
+        self._on_stream_reset = on_stream_reset
 
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._pump_task)
@@ -816,11 +829,15 @@ class AudioRecognition:
         if reset_context:
             self.stt_context = None
         if pipeline is None and stt is not None:
-            pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
+            pipeline = _STTPipeline(
+                stt,
+                is_closing=self._session._is_closing,
+                on_stream_reset=self._on_stt_stream_reset,
+            )
         elif pipeline is not None and stt is not None:
             # reused pipeline: rebind to this activity's node so a recreation
             # after an error doesn't call into the previous (torn-down) agent
-            pipeline._rebind_node(stt)
+            pipeline._rebind_node(stt, on_stream_reset=self._on_stt_stream_reset)
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(
@@ -972,7 +989,21 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
+    def _on_stt_stream_reset(self) -> None:
+        # the STT stream is being torn down mid-utterance (recreated after a
+        # connection failure, or the user turn was cleared): its pending
+        # END_OF_SPEECH will never arrive. In stt turn-detection mode the STT
+        # drives user_state, so close the open segment like the vad-task
+        # teardown does - otherwise the user stays "speaking" until a later
+        # utterance is fully transcribed
+        if self._turn_detection_mode != "stt" or not self._speaking:
+            return
+        with trace.use_span(self._ensure_user_turn_span()):
+            self._hooks.on_end_of_speech(None)
+        self._speaking = False
+
     def _clear_user_turn(self) -> None:
+        self._on_stt_stream_reset()
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
