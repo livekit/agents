@@ -11,22 +11,22 @@ pytestmark = pytest.mark.unit
 
 
 def _llm_metrics(**overrides: object) -> LLMMetrics:
-    base: dict[str, object] = dict(
-        label="test.LLM",
-        request_id="req-1",
-        timestamp=0.0,
-        duration=1.0,
-        ttft=0.1,
-        cancelled=False,
-        completion_tokens=10,
-        prompt_tokens=100,
-        prompt_cached_tokens=20,
-        total_tokens=110,
-        tokens_per_second=10.0,
-        metadata=Metadata(model_provider="anthropic", model_name="claude-sonnet-4"),
-    )
+    base: dict[str, object] = {
+        "label": "test.LLM",
+        "request_id": "req-1",
+        "timestamp": 0.0,
+        "duration": 1.0,
+        "ttft": 0.1,
+        "cancelled": False,
+        "completion_tokens": 10,
+        "prompt_tokens": 100,
+        "prompt_cached_tokens": 20,
+        "total_tokens": 110,
+        "tokens_per_second": 10.0,
+        "metadata": Metadata(model_provider="anthropic", model_name="claude-sonnet-4"),
+    }
     base.update(overrides)
-    return LLMMetrics(**base)  # type: ignore[arg-type]
+    return LLMMetrics(**base)
 
 
 def test_llm_metrics_defaults_cache_creation_to_zero() -> None:
