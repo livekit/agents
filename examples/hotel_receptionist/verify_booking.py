@@ -105,12 +105,9 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
         if accept:
             if not self.done():
                 self.complete(VerifyBookingResult(booking=booking))
-            # A blank result reads as "nothing came back" and draws a retry, which lands
-            # after the handoff has swapped this tool out.
-            return (
-                f"Verified via {kind} - the booking is loaded and this verification step is "
-                "closed; don't ask the caller to verify again for it."
-            )
+            # complete() ends this activity; a non-None return here would schedule a reply
+            # in it, and the handoff merge strips the output either way.
+            return None
         if self._attempts >= 3:
             if not self.done():
                 self.complete(
