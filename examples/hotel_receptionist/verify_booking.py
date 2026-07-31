@@ -113,8 +113,9 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
                 self.complete(
                     ToolError(
                         "verification failed after 3 attempts - don't keep trying. "
-                        "Apologize, then call record_followup with kind='verification_help' "
-                        "so a manager can follow up."
+                        'Apologize, then load_capability("guest_services") and call '
+                        "record_followup with kind='verification_help' so a manager can "
+                        "follow up; record_followup is not in the rooms area."
                     )
                 )
             return None

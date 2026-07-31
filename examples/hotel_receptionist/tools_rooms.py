@@ -555,9 +555,9 @@ class RoomToolsMixin:
                 f"the same value. The invoice's exact labels are: {labels}. If one of those "
                 "is the charge the caller is contesting, call again with it exactly as quoted "
                 "(no amount appended). If the charge they described is not among them, there "
-                "is no line to dispute and nothing further to call here: tell them plainly it "
-                'isn\'t on their invoice, then load_capability("guest_services") and '
-                "record_followup so a human investigates. Don't look the invoice up again."
+                "is no line to dispute: tell them plainly it isn't on their invoice, then "
+                'load_capability("guest_services") and record_followup so a human '
+                "investigates. Don't call lookup_invoice or dispute_charge again."
             )
 
         amount = item.amount_cents
