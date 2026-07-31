@@ -773,3 +773,62 @@ class TestAMDClassifier:
         await detector._setup(session)  # type: ignore[arg-type]
 
         assert calls == 2
+
+
+class TestEndBeforeStart:
+    """Regression tests for #5616: speech that began before listening opened.
+
+    When AMD attaches after the callee has already started speaking (outbound
+    calls answered mid-greeting), the start event is dropped by the listening
+    gate; the later end event used to be discarded too, leaving no timers armed
+    and stalling the verdict until ``detection_timeout`` (7-16s+ of held
+    playout in the report).
+    """
+
+    async def test_end_without_start_synthesizes_start_and_emits(self) -> None:
+        clf = _make_classifier(human_silence_threshold=0.1)
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        await asyncio.sleep(0.05)
+        # no on_user_speech_started: it fired before the gate opened
+        clf.on_user_speech_ended(silence_duration=0.0)
+
+        # the start is synthesized from the listening gate opening
+        assert clf._speech_started_at is not None
+        assert clf._speech_started_at >= clf._listening_started_at
+        # the verdict path is armed instead of stalling until detection_timeout
+        assert clf._silence_timer is not None
+        assert clf._silence_timer_trigger == "short_speech"
+        # speech clearly happened; the no-speech timer must not fire later
+        assert clf._no_speech_timer is None
+
+        await asyncio.sleep(0.2)
+
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.HUMAN
+        assert results[0].reason == "short_greeting"
+
+    async def test_end_before_listening_stays_gated(self) -> None:
+        # before start_listening() everything is a no-op, as documented
+        clf = _make_classifier()
+        clf.on_user_speech_ended(silence_duration=0.0)
+        assert clf._speech_started_at is None
+        assert clf._silence_timer is None
+
+    async def test_normal_ordering_unchanged(self) -> None:
+        clf = _make_classifier(human_silence_threshold=0.1)
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.on_user_speech_started()
+        started_at = clf._speech_started_at
+        await asyncio.sleep(0.05)
+        clf.on_user_speech_ended(silence_duration=0.0)
+
+        # the real start timestamp is kept, not overwritten by synthesis
+        assert clf._speech_started_at == started_at
+        await asyncio.sleep(0.2)
+        assert len(results) == 1
