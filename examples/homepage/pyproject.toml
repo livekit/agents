@@ -1,0 +1,16 @@
+[project]
+name = "livekit-example-homepage"
+version = "0"
+requires-python = ">=3.10"
+dependencies = [
+    "livekit-agents>=1.6",
+    "livekit-plugins-ai-coustics~=0.3",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+# an example is a script collection, not an installable distribution
+package = false
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }

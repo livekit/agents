@@ -73,7 +73,7 @@ jobs:
           print(f"wrote examples/{slug}/livekit.toml")
           PY
 
-      - name: Pin livekit-* requirements to the deployed ref
+      - name: Render requirements.txt from pyproject.toml
         env:
           # Build the agent against the code at the ref we're deploying,
           # not the latest release on PyPI. Without this, a branch deploy

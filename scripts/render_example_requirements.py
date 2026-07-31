@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Pin an example's in-repo requirements at a git ref, in place.
+"""Render an example's requirements.txt from its pyproject.toml.
 
-A deploy build context is the example directory alone, so in-repo requirements
-have to resolve over the network. Pinning them at the deployed ref builds the
-agent against the code at that ref rather than the latest release on PyPI.
+Each example is a uv workspace member, so its in-repo dependencies resolve
+through ``[tool.uv.sources]`` and only inside the workspace. A deploy build
+context is the example directory alone, so the image installs from a rendered
+requirements.txt instead, with in-repo names repointed at a git ref.
 
     python scripts/render_example_requirements.py examples/hotel_receptionist --ref main
+
+Needs Python 3.11+ for tomllib.
 """
 
 from __future__ import annotations
@@ -15,22 +18,24 @@ import re
 import sys
 from pathlib import Path
 
+import tomllib
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "git+https://github.com/livekit/agents.git"
 
-# The package name (and optional [extras]) at the start of a requirement,
-# e.g. "livekit-agents[evals]>=1.5.7".
+# The distribution name (and optional [extras]) at the start of a requirement,
+# e.g. "livekit-agents[mcp]>=1.6".
 REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)(?P<extras>\[.*\])?")
 
 
 def monorepo_path(name: str) -> str | None:
-    """Path of `name` within this repo, or None if it lives elsewhere.
+    """Path of ``name`` within this repo, or None if it lives elsewhere.
 
-    We only pin packages that actually exist in the checkout. The directory
+    Only packages that actually exist in the checkout are pinned. The directory
     basename is the distribution name for every package here (livekit-agents at
     the root, everything else under livekit-plugins/). Anything not found
     (livekit rtc, livekit-blingfire, livekit-local-inference, …) keeps its PyPI
-    pin.
+    specifier.
     """
     for rel in (name, f"livekit-plugins/{name}"):
         if (REPO_ROOT / rel).is_dir():
@@ -38,18 +43,13 @@ def monorepo_path(name: str) -> str | None:
     return None
 
 
-def pin_to_ref(line: str, ref: str) -> str:
-    """Repoint an in-repo requirement at the deployed git ref.
-
-    External requirements, comments and blanks pass through untouched (the
-    regex doesn't match a leading '#' or '').
-    """
-    match = REQUIREMENT.match(line.strip())
+def pin_to_ref(requirement: str, ref: str) -> str:
+    match = REQUIREMENT.match(requirement)
     if match is None:
-        return line
+        return requirement
     path = monorepo_path(match["name"])
     if path is None:
-        return line
+        return requirement
     return f"{match['name']}{match['extras'] or ''} @ {REPO}@{ref}#subdirectory={path}"
 
 
@@ -59,15 +59,17 @@ def main() -> int:
     parser.add_argument(
         "--ref",
         required=True,
-        help="git ref in-repo requirements are pinned to (branch, tag or sha)",
+        help="git ref in-repo dependencies are pinned to (branch, tag or sha)",
     )
     args = parser.parse_args()
 
-    requirements = args.example / "requirements.txt"
-    pinned = [pin_to_ref(line, args.ref) for line in requirements.read_text().splitlines()]
-    requirements.write_text("\n".join(pinned) + "\n")
+    pyproject = args.example / "pyproject.toml"
+    project = tomllib.loads(pyproject.read_text())["project"]
+    pinned = [pin_to_ref(dep, args.ref) for dep in project["dependencies"]]
 
-    print(f"--- {requirements} pinned to {args.ref} ---")
+    requirements = args.example / "requirements.txt"
+    requirements.write_text("\n".join(pinned) + "\n")
+    print(f"--- {requirements} rendered at {args.ref} ---")
     print(requirements.read_text(), end="")
     return 0
 

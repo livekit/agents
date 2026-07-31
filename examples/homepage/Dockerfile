@@ -34,6 +34,10 @@ RUN git lfs install --system
 WORKDIR /app
 USER appuser
 
+# requirements.txt is not checked in: the examples declare their dependencies in
+# pyproject.toml as uv workspace members, and this build context is the example
+# directory alone. Render it first:
+#   python scripts/render_example_requirements.py examples/<name> --ref <git-ref>
 COPY requirements.txt ./
 RUN pip install --user --no-cache-dir -r requirements.txt
 

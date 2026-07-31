@@ -1,0 +1,21 @@
+[project]
+name = "livekit-example-healthcare"
+version = "0"
+requires-python = ">=3.10"
+dependencies = [
+    "livekit-agents>=1.6",
+    "livekit-plugins-openai>=1.5.7",
+    "livekit-plugins-silero>=1.5.7",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[tool.uv]
+# an example is a script collection, not an installable distribution
+package = false
+
+[tool.uv.sources]
+livekit-agents = { workspace = true }
+livekit-plugins-openai = { workspace = true }
+livekit-plugins-silero = { workspace = true }

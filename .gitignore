@@ -178,3 +178,7 @@ docs/
 
 # Examples for development
 examples/dev/*
+
+# Rendered by scripts/render_example_requirements.py at deploy time; the
+# examples declare their dependencies in pyproject.toml.
+examples/*/requirements.txt
