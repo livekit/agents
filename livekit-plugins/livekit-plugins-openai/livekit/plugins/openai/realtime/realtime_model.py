@@ -453,10 +453,13 @@ class RealtimeModel(llm.RealtimeModel):
             )
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
+        resolved_turn_detection = to_turn_detection(turn_detection)
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
-                turn_detection=turn_detection is not None,
+                # create_response=False leaves the reply to the client: client-side turn taking
+                turn_detection=resolved_turn_detection is not None
+                and resolved_turn_detection.create_response is not False,
                 can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
@@ -501,7 +504,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities=modalities,
             input_audio_transcription=to_audio_transcription(input_audio_transcription),
             input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            turn_detection=resolved_turn_detection,
             api_key=api_key,
             base_url=base_url_val,
             is_azure=is_azure,
@@ -2244,6 +2247,12 @@ class RealtimeSession(
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         if event.error.message.startswith("Cancellation failed"):
+            return
+
+        if event.error.code == "input_audio_buffer_commit_empty" and (
+            self._opts.turn_detection is not None
+        ):
+            # the server VAD commits each segment itself, ours lands on an emptied buffer
             return
 
         provider_label = self._realtime_model._provider_label
