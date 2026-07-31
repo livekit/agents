@@ -311,11 +311,14 @@ class RoomToolsMixin:
         except ToolError as e:
             # The capture ended without a usable card (refused, or their only card is
             # expired/failing). The card on file stays; hand the agent the resolution.
+            # The callback offer is spoken, not recorded: record_followup is not in the
+            # billing area, and naming it here made the model drop the clause instead.
             raise ToolError(
                 f"{e} - the booking stays held on the current card and a working card "
-                "isn't needed until check-in: reassure the caller of that, suggest they "
-                "check with their card issuer in case it's a technical fault, and offer "
-                'a callback to retry (record_followup, kind="callback").'
+                "isn't needed until check-in. Reassure the caller of that, and make the "
+                "question for this turn the callback offer: ask whether they'd like the "
+                "desk to call them back to retry the card once they've had a chance to "
+                "check with their card issuer. Speaking that offer is the whole action."
             ) from None
         await ctx.userdata.db.update_booking_card(
             booking_code=booking.code, card_last4=card.card_number[-4:]
@@ -508,10 +511,11 @@ class RoomToolsMixin:
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
             f"{items}. The quoted labels are the exact line-item names dispute_charge takes - "
-            "the label only, never with the amount appended. I can email an itemized copy to "
-            f"the address on file, {booking.email}, "
-            "if you'd like - just say the word. | This turn: read the total and every line "
-            "item and offer to email the itemized folio; do not call dispute_charge yet."
+            "the label only, never with the amount appended. | This turn: read the total and "
+            "every line item; do not call dispute_charge yet. Caller is questioning a charge "
+            "or asked for a copy of their bill: also offer to email the itemized folio to the "
+            f"address on file, {booking.email}. Any other reason you pulled the invoice up: "
+            "don't mention emailing it."
         )
 
     @function_tool

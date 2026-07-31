@@ -91,8 +91,9 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
                 ToolError(
                     f"couldn't verify the booking: {reason} | verification is closed - your full "
                     "toolset is back: continue with what the caller actually wants (a new booking "
-                    "-> start_room_booking; a followup -> record_followup). Nothing was booked or "
-                    "recorded during verification - don't claim otherwise."
+                    '-> start_room_booking; a followup -> load_capability("guest_services") '
+                    "first, since record_followup is not in the rooms area). Nothing was booked "
+                    "or recorded during verification - don't claim otherwise."
                 )
             )
 

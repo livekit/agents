@@ -47,34 +47,40 @@ _close_watchdogs: dict[AgentSession, asyncio.Task[None]] = {}
 _CALLER_HANGUP_GRACE = 10.0
 
 # The shorter quiet period for a REPEAT close: the farewell already happened and
-# the caller has indicated twice that they're done. New caller speech still
-# cancels this timer; the next completed response can arm a replacement.
+# the caller has indicated twice that they're done. New caller speech postpones this
+# timer by the full _CALLER_HANGUP_GRACE rather than cancelling it.
 _REPEAT_CLOSE_GRACE = 3.0
 
 
 def _arm_close_watchdog(session: AgentSession, *, grace: float) -> asyncio.Task[None]:
     """Hang up after `grace` seconds of caller silence.
 
-    Caller speech always cancels the pending close, including after a repeat
-    farewell, so a stale timer cannot shut down the newer active turn. A later
-    close invocation replaces the cancelled timer after that turn's response.
+    Caller speech postpones the close, it never cancels it: the farewell is already
+    spoken, so a caller who keeps answering it must not be able to hold the line open
+    for the rest of the call. Postponement is always the full caller-hangup grace, which
+    outlasts the reply to that utterance, so the session is never torn down mid-answer.
     shutdown() is idempotent, so a caller who hangs up during the wait is a no-op.
     """
 
     if previous := _close_watchdogs.get(session):
         previous.cancel()
 
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + grace
+
     def _on_item_added(ev: object) -> None:
+        nonlocal deadline
         item = getattr(ev, "item", None)
         if item is not None and getattr(item, "role", None) == "user":
-            task.cancel()
+            deadline = loop.time() + _CALLER_HANGUP_GRACE
 
     async def _close_after_silence() -> None:
         try:
-            await asyncio.sleep(grace)
+            while (remaining := deadline - loop.time()) > 0:
+                await asyncio.sleep(remaining)
             session.shutdown()
         except asyncio.CancelledError:
-            pass  # caller spoke again - the conversation is back on
+            pass  # superseded by a newer close
         finally:
             session.off("conversation_item_added", _on_item_added)
             if _close_watchdogs.get(session) is task:
@@ -779,7 +785,8 @@ class ServicesToolsMixin:
             f"On file: {prefs} | proactively offer to set these up again for the new stay. The "
             'ones the guest confirms are only noted once record_followup (kind="other") has run '
             "with them - make that call before starting any booking flow (it isn't reachable "
-            "from inside one). Don't add any preference beyond these."
+            "from inside one), loading guest_services first if record_followup isn't on yet. "
+            "Don't add any preference beyond these."
         )
 
     @function_tool
