@@ -552,7 +552,10 @@ class RoomToolsMixin:
             raise ToolError(
                 f"No line item labelled {line_item_label!r} on that invoice - do NOT retry "
                 f"the same value. The invoice's exact labels are: {labels}. Call again with "
-                "one of those, exactly as quoted (no amount appended)."
+                "one of those, exactly as quoted (no amount appended). If the charge the "
+                "caller is contesting is genuinely not among them, there is no line here to "
+                "dispute: tell them plainly it isn't on their invoice and get the discrepancy "
+                "recorded for a human to investigate rather than looking the invoice up again."
             )
 
         amount = item.amount_cents
