@@ -112,7 +112,7 @@ def test_auto_mode_respects_explicit_value_with_chunk_length_schedule() -> None:
 async def test_job_shutdown_gracefully_closes_websocket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    close_code: asyncio.Future[int | None] = asyncio.get_running_loop().create_future()
+    close_codes: asyncio.Queue[int | None] = asyncio.Queue()
 
     async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         websocket = web.WebSocketResponse()
@@ -121,8 +121,7 @@ async def test_job_shutdown_gracefully_closes_websocket(
             async for _ in websocket:
                 pass
         finally:
-            if not close_code.done():
-                close_code.set_result(websocket.close_code)
+            close_codes.put_nowait(websocket.close_code)
         return websocket
 
     app = web.Application()
@@ -154,7 +153,17 @@ async def test_job_shutdown_gracefully_closes_websocket(
                 assert len(job_ctx.shutdown_callbacks) == 1
                 await job_ctx.shutdown_callbacks[0]()
 
-                assert await asyncio.wait_for(close_code, timeout=1) == 1000
+                assert await asyncio.wait_for(close_codes.get(), timeout=1) == 1000
+                assert not http_session.closed
+
+                job_ctx = _FakeJobContext()
+                await tts._current_connection()  # pyright: ignore[reportPrivateUsage]
+                await tts._current_connection()  # pyright: ignore[reportPrivateUsage]
+
+                assert len(job_ctx.shutdown_callbacks) == 1
+                await job_ctx.shutdown_callbacks[0]()
+
+                assert await asyncio.wait_for(close_codes.get(), timeout=1) == 1000
                 assert not http_session.closed
             finally:
                 await tts.aclose()

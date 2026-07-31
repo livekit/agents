@@ -34,6 +34,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    JobContext,
     LanguageCode,
     get_job_context,
     tokenize,
@@ -212,7 +213,7 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
-        self._job_context_cb_registered = False
+        self._registered_job_ctx_ref: weakref.ReferenceType[JobContext] | None = None
 
     @property
     def model(self) -> str:
@@ -288,13 +289,15 @@ class TTS(tts.TTS):
             Tuple of (connection, acquire_time, connection_reused)
         """
         async with self._connection_lock:
-            if not self._job_context_cb_registered:
-                job_ctx = get_job_context(required=False)
-                if job_ctx is not None:
-                    # AgentSession closes active synthesis streams but does not own the TTS
-                    # model. Close our reusable WebSocket before the job-owned HTTP session.
-                    job_ctx.add_shutdown_callback(self.aclose)
-                    self._job_context_cb_registered = True
+            job_ctx = get_job_context(required=False)
+            registered_job_ctx = (
+                self._registered_job_ctx_ref() if self._registered_job_ctx_ref is not None else None
+            )
+            if job_ctx is not None and job_ctx is not registered_job_ctx:
+                # AgentSession closes active synthesis streams but does not own the TTS
+                # model. Close our reusable WebSocket before the job-owned HTTP session.
+                job_ctx.add_shutdown_callback(self.aclose)
+                self._registered_job_ctx_ref = weakref.ref(job_ctx)
 
             if (
                 self.__current_connection
