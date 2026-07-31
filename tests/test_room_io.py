@@ -15,6 +15,7 @@ from livekit.agents.voice.room_io._input import (
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
@@ -116,6 +117,10 @@ class _NoopAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
 class _FakeWriter:
     def __init__(self) -> None:
         self.close_calls = 0
+        self.chunks: list[str] = []
+
+    async def write(self, text: str) -> None:
+        self.chunks.append(text)
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
@@ -184,6 +189,26 @@ async def test_transcription_output_aclose_unregisters_and_closes_resources() ->
     assert room.listener_count("local_track_published") == 0
     assert legacy_output._flush_task is not None and legacy_output._flush_task.done()
     assert writer.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_output_strips_markup_but_keeps_links() -> None:
+    room = _FakeRoom()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="agent")
+    await output.capture_text(
+        '<expr type="expression" label="happy"/>See [the docs](https://docs.livekit.io)'
+    )
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+
+    published = "".join(writer.chunks)
+    # markup is removed; a markdown link is prose and must reach the user intact
+    assert "<expr" not in published
+    assert "[the docs](https://docs.livekit.io)" in published
 
 
 @pytest.mark.asyncio

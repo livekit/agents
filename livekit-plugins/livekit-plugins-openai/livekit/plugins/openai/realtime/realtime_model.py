@@ -457,6 +457,7 @@ class RealtimeModel(llm.RealtimeModel):
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=turn_detection is not None,
+                can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
@@ -671,10 +672,13 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(input_audio_transcription):
             input_audio_transcription = AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
 
+        # capture intent before applying the azure default, so the framework can still
+        # auto-disable server-side turn detection when the user didn't configure it
+        can_disable_turn_detection = not is_given(turn_detection)
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        return RealtimeModel(
+        model = RealtimeModel(
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
@@ -691,6 +695,8 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
             max_session_duration=max_session_duration,
         )
+        model._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        return model
 
     def update_options(
         self,
@@ -746,7 +752,9 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                # only propagate when the caller set it, so a session that opted out of
+                # server-side turn detection isn't force-synced back on by an unrelated update
+                turn_detection=self._opts.turn_detection if is_given(turn_detection) else NOT_GIVEN,
                 tool_choice=tool_choice,
                 input_audio_transcription=self._opts.input_audio_transcription,
                 input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
@@ -767,8 +775,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -841,11 +849,16 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         # per-session copy of opts so update_options can diff against session's own state
-        self._opts = replace(realtime_model._opts)
+        self._opts = replace(
+            realtime_model._opts,
+            turn_detection=None if turn_detection_disabled else realtime_model._opts.turn_detection,
+        )
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -864,8 +877,7 @@ class RealtimeSession(
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
 
-        # accumulates partial input-audio transcripts per (item_id, content_index)
-        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+        self._reset_input_turn_state()
 
         self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -882,6 +894,20 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _reset_input_turn_state(self) -> None:
+        """Per-turn input state, keyed by item_id and valid only within one connection.
+
+        Every field here must be discarded on reconnect: the server assigns new item ids,
+        so a stale entry can never be matched again.
+        """
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+
+        # when serverside VAD detected speech onset, per item_id. Correlating through the
+        # item keeps each turn paired with its own start; a single "last speech started"
+        # value cannot, because a late transcript would consume the next turn's value.
+        self._input_speech_started_at: dict[str, float] = {}
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -914,7 +940,7 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._input_transcript_accumulators.clear()
+            self._reset_input_turn_state()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -1760,8 +1786,10 @@ class RealtimeSession(
             yield frame
 
     def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
+        self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
+        if event.item_id:
+            self._input_speech_started_at[event.item_id] = time.time()
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
@@ -1885,6 +1913,7 @@ class RealtimeSession(
         assert event.item_id is not None, "item_id is None"
 
         self._input_transcript_accumulators.pop(event.item_id, None)
+        self._input_speech_started_at.pop(event.item_id, None)
 
         try:
             self._remote_chat_ctx.delete(event.item_id)
@@ -1945,6 +1974,7 @@ class RealtimeSession(
                 transcript=event.transcript,
                 is_final=True,
                 confidence=confidence,
+                turn_started_at=self._input_speech_started_at.pop(event.item_id, None),
             ),
         )
 
@@ -1958,12 +1988,16 @@ class RealtimeSession(
 
         # close any open partial stream so consumers waiting for is_final don't hang
         partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+        turn_started_at = self._input_speech_started_at.pop(event.item_id, None)
         if partial is None:
             return
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
-                item_id=event.item_id, transcript=partial, is_final=True
+                item_id=event.item_id,
+                transcript=partial,
+                is_final=True,
+                turn_started_at=turn_started_at,
             ),
         )
 

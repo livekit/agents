@@ -457,9 +457,19 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
 
-                        if has_ended:
-                            self._audio_duration_collector.flush()
-                            has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": "",
+                                    "commit": True,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
+                        )
+                        has_ended = False
 
                 closing_ws = True
             except (aiohttp.ClientError, ConnectionError) as e:
