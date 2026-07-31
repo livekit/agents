@@ -1527,7 +1527,8 @@ def _run_console(
 
     c.print(
         "console mode is deprecated and will be removed in a future release. "
-        "Use [bold]lk agent console[/bold] instead.",
+        "Use [bold]lk agent console[/bold] instead: "
+        "https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup",
         tag="Deprecated",
         tag_style=Style.parse("black on yellow"),
     )
@@ -1661,7 +1662,8 @@ def _build_cli(server: AgentServer) -> typer.Typer:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
 
-        [red]Deprecated[/red]: use [bold]lk agent console[/bold] instead.
+        [red]Deprecated[/red]: use [bold]lk agent console[/bold] instead
+        (https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup).
         """
         if list_devices:
             _print_audio_devices()
