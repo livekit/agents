@@ -15,8 +15,6 @@ dependencies = [
 [tool.uv]
 # an example is a script collection, not an installable distribution
 package = false
-
-[tool.uv.sources]
-livekit-agents = { workspace = true }
-livekit-plugins-silero = { workspace = true }
-livekit-plugins-turn-detector = { workspace = true }
+# No [tool.uv.sources] here: the workspace root repoints the livekit-* deps at
+# the in-repo copies for members, and staying free of workspace-only references
+# is what lets a copy of this directory resolve on its own, outside the repo.

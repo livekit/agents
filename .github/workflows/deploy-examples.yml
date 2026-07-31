@@ -30,7 +30,7 @@ jobs:
           # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the
           # real binaries — not pointer files — get uploaded as the build context
           # and copied into the image via `COPY . .`. This checkout authenticates
-          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike pip's anonymous
+          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike uv's anonymous
           # git clone). Without this the agent crashes at runtime decoding a
           # 131-byte pointer as audio.
           lfs: true
@@ -73,16 +73,16 @@ jobs:
           print(f"wrote examples/{slug}/livekit.toml")
           PY
 
-      - name: Render requirements.txt from pyproject.toml
+      - name: Pin in-repo dependencies to the deployed ref
         env:
           # Build the agent against the code at the ref we're deploying,
           # not the latest release on PyPI. Without this, a branch deploy
           # would silently run against the published livekit-agents instead
           # of the branch's own SDK changes. Mirror the checkout ref above,
-          # using ref_name so it's a plain branch/tag pip can resolve.
+          # using ref_name so it's a plain branch/tag git can resolve.
           DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
         run: |
-          python3 scripts/render_example_requirements.py \
+          python3 scripts/pin_example_to_ref.py \
             "examples/${{ matrix.example }}" --ref "$DEPLOY_REF"
 
       - name: Build secrets file

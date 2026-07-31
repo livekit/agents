@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Render an example's requirements.txt from its pyproject.toml.
+"""Pin an example's in-repo dependencies to a git ref, in place.
 
-Each example is a uv workspace member, so its in-repo dependencies resolve
-through ``[tool.uv.sources]`` and only inside the workspace. A deploy build
-context is the example directory alone, so the image installs from a rendered
-requirements.txt instead, with in-repo names repointed at a git ref.
+An example resolves its livekit-* dependencies through the workspace root's
+``[tool.uv.sources]``, which only applies inside this repo. A deploy build
+context is the example directory alone, so appending a git source for every
+in-repo dependency is what builds the image against this checkout's code
+instead of the latest release on PyPI.
 
-    python scripts/render_example_requirements.py examples/hotel_receptionist --ref main
+    python scripts/pin_example_to_ref.py examples/hotel_receptionist --ref main
 
 Needs Python 3.11+ for tomllib.
 """
@@ -21,11 +22,11 @@ from pathlib import Path
 import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REPO = "git+https://github.com/livekit/agents.git"
+REPO = "https://github.com/livekit/agents.git"
 
-# The distribution name (and optional [extras]) at the start of a requirement,
-# e.g. "livekit-agents[mcp]>=1.6".
-REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)(?P<extras>\[.*\])?")
+# The distribution name at the start of a requirement, e.g. "livekit-agents[mcp]>=1.6".
+# Extras stay on the dependency itself; a source is keyed by name alone.
+REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)")
 
 
 def monorepo_path(name: str) -> str | None:
@@ -43,14 +44,25 @@ def monorepo_path(name: str) -> str | None:
     return None
 
 
-def pin_to_ref(requirement: str, ref: str) -> str:
-    match = REQUIREMENT.match(requirement)
-    if match is None:
-        return requirement
-    path = monorepo_path(match["name"])
-    if path is None:
-        return requirement
-    return f"{match['name']}{match['extras'] or ''} @ {REPO}@{ref}#subdirectory={path}"
+def git_sources(dependencies: list[str], ref: str) -> str:
+    lines = [
+        "",
+        "# Written by scripts/pin_example_to_ref.py for a deploy: the build context is",
+        "# this directory alone, so the in-repo dependencies come from the git ref being",
+        f"# deployed ({ref}) rather than from PyPI.",
+        "[tool.uv.sources]",
+    ]
+    for dep in dependencies:
+        match = REQUIREMENT.match(dep)
+        if match is None:
+            continue
+        path = monorepo_path(match["name"])
+        if path is None:
+            continue
+        lines.append(
+            f'{match["name"]} = {{ git = "{REPO}", rev = "{ref}", subdirectory = "{path}" }}'
+        )
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:
@@ -64,13 +76,15 @@ def main() -> int:
     args = parser.parse_args()
 
     pyproject = args.example / "pyproject.toml"
-    project = tomllib.loads(pyproject.read_text())["project"]
-    pinned = [pin_to_ref(dep, args.ref) for dep in project["dependencies"]]
+    contents = pyproject.read_text()
+    parsed = tomllib.loads(contents)
+    if "sources" in parsed.get("tool", {}).get("uv", {}):
+        parser.error(f"{pyproject} already declares [tool.uv.sources]")
 
-    requirements = args.example / "requirements.txt"
-    requirements.write_text("\n".join(pinned) + "\n")
-    print(f"--- {requirements} rendered at {args.ref} ---")
-    print(requirements.read_text(), end="")
+    sources = git_sources(parsed["project"]["dependencies"], args.ref)
+    pyproject.write_text(contents + sources)
+    print(f"--- {pyproject} pinned to {args.ref} ---")
+    print(sources, end="")
     return 0
 
 
