@@ -83,6 +83,16 @@ class _TTSOptions:
         return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
+def _supports_word_timestamps(model: str, language: str | None) -> bool:
+    """Whether the model/language combination can return word timestamps.
+
+    https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
+    """
+    if "preview" in model:
+        return True
+    return language is None or LanguageCode(language).language in {"en", "de", "es", "fr"}
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -126,6 +136,14 @@ class TTS(tts.TTS):
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
+
+        if word_timestamps and not _supports_word_timestamps(model, language):
+            # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
+            logger.warning(
+                "word_timestamps disabled: it is only supported for languages en, de, es, and fr"
+                " with `sonic` models, or all languages with `preview` models"
+            )
+            word_timestamps = False
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -180,23 +198,6 @@ class TTS(tts.TTS):
             self._stream_pacer = tts.SentenceStreamPacer()
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
-
-        if word_timestamps:
-            if "preview" not in self._opts.model and (
-                self._opts.language is not None
-                and self._opts.language.language
-                not in {
-                    "en",
-                    "de",
-                    "es",
-                    "fr",
-                }
-            ):
-                # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-                logger.warning(
-                    "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
-                    " or all languages with `preview` models"
-                )
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
