@@ -230,6 +230,17 @@ class FallbackLLMStream(LLMStream):
         llm_status = self._fallback_adapter._status[
             self._fallback_adapter._llm_instances.index(llm)
         ]
+        if llm.stateful:
+            # a recovery probe runs a full chat() and throws every chunk away;
+            # for a stateful instance that commits the side effects of a real
+            # turn just to test availability. It is retried on real traffic
+            # instead (see _run), so it can still come back.
+            logger.debug(
+                "%s declares chat() stateful, skipping the recovery probe",
+                llm.label,
+            )
+            return
+
         if llm_status.recovering_task is None or llm_status.recovering_task.done():
 
             async def _recover_llm_task(llm: LLM) -> None:
@@ -257,7 +268,10 @@ class FallbackLLMStream(LLMStream):
 
         for i, llm in enumerate(self._fallback_adapter._llm_instances):
             llm_status = self._fallback_adapter._status[i]
-            if llm_status.available or all_failed:
+            # a stateful instance gets no background probe to mark it healthy
+            # again, so it is retried here instead - otherwise one failure
+            # would drop it (often the primary) for the rest of the process
+            if llm_status.available or all_failed or llm.stateful:
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
