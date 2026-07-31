@@ -78,6 +78,9 @@ class StreamAdapter(STT):
             conn_options=conn_options,
         )
 
+    def prewarm(self) -> None:
+        self._stt.prewarm()
+
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
