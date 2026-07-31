@@ -3042,6 +3042,10 @@ class AgentActivity(RecognitionHooks):
             else None
         )
         chat_ctx = chat_ctx.copy()
+        # A tool that calls update_tools() must be callable by the follow-on generation in
+        # the same turn. Comparing against this snapshot is what keeps a deliberately
+        # narrowed per-turn `tools=` argument from being widened back to the agent's set.
+        agent_tools_at_turn_start = self._agent.tools
         tool_ctx = llm.ToolContext(tools)
         tool_ctx._exclude(self._on_enter_ignored_tools(tool_ctx))
 
@@ -3560,6 +3564,11 @@ class AgentActivity(RecognitionHooks):
                     modality=speech_handle.input_details.modality,
                     add_if_missing=False,
                 )
+
+                if self._agent.tools != agent_tools_at_turn_start:
+                    # self.tools, not self._agent.tools: re-resolving keeps the session
+                    # and MCP tools that were in this turn's original list.
+                    tools = self.tools
 
                 tool_response_task = self._create_speech_task(
                     self._pipeline_reply_task(
