@@ -205,7 +205,13 @@ spelled-out forms like "I am" or "do not" sound stiff when spoken.
 Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
 like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
 on short replies or decorate every sentence. If a reaction wouldn't happen in a real \
-conversation, skip it — there's always another genuine beat to lean into."""
+conversation, skip it — there's always another genuine beat to lean into.
+
+Match your delivery to the REGISTER of the moment, and reassess every turn. When the \
+moment is professional, high-stakes, or emotionally heavy — bad news, an emergency, \
+real distress — keep delivery composed and restrained. When the moment is casual, \
+playful, or celebratory, let it loosen and brighten. A serious turn in an otherwise \
+casual conversation still gets a composed reply."""
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -457,6 +463,26 @@ sentences or commas.""",
         """When the conversation is in another language, still write every marker label in \
 English — labels are a fixed vocabulary, never translated.""",
     ]
+
+    # Vocabulary-specific register guidance on top of the preamble's neutral rule.
+    # Each clause mentions only concepts this steering actually enables, so an
+    # opted-out option is never referenced (not even prohibitively).
+    register = [
+        "At heavy moments reach for empathetic, sad, regretful, or hopeful — never a "
+        'bright label like "happy" or "excited" against hard news; bright labels belong '
+        "to bright moments."
+    ]
+    if any(s in sounds for s in ("laughing", "chuckling")):
+        register.append(
+            "Laughter belongs only in genuinely playful or celebratory beats, never at "
+            "a serious moment."
+        )
+    if disfluencies:
+        register.append(
+            "Save fillers for relaxed moments — never in an emergency or against grave news."
+        )
+    parts.append(" ".join(register))
+
     pool = _FISHAUDIO_EXAMPLES + (_FISHAUDIO_DISFLUENT_EXAMPLES if disfluencies else [])
     if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
         parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
@@ -475,21 +501,29 @@ _PROVIDER_SOUNDS: dict[str, list[str]] = {
 def _steering_removed(
     table: dict[str, dict[str, list[str]]], provider: str, steering: SpeechSteeringOptions | None
 ) -> set[str]:
-    """Labels from a per-provider governance table that *steering* disables."""
+    """Labels from a per-provider governance table that *steering* disables.
+
+    ``nonverbal_sounds`` accepts a bool or a sparse per-category dict:
+    ``True`` (like omitting the key) keeps the full vocabulary, ``False``
+    disables every sound, and in a dict an omitted category stays ENABLED —
+    ``{"laughing": False}`` removes laughter and nothing else.
+    """
     nonverbals = steering.get("nonverbal_sounds") if steering else None
     labels = table.get(provider)
-    if nonverbals is None or labels is None:
+    if nonverbals is None or nonverbals is True or labels is None:
         return set()
+    if nonverbals is False:
+        return {lb for lbs in labels.values() for lb in lbs}
     flags = dict(nonverbals)
-    return {lb for f, lbs in labels.items() if not flags.get(f, False) for lb in lbs}
+    return {lb for f, lbs in labels.items() if not flags.get(f, True) for lb in lbs}
 
 
 def _allowed_sounds(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
     """The provider's sound vocabulary minus labels steering disables.
 
     Every label is governed by a ``NonverbalOptions`` field, so passing
-    ``nonverbal_sounds`` with everything off returns an empty list — the
-    instruction builders then omit the Sounds section entirely.
+    ``nonverbal_sounds=False`` returns an empty list — the instruction
+    builders then omit the Sounds section entirely.
     """
     removed = _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering)
     return [s for s in _PROVIDER_SOUNDS.get(provider, []) if s not in removed]
@@ -511,8 +545,8 @@ def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> l
 # has no sound for that field (nothing to filter). _allowed_sounds uses this to
 # remove disabled labels from the advertised vocabulary, so a sound steering turns
 # off is never exposed to the LLM in the first place. Every label in
-# _PROVIDER_SOUNDS must be governed by exactly one field, so a preset controls
-# the full vocabulary.
+# _PROVIDER_SOUNDS must be governed by exactly one field, so a steering config
+# controls the full vocabulary.
 _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     "inworld": {
         "laughing": ["laugh"],
@@ -605,14 +639,18 @@ def _sound_guidance(sounds: list[str]) -> str:
 def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str:
     """Render a ``SpeechSteeringOptions`` into delivery guidelines for *provider*.
 
-    Only set fields produce output, so an empty dict adds nothing on top of the
-    base template. Disabled sounds never appear here: ``llm_instructions`` filters
-    them out of the advertised vocabulary (via ``_allowed_sounds``), so the only
-    sound guidance left is how sparingly to use what remains.
+    Only fields that change the default produce output, so an empty dict adds
+    nothing on top of the base template. Disabled sounds never appear here:
+    ``llm_instructions`` filters them out of the advertised vocabulary (via
+    ``_allowed_sounds``), so the only sound guidance left is how sparingly to
+    use what remains.
     """
     lines: list[str] = []
 
-    if steering.get("nonverbal_sounds") is not None and (
+    # sound guidance only when steering actually removes part of the vocabulary:
+    # the explicit all-on forms (True, an empty dict) must render identically to
+    # omitting the key, and all-off leaves nothing to guide
+    if _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering) and (
         allowed := _allowed_sounds(provider, steering)
     ):
         lines.append(_sound_guidance(allowed))
