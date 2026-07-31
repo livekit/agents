@@ -9,6 +9,7 @@ from collections import deque
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from benchmark import build_expected, diff_databases
+from capabilities import CAPABILITIES, render
 from common import Userdata
 from dotenv import load_dotenv
 from fake_data.seed import build_seed_bytes
@@ -16,7 +17,7 @@ from hotel_db import (
     TODAY,
     HotelDB,
 )
-from instructions import build_instructions
+from persona_core import CORE_INSTRUCTIONS
 from policies import build_lookup_policy_tool
 from run_artifacts import dump_run_artifacts
 from tools_restaurant import RestaurantToolsMixin
@@ -31,7 +32,9 @@ from livekit.agents import (
     JobContext,
     MetricsCollectedEvent,
     SimulationContext,
+    ToolError,
     cli,
+    function_tool,
     inference,
 )
 
@@ -67,7 +70,38 @@ def _tag_work_activity(ctx: JobContext, *, state_changes: list[str], served_read
 
 class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent):
     def __init__(self) -> None:
-        super().__init__(instructions=build_instructions(), tools=[build_lookup_policy_tool()])
+        super().__init__(instructions=CORE_INSTRUCTIONS, tools=[build_lookup_policy_tool()])
+
+        # Agent.__init__ collects every mixin tool. Hold them in a registry keyed by
+        # name and expose only the resident pair, so the re-sent prefix carries the
+        # router rather than 35 schemas; load_capability switches the rest on.
+        self._registry = {tool.info.name: tool for tool in self._tools}
+        self._loaded: set[str] = set()
+        self._expose()
+
+    def _expose(self) -> None:
+        resident = ["load_capability", "say_goodbye_and_close_call"]
+        names = dict.fromkeys(
+            resident + [name for area in self._loaded for name in CAPABILITIES[area].tools]
+        )
+        self._tools = [self._registry[name] for name in names if name in self._registry]
+        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+
+    @function_tool
+    async def load_capability(self, area: str) -> str:
+        """Switch on the tools and procedure for one area of the job. Call this as soon as
+        the caller names what they need, before promising anything in that area.
+
+        Args:
+            area: One of rooms, billing, restaurant, concierge, guest_services, groups,
+                emergency, transfer, policy.
+        """
+        if area not in CAPABILITIES:
+            raise ToolError(f"unknown area {area!r} - valid areas: {', '.join(CAPABILITIES)}")
+        self._loaded.add(area)
+        self._expose()
+        await self.update_tools(self._tools)
+        return render(area)
 
     async def on_enter(self) -> None:
         # The caller may have already said what they want before we speak -
