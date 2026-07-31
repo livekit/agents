@@ -16,6 +16,7 @@ import pytest
 from livekit.agents import AgentSession
 from livekit.agents.llm import InputSpeechStartedEvent
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .test_agent_session import MyAgent
@@ -59,6 +60,31 @@ class TestAllowInterruptionsFalse:
     async def test_input_speech_started_interrupts_when_allowed(self) -> None:
         session = _make_session(allow_interruptions=True)
         activity = AgentActivity(MyAgent(), session)
+        activity.interrupt = Mock()  # type: ignore[method-assign]
+
+        activity._on_input_speech_started(InputSpeechStartedEvent())
+
+        activity.interrupt.assert_called_once()
+
+    async def test_protected_speech_wins_over_permissive_default(self) -> None:
+        # say(..., allow_interruptions=False) while the session default is True:
+        # the playing speech must not be interrupted (and no spurious
+        # "this should never happen" RuntimeError must be logged)
+        session = _make_session(allow_interruptions=True)
+        activity = AgentActivity(MyAgent(), session)
+        activity._current_speech = SpeechHandle.create(allow_interruptions=False)
+        activity.interrupt = Mock()  # type: ignore[method-assign]
+
+        activity._on_input_speech_started(InputSpeechStartedEvent())
+
+        activity.interrupt.assert_not_called()
+
+    async def test_interruptible_speech_wins_over_protective_default(self) -> None:
+        # say(..., allow_interruptions=True) while the session default is False:
+        # the explicitly interruptible speech must be interrupted locally
+        session = _make_session(allow_interruptions=False)
+        activity = AgentActivity(MyAgent(), session)
+        activity._current_speech = SpeechHandle.create(allow_interruptions=True)
         activity.interrupt = Mock()  # type: ignore[method-assign]
 
         activity._on_input_speech_started(InputSpeechStartedEvent())

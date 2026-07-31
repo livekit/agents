@@ -1792,9 +1792,20 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
-        if not self.allow_interruptions:
+        # interruptibility is a per-speech property: an explicit
+        # say(..., allow_interruptions=False) must survive user speech even when
+        # the session-wide default allows interruptions, and vice versa. The
+        # session-wide default only decides when nothing is playing.
+        if self._current_speech is not None:
+            if not self._current_speech.allow_interruptions:
+                # the in-progress speech must not be cancelled (#6635 manual/
+                # button-style turn taking, or an explicitly protected say());
+                # the provider is expected to be configured to match
+                # (e.g. interrupt_response=False)
+                return
+        elif not self.allow_interruptions:
             # manual/button-style turn taking (#6635): user speech must not cancel
-            # the in-progress response; the provider is expected to be configured
+            # queued replies either; the provider is expected to be configured
             # to match (e.g. interrupt_response=False)
             return
 
