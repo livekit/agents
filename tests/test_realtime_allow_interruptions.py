@@ -111,25 +111,47 @@ class TestAllowInterruptionsFalse:
         assert not protected.interrupted
 
     async def test_interrupt_preserves_the_protected_realtime_generation(self) -> None:
-        # the streaming realtime response belongs to the newest queued
-        # generation, so response.cancel must not be sent while a protected
-        # reply is queued - it would truncate the speech we just preserved
+        # the protected handle owns the response the provider is streaming:
+        # response.cancel would truncate exactly the speech we preserved
         session = _make_session(allow_interruptions=True)
         activity = AgentActivity(MyAgent(), session)
         activity._rt_session = Mock()
+        protected = SpeechHandle.create(allow_interruptions=False)
+        activity._rt_generation_handle = protected
         activity._current_speech = SpeechHandle.create(allow_interruptions=True)
-        activity._speech_q.append((0, 0.0, SpeechHandle.create(allow_interruptions=False)))
+        activity._speech_q.append((0, 0.0, protected))
 
         activity.interrupt()
 
         activity._rt_session.interrupt.assert_not_called()
 
-    async def test_interrupt_cancels_the_realtime_generation_when_unprotected(self) -> None:
+    async def test_interrupt_cancels_when_the_generation_owner_is_interrupted(self) -> None:
+        # the usual flow: the streaming response belongs to the playing speech
+        # while a protected say() merely waits in the queue. Stopping playback
+        # locally must still stop the provider, or it keeps generating a reply
+        # nobody will hear and its state diverges from the local one
         session = _make_session(allow_interruptions=True)
         activity = AgentActivity(MyAgent(), session)
         activity._rt_session = Mock()
-        activity._current_speech = SpeechHandle.create(allow_interruptions=True)
-        activity._speech_q.append((0, 0.0, SpeechHandle.create(allow_interruptions=True)))
+        current = SpeechHandle.create(allow_interruptions=True)
+        activity._rt_generation_handle = current
+        activity._current_speech = current
+        activity._speech_q.append((0, 0.0, SpeechHandle.create(allow_interruptions=False)))
+
+        activity.interrupt()
+
+        activity._rt_session.interrupt.assert_called_once()
+
+    async def test_interrupt_cancels_when_the_protected_generation_is_done(self) -> None:
+        # a protected handle lingers in the queue until the scheduling task
+        # pops it; once done it owns nothing and must not suppress the cancel
+        session = _make_session(allow_interruptions=True)
+        activity = AgentActivity(MyAgent(), session)
+        activity._rt_session = Mock()
+        protected = SpeechHandle.create(allow_interruptions=False)
+        protected._mark_done()
+        activity._rt_generation_handle = protected
+        activity._speech_q.append((0, 0.0, protected))
 
         activity.interrupt()
 
@@ -140,6 +162,7 @@ class TestAllowInterruptionsFalse:
         activity = AgentActivity(MyAgent(), session)
         activity._rt_session = Mock()
         protected = SpeechHandle.create(allow_interruptions=False)
+        activity._rt_generation_handle = protected
         activity._speech_q.append((0, 0.0, protected))
 
         activity.interrupt(force=True)

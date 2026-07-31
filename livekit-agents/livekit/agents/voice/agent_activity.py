@@ -167,6 +167,10 @@ class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        # the handle owning the realtime response currently streaming from the
+        # provider (one at a time); interrupt() uses it to decide whether
+        # cancelling would truncate a speech that disallows interruptions
+        self._rt_generation_handle: SpeechHandle | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -1509,20 +1513,25 @@ class AgentActivity(RecognitionHooks):
         # speeches above): raising mid-loop would abort the rest of the
         # interruption sequence, leaving the realtime session untold and the
         # returned future never resolving
-        preserved_speech = False
         for _, _, speech in self._speech_q:
             if force or speech.allow_interruptions:
                 speech.interrupt(force=force)
                 interrupted_speeches.append(speech)
-            else:
-                preserved_speech = True
 
-        # a realtime response that is still streaming belongs to the newest
-        # queued generation, so cancelling it while a protected reply sits in
-        # the queue would truncate exactly the speech we just preserved. The
-        # interrupted handles stop locally either way and truncate their own
-        # chat-context item when their playout ends partial.
-        if self._rt_session is not None and not preserved_speech:
+        # the provider streams one response at a time: cancelling it when the
+        # handle that owns it was deliberately preserved would truncate exactly
+        # the speech that disallows interruptions. Every other case must still
+        # cancel, or the provider keeps generating (and billing) a reply the
+        # user will never hear and its state diverges from the local one.
+        rt_generation = self._rt_generation_handle
+        preserved_generation = (
+            not force
+            and rt_generation is not None
+            and not rt_generation.allow_interruptions
+            and not rt_generation.interrupted
+            and not rt_generation.done()
+        )
+        if self._rt_session is not None and not preserved_generation:
             self._rt_session.interrupt()
 
         if not interrupted_speeches:
@@ -3627,20 +3636,27 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
     ) -> None:
-        with tracer.start_as_current_span(
-            "agent_turn", context=self._session._root_span_context
-        ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
-            if parent_id := speech_handle._parent_generation_id:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            speech_handle._agent_turn_context = otel_context.get_current()
+        self._rt_generation_handle = speech_handle
+        try:
+            with tracer.start_as_current_span(
+                "agent_turn", context=self._session._root_span_context
+            ) as current_span:
+                current_span.set_attribute(
+                    trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id
+                )
+                if parent_id := speech_handle._parent_generation_id:
+                    current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
+                speech_handle._agent_turn_context = otel_context.get_current()
 
-            await self._realtime_generation_task_impl(
-                speech_handle=speech_handle,
-                generation_ev=generation_ev,
-                model_settings=model_settings,
-                instructions=instructions,
-            )
+                await self._realtime_generation_task_impl(
+                    speech_handle=speech_handle,
+                    generation_ev=generation_ev,
+                    model_settings=model_settings,
+                    instructions=instructions,
+                )
+        finally:
+            if self._rt_generation_handle is speech_handle:
+                self._rt_generation_handle = None
 
     async def _realtime_generation_task_impl(
         self,
