@@ -1505,9 +1505,14 @@ class AgentActivity(RecognitionHooks):
             self._current_speech.interrupt(force=force)
             interrupted_speeches.append(self._current_speech)
 
+        # skip queued handles that disallow interruptions (same as background
+        # speeches above): raising mid-loop would abort the rest of the
+        # interruption sequence, leaving the realtime session untold and the
+        # returned future never resolving
         for _, _, speech in self._speech_q:
-            speech.interrupt(force=force)
-            interrupted_speeches.append(speech)
+            if force or speech.allow_interruptions:
+                speech.interrupt(force=force)
+                interrupted_speeches.append(speech)
 
         if self._rt_session is not None:
             self._rt_session.interrupt()

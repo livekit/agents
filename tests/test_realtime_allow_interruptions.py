@@ -90,3 +90,22 @@ class TestAllowInterruptionsFalse:
         activity._on_input_speech_started(InputSpeechStartedEvent())
 
         activity.interrupt.assert_called_once()
+
+    async def test_interrupt_skips_protected_queued_speech(self) -> None:
+        # a protected handle can now sit in the queue while an interruptible
+        # one plays; interrupt() must skip it (like background speeches)
+        # instead of raising mid-loop and aborting the rest of the sequence
+        session = _make_session(allow_interruptions=True)
+        activity = AgentActivity(MyAgent(), session)
+        current = SpeechHandle.create(allow_interruptions=True)
+        protected = SpeechHandle.create(allow_interruptions=False)
+        queued = SpeechHandle.create(allow_interruptions=True)
+        activity._current_speech = current
+        activity._speech_q.append((0, 0.0, protected))
+        activity._speech_q.append((0, 1.0, queued))
+
+        activity.interrupt()  # must not raise
+
+        assert current.interrupted
+        assert queued.interrupted
+        assert not protected.interrupted
