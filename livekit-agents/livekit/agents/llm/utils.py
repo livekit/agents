@@ -648,7 +648,9 @@ def _flatten_delta_content(content: Any) -> str | None:
             text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
             if isinstance(text, str):
                 parts.append(text)
-        return "".join(parts)
+        # no text part at all carries no content, unlike a part that carries an
+        # empty string - that one is kept, like a plain "" delta
+        return "".join(parts) if parts else None
     logger.warning(
         "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
     )

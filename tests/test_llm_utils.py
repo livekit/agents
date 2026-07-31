@@ -155,6 +155,23 @@ def test_list_parts_without_text_are_ignored() -> None:
     assert content == "hi"
 
 
+def test_list_without_any_text_part_carries_no_content() -> None:
+    # nothing textual arrived, so report "no content" rather than an empty
+    # string the provider never sent
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([], state) is None
+    assert (
+        strip_thinking_tokens([{"type": "image_url", "image_url": {"url": "https://x"}}], state)
+        is None
+    )
+
+
+def test_an_empty_text_part_is_kept_as_empty_content() -> None:
+    # the provider did send text, it is just empty - same as a plain "" delta
+    state = ThinkingTokenFilter()
+    assert strip_thinking_tokens([{"type": "text", "text": ""}], state) == ""
+
+
 def test_object_parts_with_text_attribute_are_flattened() -> None:
     class _Part:
         text = "typed part"
