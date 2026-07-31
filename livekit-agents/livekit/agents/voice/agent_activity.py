@@ -1972,7 +1972,12 @@ class AgentActivity(RecognitionHooks):
         ev: vad.VADEvent | None,
         speech_start_time: float,
     ) -> None:
-        self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
+        # with STT-driven turn detection, STT speech events (ev is None) are the
+        # authoritative user_state source: VAD stays active for interruption and
+        # endpointing below, but background noise it picks up must not flip
+        # user_state to "speaking" when the STT hears no speech (#5580)
+        if ev is None or self._turn_detection != "stt":
+            self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition._on_start_of_speech(
                 started_at=speech_start_time,
@@ -2019,10 +2024,11 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
             )
 
-        self._session._update_user_state(
-            "listening",
-            last_speaking_time=speech_end_time,
-        )
+        if ev is None or self._turn_detection != "stt":
+            self._session._update_user_state(
+                "listening",
+                last_speaking_time=speech_end_time,
+            )
         self._user_silence_event.set()
 
         if self._paused_speech:
