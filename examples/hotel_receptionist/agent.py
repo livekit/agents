@@ -36,6 +36,7 @@ from livekit.agents import (
     cli,
     function_tool,
     inference,
+    llm,
 )
 
 load_dotenv(".env.local")
@@ -77,15 +78,18 @@ class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesTools
         # router rather than 35 schemas; load_capability switches the rest on.
         self._registry = {tool.info.name: tool for tool in self._tools}
         self._loaded: set[str] = set()
-        self._expose()
+        self._tools = self._visible_tools()
+        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
 
-    def _expose(self) -> None:
+    def _visible_tools(self) -> list[llm.Tool | llm.Toolset]:
+        # Returns rather than assigns self._tools: update_tools() diffs against the
+        # current list to emit the AgentConfigUpdate that records the switch, so
+        # assigning first would make every capability load invisible.
         resident = ["load_capability", "say_goodbye_and_close_call"]
         names = dict.fromkeys(
             resident + [name for area in self._loaded for name in CAPABILITIES[area].tools]
         )
-        self._tools = [self._registry[name] for name in names if name in self._registry]
-        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+        return [self._registry[name] for name in names if name in self._registry]
 
     @function_tool
     async def load_capability(self, area: str) -> str:
@@ -99,8 +103,7 @@ class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesTools
         if area not in CAPABILITIES:
             raise ToolError(f"unknown area {area!r} - valid areas: {', '.join(CAPABILITIES)}")
         self._loaded.add(area)
-        self._expose()
-        await self.update_tools(self._tools)
+        await self.update_tools(self._visible_tools())
         return render(area)
 
     async def on_enter(self) -> None:
