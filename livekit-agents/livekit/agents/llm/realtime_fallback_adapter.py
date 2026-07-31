@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -65,6 +65,13 @@ _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
     "metrics_collected",
     "remote_item_added",
 )
+
+# events the wrapper handles itself; anything else is plugin-specific and is
+# registered directly on the active child session
+_WRAPPER_EVENTS: frozenset[str] = frozenset(_FORWARDED_EVENTS) | {
+    "error",
+    "realtime_availability_changed",
+}
 
 
 def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:
@@ -188,21 +195,84 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
 
+        # plugin-specific handlers registered on this wrapper, replayed onto every child
+        self._plugin_handlers: dict[str, set[Callable[..., Any]]] = {}
+
         self._active_index = 0
         self._active = adapter._models[0].session(
             turn_detection_disabled=self._turn_detection_disabled
         )
         self._bind(self._active)
 
+    def on(self, event: str, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        """Register a handler.
+
+        Events the wrapper forwards or emits itself are registered on the wrapper. Anything
+        else is treated as plugin-specific, registered on the active child session, and
+        re-registered automatically whenever the child is swapped.
+        """
+        if event in _WRAPPER_EVENTS:
+            return super().on(event, callback)  # type: ignore[arg-type]
+
+        if callback is None:
+
+            def _decorator(cb: Callable[..., Any]) -> Callable[..., Any]:
+                self.on(event, cb)
+                return cb
+
+            return _decorator
+
+        self._plugin_handlers.setdefault(event, set()).add(callback)
+        self._active.on(event, callback)  # type: ignore[arg-type]
+        return callback
+
+    def once(self, event: str, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        """Like ``on``, but fires at most once across child swaps."""
+        if event in _WRAPPER_EVENTS:
+            return super().once(event, callback)  # type: ignore[arg-type]
+
+        if callback is None:
+
+            def _decorator(cb: Callable[..., Any]) -> Callable[..., Any]:
+                self.once(event, cb)
+                return cb
+
+            return _decorator
+
+        def _fire_once(*args: Any, **kwargs: Any) -> None:
+            self.off(event, _fire_once)
+            callback(*args, **kwargs)
+
+        self.on(event, _fire_once)
+        return callback
+
+    def off(self, event: str, callback: Callable[..., Any]) -> None:
+        if event in _WRAPPER_EVENTS:
+            super().off(event, callback)  # type: ignore[arg-type]
+            return
+
+        handlers = self._plugin_handlers.get(event)
+        if handlers is not None:
+            handlers.discard(callback)
+            if not handlers:
+                del self._plugin_handlers[event]
+        self._active.off(event, callback)  # type: ignore[arg-type]
+
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
         child.on("error", self._on_child_error)
+        for plugin_event, callbacks in self._plugin_handlers.items():
+            for callback in callbacks:
+                child.on(plugin_event, callback)  # type: ignore[arg-type]
 
     def _unbind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.off(event, forwarder)
         child.off("error", self._on_child_error)
+        for plugin_event, callbacks in self._plugin_handlers.items():
+            for callback in callbacks:
+                child.off(plugin_event, callback)  # type: ignore[arg-type]
 
     def _set_available(self, index: int, available: bool) -> None:
         if self._available[index] == available:

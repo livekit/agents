@@ -557,3 +557,94 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+# --- plugin-specific event handlers -----------------------------------------
+# Providers emit their own events (openai_server_event_received, etc) that the
+# wrapper does not forward. Those handlers must survive a child swap.
+
+
+async def test_plugin_handler_survives_restart_same_model() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    received: list[str] = []
+    session.on("openai_server_event_received", received.append)
+
+    await adapter.restart_session()
+    session._active.emit("openai_server_event_received", "after-restart")
+
+    assert received == ["after-restart"]
+
+
+async def test_plugin_handler_survives_switch_to_other_model() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+
+    received: list[str] = []
+    session.on("openai_server_event_received", received.append)
+
+    await adapter.restart_session(switch_model=True)
+    assert session._active is backup.active_session
+
+    session._active.emit("openai_server_event_received", "after-switch")
+    assert received == ["after-switch"]
+
+
+async def test_plugin_handler_reaches_current_child_before_any_swap() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    received: list[str] = []
+    session.on("openai_server_event_received", received.append)
+
+    primary.active_session.emit("openai_server_event_received", "immediate")
+    assert received == ["immediate"]
+
+
+async def test_removed_plugin_handler_does_not_come_back_on_restart() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    received: list[str] = []
+    session.on("openai_server_event_received", received.append)
+    session.off("openai_server_event_received", received.append)
+
+    await adapter.restart_session()
+    session._active.emit("openai_server_event_received", "should-not-arrive")
+
+    assert received == []
+
+
+async def test_plugin_once_fires_at_most_once_across_swap() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    received: list[str] = []
+    session.once("openai_server_event_received", received.append)
+
+    primary.active_session.emit("openai_server_event_received", "first")
+    await adapter.restart_session()
+    session._active.emit("openai_server_event_received", "second")
+
+    assert received == ["first"]
+
+
+async def test_wrapper_events_still_registered_on_the_wrapper() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    received: list[object] = []
+    session.on("input_speech_started", received.append)
+
+    primary.active_session.emit("input_speech_started", object())
+
+    assert len(received) == 1
+    assert "input_speech_started" not in session._plugin_handlers
