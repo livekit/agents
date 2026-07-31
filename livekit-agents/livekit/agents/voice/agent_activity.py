@@ -226,10 +226,14 @@ class AgentActivity(RecognitionHooks):
             and self.llm.capabilities.turn_detection
             and not self.allow_interruptions
         ):
-            raise ValueError(
-                "the RealtimeModel uses a server-side turn detection, "
-                "allow_interruptions cannot be False, disable turn_detection in "
-                "the RealtimeModel and use VAD on the AgentSession instead"
+            # supported for manual/button-style turn taking (#6635), but the
+            # provider must agree or it will still cancel the response server-side
+            logger.warning(
+                "allow_interruptions is False while the RealtimeModel uses server-side "
+                "turn detection: user speech will not interrupt agent playback locally. "
+                "Configure the provider to match (e.g. interrupt_response=False in the "
+                "OpenAI turn_detection settings), otherwise the server still cancels "
+                "the in-progress response on user speech."
             )
 
         # validate turn detection mode and turn detector
@@ -1327,17 +1331,6 @@ class AgentActivity(RecognitionHooks):
                 "add a TTS model to AgentSession to enable say()"
             )
 
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
-        ):
-            logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
-            )
-            allow_interruptions = NOT_GIVEN
-
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
             if is_given(allow_interruptions)
@@ -1397,17 +1390,6 @@ class AgentActivity(RecognitionHooks):
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
-        if (
-            isinstance(self.llm, llm.RealtimeModel)
-            and self.llm.capabilities.turn_detection
-            and allow_interruptions is False
-        ):
-            logger.warning(
-                "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
-            )
-            allow_interruptions = NOT_GIVEN
-
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
 
@@ -1810,8 +1792,12 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
-        # self.interrupt() is going to raise when allow_interruptions is False, llm.InputSpeechStartedEvent is only fired by the server when the turn_detection is enabled.  # noqa: E501
-        # When using the server-side turn_detection, we don't allow allow_interruptions to be False.
+        if not self.allow_interruptions:
+            # manual/button-style turn taking (#6635): user speech must not cancel
+            # the in-progress response; the provider is expected to be configured
+            # to match (e.g. interrupt_response=False)
+            return
+
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
