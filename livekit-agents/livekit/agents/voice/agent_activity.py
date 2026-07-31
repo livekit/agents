@@ -1509,12 +1509,20 @@ class AgentActivity(RecognitionHooks):
         # speeches above): raising mid-loop would abort the rest of the
         # interruption sequence, leaving the realtime session untold and the
         # returned future never resolving
+        preserved_speech = False
         for _, _, speech in self._speech_q:
             if force or speech.allow_interruptions:
                 speech.interrupt(force=force)
                 interrupted_speeches.append(speech)
+            else:
+                preserved_speech = True
 
-        if self._rt_session is not None:
+        # a realtime response that is still streaming belongs to the newest
+        # queued generation, so cancelling it while a protected reply sits in
+        # the queue would truncate exactly the speech we just preserved. The
+        # interrupted handles stop locally either way and truncate their own
+        # chat-context item when their playout ends partial.
+        if self._rt_session is not None and not preserved_speech:
             self._rt_session.interrupt()
 
         if not interrupted_speeches:
