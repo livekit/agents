@@ -1219,7 +1219,8 @@ scenarios:
 - label: Order flowers to a room with a gift-card message
   instructions: |
     PERSONA: Marcus Webb, warm and a little rushed, arranging a surprise for his wife.
-    OPENING LINE: "Hi - I'd like to send some flowers up to a room at your hotel."
+    OPENING LINE: "Hi - I'd like to send some flowers up to a room at your hotel, and I
+      need them there before noon while she's still in the room."
     FACTS (reveal each only when asked, one per turn):
     - your name: Marcus Webb
     - your callback number: 415-555-0182
@@ -1229,7 +1230,7 @@ scenarios:
     - the gift-card message: "Happy ten years, my love. Yours always, Marcus."
     DO, IN ORDER:
     1. Ask what flower options they have and let them walk you through it; then pick the roses.
-    2. Ask for delivery before noon while she's still in the room.
+    2. If the agent hasn't addressed the before-noon timing, press once for it.
     3. Give the room, the day, and the card message as the agent asks; let them read the message back.
     4. Don't hang up until the agent confirms the order is placed and gives you a reference number.
     GROUND TRUTH (never spoken): this Friday is 2026-06-12.
@@ -1404,7 +1405,8 @@ scenarios:
       a little exacting about details - she's arranged things like this many times and
       wants it right, but she's gracious, not combative.
     OPENING LINE: "Hello - I'm calling ahead of a guest's arrival to have a flower
-      arrangement and a welcome card waiting in the suite before she checks in."
+      arrangement and a welcome card waiting in the suite before she checks in - she lands
+      around noon, so please have it there before she gets in."
     FACTS (reveal each only when asked, one per turn):
     - your name (the assistant placing the order): Renata Cole
     - the guest arriving: Diane Okafor (she's the one staying; the room is the Penthouse Suite)
@@ -1416,8 +1418,8 @@ scenarios:
     DO, IN ORDER:
     1. Ask what arrangements are available and their prices; let the agent walk you
        through them, then choose the centerpiece.
-    2. Ask: "She arrives around noon - please have it in the suite before she gets there."
-       You want the preference recorded, along with an honest answer about the delivery
+    2. If the agent hasn't addressed the before-noon timing, press once for it. You want
+       the preference recorded, along with an honest answer about the delivery
        window rather than a guaranteed time the florist cannot promise.
     3. Give the suite, the day, and the card message as the agent asks; let them read
        the card message back to you.
