@@ -10,16 +10,29 @@ from livekit.agents.utils import is_given
 pytestmark = pytest.mark.plugin("xai")
 
 
+class _FakeEventCh:
+    def send_nowait(self, event: Any) -> None:
+        pass
+
+
 class _FakeStream:
     def __init__(self, *, speaking: bool = False) -> None:
         self._speaking = speaking
         self._pending_keyterm: list[str] | None = None
         self.updated_keyterms: list[list[str]] = []
+        self._event_ch = _FakeEventCh()
+        self._emitted_chunk_final = False
+        self._request_id = "test-request"
 
     def update_options(self, *, keyterm: Any = NOT_GIVEN, **_: Any) -> None:
         if is_given(keyterm):
             self.updated_keyterms.append(list(keyterm))
         self._pending_keyterm = None
+
+    def _on_end_of_speech(self) -> None:
+        from livekit.plugins.xai.stt import SpeechStream
+
+        SpeechStream._on_end_of_speech(cast(Any, self))
 
 
 def _add_fake_stream(instance: Any, *, speaking: bool = False) -> _FakeStream:
@@ -55,21 +68,40 @@ def test_merges_user_and_session_keyterms() -> None:
     assert stream.updated_keyterms[-1] == ["Agents"]
 
 
-def test_defers_session_keyterm_reconnect_while_speaking() -> None:
+# every message that ends an utterance must flush the deferred keyterms
+@pytest.mark.parametrize(
+    "end_of_speech_event",
+    [
+        {
+            "type": "transcript.partial",
+            "text": "hello",
+            "is_final": True,
+            "speech_final": True,
+            "words": [],
+            "language": "en",
+        },
+        {"type": "transcript.done", "text": "", "words": [], "language": "en"},
+    ],
+)
+def test_defers_session_keyterm_reconnect_while_speaking(
+    end_of_speech_event: dict[str, Any],
+) -> None:
     from livekit.plugins.xai import STT
     from livekit.plugins.xai.stt import SpeechStream
 
     instance = STT(api_key="test-key", keyterm=["LiveKit"])
     stream = _add_fake_stream(instance, speaking=True)
+    stream._opts = instance._opts  # type: ignore[attr-defined]
 
     instance._update_session_keyterms(["Krisp"])
 
     assert stream.updated_keyterms == []
     assert stream._pending_keyterm == ["LiveKit", "Krisp"]
 
-    SpeechStream._on_end_of_speech(cast(Any, stream))
+    SpeechStream._process_stream_event(cast(Any, stream), end_of_speech_event)
     assert stream.updated_keyterms == [["LiveKit", "Krisp"]]
     assert stream._pending_keyterm is None
+    assert stream._speaking is False
 
 
 def test_validates_user_keyterm_limits() -> None:

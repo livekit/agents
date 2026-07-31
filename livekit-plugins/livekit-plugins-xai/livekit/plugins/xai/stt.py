@@ -627,6 +627,7 @@ class SpeechStream(stt.RecognizeStream):
             if self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
 
         elif msg_type == "error":
             logger.error("xAI STT error: %s", data.get("message", "unknown error"))
