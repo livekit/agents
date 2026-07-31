@@ -21,11 +21,15 @@ pytestmark = pytest.mark.unit
 
 
 class _CountingLLM(llm.LLM):
-    """Fails every chat(), counting the calls; optionally declares itself stateful."""
+    """Counts chat() calls; fails the first ``failures`` of them.
 
-    def __init__(self, *, stateful: bool) -> None:
+    ``failures=None`` fails every call.
+    """
+
+    def __init__(self, *, stateful: bool, failures: int | None = None) -> None:
         super().__init__()
         self._stateful = stateful
+        self._failures = failures
         self.calls = 0
 
     @property
@@ -34,7 +38,9 @@ class _CountingLLM(llm.LLM):
 
     def chat(self, **kwargs: Any) -> llm.LLMStream:  # type: ignore[override]
         self.calls += 1
-        return _FailingStream(
+        failing = self._failures is None or self.calls <= self._failures
+        stream_cls = _FailingStream if failing else _EmptyStream
+        return stream_cls(
             self,
             chat_ctx=kwargs["chat_ctx"],
             tools=kwargs.get("tools") or [],
@@ -46,6 +52,11 @@ class _CountingLLM(llm.LLM):
 class _FailingStream(llm.LLMStream):
     async def _run(self) -> None:
         raise APIConnectionError("unavailable")
+
+
+class _EmptyStream(llm.LLMStream):
+    async def _run(self) -> None:
+        return
 
 
 class TestStateful:
@@ -90,6 +101,11 @@ class TestFallbackRecoveryProbes:
                 async for _ in stream:
                     pass
 
+    async def _consume(self, adapter: FallbackAdapter) -> None:
+        async with adapter.chat(chat_ctx=llm.ChatContext.empty()) as stream:
+            async for _ in stream:
+                pass
+
     @staticmethod
     async def _settle(adapter: FallbackAdapter) -> None:
         """Await the background recovery probes the adapter may have started."""
@@ -132,5 +148,25 @@ class TestFallbackRecoveryProbes:
 
             await self._drain(adapter)
             assert stateful.calls == first_round + 1
+        finally:
+            await self._settle(adapter)
+
+    async def test_a_successful_request_clears_the_unavailable_flag(self) -> None:
+        # nothing else can clear it for a stateful instance, and leaving it set
+        # would log "all LLMs are unavailable" on every later turn and never
+        # report the recovery
+        stateful = _CountingLLM(stateful=True, failures=1)
+        adapter = FallbackAdapter([stateful])
+        events: list[bool] = []
+        adapter.on("llm_availability_changed", lambda ev: events.append(ev.available))
+        try:
+            await self._drain(adapter)
+            assert adapter._status[0].available is False
+
+            await self._consume(adapter)
+
+            assert adapter._status[0].available is True
+            # one transition each way, no repeats
+            assert events == [False, True]
         finally:
             await self._settle(adapter)

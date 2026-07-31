@@ -226,6 +226,18 @@ class FallbackLLMStream(LLMStream):
             )
             raise
 
+    def _mark_available(self, llm: LLM, llm_status: _LLMStatus) -> None:
+        """Report a healthy instance, announcing only an actual transition."""
+        if llm_status.available:
+            return
+
+        llm_status.available = True
+        logger.info(f"llm.FallbackAdapter, {llm.label} recovered")
+        self._fallback_adapter.emit(
+            "llm_availability_changed",
+            AvailabilityChangedEvent(llm=llm, available=True),
+        )
+
     def _try_recovery(self, llm: LLM) -> None:
         llm_status = self._fallback_adapter._status[
             self._fallback_adapter._llm_instances.index(llm)
@@ -248,12 +260,7 @@ class FallbackLLMStream(LLMStream):
                     async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass
 
-                    llm_status.available = True
-                    logger.info(f"llm.FallbackAdapter, {llm.label} recovered")
-                    self._fallback_adapter.emit(
-                        "llm_availability_changed",
-                        AvailabilityChangedEvent(llm=llm, available=True),
-                    )
+                    self._mark_available(llm, llm_status)
                 except Exception:
                     return
 
@@ -284,6 +291,10 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
+                    # a completed request is proof of life. Stateful instances
+                    # get no background probe to clear the flag, and for the
+                    # rest this converges the status one request sooner
+                    self._mark_available(llm, llm_status)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
                     if llm_status.available:
