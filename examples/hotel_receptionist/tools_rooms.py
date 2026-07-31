@@ -191,7 +191,8 @@ class RoomToolsMixin:
             "those words. One sentence per reply does not apply here, and a part saved for a "
             "later turn is a part the guest never hears. The guest is angry and will interrupt: "
             "repeat any part that got talked over, stay calm, and don't argue. This walk IS the "
-            "resolution - no manager and no further tool call."
+            "resolution - deliver it rather than offering a manager, and no further tool call "
+            "is needed."
         )
 
     @function_tool
