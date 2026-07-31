@@ -206,14 +206,14 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         mode: VivaMode = VivaMode.VOICE_ISOLATION,
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
         model_path: str | None = None,
-        noise_suppression_level: int = 100,
+        noise_suppression_level: int = 75,
         frame_duration_ms: int | None = None,
         sample_rate: int | None = None,
     ) -> None:
         """Initialize the Krisp frame processor.
 
         Args:
-            noise_suppression_level: Noise suppression level (0-100, default: 100).
+            noise_suppression_level: Noise suppression level (0-100, default: 75).
             auth_provider: Authentication provider. Defaults to
                 :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled
                 model). Pass :class:`KrispLicenseAuthProvider` to use a Krisp
