@@ -35,6 +35,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    get_job_context,
     tokenize,
     tts,
     utils,
@@ -211,6 +212,7 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | None = None
         self._connection_lock = asyncio.Lock()
+        self._job_context_cb_registered = False
 
     @property
     def model(self) -> str:
@@ -286,6 +288,14 @@ class TTS(tts.TTS):
             Tuple of (connection, acquire_time, connection_reused)
         """
         async with self._connection_lock:
+            if not self._job_context_cb_registered:
+                job_ctx = get_job_context(required=False)
+                if job_ctx is not None:
+                    # AgentSession closes active synthesis streams but does not own the TTS
+                    # model. Close our reusable WebSocket before the job-owned HTTP session.
+                    job_ctx.add_shutdown_callback(self.aclose)
+                    self._job_context_cb_registered = True
+
             if (
                 self.__current_connection
                 and self.__current_connection.is_current

@@ -3,14 +3,25 @@
 import asyncio
 import base64
 import json
+import socket
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
 import aiohttp
 import pytest
+from aiohttp import web
 
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
+
+
+class _FakeJobContext:
+    def __init__(self) -> None:
+        self.shutdown_callbacks: list[Callable[[], Awaitable[None]]] = []
+
+    def add_shutdown_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
+        self.shutdown_callbacks.append(callback)
 
 
 class _FakeWebSocket:
@@ -95,6 +106,60 @@ def test_auto_mode_respects_explicit_value_with_chunk_length_schedule() -> None:
         auto_mode=True,
     )
     assert tts._opts.auto_mode is True
+
+
+@pytest.mark.asyncio
+async def test_job_shutdown_gracefully_closes_websocket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_code: asyncio.Future[int | None] = asyncio.get_running_loop().create_future()
+
+    async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
+        websocket = web.WebSocketResponse()
+        await websocket.prepare(request)
+        try:
+            async for _ in websocket:
+                pass
+        finally:
+            if not close_code.done():
+                close_code.set_result(websocket.close_code)
+        return websocket
+
+    app = web.Application()
+    app.router.add_get("/{path:.*}", websocket_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    server_socket = socket.socket()
+    server_socket.bind(("127.0.0.1", 0))
+    port = server_socket.getsockname()[1]
+    site = web.SockSite(runner, server_socket)
+    await site.start()
+
+    job_ctx = _FakeJobContext()
+    monkeypatch.setattr(elevenlabs_tts, "get_job_context", lambda *, required=False: job_ctx)
+
+    try:
+        async with aiohttp.ClientSession() as http_session:
+            tts = elevenlabs_tts.TTS(
+                api_key="test-key",
+                voice_id="test-voice",
+                base_url=f"http://127.0.0.1:{port}",
+                http_session=http_session,
+            )
+            try:
+                await tts._current_connection()  # pyright: ignore[reportPrivateUsage]
+                await tts._current_connection()  # pyright: ignore[reportPrivateUsage]
+
+                assert len(job_ctx.shutdown_callbacks) == 1
+                await job_ctx.shutdown_callbacks[0]()
+
+                assert await asyncio.wait_for(close_code, timeout=1) == 1000
+                assert not http_session.closed
+            finally:
+                await tts.aclose()
+    finally:
+        await runner.cleanup()
 
 
 def test_build_context_init_packet_includes_generation_config() -> None:
