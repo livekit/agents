@@ -1537,19 +1537,22 @@ class AgentActivity(RecognitionHooks):
 
         interrupted_speeches = self._interrupt_background_speeches(force=force)
 
-        current_speech = self._current_speech
-        for speech in self._playout_ordered_speeches():
+        kept_next_speech = False
+        for index, speech in enumerate(self._playout_ordered_speeches()):
             if not force and not speech.allow_interruptions:
                 # SpeechHandle.interrupt() would raise here, and the speeches
                 # behind this one are going to play, so stop the walk instead
+                kept_next_speech = index == 0
                 break
 
             speech.interrupt(force=force)
             interrupted_speeches.append(speech)
 
-        # a realtime response still streaming belongs to the playing speech;
-        # cancelling it while that speech survives would truncate it
-        if self._rt_session is not None and (current_speech is None or current_speech.interrupted):
+        # a realtime response still streaming belongs to whatever speaks next -
+        # the playing one, or the head of the queue while it waits to be
+        # promoted - so cancelling it while that speech is kept would truncate
+        # it. Anything else must still stop the provider from generating.
+        if self._rt_session is not None and not kept_next_speech:
             self._rt_session.interrupt()
 
         if not interrupted_speeches:

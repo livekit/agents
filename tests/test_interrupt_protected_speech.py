@@ -101,6 +101,27 @@ class TestInterruptWalk:
             assert not head.interrupted
             assert not middle.interrupted
             assert not tail.interrupted
+            # a realtime handle sits in the queue before the scheduling task
+            # promotes it, so the streaming response belongs to this kept head
+            activity._rt_session.interrupt.assert_not_called()
+        finally:
+            await _close_test_session(activity._session)
+
+    async def test_realtime_is_cancelled_when_the_playing_speech_is_done(self) -> None:
+        # SpeechHandle._cancel() is a no-op once the handle is done, so
+        # `interrupted` stays False while the scheduling task has not cleared
+        # _current_speech yet - nothing was protected, the provider must stop
+        activity = _make_activity()
+        activity._rt_session = Mock()
+        current = SpeechHandle.create(allow_interruptions=True)
+        current._mark_done()
+        activity._current_speech = current
+
+        try:
+            activity.interrupt()
+
+            assert not current.interrupted
+            activity._rt_session.interrupt.assert_called_once()
         finally:
             await _close_test_session(activity._session)
 
