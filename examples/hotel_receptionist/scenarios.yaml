@@ -46,10 +46,10 @@ scenarios:
     Captures the booking details and lets the GUEST choose the room: offers the available
     types and asks rather than picking one for her. Quotes the nightly rate, answers the
     breakfast question, and reads the full booking back to confirm before completing the
-    reservation. Takes a card to guarantee the booking, which is expected and correct, and
-    answers her "how much to pay now to hold it?" honestly: nothing is charged now and there
-    is no separate deposit - the stay is settled at checkout. Should not invent an upfront
-    deposit or charge.
+    reservation. Takes a card, which is expected and correct, and answers her "how much to
+    pay now to hold it?" honestly: the full stay total is charged to the card at booking -
+    there is no separate deposit and the card is never just a hold. Should not invent a
+    deposit percentage or schedule, and should not say the card is only a hold.
   tags:
     feature: room_booking
     channel: phone
