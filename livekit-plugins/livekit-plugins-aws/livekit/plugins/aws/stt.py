@@ -416,7 +416,7 @@ class SpeechStream(stt.SpeechStream):
         audio_duration = self._audio_duration
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
-        with contextlib.suppress(RuntimeError):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
