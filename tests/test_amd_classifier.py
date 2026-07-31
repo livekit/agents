@@ -810,29 +810,41 @@ class TestEndBeforeStart:
         assert results[0].category == AMDCategory.HUMAN
         assert results[0].reason == "short_greeting"
 
-    async def test_gate_opened_during_trailing_pause_clamps_duration(self) -> None:
-        # the VAD reports end-of-speech only after a minimum trailing silence,
-        # so the computed end points back in time; if listening began during
-        # that pause the synthesized start must be capped at the end so the
-        # reported duration is never negative
+    async def test_speech_that_ended_before_listening_is_dropped(self) -> None:
+        # ringback/early-media audio can trip the session VAD before the gate
+        # opens; when the end lands just after start_listening() but the speech
+        # is entirely in the past, it must be dropped like its start was - not
+        # synthesized into a zero-length greeting and an instant HUMAN verdict
         clf = _make_classifier(human_silence_threshold=0.1)
         clf.start_listening()
         results: list[AMDPredictionEvent] = []
         clf.on("amd_prediction", results.append)
 
-        # end arrived 0.5s ago - before the gate opened just now
+        # the VAD end reports the speech stopped 0.5s ago - before the gate opened
         clf.on_user_speech_ended(silence_duration=0.5)
 
-        assert clf._speech_started_at is not None and clf._speech_ended_at is not None
-        assert clf._speech_started_at <= clf._speech_ended_at
-        assert clf.speech_duration >= 0.0
-        assert clf._silence_timer_trigger == "short_speech"
+        assert clf._speech_started_at is None
+        assert clf._speech_ended_at is None
+        assert clf._silence_timer is None
+        # nothing was heard while listening: keep waiting for real speech
+        assert clf._no_speech_timer is not None
 
         await asyncio.sleep(0.2)
+        assert results == []
 
-        assert len(results) == 1
-        assert results[0].category == AMDCategory.HUMAN
-        assert results[0].speech_duration >= 0.0
+    async def test_synthesized_duration_is_positive_on_overlap(self) -> None:
+        # when the speech genuinely overlaps the listening window the start is
+        # synthesized from the gate opening, so the duration stays positive
+        clf = _make_classifier(human_silence_threshold=0.1)
+        clf.start_listening()
+
+        await asyncio.sleep(0.05)
+        clf.on_user_speech_ended(silence_duration=0.0)
+
+        assert clf._speech_started_at is not None and clf._speech_ended_at is not None
+        assert clf._speech_started_at == clf._listening_started_at
+        assert clf._speech_ended_at > clf._speech_started_at
+        assert clf.speech_duration > 0.0
 
     async def test_end_before_listening_stays_gated(self) -> None:
         # before start_listening() everything is a no-op, as documented

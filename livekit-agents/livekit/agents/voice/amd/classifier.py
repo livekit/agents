@@ -208,26 +208,28 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
     def on_user_speech_ended(self, silence_duration: float) -> None:
         speech_ended_at = time.time() - silence_duration
         if self._speech_started_at is None:
-            # the speech began before listening started (e.g. AMD attached after
-            # the callee was already mid-greeting, so the start event was dropped
-            # by the listening gate). Synthesize the start from the moment the
-            # gate opened instead of dropping the end signal - previously the
-            # classifier stalled with no timers armed until detection_timeout
-            # (#5616), holding back playout for the full timeout budget.
+            if self._listening_started_at is None or speech_ended_at <= self._listening_started_at:
+                # the segment started AND ended before the gate opened: this is
+                # pre-answer audio (ringback, early media) the gate is
+                # documented to drop - nothing was heard while listening, so
+                # keep the no-speech timer armed instead of committing a
+                # verdict from zero observed speech
+                logger.debug("dropping user speech that ended before listening began")
+                return
+            # the speech began before listening started but overlaps the
+            # listening window (e.g. AMD attached after the callee was already
+            # mid-greeting, so the start event was dropped by the listening
+            # gate). Synthesize the start from the moment the gate opened
+            # instead of dropping the end signal - previously the classifier
+            # stalled with no timers armed until detection_timeout (#5616),
+            # holding back playout for the full timeout budget.
             logger.debug(
                 "user speech ended without a start signal; assuming speech since listening began"
             )
             if self._no_speech_timer is not None:
                 self._no_speech_timer.cancel()
                 self._no_speech_timer = None
-            # the gate may open during the trailing silence (after the greeting
-            # already stopped), so cap the synthesized start at the computed end
-            # to keep the reported duration non-negative
-            self._speech_started_at = (
-                min(self._listening_started_at, speech_ended_at)
-                if self._listening_started_at is not None
-                else speech_ended_at
-            )
+            self._speech_started_at = self._listening_started_at
 
         self._speech_ended_at = speech_ended_at
         speech_duration = self._speech_ended_at - self._speech_started_at
