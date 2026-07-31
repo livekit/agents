@@ -206,6 +206,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
 
     @_listening_guard
     def on_user_speech_ended(self, silence_duration: float) -> None:
+        speech_ended_at = time.time() - silence_duration
         if self._speech_started_at is None:
             # the speech began before listening started (e.g. AMD attached after
             # the callee was already mid-greeting, so the start event was dropped
@@ -219,13 +220,16 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             if self._no_speech_timer is not None:
                 self._no_speech_timer.cancel()
                 self._no_speech_timer = None
+            # the gate may open during the trailing silence (after the greeting
+            # already stopped), so cap the synthesized start at the computed end
+            # to keep the reported duration non-negative
             self._speech_started_at = (
-                self._listening_started_at
+                min(self._listening_started_at, speech_ended_at)
                 if self._listening_started_at is not None
-                else time.time() - silence_duration
+                else speech_ended_at
             )
 
-        self._speech_ended_at = time.time() - silence_duration
+        self._speech_ended_at = speech_ended_at
         speech_duration = self._speech_ended_at - self._speech_started_at
         self._speech_active = False
         self._arm_eot_timer(delay=max(0, self._max_endpointing_delay - silence_duration))

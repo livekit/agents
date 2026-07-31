@@ -810,6 +810,30 @@ class TestEndBeforeStart:
         assert results[0].category == AMDCategory.HUMAN
         assert results[0].reason == "short_greeting"
 
+    async def test_gate_opened_during_trailing_pause_clamps_duration(self) -> None:
+        # the VAD reports end-of-speech only after a minimum trailing silence,
+        # so the computed end points back in time; if listening began during
+        # that pause the synthesized start must be capped at the end so the
+        # reported duration is never negative
+        clf = _make_classifier(human_silence_threshold=0.1)
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        # end arrived 0.5s ago - before the gate opened just now
+        clf.on_user_speech_ended(silence_duration=0.5)
+
+        assert clf._speech_started_at is not None and clf._speech_ended_at is not None
+        assert clf._speech_started_at <= clf._speech_ended_at
+        assert clf.speech_duration >= 0.0
+        assert clf._silence_timer_trigger == "short_speech"
+
+        await asyncio.sleep(0.2)
+
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.HUMAN
+        assert results[0].speech_duration >= 0.0
+
     async def test_end_before_listening_stays_gated(self) -> None:
         # before start_listening() everything is a no-op, as documented
         clf = _make_classifier()
