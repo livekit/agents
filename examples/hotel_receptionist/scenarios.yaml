@@ -829,13 +829,13 @@ scenarios:
     OPENING LINE: "Hi - I have a reservation arriving tomorrow, and I'm worried my room will be given away because my flight gets in really late. Can you make sure it's held?"
     FACTS (reveal each only when asked, one per turn):
     - last name: Sato
-    - confirmation code: BN23
+    - confirmation code: H-T-L-B-N-2-3
     - if asked for the card instead of the code: the card on file ends 8821
     - your flight is a red-eye; it lands around 12:40 AM and you'd reach the hotel close to 1:30 AM
     - the booking is for two nights starting tomorrow
     DO, IN ORDER:
     1. Explain you'll be checking in well after midnight and ask them to hold the room so it isn't released.
-    2. Verify yourself when asked (last name plus the code BN23, or the card ending 8821).
+    2. Verify yourself when asked (last name plus the code H-T-L-B-N-2-3, or the card ending 8821).
     3. CURVEBALL - test whether the hold is real: "A different hotel once told me my room was 'all set,' and when I showed up at 1 AM it had been given to a walk-in. How do I know that won't happen here - is this actually noted on my reservation, or are you just telling me it'll be fine?"
     4. PROOF-FORCING CLOSE: do not end the call until the agent confirms the late arrival is recorded ON your booking (not just verbally reassured). Ask plainly: "So it's written on my reservation right now, not just something you're saying?" If they only reassure you without actually noting it, press again before hanging up.
     REACTIONS:
