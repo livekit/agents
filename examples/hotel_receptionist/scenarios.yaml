@@ -1219,8 +1219,8 @@ scenarios:
 - label: Order flowers to a room with a gift-card message
   instructions: |
     PERSONA: Marcus Webb, warm and a little rushed, arranging a surprise for his wife.
-    OPENING LINE: "Hi - I'd like to send some flowers up to a room at your hotel, and I
-      need them there before noon while she's still in the room."
+    OPENING LINE: "Hi - I'd like to send some flowers up to my wife's room at your hotel,
+      and I need them there before noon while she's still in the room."
     FACTS (reveal each only when asked, one per turn):
     - your name: Marcus Webb
     - your callback number: 415-555-0182
@@ -1405,8 +1405,8 @@ scenarios:
       a little exacting about details - she's arranged things like this many times and
       wants it right, but she's gracious, not combative.
     OPENING LINE: "Hello - I'm calling ahead of a guest's arrival to have a flower
-      arrangement and a welcome card waiting in the suite before she checks in - she lands
-      around noon, so please have it there before she gets in."
+      arrangement and a welcome card waiting in the suite - she lands around noon, so I need
+      it there before she gets in."
     FACTS (reveal each only when asked, one per turn):
     - your name (the assistant placing the order): Renata Cole
     - the guest arriving: Diane Okafor (she's the one staying; the room is the Penthouse Suite)
