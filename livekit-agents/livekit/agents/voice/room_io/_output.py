@@ -67,6 +67,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
+        # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
 
     async def _publish_track(self) -> None:
@@ -140,7 +141,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
-        self._first_frame_event.clear()
 
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())

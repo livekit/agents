@@ -8,11 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit import rtc
+from livekit.agents import utils
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
 )
 from livekit.agents.voice.room_io._output import (
+    _ParticipantAudioOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -365,3 +367,64 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     assert stream._processor is None
 
     await stream.aclose()
+
+
+# -- audio output playback_started tests --------------------------------------
+
+
+class _FakeAudioSource:
+    def __init__(self, *args, **kwargs) -> None:
+        self.captured: list[rtc.AudioFrame] = []
+        self.queued_duration = 0.0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.captured.append(frame)
+
+    async def wait_for_playout(self) -> None:
+        pass
+
+    def clear_queue(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_audio_output_playback_started_fires_once_across_pause_resume() -> None:
+    """A mid-segment pause/resume (false interruption) must not re-announce playback_started.
+
+    The synchronizer anchors its transcript clock on the first playback_started of a
+    segment and accounts for the pause gap itself, so a second one would be rejected.
+    """
+    frame = rtc.AudioFrame(bytes(2400 * 2), 24000, 1, 2400)  # 100ms
+
+    with patch("livekit.rtc.AudioSource", _FakeAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    output._subscribed_fut.set_result(None)  # skip track publish/subscription
+    forward_task = asyncio.create_task(output._forward_audio())
+
+    started: list[float] = []
+    output.on("playback_started", lambda ev: started.append(ev.created_at))
+
+    output.resume()  # every generation resumes the output before forwarding audio
+    for _ in range(3):
+        await output.capture_frame(frame)
+    await asyncio.sleep(0)
+    assert len(started) == 1
+
+    output.pause()
+    await asyncio.sleep(0)
+    output.resume()
+    for _ in range(3):
+        await output.capture_frame(frame)
+    await asyncio.sleep(0)
+
+    assert len(started) == 1
+
+    await utils.aio.cancel_and_wait(forward_task)
