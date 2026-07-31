@@ -1778,6 +1778,18 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             ),
         ] = None,
     ) -> None:
+        """
+        Run a [bold]LiveKit Agents[/bold] in [yellow]development[/yellow] mode.
+
+        [red]Deprecated[/red]: use [bold]lk agent dev[/bold] instead
+        (https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup).
+        """
+        logger.warning(
+            "dev mode is deprecated and will be removed in a future release; "
+            "use `lk agent dev` instead "
+            "(https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup)"
+        )
+
         if reload:
             logger.warning(
                 "in-process auto-reload has been removed from the Python CLI; "
