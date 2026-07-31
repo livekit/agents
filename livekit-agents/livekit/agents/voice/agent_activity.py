@@ -188,6 +188,11 @@ class AgentActivity(RecognitionHooks):
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
         self._stt_eos_received: bool = False
+        # True while an STT-driven speech segment is open (paired ev=None
+        # start/end hook calls); lets the end-of-speech gate below tell an
+        # STT-authored "speaking" state apart from one written by another
+        # source (e.g. claim_user_turn), which the STT will never clear
+        self._stt_user_speaking: bool = False
 
         # fired when a speech_task finishes or when a new speech_handle is scheduled
         # this is used to wake up the main task when the scheduling state changes
@@ -1976,6 +1981,8 @@ class AgentActivity(RecognitionHooks):
         # authoritative user_state source: VAD stays active for interruption and
         # endpointing below, but background noise it picks up must not flip
         # user_state to "speaking" when the STT hears no speech (#5580)
+        if ev is None:
+            self._stt_user_speaking = True
         if ev is None or self._turn_detection != "stt":
             self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
@@ -2024,7 +2031,19 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
             )
 
-        if ev is None or self._turn_detection != "stt":
+        if ev is None:
+            self._stt_user_speaking = False
+        # in stt mode the VAD end must not clear an STT-authored "speaking"
+        # (the STT end-of-speech will), but "speaking" can also be entered by
+        # writers the STT will never clear - claim_user_turn re-deriving from
+        # VAD silence, or a turn_detection switch mid-speech - so when no
+        # STT-driven segment is open, let the VAD end recover the state
+        # instead of leaving it stuck at "speaking"
+        if (
+            ev is None
+            or self._turn_detection != "stt"
+            or (not self._stt_user_speaking and self._session.user_state == "speaking")
+        ):
             self._session._update_user_state(
                 "listening",
                 last_speaking_time=speech_end_time,

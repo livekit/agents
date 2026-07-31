@@ -76,3 +76,56 @@ class TestSttDrivenUserState:
             assert session.user_state == "listening"
         finally:
             await _close_test_session(session)
+
+    async def test_vad_end_recovers_speaking_written_by_non_stt_source(self) -> None:
+        # "speaking" can be entered by writers the STT will never clear
+        # (claim_user_turn re-derivation, a turn_detection switch mid-speech);
+        # a VAD end-of-speech must recover the state instead of leaving it
+        # stuck at "speaking" with no STT end-of-speech ever coming
+        activity = _make_activity("stt")
+        session = activity._session
+        try:
+            session._update_user_state("speaking", last_speaking_time=time.time())
+            assert session.user_state == "speaking"
+
+            activity.on_end_of_speech(_vad_event(vad.VADEventType.END_OF_SPEECH))
+            assert session.user_state == "listening"
+        finally:
+            await _close_test_session(session)
+
+    async def test_vad_end_does_not_clear_stt_authored_speaking(self) -> None:
+        # the VAD usually endpoints before the STT: its end-of-speech must not
+        # cut short a "speaking" state the STT opened and will close itself
+        activity = _make_activity("stt")
+        session = activity._session
+        try:
+            activity.on_start_of_speech(None, time.time())
+            assert session.user_state == "speaking"
+
+            activity.on_end_of_speech(_vad_event(vad.VADEventType.END_OF_SPEECH))
+            assert session.user_state == "speaking"
+
+            activity.on_end_of_speech(None)
+            assert session.user_state == "listening"
+        finally:
+            await _close_test_session(session)
+
+    async def test_claimed_turn_with_vad_noise_recovers(self) -> None:
+        # background noise trips the VAD during a programmatic (text) turn:
+        # the release re-derives "speaking" from the VAD-driven silence event,
+        # and only the later VAD end-of-speech can clear it (the STT heard
+        # nothing, so no STT end-of-speech will ever arrive)
+        activity = _make_activity("stt")
+        session = activity._session
+        session._activity = activity
+        try:
+            async with session._claim_user_turn():
+                activity.on_start_of_speech(
+                    _vad_event(vad.VADEventType.START_OF_SPEECH), time.time()
+                )
+            assert session.user_state == "speaking"
+
+            activity.on_end_of_speech(_vad_event(vad.VADEventType.END_OF_SPEECH))
+            assert session.user_state == "listening"
+        finally:
+            await _close_test_session(session)
