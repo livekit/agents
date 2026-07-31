@@ -1506,53 +1506,50 @@ class AgentActivity(RecognitionHooks):
 
         return interrupted_speeches
 
+    def _playout_ordered_speeches(self) -> list[SpeechHandle]:
+        """The playing speech followed by the queued ones, in playout order.
+
+        ``_speech_q`` is a heap, so its list order is not the order the
+        speeches will be popped in.
+        """
+        speeches = [self._current_speech] if self._current_speech is not None else []
+        speeches.extend(
+            speech for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1]))
+        )
+        return speeches
+
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
-        Speeches that disallow interruptions are left running unless ``force``
-        is set; the playing one is reported instead of being skipped silently.
+        The playing speech and the queued ones are interrupted in playout
+        order, stopping at the first speech that disallows interruptions:
+        everything behind it still plays, so interrupting past it would leave
+        a gap in the conversation. ``force`` interrupts them regardless.
 
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated
-
-        Raises:
-            RuntimeError: If the playing speech disallows interruptions and
-                ``force`` is False. Nothing is interrupted in that case.
         """
-        # checked up-front: SpeechHandle.interrupt() raises for a protected
-        # handle, and letting that happen mid-sequence would leave the
-        # background speeches interrupted, the queue untouched, the realtime
-        # session untold and the returned future unresolved
-        if (
-            not force
-            and self._current_speech is not None
-            and not self._current_speech.allow_interruptions
-        ):
-            raise RuntimeError(
-                "the current speech does not allow interruptions, "
-                "use interrupt(force=True) to interrupt it anyway"
-            )
-
+        # independent of the playing speech, so always cancelled
         self._cancel_preemptive_generation()
 
         future = asyncio.Future[None]()
 
         interrupted_speeches = self._interrupt_background_speeches(force=force)
 
-        if self._current_speech is not None:
-            self._current_speech.interrupt(force=force)
-            interrupted_speeches.append(self._current_speech)
+        current_speech = self._current_speech
+        for speech in self._playout_ordered_speeches():
+            if not force and not speech.allow_interruptions:
+                # SpeechHandle.interrupt() would raise here, and the speeches
+                # behind this one are going to play, so stop the walk instead
+                break
 
-        # skip queued handles that disallow interruptions, like the background
-        # speeches above: raising mid-loop would leave the remaining queue
-        # playing, the realtime session untold and the future unresolved
-        for _, _, speech in self._speech_q:
-            if force or speech.allow_interruptions:
-                speech.interrupt(force=force)
-                interrupted_speeches.append(speech)
+            speech.interrupt(force=force)
+            interrupted_speeches.append(speech)
 
-        if self._rt_session is not None:
+        # a realtime response still streaming belongs to the playing speech;
+        # cancelling it while that speech survives would truncate it
+        if self._rt_session is not None and (current_speech is None or current_speech.interrupted):
             self._rt_session.interrupt()
 
         if not interrupted_speeches:
