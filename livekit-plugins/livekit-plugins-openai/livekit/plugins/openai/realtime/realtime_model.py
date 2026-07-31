@@ -454,6 +454,16 @@ class RealtimeModel(llm.RealtimeModel):
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         resolved_turn_detection = to_turn_detection(turn_detection)
+        if (
+            resolved_turn_detection is not None
+            and resolved_turn_detection.create_response is False
+            and resolved_turn_detection.interrupt_response is not False
+        ):
+            logger.warning(
+                "create_response=False hands turn taking to the client, but the server still "
+                "cancels its response on user speech, pass interrupt_response=False as well"
+            )
+
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,

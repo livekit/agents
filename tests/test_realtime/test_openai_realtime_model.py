@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import cast
 
@@ -80,6 +81,29 @@ def test_create_response_false_reports_client_side_turn_taking() -> None:
     assert auto_reply.capabilities.turn_detection is True
 
     assert RealtimeModel(api_key="fake").capabilities.turn_detection is True
+
+
+def test_create_response_false_warns_when_the_server_still_interrupts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # interrupt_response is a separate switch, left on the server keeps cancelling its response
+    # on user speech while the client believes it owns interruptions
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(type="server_vad", create_response=False),
+        )
+    assert "pass interrupt_response=False" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(
+                type="server_vad", create_response=False, interrupt_response=False
+            ),
+        )
+    assert caplog.text == ""
 
 
 def test_legacy_turn_detection_keeps_interrupt_response() -> None:
