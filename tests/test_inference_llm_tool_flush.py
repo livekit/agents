@@ -105,6 +105,16 @@ def test_marker_emitted_once_per_turn() -> None:
     # Argument fragments for the same call never re-signal.
     assert stream._parse_choice("c", _choice(tools=[_tool(arguments="{}")]), thinking) is None
 
+    # A second tool call later in the turn flushes the first as a call chunk,
+    # but the start signal was already emitted and must not fire again.
+    second = stream._parse_choice(
+        "c", _choice(tools=[_tool(name="b", arguments="", id="call_2", index=1)]), thinking
+    )
+    assert second is not None and second.delta is not None
+    assert second.delta.tool_call_started is False
+    assert len(second.delta.tool_calls) == 1
+    assert second.delta.tool_calls[0].name == "a"
+
 
 def test_content_in_same_delta_as_tool_survives_on_marker() -> None:
     # Some providers pack the last text token into the same delta as the first
@@ -131,6 +141,8 @@ def test_content_in_same_delta_as_tool_survives_on_marker() -> None:
 def test_parallel_tool_calls_in_one_delta_both_accumulated() -> None:
     # Two named tool calls batched into a single delta: the first is flushed as a
     # call chunk when the second starts, and the second is assembled at finish.
+    # The flushed call preempts the post-loop marker, so it must carry the start
+    # signal itself or the preamble flush would be lost for the whole turn.
     stream = _stream()
     thinking = ThinkingTokenFilter()
 
@@ -145,6 +157,7 @@ def test_parallel_tool_calls_in_one_delta_both_accumulated() -> None:
         thinking,
     )
     assert chunk is not None and chunk.delta is not None
+    assert chunk.delta.tool_call_started is True
     assert len(chunk.delta.tool_calls) == 1
     assert chunk.delta.tool_calls[0].name == "get_balance"
     assert chunk.delta.tool_calls[0].arguments == '{"account":1}'

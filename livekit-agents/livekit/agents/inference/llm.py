@@ -525,11 +525,18 @@ class LLMStream(llm.LLMStream):
 
                 call_chunk = None
                 if self._tool_call_id and tool.id and tool.index != self._tool_index:
+                    # A batched delta can name a second tool before the post-loop marker
+                    # below has a chance to run; carry the start signal on the flushed
+                    # call (which is complete) so the preamble flush is not lost.
+                    signal_tool_start = pending_tool_start and not self._tool_start_signaled
+                    if signal_tool_start:
+                        self._tool_start_signaled = True
                     call_chunk = llm.ChatChunk(
                         id=id,
                         delta=llm.ChoiceDelta(
                             role="assistant",
                             content=delta.content,
+                            tool_call_started=signal_tool_start,
                             tool_calls=[
                                 llm.FunctionToolCall(
                                     arguments=self._fnc_raw_arguments or "",
