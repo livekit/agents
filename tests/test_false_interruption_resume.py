@@ -1,0 +1,214 @@
+"""The false-interruption resume must follow the end-of-turn decision, never race it.
+
+Both deadlines are armed from the same VAD ``END_OF_SPEECH``: the resume timer counts
+``false_interruption_timeout`` from the event, while the turn commits at
+``last_speaking_time + endpointing_delay`` — measured from before the VAD silence window.
+When the turn detector reads the pause as mid-utterance the delay becomes ``max_delay``,
+which lands after the resume timer, so the agent used to resume and get cut off again.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
+from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.turn import (
+    TurnDetectionEvent,
+    _StreamingTurnDetector,
+    _StreamingTurnDetectorStream,
+)
+
+from .fake_io import FakeAudioOutput
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_vad import FakeVAD
+
+pytestmark = pytest.mark.unit
+
+# scaled-down shipped defaults, keeping max_delay - vad_min_silence > timeout
+VAD_MIN_SILENCE = 0.05
+FALSE_INTERRUPTION_TIMEOUT = 0.3
+MAX_DELAY = 0.5
+
+
+def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecognition:
+    """AudioRecognition wired to drive one real eou bounce against ``hooks``."""
+    ar = AudioRecognition.__new__(AudioRecognition)
+    ar._session = MagicMock()
+    ar._hooks = hooks
+    ar._stt = None  # realtime model, no STT
+    ar._audio_transcript = ""
+    ar._turn_detection_mode = None
+    ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
+
+    stream_mock = MagicMock(spec=_StreamingTurnDetectorStream)
+    stream_mock.supports_language = AsyncMock(return_value=True)
+    stream_mock.unlikely_threshold = AsyncMock(return_value=0.5)
+    stream_mock.backchannel_threshold = AsyncMock(return_value=None)
+    stream_mock.flush = MagicMock()
+    stream_mock.cancel_inference = MagicMock()
+    stream_mock.prediction_timeout = 0.5
+    ar._turn_detector_stream = stream_mock
+
+    # the detector already answered: mid-utterance, so the bounce waits out max_delay
+    fut: asyncio.Future[TurnDetectionEvent] = asyncio.Future()
+    fut.set_result(
+        TurnDetectionEvent(
+            type="eot_prediction",
+            end_of_turn_probability=0.1,
+            last_speaking_time=last_speaking_time,
+        )
+    )
+    ar._turn_detector_prediction_fut = fut
+    ar._turn_detector_flushed = False
+    ar._turn_detector_late_prediction_warned = False
+    ar._agent_speaking = False
+    ar._interruption_enabled = False
+    ar._interruption_ch = None
+    ar._vad_base_turn_detection = True
+    ar._backchannel_boundary = None
+    ar._backchannel_boundary_timer = None
+    ar._backchannel_boundary_callback = None
+
+    endpointing = MagicMock()
+    endpointing.min_delay = 0.05
+    endpointing.max_delay = MAX_DELAY
+    ar._endpointing = endpointing
+
+    ar._ensure_user_turn_span = MagicMock(  # type: ignore[method-assign]
+        return_value=MagicMock(is_recording=MagicMock(return_value=False))
+    )
+    ar._user_turn_span = None
+    ar._user_turn_start = None
+    ar._user_silence_ev = asyncio.Event()
+    ar._speaking = False
+    ar._final_transcript_confidence = []
+    ar._stt_request_ids = []
+    ar._last_speaking_time = last_speaking_time
+    ar._last_final_transcript_time = None
+    ar._speech_start_time = None
+    ar._vad_speech_started = False
+    ar._end_of_turn_task = None
+    ar._user_turn_committed = False
+    ar._vad = None
+    ar._last_language = None
+    ar._last_emitted_prediction = None
+    ar._turn_backchannel_over_agent = False
+    ar._overlap_in_current_turn = False
+    ar._turn_tracker = MagicMock()
+    ar._closing = asyncio.Event()
+    return ar
+
+
+def _paused_activity(session: AgentSession) -> tuple[AgentActivity, MagicMock]:
+    activity = AgentActivity(Agent(instructions="test"), session)
+    activity._scheduling_paused = False
+    session.output.audio = FakeAudioOutput(can_pause=True)
+
+    handle = MagicMock()
+    handle.done.return_value = False
+    handle.interrupted = False
+    handle.allow_interruptions = True
+    handle._agent_turn_context = None
+    activity._current_speech = handle
+    activity._paused_speech = _PausedSpeechInfo(
+        handle=handle, agent_state="speaking", timeout=FALSE_INTERRUPTION_TIMEOUT
+    )
+    return activity, handle
+
+
+def _session() -> AgentSession:
+    return AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+
+async def test_resume_waits_for_a_dropped_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    # t0: VAD END_OF_SPEECH — the resume timer is armed, then the bounce is scheduled
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+    activity._audio_recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    activity._audio_recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    await asyncio.sleep(MAX_DELAY + 0.3)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    resumed_at = events[0][1] - t0
+    # the turn is dropped at max_delay - vad silence; resuming any earlier is the race
+    assert resumed_at == pytest.approx(MAX_DELAY - VAD_MIN_SILENCE, abs=0.1)
+    assert activity._paused_speech is None
+
+
+async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    # a confirmed interruption: on_end_of_turn commits and the reply task interrupts the pause
+    activity._interruption_detected = True
+
+    def _swallow(coro: object, **kwargs: object) -> MagicMock:
+        coro.close()  # type: ignore[attr-defined]
+        return MagicMock()
+
+    activity._create_speech_task = _swallow  # type: ignore[method-assign, assignment]
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    activity._audio_recognition = _recognition(
+        activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
+    )
+    activity._audio_recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    await asyncio.sleep(MAX_DELAY + 0.3)
+    await session.aclose()
+
+    assert events == []
+    assert activity._false_interruption_pending is False
+    assert activity._paused_speech is not None  # left for _cancel_speech_pause to interrupt
+
+
+async def test_resume_is_immediate_when_no_turn_decision_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # VAD-only noise on an stt pipeline never starts a bounce, so the timeout still rules
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
