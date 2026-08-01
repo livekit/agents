@@ -4345,7 +4345,7 @@ class AgentActivity(RecognitionHooks):
                 await self._paused_speech.handle._wait_for_generation()
         self._paused_speech = None
 
-        # the pause withheld end-of-agent-speech for a possible resume; there is none now
+        # the pause withheld end-of-agent-speech for a resume; this ends the agent turn instead
         if self._audio_recognition:
             self._audio_recognition._on_end_of_agent_speech(
                 ignore_user_transcript_until=time.time()
