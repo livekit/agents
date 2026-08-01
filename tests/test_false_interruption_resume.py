@@ -54,6 +54,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     stream_mock.backchannel_threshold = AsyncMock(return_value=None)
     stream_mock.flush = MagicMock()
     stream_mock.cancel_inference = MagicMock()
+    stream_mock.aclose = AsyncMock()
     stream_mock.prediction_timeout = 0.5
     ar._turn_detector_stream = stream_mock
 
@@ -104,6 +105,13 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._overlap_in_current_turn = False
     ar._turn_tracker = MagicMock()
     ar._closing = asyncio.Event()
+    # only touched by _aclose
+    ar._commit_user_turn_atask = None
+    ar._stt_pipeline = None
+    ar._stt_consumer_atask = None
+    ar._vad_atask = None
+    ar._interruption_atask = None
+    ar._tasks = set()
     return ar
 
 
@@ -192,6 +200,35 @@ async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPa
     assert events == []
     assert activity._false_interruption_pending is False
     assert activity._paused_speech is not None  # left for _cancel_speech_pause to interrupt
+
+
+async def test_teardown_does_not_resume_a_deferred_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    # closing settles the open decision without deciding anything; the close path releases the
+    # pause itself, so the resume must not fire mid-teardown
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    activity._audio_recognition = _recognition(
+        activity, last_speaking_time=time.time() - VAD_MIN_SILENCE
+    )
+    activity._audio_recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    # let the timeout elapse while the decision is still open
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.05)
+    assert activity._false_interruption_pending is True
+
+    await activity._audio_recognition._aclose()
+    await asyncio.sleep(0.2)
+    await session.aclose()
+
+    assert events == []
 
 
 async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPatch) -> None:

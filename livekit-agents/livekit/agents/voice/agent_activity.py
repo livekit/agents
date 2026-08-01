@@ -4292,15 +4292,17 @@ class AgentActivity(RecognitionHooks):
             if not self._false_interruption_pending:
                 return  # the turn committed, or the pause was resolved another way
 
+            recognition = self._audio_recognition
+            eot_task = recognition._end_of_turn_task if recognition else None
             # a newer decision superseded this one (e.g. an stt final re-armed the bounce)
-            eot_task = (
-                self._audio_recognition._end_of_turn_task if self._audio_recognition else None
-            )
             if eot_task is not None and eot_task is not settled and not eot_task.done():
                 eot_task.add_done_callback(_on_turn_settled)
                 return
 
             self._false_interruption_pending = False
+            if settled.cancelled() or (recognition is not None and recognition._closing.is_set()):
+                return  # torn down instead of decided; closing releases the pause itself
+
             _on_false_interruption()
 
         def _on_timeout() -> None:
