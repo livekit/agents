@@ -163,6 +163,8 @@ async def test_resume_waits_for_a_dropped_turn(monkeypatch: pytest.MonkeyPatch) 
     t0 = time.time()
     activity.on_end_of_speech(None)
     activity._audio_recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    # a confirmed backchannel is what makes the turn drop rather than commit
+    activity._audio_recognition._turn_backchannel_over_agent = True
     activity._audio_recognition._run_eou_detection(MagicMock(), trigger="vad")
 
     await asyncio.sleep(MAX_DELAY + 0.3)

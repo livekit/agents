@@ -113,26 +113,45 @@ async def test_adaptive_interruption_disabled_for_realtime_with_server_turn_dete
     assert activity._interruption_detector is None
 
 
-async def test_backchannel_does_not_commit_while_agent_speaking(
+async def test_unjudged_overlap_over_a_paused_speech_commits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # the turn overlapped agent speech and no interruption was flagged, so it's a
-    # backchannel and must not commit a user turn
+    # a pause silences the agent and ends the overlap, so no verdict is coming: the turn must
+    # commit rather than be discarded on the assumption that one might still arrive
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
     activity = _make_activity(_realtime_barge_in_session())
     activity._scheduling_paused = False  # simulate a running session
     assert activity._interruption_detection_enabled is True
+    activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
 
     current_speech = MagicMock()
     current_speech.done.return_value = False
     current_speech.interrupted = False
     activity._current_speech = current_speech
     activity._interruption_detected = False
+    activity._update_paused_speech(current_speech, timeout=2.0)
 
-    # verdict pending, agent still speaking — dropped via the live-speech branch
-    assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=False)) is False
+    assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=False)) is True
+
+
+async def test_confirmed_backchannel_drops_while_agent_speaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the detector's verdict is the only thing that suppresses a turn
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    activity = _make_activity(_realtime_barge_in_session())
+    activity._scheduling_paused = False
+
+    current_speech = MagicMock()
+    current_speech.done.return_value = False
+    current_speech.interrupted = False
+    activity._current_speech = current_speech
+
+    assert activity.on_end_of_turn(_end_of_turn_info(backchannel_over_agent=True)) is False
 
 
 async def test_backchannel_dropped_after_agent_finishes_speaking(
@@ -205,6 +224,12 @@ def _recognition_for_overlap(*, speaking: bool = False) -> AudioRecognition:
         ar._user_silence_ev.set()  # silent (between segments) unless told otherwise
     ar._hooks = MagicMock()
     return ar
+
+
+def _swallow_task(coro: object, **kwargs: object) -> MagicMock:
+    """Stand in for _create_speech_task: the reply pipeline isn't under test here."""
+    coro.close()  # type: ignore[attr-defined]
+    return MagicMock()
 
 
 def _overlap_event(*, is_interruption: bool, agent_ended: bool) -> OverlappingSpeechEvent:
