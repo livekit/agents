@@ -2030,7 +2030,8 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition._on_end_of_agent_speech(
-                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time(),
+                        paused=True,
                     )
                 if self.interruption_enabled:
                     self._restore_interruption_by_audio_activity()
@@ -2147,7 +2148,8 @@ class AgentActivity(RecognitionHooks):
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
+                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at,
+                paused=self._paused_speech is not None,
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -4268,7 +4270,9 @@ class AgentActivity(RecognitionHooks):
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
+                    self._audio_recognition._on_start_of_agent_speech(
+                        started_at=time.time(), resumed=True
+                    )
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()

@@ -455,7 +455,7 @@ class AudioRecognition:
 
     # endregion
 
-    def _on_start_of_agent_speech(self, started_at: float) -> None:
+    def _on_start_of_agent_speech(self, started_at: float, *, resumed: bool = False) -> None:
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
@@ -469,10 +469,14 @@ class AudioRecognition:
                 start_cooldown, self._on_backchannel_boundary_done
             )
 
-        if self._adaptive_interruption_active:
+        # a resume re-enters the agent turn the overlap is being judged against; restarting
+        # the detector would discard that overlap along with the verdict it owes us
+        if self._adaptive_interruption_active and not resumed:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
-    def _on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
+    def _on_end_of_agent_speech(
+        self, *, ignore_user_transcript_until: float, paused: bool = False
+    ) -> None:
         self._cancel_backchannel_boundary()
 
         if self._agent_speaking:
@@ -482,11 +486,14 @@ class AudioRecognition:
             self._agent_speaking = False
             return
 
-        self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
+        # pausing is provisional — the overlap verdict is what decides whether it becomes an
+        # interruption, so keep the inference running until the user's speech actually ends
+        if not paused:
+            self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
         if self._agent_speaking:
             # no interruption is detected, end the inference (idempotent)
-            if not is_given(self._ignore_user_transcript_until):
+            if not paused and not is_given(self._ignore_user_transcript_until):
                 self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
 
             end_cooldown: float = (
@@ -567,7 +574,11 @@ class AudioRecognition:
         speaking (the user may still be talking), in which case the synthesized verdict
         is inconclusive and must not be treated as a confirmed backchannel.
         """
-        if not self._adaptive_interruption_active or not self._agent_speaking:
+        # an overlap opened this turn outlives a paused agent speech, so it can still be
+        # closed (and its verdict emitted) after the audio output went silent
+        if not self._adaptive_interruption_active or not (
+            self._agent_speaking or self._overlap_in_current_turn
+        ):
             return
 
         # Only set is_interruption=false if not already set (avoid overwriting true from interruption detection)

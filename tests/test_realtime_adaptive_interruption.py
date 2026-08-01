@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import NOT_GIVEN, Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import (
@@ -258,3 +259,92 @@ async def test_interruption_clears_backchannel() -> None:
     assert ar._turn_backchannel_over_agent is False
     ar._hooks.on_interruption.assert_called_once()
     ar._hooks.on_backchannel_confirmed.assert_not_called()
+
+
+class _RecordingChan:
+    """Stands in for the interruption channel, capturing the sentinels sent to it."""
+
+    def __init__(self) -> None:
+        self.sent: list[object] = []
+        self.closed = False
+
+    def send_nowait(self, item: object) -> None:
+        self.sent.append(item)
+
+
+def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingChan]:
+    ar = AudioRecognition.__new__(AudioRecognition)
+    ch = _RecordingChan()
+    ar._interruption_enabled = True
+    ar._interruption_ch = ch  # type: ignore[assignment]
+    ar._agent_speaking = False
+    ar._agent_speech_started_at = None
+    ar._endpointing = MagicMock()
+    ar._backchannel_boundary = None
+    ar._backchannel_boundary_timer = None
+    ar._backchannel_boundary_callback = None
+    ar._ignore_user_transcript_until = NOT_GIVEN
+    ar._overlap_in_current_turn = False
+    ar._turn_backchannel_over_agent = False
+    ar._transcript_buffer = []
+    ar._tasks = set()
+    ar._user_silence_ev = asyncio.Event()
+    ar._user_silence_ev.set()
+    ar._hooks = MagicMock()
+    return ar, ch
+
+
+def _sentinel_names(ch: _RecordingChan) -> list[str]:
+    return [type(item).__name__ for item in ch.sent]
+
+
+async def test_pause_keeps_overlap_inference_alive() -> None:
+    # pausing is provisional: the verdict for this overlap is what decides whether the
+    # pause becomes an interruption, so the inference must survive it
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ch.sent.clear()
+
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+
+    assert _sentinel_names(ch) == []
+
+
+async def test_pause_still_lets_the_user_close_the_overlap() -> None:
+    # the user finishing their utterance during the pause is what produces the verdict
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ch.sent.clear()
+
+    ar._on_end_of_speech(ended_at=time.time())
+
+    assert _sentinel_names(ch) == ["_OverlapSpeechEndedSentinel"]
+    assert ch.sent[0]._agent_ended is False  # type: ignore[attr-defined]
+
+
+async def test_resume_does_not_restart_the_detector() -> None:
+    # a resume re-enters the same agent turn; restarting would reset the open overlap
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ch.sent.clear()
+
+    ar._on_start_of_agent_speech(started_at=time.time(), resumed=True)
+
+    assert _sentinel_names(ch) == []
+
+
+async def test_real_end_of_agent_speech_still_tears_down() -> None:
+    # the agent turn genuinely ending must stop the inference
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ch.sent.clear()
+
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+
+    assert "_AgentSpeechEndedSentinel" in _sentinel_names(ch)
