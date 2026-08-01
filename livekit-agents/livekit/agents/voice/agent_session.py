@@ -94,6 +94,10 @@ if TYPE_CHECKING:
     from .transcription.text_transforms import TextTransforms
 
 
+_SIP_RULE_ID_ATTR = "sip.ruleID"
+_DEFAULT_AEC_WARMUP_DURATION = 3.0
+
+
 class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
@@ -379,7 +383,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        aec_warmup_duration: float | None = 3.0,
+        aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
         session_close_transcript_timeout: float = 2.0,
@@ -465,7 +469,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
-                Set to ``None`` to disable. Default ``3.0`` s.
+                Defaults to ``3.0``, or ``None`` for outbound SIP calls.
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
@@ -523,6 +527,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             stt_context = None
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
+        self._aec_warmup_duration_explicit = is_given(aec_warmup_duration)
+        resolved_aec_warmup_duration = (
+            aec_warmup_duration if is_given(aec_warmup_duration) else _DEFAULT_AEC_WARMUP_DURATION
+        )
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -548,7 +556,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=(
                 use_tts_aligned_transcript if is_given(use_tts_aligned_transcript) else None
             ),
-            aec_warmup_duration=aec_warmup_duration,
+            aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
         # expressive mode is not publicly exposed; the pipeline stays disabled
@@ -604,7 +612,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts_error_counts = 0
 
         # aec warmup: disable interruptions while AEC warms up
-        self._aec_warmup_remaining = aec_warmup_duration or 0.0
+        self._aec_warmup_remaining = resolved_aec_warmup_duration or 0.0
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
@@ -1806,6 +1814,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._aec_warmup_remaining = 0.0
         if self._aec_warmup_timer is not None:
+            self._aec_warmup_timer.cancel()
+            self._aec_warmup_timer = None
+
+    def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        if self._aec_warmup_duration_explicit:
+            return
+
+        is_outbound_sip = (
+            participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+            and not participant.attributes.get(_SIP_RULE_ID_ATTR)
+        )
+        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
+
+        if is_outbound_sip and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 

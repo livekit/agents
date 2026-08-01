@@ -9,10 +9,12 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
+    AgentSession,
     AgentStateChangedEvent,
     APIConnectionError,
     ConversationItemAddedEvent,
@@ -913,6 +915,63 @@ def test_on_enter_ignored_tools() -> None:
         assert activity._on_enter_ignored_tools(tool_ctx) == []
     finally:
         _OnEnterContextVar.reset(tk)
+
+
+@pytest.mark.parametrize(
+    ("kind", "attributes", "expected_duration"),
+    [
+        (rtc.ParticipantKind.PARTICIPANT_KIND_SIP, {}, None),
+        (
+            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+            {"sip.ruleID": "SDR_inbound"},
+            3.0,
+        ),
+        (rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, {}, 3.0),
+    ],
+)
+def test_aec_warmup_default_depends_on_call_type(
+    kind: rtc.ParticipantKind.ValueType,
+    attributes: dict[str, str],
+    expected_duration: float | None,
+) -> None:
+    session = AgentSession(vad=None)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = kind
+    participant.attributes = attributes
+
+    session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
+
+
+@pytest.mark.parametrize("duration", [None, 0.0, 1.5])
+def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
+    duration: float | None,
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=duration)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    participant.attributes = {}
+
+    session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == duration
+    assert session._aec_warmup_remaining == (duration or 0.0)
+
+
+def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
+    session = AgentSession(vad=None)
+    timer = MagicMock(spec=asyncio.TimerHandle)
+    session._aec_warmup_timer = timer
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    participant.attributes = {}
+
+    session._on_room_io_participant_linked(participant)
+
+    timer.cancel.assert_called_once()
+    assert session._aec_warmup_timer is None
 
 
 async def test_aec_warmup() -> None:
