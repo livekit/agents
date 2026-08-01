@@ -1,10 +1,8 @@
 """The false-interruption resume must follow the end-of-turn decision, never race it.
 
-Both deadlines are armed from the same VAD ``END_OF_SPEECH``: the resume timer counts
-``false_interruption_timeout`` from the event, while the turn commits at
-``last_speaking_time + endpointing_delay`` — measured from before the VAD silence window.
-When the turn detector reads the pause as mid-utterance the delay becomes ``max_delay``,
-which lands after the resume timer, so the agent used to resume and get cut off again.
+Both are armed from the same VAD ``END_OF_SPEECH``, but the turn commits at
+``last_speaking_time + endpointing_delay`` — measured from before the VAD silence window —
+so a ``max_delay`` decision lands after the resume timer.
 """
 
 from __future__ import annotations

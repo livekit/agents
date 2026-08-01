@@ -4306,9 +4306,8 @@ class AgentActivity(RecognitionHooks):
         def _on_timeout() -> None:
             self._false_interruption_timer = None
 
-            # an open turn decision owns the paused speech: it either commits and interrupts it,
-            # or drops it — only then is the interruption known to be false. the elapsed timeout
-            # counts as part of that wait, so the resume follows the decision immediately.
+            # an open turn decision owns the paused speech: it either commits and interrupts it
+            # or drops it, and only then is the interruption known to be false
             eot_task = (
                 self._audio_recognition._end_of_turn_task if self._audio_recognition else None
             )

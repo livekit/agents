@@ -469,8 +469,7 @@ class AudioRecognition:
                 start_cooldown, self._on_backchannel_boundary_done
             )
 
-        # a resume re-enters the agent turn the overlap is being judged against; restarting
-        # the detector would discard that overlap along with the verdict it owes us
+        # a resume re-enters the same agent turn; restarting would discard the open overlap
         if self._adaptive_interruption_active and not resumed:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
@@ -486,8 +485,7 @@ class AudioRecognition:
             self._agent_speaking = False
             return
 
-        # pausing is provisional — the overlap verdict is what decides whether it becomes an
-        # interruption, so keep the inference running until the user's speech actually ends
+        # a pause is provisional: keep the inference running until the overlap has a verdict
         if not paused:
             self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
@@ -574,8 +572,7 @@ class AudioRecognition:
         speaking (the user may still be talking), in which case the synthesized verdict
         is inconclusive and must not be treated as a confirmed backchannel.
         """
-        # an overlap opened this turn outlives a paused agent speech, so it can still be
-        # closed (and its verdict emitted) after the audio output went silent
+        # an open overlap outlives a paused agent speech, so it can still be closed here
         if not self._adaptive_interruption_active or not (
             self._agent_speaking or self._overlap_in_current_turn
         ):
