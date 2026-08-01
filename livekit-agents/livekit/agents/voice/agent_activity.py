@@ -2337,8 +2337,9 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        # the reply task interrupts the paused speech, so the resume must not beat it there
-        if not info.skip_reply:  # a skipped reply returns early and needs the resume armed
+        # a replying turn interrupts the paused speech, so cancel the resume that would race it —
+        # but the reply task returns before that in these two cases, so leave the resume armed
+        if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask

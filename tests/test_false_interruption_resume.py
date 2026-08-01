@@ -132,6 +132,21 @@ def _paused_activity(session: AgentSession) -> tuple[AgentActivity, MagicMock]:
     return activity, handle
 
 
+def _eot_info(*, skip_reply: bool = False) -> _EndOfTurnInfo:
+    return _EndOfTurnInfo(
+        skip_reply=skip_reply,
+        new_transcript="",
+        transcript_confidence=0.0,
+        metrics=_EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        ),
+        backchannel_over_agent=False,
+    )
+
+
 def _swallow_task(coro: object, **kwargs: object) -> MagicMock:
     """Stand in for _create_speech_task: the reply pipeline isn't under test here."""
     coro.close()  # type: ignore[attr-defined]
@@ -248,19 +263,33 @@ async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPa
     session.on("agent_false_interruption", lambda _: events.append("resume"))
 
     activity.on_end_of_speech(None)
-    info = _EndOfTurnInfo(
-        skip_reply=True,
-        new_transcript="",
-        transcript_confidence=0.0,
-        metrics=_EndOfTurnMetrics(
-            started_speaking_at=None,
-            stopped_speaking_at=None,
-            transcription_delay=None,
-            end_of_turn_delay=None,
-        ),
-        backchannel_over_agent=False,
-    )
-    assert activity.on_end_of_turn(info) is True
+    assert activity.on_end_of_turn(_eot_info(skip_reply=True)) is True
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert events == ["resume"]
+    assert activity._paused_speech is None
+
+
+async def test_server_side_turn_detection_keeps_the_resume_armed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the reply task returns before _cancel_speech_pause when the server owns turn taking, so
+    # only the resume can release the pre-pause taken while the agent was still generating
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    activity._rt_turn_detection_enabled = True
+    activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    assert activity.on_end_of_turn(_eot_info()) is True
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
     await session.aclose()
