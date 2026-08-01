@@ -17,7 +17,11 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import (
+    AudioRecognition,
+    _EndOfTurnInfo,
+    _EndOfTurnMetrics,
+)
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     _StreamingTurnDetector,
@@ -122,6 +126,12 @@ def _paused_activity(session: AgentSession) -> tuple[AgentActivity, MagicMock]:
     return activity, handle
 
 
+def _swallow_task(coro: object, **kwargs: object) -> MagicMock:
+    """Stand in for _create_speech_task: the reply pipeline isn't under test here."""
+    coro.close()  # type: ignore[attr-defined]
+    return MagicMock()
+
+
 def _session() -> AgentSession:
     return AgentSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
@@ -167,12 +177,7 @@ async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPa
     activity, _ = _paused_activity(session)
     # a confirmed interruption: on_end_of_turn commits and the reply task interrupts the pause
     activity._interruption_detected = True
-
-    def _swallow(coro: object, **kwargs: object) -> MagicMock:
-        coro.close()  # type: ignore[attr-defined]
-        return MagicMock()
-
-    activity._create_speech_task = _swallow  # type: ignore[method-assign, assignment]
+    activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
 
     events: list[str] = []
     session.on("agent_false_interruption", lambda _: events.append("resume"))
@@ -189,6 +194,42 @@ async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPa
     assert events == []
     assert activity._false_interruption_pending is False
     assert activity._paused_speech is not None  # left for _cancel_speech_pause to interrupt
+
+
+async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a skipped reply (AMD verdict, or commit_user_turn on a realtime session) returns before
+    # _cancel_speech_pause, so the resume is the only thing that can un-pause the speech
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    activity._interruption_detected = True
+    activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    info = _EndOfTurnInfo(
+        skip_reply=True,
+        new_transcript="",
+        transcript_confidence=0.0,
+        metrics=_EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        ),
+        backchannel_over_agent=False,
+    )
+    assert activity.on_end_of_turn(info) is True
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert events == ["resume"]
+    assert activity._paused_speech is None
 
 
 async def test_resume_is_immediate_when_no_turn_decision_is_open(
