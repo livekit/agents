@@ -77,9 +77,11 @@ class ChoiceDelta(BaseModel):
     tool_call_started: bool = False
     """Marks the delta where a tool call begins, before its arguments have streamed in.
 
-    Emitted as an empty marker chunk (no ``content``, no ``tool_calls``) so downstream
-    consumers can flush any buffered text preamble to TTS immediately, instead of waiting
-    for the tool arguments to finish serializing."""
+    Lets downstream consumers flush any buffered text preamble to TTS immediately, instead
+    of waiting for the tool arguments to finish serializing. The marker never carries
+    ``tool_calls`` — the assembled call is emitted once its arguments are complete — but it
+    does carry ``content``/``extra`` when the provider packs them into the same delta as the
+    tool call, so consumers should route those before acting on the flush."""
 
 
 class ChatChunk(BaseModel):
