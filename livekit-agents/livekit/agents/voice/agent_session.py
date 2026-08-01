@@ -1368,17 +1368,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
-        The playing speech and the queued ones are interrupted in playout
-        order, stopping at the first one created with
-        ``allow_interruptions=False`` — it and everything behind it keep
-        playing. ``force`` interrupts them regardless.
+        A queued speech created with ``allow_interruptions=False`` keeps playing,
+        along with the ones behind it, unless ``force`` is set.
 
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated.
 
         Raises:
-            RuntimeError: If the session isn't running.
+            RuntimeError: If the session isn't running, or if the speech currently
+                playing disallows interruptions and ``force`` is False.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")

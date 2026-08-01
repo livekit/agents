@@ -1506,66 +1506,48 @@ class AgentActivity(RecognitionHooks):
 
         return interrupted_speeches
 
-    def _playout_ordered_speeches(self) -> list[SpeechHandle]:
-        """The playing speech followed by the queued ones, in playout order.
-
-        ``_speech_q`` is a heap, so its list order is not the order the
-        speeches will be popped in.
-        """
-        speeches = [self._current_speech] if self._current_speech is not None else []
-        speeches.extend(
-            speech for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1]))
-        )
-        return speeches
-
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
-        The playing speech and the queued ones are interrupted in playout
-        order, stopping at the first speech that disallows interruptions:
-        everything behind it still plays, so interrupting past it would leave
-        a gap in the conversation. ``force`` interrupts them regardless.
+        A queued speech that disallows interruptions keeps playing, along with the ones
+        behind it, unless ``force`` is set.
 
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated
+
+        Raises:
+            RuntimeError: If the speech currently playing disallows interruptions and
+                ``force`` is False.
         """
-        # independent of the playing speech, so always cancelled
         self._cancel_preemptive_generation()
 
         future = asyncio.Future[None]()
 
         interrupted_speeches = self._interrupt_background_speeches(force=force)
 
-        kept_next_speech = False
-        stopped_a_live_speech = False
-        for speech in self._playout_ordered_speeches():
-            # a done or already interrupted handle lingers in the queue (and
-            # _current_speech) until the scheduling task drops it, but it is
-            # never going to play
-            stale = speech.done() or speech.interrupted
+        if self._current_speech is not None:
+            self._current_speech.interrupt(force=force)
+            interrupted_speeches.append(self._current_speech)
 
-            if not force and not speech.allow_interruptions:
-                if stale:
-                    # it cannot leave a gap behind it, so keep walking
-                    continue
+        if self._rt_session is not None:
+            self._rt_session.interrupt()
 
-                # SpeechHandle.interrupt() would raise here, and the speeches
-                # behind this one are going to play, so stop the walk instead
-                kept_next_speech = not stopped_a_live_speech
+        # _speech_q is a heap, so its list order is not the order it pops in
+        for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
+            try:
+                speech.interrupt(force=force)
+            except RuntimeError:
+                # the speeches behind this one are going to play, so stopping
+                # here keeps the conversation contiguous
+                logger.warning(
+                    "a queued speech does not allow interruptions and will play after the "
+                    "interruption, use interrupt(force=True) to interrupt it as well",
+                    extra={"speech_id": speech.id},
+                )
                 break
 
-            speech.interrupt(force=force)
             interrupted_speeches.append(speech)
-            if not stale:
-                stopped_a_live_speech = True
-
-        # a realtime response still streaming belongs to the first speech that
-        # is actually going to play - the playing one, or the head of the queue
-        # while it waits to be promoted - so cancelling it while that speech is
-        # kept would truncate it. Anything else must still stop the provider.
-        if self._rt_session is not None and not kept_next_speech:
-            self._rt_session.interrupt()
 
         if not interrupted_speeches:
             future.set_result(None)

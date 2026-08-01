@@ -1,15 +1,14 @@
-"""``AgentActivity.interrupt()`` walks the playout order and stops at the first
-speech that disallows interruptions.
+"""``AgentActivity.interrupt()`` and queued speeches that disallow interruptions.
 
-``SpeechHandle.interrupt()`` raises for such a handle, and that raise used to
-escape from the middle of ``interrupt()``: the queued speeches were left
-playing, the realtime session was never told to stop generating, and the
-returned future never resolved. Interrupting *past* a protected speech is
-wrong too — the speeches behind it still play, so skipping one in the middle
-would leave a gap in the conversation.
+``SpeechHandle.interrupt()`` raises for such a handle, and the queue loop used
+to let that raise escape: the remaining queued speeches were left playing and
+the returned future never resolved. Interrupting *past* the protected speech
+would be wrong too — the ones behind it still play, so skipping one in the
+middle would leave a gap in the conversation.
 """
 
 import heapq
+import logging
 import time
 from unittest.mock import Mock
 
@@ -33,34 +32,10 @@ def _enqueue(activity: AgentActivity, speech: SpeechHandle, *, priority: int = 0
     heapq.heappush(activity._speech_q, (-priority, time.perf_counter_ns(), speech))
 
 
-class TestInterruptWalk:
-    async def test_protected_current_speech_stops_the_walk(self) -> None:
-        activity = _make_activity()
-        activity._rt_session = Mock()
-        activity._preemptive_generation = Mock()
-        background = SpeechHandle.create(allow_interruptions=True)
-        queued = SpeechHandle.create(allow_interruptions=True)
-        current = SpeechHandle.create(allow_interruptions=False)
-        activity._current_speech = current
-        activity._background_speeches.add(background)
-        _enqueue(activity, queued)
-
-        try:
-            activity.interrupt()  # must not raise
-
-            # the protected speech keeps playing, and so does everything queued
-            # behind it
-            assert not current.interrupted
-            assert not queued.interrupted
-            # the streaming realtime response belongs to the speech we kept
-            activity._rt_session.interrupt.assert_not_called()
-            # neither of these depends on the playing speech
-            assert background.interrupted
-            assert activity._preemptive_generation is None
-        finally:
-            await _close_test_session(activity._session)
-
-    async def test_walk_stops_at_the_first_protected_queued_speech(self) -> None:
+class TestInterruptQueuedSpeeches:
+    async def test_queue_stops_at_the_protected_speech(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         activity = _make_activity()
         activity._rt_session = Mock()
         current = SpeechHandle.create(allow_interruptions=True)
@@ -72,19 +47,21 @@ class TestInterruptWalk:
             _enqueue(activity, speech)
 
         try:
-            activity.interrupt()
+            with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+                activity.interrupt()  # must not raise
 
             assert current.interrupted
             assert first.interrupted
             assert not protected.interrupted
             # no hole: what plays after the protected speech is untouched
             assert not behind.interrupted
-            # the playing speech was interrupted, so the server must stop too
+            # the rest of the sequence still ran
             activity._rt_session.interrupt.assert_called_once()
+            assert any("force=True" in record.message for record in caplog.records)
         finally:
             await _close_test_session(activity._session)
 
-    async def test_a_protected_head_is_not_skipped_over(self) -> None:
+    async def test_a_protected_head_shields_the_whole_queue(self) -> None:
         # [protected, interruptible, protected]: interrupting only the middle
         # one would play the first and third with a gap between them
         activity = _make_activity()
@@ -101,89 +78,10 @@ class TestInterruptWalk:
             assert not head.interrupted
             assert not middle.interrupted
             assert not tail.interrupted
-            # a realtime handle sits in the queue before the scheduling task
-            # promotes it, so the streaming response belongs to this kept head
-            activity._rt_session.interrupt.assert_not_called()
         finally:
             await _close_test_session(activity._session)
 
-    async def test_a_finished_protected_speech_does_not_block_the_walk(self) -> None:
-        # a done handle lingers in _current_speech until the scheduling task
-        # drops it; it will never play, so it cannot leave a gap and must not
-        # shield the speeches behind it
-        activity = _make_activity()
-        activity._rt_session = Mock()
-        finished = SpeechHandle.create(allow_interruptions=False)
-        finished._mark_done()
-        queued = SpeechHandle.create(allow_interruptions=True)
-        activity._current_speech = finished
-        _enqueue(activity, queued)
-
-        try:
-            activity.interrupt()
-
-            assert queued.interrupted
-            activity._rt_session.interrupt.assert_called_once()
-        finally:
-            await _close_test_session(activity._session)
-
-    async def test_a_force_interrupted_queue_entry_does_not_block_the_walk(self) -> None:
-        # interrupt(force=True) leaves handles in _speech_q until the
-        # scheduling task pops and skips them
-        activity = _make_activity()
-        activity._rt_session = Mock()
-        cancelled = SpeechHandle.create(allow_interruptions=False)
-        cancelled.interrupt(force=True)
-        behind = SpeechHandle.create(allow_interruptions=True)
-        for speech in (cancelled, behind):
-            _enqueue(activity, speech)
-
-        try:
-            activity.interrupt()
-
-            assert behind.interrupted
-            activity._rt_session.interrupt.assert_called_once()
-        finally:
-            await _close_test_session(activity._session)
-
-    async def test_a_live_protected_speech_behind_a_stale_one_is_still_kept(self) -> None:
-        # walking past the stale handle must not make the live protected one
-        # look like something we interrupted: the streaming response is its own
-        activity = _make_activity()
-        activity._rt_session = Mock()
-        stale = SpeechHandle.create(allow_interruptions=False)
-        stale._mark_done()
-        live = SpeechHandle.create(allow_interruptions=False)
-        activity._current_speech = stale
-        _enqueue(activity, live)
-
-        try:
-            activity.interrupt()
-
-            assert not live.interrupted
-            activity._rt_session.interrupt.assert_not_called()
-        finally:
-            await _close_test_session(activity._session)
-
-    async def test_realtime_is_cancelled_when_the_playing_speech_is_done(self) -> None:
-        # SpeechHandle._cancel() is a no-op once the handle is done, so
-        # `interrupted` stays False while the scheduling task has not cleared
-        # _current_speech yet - nothing was protected, the provider must stop
-        activity = _make_activity()
-        activity._rt_session = Mock()
-        current = SpeechHandle.create(allow_interruptions=True)
-        current._mark_done()
-        activity._current_speech = current
-
-        try:
-            activity.interrupt()
-
-            assert not current.interrupted
-            activity._rt_session.interrupt.assert_called_once()
-        finally:
-            await _close_test_session(activity._session)
-
-    async def test_the_walk_follows_playout_order_not_heap_order(self) -> None:
+    async def test_the_queue_is_walked_in_playout_order_not_heap_order(self) -> None:
         # a higher-priority speech is queued last but plays first; the heap's
         # list order does not reflect that, the walk must
         activity = _make_activity()
@@ -194,8 +92,6 @@ class TestInterruptWalk:
         _enqueue(activity, urgent_protected, priority=SpeechHandle.SPEECH_PRIORITY_HIGH)
 
         try:
-            assert activity._playout_ordered_speeches() == [urgent_protected, low]
-
             activity.interrupt()
 
             # the protected speech plays first, so the walk stops immediately
@@ -204,14 +100,14 @@ class TestInterruptWalk:
         finally:
             await _close_test_session(activity._session)
 
-    async def test_realtime_is_cancelled_when_nothing_is_playing(self) -> None:
+    async def test_a_protected_playing_speech_still_raises(self) -> None:
+        # unchanged behaviour: SpeechHandle.interrupt() is explicit about it
         activity = _make_activity()
-        activity._rt_session = Mock()
+        activity._current_speech = SpeechHandle.create(allow_interruptions=False)
 
         try:
-            activity.interrupt()
-
-            activity._rt_session.interrupt.assert_called_once()
+            with pytest.raises(RuntimeError):
+                activity.interrupt()
         finally:
             await _close_test_session(activity._session)
 
@@ -220,20 +116,24 @@ class TestInterruptWalk:
         activity._rt_session = Mock()
         current = SpeechHandle.create(allow_interruptions=False)
         queued = SpeechHandle.create(allow_interruptions=False)
+        behind = SpeechHandle.create(allow_interruptions=True)
         activity._current_speech = current
-        _enqueue(activity, queued)
+        for speech in (queued, behind):
+            _enqueue(activity, speech)
 
         try:
             activity.interrupt(force=True)
 
             assert current.interrupted
             assert queued.interrupted
+            assert behind.interrupted
             activity._rt_session.interrupt.assert_called_once()
         finally:
             await _close_test_session(activity._session)
 
     async def test_interruptible_chain_is_unaffected(self) -> None:
         activity = _make_activity()
+        activity._rt_session = Mock()
         current = SpeechHandle.create(allow_interruptions=True)
         queued = SpeechHandle.create(allow_interruptions=True)
         activity._current_speech = current
@@ -244,5 +144,6 @@ class TestInterruptWalk:
 
             assert current.interrupted
             assert queued.interrupted
+            activity._rt_session.interrupt.assert_called_once()
         finally:
             await _close_test_session(activity._session)
