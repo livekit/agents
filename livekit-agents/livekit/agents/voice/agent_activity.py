@@ -2319,9 +2319,8 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             return False
 
-        # avoid interruption if backchannel is detected with realtime model. only a confirmed
-        # verdict suppresses a turn: an unjudged overlap is committed, since interrupting the
-        # agent is recoverable where silently discarding what the user said is not
+        # avoid interruption if backchannel is detected with realtime model. an unjudged overlap
+        # commits: interrupting the agent is recoverable, discarding a real user turn is not
         if (
             self.stt is None
             and self._turn_detection != "manual"
@@ -4345,6 +4344,12 @@ class AgentActivity(RecognitionHooks):
             if self._paused_speech.handle._generations:
                 await self._paused_speech.handle._wait_for_generation()
         self._paused_speech = None
+
+        # the pause withheld end-of-agent-speech for a possible resume; there is none now
+        if self._audio_recognition:
+            self._audio_recognition._on_end_of_agent_speech(
+                ignore_user_transcript_until=time.time()
+            )
 
         if (
             self._session.options.interruption["resume_false_interruption"]

@@ -363,6 +363,19 @@ async def test_resume_does_not_restart_the_detector() -> None:
     assert _sentinel_names(ch) == []
 
 
+async def test_interrupting_a_paused_speech_tears_down() -> None:
+    # the pause withheld the teardown for a possible resume; an interrupt ends the turn instead
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ch.sent.clear()
+
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+
+    assert _sentinel_names(ch) == ["_AgentSpeechEndedSentinel"]
+
+
 async def test_real_end_of_agent_speech_still_tears_down() -> None:
     # the agent turn genuinely ending must stop the inference
     ar, ch = _recognition_with_interruption_ch()

@@ -269,6 +269,23 @@ async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPa
     assert activity._paused_speech is None
 
 
+async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the pipeline paths that report it are gated on a speaking state the pause already left
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, handle = _paused_activity(session)
+    handle._generations = []
+    activity._audio_recognition = MagicMock()
+
+    await activity._cancel_speech_pause()
+    await session.aclose()
+
+    handle.interrupt.assert_called_once()
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
+
+
 async def test_resume_is_immediate_when_no_turn_decision_is_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
