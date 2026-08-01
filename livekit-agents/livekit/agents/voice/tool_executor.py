@@ -40,6 +40,10 @@ if TYPE_CHECKING:
     from .speech_handle import SpeechHandle
 
 
+# How long an active RunResult waits on a tool that went non-blocking via
+# ctx.update() before completing without it.
+NON_BLOCKING_TOOL_RUN_TIMEOUT = 5.0
+
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
@@ -416,7 +420,46 @@ class _ToolExecutor:
 
         exe_task.add_done_callback(_on_done)
 
-        return await first_update_fut
+        result = await first_update_fut
+
+        # ctx.update() releases control back to dispatch while the tool body keeps
+        # running, so the rest of the tool (a handoff, a generate_reply, ...) lands
+        # after this returns. Let an active RunResult wait on it, the same way a
+        # deferred reply is watched in _enqueue_reply; otherwise run() completes
+        # early and everything the tool does next is dropped.
+        #
+        # The wait is bounded: ctx.update() is also how a tool answers early and
+        # keeps doing long background work, and that kind of tool should not hold
+        # run() open until it finishes. Same shape as the realtime auto tool reply
+        # in agent_activity, watch a bounded waiter instead of the open-ended task.
+        if not exe_task.done():
+            run_state = run_ctx.session._global_run_state
+            if run_state is not None and not run_state.done():
+
+                async def _wait_for_tool_body() -> None:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(exe_task), NON_BLOCKING_TOOL_RUN_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            "non-blocking tool still running, letting the run complete without it",
+                            extra={"function": fnc_name, "call_id": call_id},
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except BaseException:
+                        # the tool's own failure is reported through _on_done; swallow it
+                        # here so the waiter doesn't log "exception was never retrieved"
+                        pass
+
+                run_state._watch_handle(
+                    asyncio.create_task(
+                        _wait_for_tool_body(), name=f"tool_run_state_wait_{fnc_name}"
+                    )
+                )
+
+        return result
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)
