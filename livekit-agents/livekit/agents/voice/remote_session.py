@@ -508,7 +508,8 @@ class SessionHost:
                     )
                     await utils.aio.cancel_and_wait(self._writer_task)
                 except asyncio.CancelledError:
-                    pass
+                    await utils.aio.cancel_and_wait(self._writer_task)
+                    raise
             elif not self._writer_task.done():
                 await utils.aio.cancel_and_wait(self._writer_task)
             self._writer_task = None
