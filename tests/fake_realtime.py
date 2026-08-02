@@ -9,11 +9,13 @@ from livekit import rtc
 from livekit.agents import NOT_GIVEN, NotGivenOr
 from livekit.agents.llm import (
     ChatContext,
+    ChatItem,
     GenerationCreatedEvent,
     RealtimeCapabilities,
     RealtimeModel,
     RealtimeModelError,
     RealtimeSession,
+    RemoteItemAddedEvent,
 )
 from livekit.agents.llm.tool_context import Tool, ToolChoice, ToolContext
 
@@ -48,9 +50,12 @@ class FakeRealtimeSession(RealtimeSession):
         self.closed = False
         self.interrupted = False
         self.committed = False
+        self.committed_at: float | None = None
         self.audio_cleared = False
+        self.audio_cleared_at: float | None = None
         self.pushed_audio: list[rtc.AudioFrame] = []
         self.generate_reply_calls = 0
+        self.active_generation = False
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
@@ -77,7 +82,25 @@ class FakeRealtimeSession(RealtimeSession):
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         if self.update_error is not None:
             raise self.update_error
+        old_ids = {i.id for i in self._chat_ctx.items}
         self._chat_ctx = chat_ctx
+        # mirror the real plugins: the server acks newly created items, which the framework
+        # mirrors into the local history via remote_item_added
+        prev_id: str | None = None
+        for item in chat_ctx.items:
+            if item.id not in old_ids:
+                self.emit(
+                    "remote_item_added",
+                    RemoteItemAddedEvent(previous_item_id=prev_id, item=item),
+                )
+            prev_id = item.id
+
+    def emit_remote_item(self, item: ChatItem, *, previous_item_id: str | None = None) -> None:
+        """Test helper: simulate a server-initiated item (e.g. a response output item)."""
+        self._chat_ctx.items.append(item)
+        self.emit(
+            "remote_item_added", RemoteItemAddedEvent(previous_item_id=previous_item_id, item=item)
+        )
 
     async def update_tools(self, tools: list[Tool]) -> None:
         self._tools = ToolContext(tools)
@@ -103,11 +126,17 @@ class FakeRealtimeSession(RealtimeSession):
         self._reply_futs.append(fut)
         return fut
 
+    @property
+    def has_active_generation(self) -> bool:
+        return self.active_generation
+
     def commit_audio(self) -> None:
         self.committed = True
+        self.committed_at = time.time()
 
     def clear_audio(self) -> None:
         self.audio_cleared = True
+        self.audio_cleared_at = time.time()
 
     def interrupt(self) -> None:
         self.interrupted = True

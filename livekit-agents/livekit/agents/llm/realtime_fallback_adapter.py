@@ -194,6 +194,10 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         )
         self._bind(self._active)
 
+    @property
+    def has_active_generation(self) -> bool:
+        return self._active.has_active_generation
+
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)

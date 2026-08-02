@@ -256,6 +256,17 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
+    @property
+    def has_active_generation(self) -> bool:
+        """Whether a server-side response is currently being generated for this session.
+
+        Plugins whose backing API enforces a single active response per session (e.g. OpenAI
+        Realtime rejects ``response.create`` with ``conversation_already_has_active_response``
+        while one is in flight) should override this so the framework can serialize response
+        creation. The default assumes no such constraint.
+        """
+        return False
+
     # commit the input audio buffer to the server
     @abstractmethod
     def commit_audio(self) -> None: ...

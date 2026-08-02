@@ -199,7 +199,12 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
 
 
 class PreemptiveGenerationOptions(TypedDict, total=False):
-    """Configuration for preemptive generation."""
+    """Configuration for preemptive generation.
+
+    Applies to ``llm.LLM`` pipelines and to ``llm.RealtimeModel`` sessions without
+    server-side turn detection (the reply starts generating on the eager transcript;
+    playout stays gated until the turn is confirmed).
+    """
 
     enabled: bool
     """Whether preemptive generation is enabled. Defaults to ``True``."""
