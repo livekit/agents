@@ -787,36 +787,42 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
-        if self._commit_user_turn_atask is not None:
-            await aio.cancel_and_wait(self._commit_user_turn_atask)
+        try:
+            if self._commit_user_turn_atask is not None:
+                await aio.cancel_and_wait(self._commit_user_turn_atask)
 
-        if self._stt_pipeline is not None:
-            await self._stt_pipeline.aclose()
-            self._stt_pipeline = None
+            if self._stt_pipeline is not None:
+                await self._stt_pipeline.aclose()
+                self._stt_pipeline = None
 
-        await aio.cancel_and_wait(*self._tasks)
+            await aio.cancel_and_wait(*self._tasks)
 
-        if self._stt_consumer_atask is not None:
-            await aio.cancel_and_wait(self._stt_consumer_atask)
+            if self._stt_consumer_atask is not None:
+                await aio.cancel_and_wait(self._stt_consumer_atask)
 
-        if self._vad_atask is not None:
-            await aio.cancel_and_wait(self._vad_atask)
+            if self._vad_atask is not None:
+                await aio.cancel_and_wait(self._vad_atask)
 
-        if self._interruption_atask is not None:
-            await aio.cancel_and_wait(self._interruption_atask)
+            if self._interruption_atask is not None:
+                await aio.cancel_and_wait(self._interruption_atask)
 
-        if self._end_of_turn_task is not None:
-            await aio.cancel_and_wait(self._end_of_turn_task)
+            if self._end_of_turn_task is not None:
+                await aio.cancel_and_wait(self._end_of_turn_task)
 
-        if self._turn_detector_stream is not None:
-            await self._turn_detector_stream.aclose()
-            self._turn_detector_stream = None
-        self._turn_detector_prediction_fut = None
+            if self._turn_detector_stream is not None:
+                await self._turn_detector_stream.aclose()
+                self._turn_detector_stream = None
+            self._turn_detector_prediction_fut = None
 
-        if self._backchannel_boundary_timer is not None:
-            self._backchannel_boundary_timer.cancel()
-            self._backchannel_boundary_timer = None
-            self._backchannel_boundary_callback = None
+            if self._backchannel_boundary_timer is not None:
+                self._backchannel_boundary_timer.cancel()
+                self._backchannel_boundary_timer = None
+                self._backchannel_boundary_callback = None
+        finally:
+            # a speech segment may never produce a transcript or a committed turn.
+            # the eou detection ends the span on the normal path, it is cancelled above,
+            # so end it here once recognition stopped to keep the span exported
+            self._end_user_turn_span()
 
     def _update_stt(
         self,
@@ -1014,9 +1020,7 @@ class AudioRecognition:
         self._turn_tracker = _UserTurnTracker()
 
         # end any in-progress user_turn span so the next speech starts a fresh one
-        if self._user_turn_span is not None and self._user_turn_span.is_recording():
-            self._user_turn_span.end()
-        self._user_turn_span = None
+        self._end_user_turn_span()
         self._stt_request_ids = []
 
         # reset stt to clear the buffer from previous user turn
@@ -1884,3 +1888,9 @@ class AudioRecognition:
             )
 
         return self._user_turn_span
+
+    def _end_user_turn_span(self) -> None:
+        if self._user_turn_span is not None and self._user_turn_span.is_recording():
+            self._user_turn_span.end()
+        self._user_turn_span = None
+        self._user_turn_start = None
