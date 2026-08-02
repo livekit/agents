@@ -1133,11 +1133,7 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
-        if (
-            ev.type
-            in (stt.SpeechEventType.FINAL_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT)
-            and ev.alternatives[0].text
-        ):
+        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
             self._mark_turn_transcribed()
 
         # handle interruption detection
@@ -1403,10 +1399,14 @@ class AudioRecognition:
 
             self._vad_speech_started = False
             self._speaking = False
-            self._last_speaking_time = time.time() - ev.silence_duration - ev.inference_duration
+            speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
+            self._last_speaking_time = speech_end_time
 
             if self._stt_pipeline is not None:
-                self._arm_transcription_timeout(ev.speech_duration)
+                self._arm_transcription_timeout(
+                    ev.speech_duration,
+                    delay=ev.silence_duration + ev.inference_duration,
+                )
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
@@ -1877,15 +1877,16 @@ class AudioRecognition:
         self._turn_transcript_received = True
         self._cancel_transcription_timeout()
 
-    def _arm_transcription_timeout(self, speech_duration: float) -> None:
+    def _arm_transcription_timeout(self, speech_duration: float, *, delay: float) -> None:
         timeout = self._session.options.transcription_timeout
         if timeout is None or self._turn_transcript_received:
             return
 
         self._turn_speech_duration += speech_duration
         self._cancel_transcription_timeout()
+        remaining_timeout = max(0.0, timeout - delay)
         self._transcription_timeout_handle = asyncio.get_running_loop().call_later(
-            timeout, self._on_transcription_timeout
+            remaining_timeout, self._on_transcription_timeout
         )
 
     def _on_transcription_timeout(self) -> None:

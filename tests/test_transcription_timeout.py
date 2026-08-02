@@ -31,6 +31,7 @@ async def test_fires_when_vad_speech_not_transcribed() -> None:
     assert len(events) == 1
     assert events[0].speech_duration == pytest.approx(2.0, abs=0.5)
     assert events[0].vad_speech_started_at - t_origin == pytest.approx(0.5, abs=0.5)
+    assert events[0].created_at - t_origin == pytest.approx(2.5 + TIMEOUT, abs=0.1)
 
 
 async def test_no_event_when_transcribed() -> None:
