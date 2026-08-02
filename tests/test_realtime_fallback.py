@@ -276,6 +276,35 @@ async def test_plugin_event_subscribed_mid_swap_binds_to_new_child() -> None:
     assert received == ["from-new-child"]
 
 
+async def test_swap_survives_bring_up_raising_before_a_child_exists() -> None:
+    primary = FakeRealtimeModel()
+    backup1 = FakeRealtimeModel()
+    backup2 = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup1, backup2])
+    session = adapter.session()
+    errors: list = []
+    session.on("error", lambda e: errors.append(e))
+
+    # session() raises, so _bring_up's failure path unbinds the *outgoing* child a second
+    # time -- and by then _forwarders holds an entry that was never attached to it
+    backup1.session_error = RuntimeError("cannot construct session")
+    old_child = primary.active_session
+    gate = asyncio.Event()
+    old_child.block_aclose = gate
+
+    old_child.emit_error(recoverable=False)
+    await old_child.aclose_entered.wait()
+    session.on(_PLUGIN_EVENT, lambda ev: None)  # registered mid-swap, never bound to old_child
+    gate.set()
+    await session._swap_task
+
+    # detaching a forwarder the child never had is a no-op, so the swap still cascades
+    assert session._active_index == 2
+    assert session._active is backup2.active_session
+    assert all(e.recoverable for e in errors)
+    session._active.emit(_PLUGIN_EVENT, "still-forwarded")
+
+
 def test_forwards_multi_arg_plugin_events() -> None:
     primary = FakeRealtimeModel()
     session = RealtimeModelFallbackAdapter([primary]).session()

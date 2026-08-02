@@ -167,12 +167,16 @@ class FakeRealtimeModel(RealtimeModel):
         self.closed = False
         # when set, every session this model creates fails to bring up
         self.bring_up_error: Exception | None = None
+        # when set, session() itself raises, before any child exists to bind
+        self.session_error: Exception | None = None
 
     @property
     def active_session(self) -> FakeRealtimeSession:
         return self.created_sessions[-1]
 
     def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        if self.session_error is not None:
+            raise self.session_error
         sess = FakeRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         sess.update_error = self.bring_up_error
         self.created_sessions.append(sess)
