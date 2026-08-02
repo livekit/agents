@@ -321,6 +321,23 @@ def test_forwards_multi_arg_plugin_events() -> None:
     assert received == [("a", "b")]
 
 
+async def test_once_plugin_subscription_survives_a_swap_and_fires_once() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    received: list[object] = []
+    session.once(_PLUGIN_EVENT, lambda ev: received.append(ev))
+
+    await adapter.restart_session()
+
+    session._active.emit(_PLUGIN_EVENT, "first")
+    session._active.emit(_PLUGIN_EVENT, "second")
+
+    # a one-shot subscriber gets a forwarder too, is re-attached to the new child, and
+    # still fires exactly once
+    assert received == ["first"]
+
+
 def test_multi_arg_forwarding_is_independent_per_subscriber() -> None:
     primary = FakeRealtimeModel()
     session = RealtimeModelFallbackAdapter([primary]).session()

@@ -224,6 +224,16 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._add_forwarder(event)
         return super().on(event, callback)
 
+    def once(self, event: str, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        """One-shot :meth:`on`, registering the forwarder the same way.
+
+        ``EventEmitter.once`` currently routes through ``on``, so this would work without the
+        override. Registering here too keeps one-shot plugin subscriptions from silently
+        never firing if that ever stops being true.
+        """
+        self._add_forwarder(event)
+        return super().once(event, callback)
+
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
