@@ -243,6 +243,56 @@ async def test_ping():
 
 
 @pytest.mark.asyncio
+async def test_wait_for_ready_retries_transport_send_failures():
+    """Transient send failures must be retried until the peer becomes reachable."""
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    host = SessionHost(host_transport)
+    host.register_session(_make_mock_session())
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    attempts = {"n": 0}
+    original_send = client_transport.send_message
+
+    async def flaky_send(msg: agent_pb.AgentSessionMessage) -> None:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("room session transport is closed")
+        await original_send(msg)
+
+    client_transport.send_message = flaky_send  # type: ignore[method-assign]
+    await client.wait_for_ready(timeout=2.0, retry_interval=0.05)
+    assert attempts["n"] >= 3
+
+    await client.aclose()
+    await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ready_surfaces_transport_error_after_deadline():
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    async def always_fail(msg: agent_pb.AgentSessionMessage) -> None:
+        raise RuntimeError("failed to send binary stream message: peer missing")
+
+    client_transport.send_message = always_fail  # type: ignore[method-assign]
+
+    with pytest.raises(TimeoutError, match="wait_for_ready timed out") as ei:
+        await client.wait_for_ready(timeout=0.15, retry_interval=0.05)
+
+    assert ei.value.__cause__ is not None
+    assert "peer missing" in str(ei.value.__cause__)
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_get_chat_history():
     host_transport, client_transport = PairedTransport.create_pair()
 

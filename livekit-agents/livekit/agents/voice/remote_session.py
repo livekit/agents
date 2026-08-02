@@ -1266,11 +1266,18 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         return resp
 
     async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
+        """Wait until the remote session answers a ping.
+
+        Retries on request timeouts and transient transport send failures (e.g.
+        room not connected yet, destination participant missing, stream_bytes
+        errors) until ``timeout`` elapses, then raises ``TimeoutError``.
+        """
         deadline = asyncio.get_event_loop().time() + timeout
+        last_error: BaseException | None = None
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                raise TimeoutError("wait_for_ready timed out")
+                raise TimeoutError("wait_for_ready timed out") from last_error
             req = agent_pb.SessionRequest(
                 request_id=utils.shortuuid("req_"),
                 ping=agent_pb.SessionRequest.Ping(),
@@ -1278,9 +1285,18 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             try:
                 await self._send_request(req, timeout=min(retry_interval, remaining))
                 return
-            except (TimeoutError, asyncio.TimeoutError):
-                if asyncio.get_event_loop().time() >= deadline:
-                    raise TimeoutError("wait_for_ready timed out") from None
+            except asyncio.CancelledError:
+                raise
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                # wait_for already consumed time up to retry_interval; retry immediately.
+                last_error = e
+            except Exception as e:
+                # Transport may not be ready yet (room connecting, peer absent).
+                last_error = e
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("wait_for_ready timed out") from last_error
+                await asyncio.sleep(min(retry_interval, remaining))
 
     async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
