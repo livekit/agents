@@ -328,11 +328,17 @@ class LLMStream(llm.LLMStream):
         if blaze._auth_token:
             headers["Authorization"] = f"Bearer {blaze._auth_token}"
 
-        # Build request body
-        body: dict[str, Any] = {"messages": messages}
-        tools_param = self._build_tools_param()
-        if tools_param:
-            body["tools"] = tools_param
+        # Body must be a JSON *array* of messages (not {"messages": [...]}).
+        # Matches agents-js and Blaze /chat-conversion-stream (422 list_type otherwise).
+        # Tool definitions are not sent in the body; use_tool_based is a query param and
+        # the voicebot's tools are configured server-side.
+        if self._tools:
+            logger.debug(
+                "[%s] %d local tool(s) registered; Blaze uses bot-configured tools "
+                "with use_tool_based query param",
+                request_id,
+                len(self._tools),
+            )
 
         logger.info(
             "[%s] LLM chat request: %d messages, bot=%s, tools=%d",
@@ -347,7 +353,7 @@ class LLMStream(llm.LLMStream):
             async with blaze._client.stream(
                 "POST",
                 url,
-                json=body,
+                json=messages,
                 headers=headers,
                 timeout=effective_connect_timeout(self._conn_options, blaze._timeout),
             ) as response:

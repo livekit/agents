@@ -604,7 +604,7 @@ async def test_llm_run_posts_empty_messages_for_agent_first_turn() -> None:
         method: str,
         url: str,
         *,
-        json: dict | None = None,
+        json: list | dict | None = None,
         headers: dict | None = None,
         timeout: object = None,
     ) -> _StreamCM:
@@ -624,8 +624,65 @@ async def test_llm_run_posts_empty_messages_for_agent_first_turn() -> None:
     try:
         chunks = [chunk async for chunk in stream]
         assert captured["method"] == "POST"
-        assert captured["json"] == {"messages": []}
+        # API expects a JSON array body, not {"messages": [...] } (422 list_type).
+        assert captured["json"] == []
         assert any(c.delta and c.delta.content == "Xin chào!" for c in chunks)
+    finally:
+        await stream.aclose()
+        await llm_inst.aclose()
+
+
+@pytest.mark.asyncio
+async def test_llm_run_posts_messages_as_json_array() -> None:
+    """Blaze chat-conversion-stream body is a list of messages (agents-js parity)."""
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Xin chào")
+
+    captured: dict = {}
+
+    class _StreamResponse:
+        status_code = 200
+
+        async def aiter_lines(self):
+            yield 'data: {"content": "Chào bạn!"}'
+            yield "data: [DONE]"
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class _StreamCM:
+        async def __aenter__(self) -> _StreamResponse:
+            return _StreamResponse()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    def stream_mock(
+        method: str,
+        url: str,
+        *,
+        json: list | dict | None = None,
+        headers: dict | None = None,
+        timeout: object = None,
+    ) -> _StreamCM:
+        captured["method"] = method
+        captured["json"] = json
+        return _StreamCM()
+
+    llm_inst = _make_llm()
+    llm_inst._client.stream = stream_mock  # type: ignore[method-assign]
+    stream = LLMStream(
+        llm_inst,
+        chat_ctx=chat_ctx,
+        tools=[],
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+
+    try:
+        chunks = [chunk async for chunk in stream]
+        assert captured["method"] == "POST"
+        assert captured["json"] == [{"role": "user", "content": "Xin chào"}]
+        assert any(c.delta and c.delta.content == "Chào bạn!" for c in chunks)
     finally:
         await stream.aclose()
         await llm_inst.aclose()
