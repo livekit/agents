@@ -78,7 +78,13 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
             # of it -- those inner tags are recorded on their own by the later pass that
             # sweeps the raw inner content returned below. deleting delimiters is enough
             # here and keeps this linear: recursing would rescan each nesting level again.
-            inner_text = delimiters.sub("", inner).strip() if inner else ""
+            if not inner:
+                inner_text = ""
+            elif "<" in inner or ">" in inner:
+                inner_text = delimiters.sub("", inner).strip()
+            else:
+                # the common case: plain inner text needs no scan at all
+                inner_text = inner.strip()
             if inner_text:
                 value = inner_text
             else:
