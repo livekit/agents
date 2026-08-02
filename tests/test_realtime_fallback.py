@@ -292,9 +292,11 @@ async def test_swap_survives_bring_up_raising_before_a_child_exists() -> None:
     gate = asyncio.Event()
     old_child.block_aclose = gate
 
+    received: list[object] = []
     old_child.emit_error(recoverable=False)
     await old_child.aclose_entered.wait()
-    session.on(_PLUGIN_EVENT, lambda ev: None)  # registered mid-swap, never bound to old_child
+    # registered mid-swap, so it is never bound to old_child
+    session.on(_PLUGIN_EVENT, lambda ev: received.append(ev))
     gate.set()
     await session._swap_task
 
@@ -302,7 +304,9 @@ async def test_swap_survives_bring_up_raising_before_a_child_exists() -> None:
     assert session._active_index == 2
     assert session._active is backup2.active_session
     assert all(e.recoverable for e in errors)
+    # ...and the mid-swap subscriber lands on the model the cascade settled on
     session._active.emit(_PLUGIN_EVENT, "still-forwarded")
+    assert received == ["still-forwarded"]
 
 
 def test_forwards_multi_arg_plugin_events() -> None:
