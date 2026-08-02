@@ -106,6 +106,23 @@ _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
 
+def _transcripts_equivalent(first: str, second: str | None) -> bool:
+    if first == second:
+        return True
+    if second is None:
+        return False
+
+    first_words = [
+        word.casefold()
+        for word, _, _ in split_words(first, ignore_punctuation=True, split_character=True)
+    ]
+    second_words = [
+        word.casefold()
+        for word, _, _ in split_words(second, ignore_punctuation=True, split_character=True)
+    ]
+    return bool(first_words) and first_words == second_words
+
+
 class ActivityClosedError(Exception):
     """Raised by ``wait_for_idle`` when the target activity/session has closed."""
 
@@ -2466,7 +2483,9 @@ class AgentActivity(RecognitionHooks):
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
             if (
-                preemptive.info.new_transcript == user_message.raw_text_content
+                _transcripts_equivalent(
+                    preemptive.info.new_transcript, user_message.raw_text_content
+                )
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
@@ -2483,7 +2502,8 @@ class AgentActivity(RecognitionHooks):
                 )
             else:
                 logger.warning(
-                    "preemptive generation enabled but chat context or tools have changed after `on_user_turn_completed`",  # noqa: E501
+                    "preemptive generation invalidated after `on_user_turn_completed` because "
+                    "the transcript, chat context, tools, or tool choice changed",
                 )
                 preemptive.speech_handle._cancel()
 
