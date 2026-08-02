@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
@@ -493,20 +492,16 @@ class Agent:
 
             conn_options = activity.session.conn_options.stt_conn_options
             async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                _audio_input_started_at: float = (
-                    activity._audio_recognition._input_started_at
+                # provider timestamps are relative to this stream's first frame; the
+                # offset places them on the input's audio timeline, which is how far
+                # that timeline had already advanced when the stream was created.
+                # Measured in audio delivered, not wall clock: the two only agree
+                # while audio flows at exactly realtime.
+                stream.start_time_offset = (
+                    activity._audio_recognition._input_audio_duration
                     if activity._audio_recognition is not None
-                    and activity._audio_recognition._input_started_at is not None
-                    else (
-                        activity.session._recorder_io.recording_started_at
-                        if activity.session._recorder_io
-                        and activity.session._recorder_io.recording_started_at
-                        else activity.session._started_at
-                        if activity.session._started_at
-                        else time.time()
-                    )
+                    else 0.0
                 )
-                stream.start_time_offset = time.time() - _audio_input_started_at
 
                 @utils.log_exceptions(logger=logger)
                 async def _forward_input() -> None:
