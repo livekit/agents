@@ -1133,16 +1133,13 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
-        if ev.type in (
-            stt.SpeechEventType.INTERIM_TRANSCRIPT,
-            stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            stt.SpeechEventType.FINAL_TRANSCRIPT,
-        ) and not ev.alternatives:
-            return
-
         # Keep the timeout armed for interim and preflight transcripts; either may never
         # be followed by a final transcript.
-        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
+        if (
+            ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            and ev.alternatives
+            and ev.alternatives[0].text
+        ):
             self._mark_turn_transcribed()
 
         # handle interruption detection
