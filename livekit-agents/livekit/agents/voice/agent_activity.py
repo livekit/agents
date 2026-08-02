@@ -2492,8 +2492,11 @@ class AgentActivity(RecognitionHooks):
             ):
                 speech_handle = preemptive.speech_handle
 
-                # preemptive generation is using another ChatMessage created outside of the on_end_of_turn callback,
-                # inject the metrics here.
+                # The pipeline task retains the ChatMessage created for preemptive generation.
+                # Reconcile it with the finalized message before scheduling so conversation
+                # history keeps the final transcript and on_user_turn_completed edits.
+                preemptive.user_message.content = user_message.content.copy()
+                preemptive.user_message.transcript_confidence = user_message.transcript_confidence
                 preemptive.user_message.metrics = metrics_report
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
