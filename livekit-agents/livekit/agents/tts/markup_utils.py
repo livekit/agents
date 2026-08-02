@@ -60,8 +60,12 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
         tag = groups.get("tag")
         if tag is not None:
             inner = groups.get("inner")
-            if inner is not None and inner.strip():
-                value = inner.strip()
+            # a wrapping tag's value is its inner *text*, so nested markup is stripped out
+            # of it -- those inner tags are recorded on their own by the later pass that
+            # sweeps the raw inner content returned below
+            inner_text = extract_and_strip(inner, xml_tags=xml_tags)[0].strip() if inner else ""
+            if inner_text:
+                value = inner_text
             else:
                 attr_match = _VALUE_ATTR_RE.search(groups.get("attrs") or "")
                 value = attr_match.group(1) if attr_match else ""
