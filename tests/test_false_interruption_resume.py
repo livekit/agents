@@ -315,6 +315,24 @@ async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.Mo
     activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
 
 
+async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a handoff keeps the speech for the next activity, and the recognition is closed by then
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, handle = _paused_activity(session)
+    activity._audio_recognition = MagicMock()
+
+    await activity._cancel_speech_pause(interrupt=False)
+    await session.aclose()
+
+    handle.interrupt.assert_not_called()
+    activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
+
+
 async def test_resume_is_immediate_when_no_turn_decision_is_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
