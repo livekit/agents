@@ -1539,6 +1539,7 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
         turn_detection="vad",
     )
     recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = True
     event_loop = asyncio.get_running_loop()
 
     try:
@@ -1556,6 +1557,39 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
         timeout_handle = recognition._transcription_timeout_handle
         assert timeout_handle is not None
         assert timeout_handle.when() - event_loop.time() == pytest.approx(1.25)
+    finally:
+        recognition._stt_pipeline = None
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
+async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = False
+
+    try:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=1.0,
+                silence_duration=0.5,
+            )
+        )
+
+        assert recognition._transcription_timeout_handle is None
     finally:
         recognition._stt_pipeline = None
         await recognition._aclose()

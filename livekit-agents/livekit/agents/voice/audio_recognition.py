@@ -1395,6 +1395,7 @@ class AudioRecognition:
                     self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
+            vad_speech_started = self._vad_speech_started
             with trace.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
@@ -1403,7 +1404,8 @@ class AudioRecognition:
             speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             self._last_speaking_time = speech_end_time
 
-            if self._stt_pipeline is not None:
+            # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
+            if self._stt_pipeline is not None and vad_speech_started:
                 self._arm_transcription_timeout(
                     ev.speech_duration,
                     delay=ev.silence_duration + ev.inference_duration,
