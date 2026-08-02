@@ -13,7 +13,7 @@ from openai.types import realtime
 
 from livekit import rtc
 from livekit.agents import RunContext, function_tool, llm, utils
-from livekit.plugins import openai, xai
+from livekit.plugins import inworld, openai, xai
 
 pytestmark = pytest.mark.realtime
 
@@ -47,12 +47,20 @@ def _xai_model() -> xai.realtime.RealtimeModel:
     return xai.realtime.RealtimeModel()
 
 
+def _inworld_model() -> inworld.realtime.RealtimeModel:
+    return inworld.realtime.RealtimeModel(model="openai/gpt-5.4-nano")
+
+
 _skip_xai = pytest.mark.skipif(not os.environ.get("XAI_API_KEY"), reason="XAI_API_KEY not set")
+_skip_inworld = pytest.mark.skipif(
+    not os.environ.get("INWORLD_API_KEY"), reason="INWORLD_API_KEY not set"
+)
 
 REALTIME_MODELS: list = [
     pytest.param(_openai_model, id="openai"),
     pytest.param(_azure_model, id="azure"),
     pytest.param(_xai_model, id="xai", marks=_skip_xai),
+    pytest.param(_inworld_model, id="inworld", marks=_skip_inworld),
 ]
 
 # xAI doesn't support conversation.item.delete or sequential response.create
