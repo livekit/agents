@@ -499,17 +499,20 @@ class SessionHost:
         if self._writer_task:
             remaining = _remaining_timeout(drain_deadline)
             if remaining > 0 and not self._writer_task.done():
-                try:
-                    await asyncio.wait_for(self._writer_task, timeout=remaining)
-                except (TimeoutError, asyncio.TimeoutError):
+                # Use wait(), not wait_for()/await on the task: _writer_loop
+                # re-raises CancelledError from transport.send_message, which
+                # leaves the Task cancelled. Awaiting that Task would raise
+                # CancelledError here and abort AgentSession cleanup even
+                # though aclose itself was not cancelled.
+                done, pending = await asyncio.wait({self._writer_task}, timeout=remaining)
+                if pending:
                     logger.warning(
                         "session host outbound writer did not drain before shutdown grace period",
                         extra={"queued_messages": self._outbound_ch.qsize()},
                     )
                     await utils.aio.cancel_and_wait(self._writer_task)
-                except asyncio.CancelledError:
-                    await utils.aio.cancel_and_wait(self._writer_task)
-                    raise
+                elif self._writer_task.cancelled():
+                    logger.debug("session host outbound writer ended cancelled during shutdown")
             elif not self._writer_task.done():
                 await utils.aio.cancel_and_wait(self._writer_task)
             self._writer_task = None

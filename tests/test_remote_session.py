@@ -622,6 +622,54 @@ async def test_writer_exit_closes_outbound_channel_and_fails_fast():
 
 
 @pytest.mark.asyncio
+async def test_aclose_ignores_cancelled_writer_task():
+    """A cancelled writer must not make aclose() raise CancelledError.
+
+    _writer_loop re-raises CancelledError from transport.send_message, leaving
+    the writer Task cancelled. Awaiting that Task via wait_for would propagate
+    CancelledError into aclose and abort AgentSession cleanup (RoomIO close).
+    """
+    host_transport, client_transport = AdversarialTransport.create_pair()
+    # Block the response send so aclose reaches wait() while the writer is alive.
+    host_transport.pause_responses()
+    host_transport._on_response_send = asyncio.Event()
+
+    mock_session = _make_mock_session()
+    mock_session.interrupt = AsyncMock()
+    mock_session.run = MagicMock(return_value=_fake_run_result())
+
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    run_task = asyncio.create_task(client.run("hello", timeout=5.0))
+    await asyncio.wait_for(host_transport._on_response_send.wait(), timeout=2.0)
+
+    close_task = asyncio.create_task(host.aclose())
+    # Let aclose cancel recv, drain handlers, close the outbound channel, and
+    # enter wait() on the still-blocked writer.
+    await asyncio.sleep(0.05)
+    assert host._writer_task is not None
+    assert not close_task.done()
+
+    # Cancel the writer while aclose is waiting on it — same end state as
+    # CancelledError bubbling out of transport.send_message.
+    host._writer_task.cancel()
+
+    # Must complete without CancelledError propagating out of aclose.
+    await asyncio.wait_for(close_task, timeout=2.0)
+    assert host_transport._closed
+
+    run_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await run_task
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_response_arriving_at_timeout_boundary_still_resolves():
     """If the ack lands in the same tick as the wait timeout, prefer success."""
     host_transport, client_transport = AdversarialTransport.create_pair()
