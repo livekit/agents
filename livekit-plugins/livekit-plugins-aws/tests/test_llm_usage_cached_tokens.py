@@ -15,7 +15,11 @@ This pins the Bedrock path to the same behaviour.
 
 from __future__ import annotations
 
+import pytest
+
 from livekit.plugins.aws.llm import LLMStream
+
+pytestmark = pytest.mark.unit
 
 
 def _parse_metadata(usage: dict) -> object:
