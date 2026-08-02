@@ -120,8 +120,12 @@ class AnamAPI:
             payload["sessionOptions"] = {
                 "videoWidth": session_options.video_width,
                 "videoHeight": session_options.video_height,
-                "showAIAvatarDisclosure": session_options.show_ai_avatar_disclosure,
             }
+
+        if session_options is not None and session_options.show_ai_avatar_disclosure is not None:
+            if "sessionOptions" not in payload:
+                payload["sessionOptions"] = {}
+            payload["sessionOptions"]["showAIAvatarDisclosure"] = session_options.show_ai_avatar_disclosure
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
