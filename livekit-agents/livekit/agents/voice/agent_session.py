@@ -377,10 +377,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 Defaults to ``15.0`` s, set to ``None`` to disable.
             transcription_timeout (float, optional): If set, emit a
                 ``user_transcription_timeout`` event when VAD detects user speech
-                during the user's turn but no transcript arrives within this amount
-                of time after the speech ends. Useful to recover from STT failures
-                by prompting the user to repeat themselves. Requires both VAD and
-                STT. Disabled by default.
+                during the user's turn but no non-empty final transcript arrives
+                within this amount of time after the speech ends. This can happen
+                because STT failed or because audio was intentionally withheld from
+                STT, such as during AEC warmup or uninterruptible agent speech. Use
+                it to prompt the user to repeat themselves. Requires both VAD and STT.
+                Disabled by default.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.

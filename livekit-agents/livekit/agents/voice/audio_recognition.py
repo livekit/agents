@@ -1133,6 +1133,8 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
+        # Keep the timeout armed for interim and preflight transcripts; either may never
+        # be followed by a final transcript.
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
             self._mark_turn_transcribed()
 
@@ -1292,7 +1294,6 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
-            # An interim may never be followed by a final transcript.
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with trace.use_span(self._ensure_user_turn_span()):

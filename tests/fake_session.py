@@ -114,7 +114,8 @@ async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float
     t_origin = time.time()
     audio_input.push(0.1)
 
-    if isinstance(stt, FakeSTT):
+    if stt is not None:
+        assert isinstance(stt, FakeSTT)
         await stt.fake_user_speeches_done
 
     await asyncio.sleep(drain_delay)
