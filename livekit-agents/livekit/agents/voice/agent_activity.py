@@ -4333,6 +4333,13 @@ class AgentActivity(RecognitionHooks):
         if not self._paused_speech:
             return
 
+        # the pause withheld end-of-agent-speech for a resume; this ends the agent turn instead.
+        # the audio stopped when it was paused, so there is no playout left to wait for
+        if self._audio_recognition:
+            self._audio_recognition._on_end_of_agent_speech(
+                ignore_user_transcript_until=time.time()
+            )
+
         if (
             interrupt
             and not self._paused_speech.handle.interrupted
@@ -4345,12 +4352,6 @@ class AgentActivity(RecognitionHooks):
             if self._paused_speech.handle._generations:
                 await self._paused_speech.handle._wait_for_generation()
         self._paused_speech = None
-
-        # the pause withheld end-of-agent-speech for a resume; this ends the agent turn instead
-        if self._audio_recognition:
-            self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=time.time()
-            )
 
         if (
             self._session.options.interruption["resume_false_interruption"]

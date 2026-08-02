@@ -310,6 +310,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._backchannel_boundary_callback = None
     ar._ignore_user_transcript_until = NOT_GIVEN
     ar._overlap_in_current_turn = False
+    ar._overlap_open = False
     ar._turn_backchannel_over_agent = False
     ar._transcript_buffer = []
     ar._tasks = set()
@@ -359,6 +360,19 @@ async def test_resume_does_not_restart_the_detector() -> None:
     ch.sent.clear()
 
     ar._on_start_of_agent_speech(started_at=time.time(), resumed=True)
+
+    assert _sentinel_names(ch) == []
+
+
+async def test_a_resolved_overlap_is_not_closed_again() -> None:
+    # a turn can hold several overlaps, so closing keys off the open one rather than the turn
+    ar, ch = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=time.time())
+    ar._on_start_of_speech(started_at=time.time())
+    await ar._on_overlap_speech_event(_overlap_event(is_interruption=True, agent_ended=False))
+    ch.sent.clear()
+
+    ar._on_end_of_speech(ended_at=time.time())
 
     assert _sentinel_names(ch) == []
 

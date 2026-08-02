@@ -300,6 +300,8 @@ class AudioRecognition:
         # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
         self._overlap_in_current_turn: bool = False
         self._turn_backchannel_over_agent: bool = False
+        # an overlap is open right now, awaiting a verdict; several can occur within one turn
+        self._overlap_open: bool = False
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -517,6 +519,9 @@ class AudioRecognition:
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
 
+        if not paused:
+            # the sentinel sent above resets the detector stream, dropping any open overlap
+            self._overlap_open = False
         self._agent_speaking = False
 
     def _on_start_of_speech(
@@ -537,6 +542,7 @@ class AudioRecognition:
             return
         # overlap over agent speech started this turn; gates verdict acceptance below
         self._overlap_in_current_turn = True
+        self._overlap_open = True
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
@@ -572,11 +578,11 @@ class AudioRecognition:
         speaking (the user may still be talking), in which case the synthesized verdict
         is inconclusive and must not be treated as a confirmed backchannel.
         """
-        # an open overlap outlives a paused agent speech, so it can still be closed here
-        if not self._adaptive_interruption_active or not (
-            self._agent_speaking or self._overlap_in_current_turn
-        ):
+        # the overlap ends once, on the first of: a verdict, the user stopping, the agent
+        # stopping, or a teardown — so a call can arrive with it already closed
+        if not self._adaptive_interruption_active or not self._overlap_open:
             return
+        self._overlap_open = False
 
         # Only set is_interruption=false if not already set (avoid overwriting true from interruption detection)
         if user_speaking_span and user_speaking_span.is_recording():
@@ -925,6 +931,7 @@ class AudioRecognition:
         self, interruption_detection: inference.AdaptiveInterruptionDetector | None
     ) -> None:
         self._interruption_detection = interruption_detection
+        self._overlap_open = False  # the stream it belonged to is gone either way
         if interruption_detection is not None:
             self._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
             self._interruption_atask = asyncio.create_task(
@@ -1404,6 +1411,9 @@ class AudioRecognition:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
+        # every verdict is terminal for its overlap, including one the cooldown then ignores
+        self._overlap_open = False
+
         if self._backchannel_boundary_active and not ev.is_interruption:
             logger.trace(
                 "ignoring backchannel event during backchannel boundary cooldown, falling back to vad"
