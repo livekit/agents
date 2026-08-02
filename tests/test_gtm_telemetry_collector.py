@@ -82,6 +82,46 @@ async def test_detach_unregisters_close_listener():
     assert collector._cached_report is None
 
 
+@pytest.mark.asyncio
+async def test_detach_actually_removes_the_registered_close_handler():
+    # Direct regression test for the EventEmitter.once()-vs-.on() bug: .once() stores an
+    # internal wrapper closure, not the passed callback, so `session.off(event,
+    # self._on_close)` would silently remove nothing and _on_close would still fire
+    # after detach. The spy must be installed *before* attach() — patching afterwards
+    # wouldn't touch whatever object was actually captured by the event registration.
+    collector = PostCallTelemetryCollector()
+    sess = AgentSession(llm=FakeLLM())
+    with patch.object(collector, "_on_close") as spy:
+        collector.attach(sess)
+        collector.detach()
+        await sess.start(_EchoAgent())
+        await sess.aclose()
+        spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attach_to_new_session_clears_stale_cached_report():
+    collector = PostCallTelemetryCollector(metadata={"call": "first"})
+    first_session = AgentSession(llm=FakeLLM())
+    collector.attach(first_session)
+    await first_session.start(_EchoAgent())
+    await first_session.aclose()
+
+    first_report = collector.finalize()
+    assert first_report.metadata == {"call": "first"}
+
+    collector.detach()
+    collector._metadata = {"call": "second"}
+    second_session = AgentSession(llm=FakeLLM())
+    collector.attach(second_session)
+    await second_session.start(_EchoAgent())
+    await second_session.aclose()
+
+    second_report = collector.finalize()
+    assert second_report.metadata == {"call": "second"}
+    assert second_report.report_id != first_report.report_id
+
+
 def test_detach_before_attach_is_safe_noop():
     collector = PostCallTelemetryCollector()
     collector.detach()

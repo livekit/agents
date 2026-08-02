@@ -84,7 +84,8 @@ class PostCallTelemetryCollector:
 
         Re-attaching to the same session is a no-op. Attaching while already attached to
         a different, still-live session raises ``RuntimeError`` — call :meth:`detach`
-        first.
+        first. Attaching to a new session always clears any report cached from a
+        previous session, so a reused collector never hands back a stale call's report.
 
         Args:
             session: The session to observe.
@@ -104,7 +105,14 @@ class PostCallTelemetryCollector:
 
         self._session_ref = weakref.ref(session)
         self._job_ctx = job_ctx
-        session.once("close", self._on_close)
+        self._cached_report = None
+        # `.on()`, not `.once()`: EventEmitter.once() registers an internal wrapper
+        # closure, not `self._on_close` itself, so a later `.off(event, self._on_close)`
+        # in detach() would silently remove nothing and leave the listener firing after
+        # detach. `.on()` stores the exact bound method, so `.off()` actually works.
+        # Firing more than once is harmless: finalize() is idempotent, and "close" is
+        # only ever emitted once per session in any case.
+        session.on("close", self._on_close)
 
     def detach(self) -> None:
         """Stop observing the attached session, if any.
