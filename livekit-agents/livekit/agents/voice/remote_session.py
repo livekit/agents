@@ -472,7 +472,7 @@ class SessionHost:
                     asyncio.gather(*handler_tasks, return_exceptions=True),
                     timeout=_SHUTDOWN_DRAIN_TIMEOUT,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning(
                     "session host request handlers did not finish before shutdown grace period",
                     extra={"pending_handlers": len(self._tasks.tasks)},
@@ -483,7 +483,7 @@ class SessionHost:
         if self._writer_task:
             try:
                 await asyncio.wait_for(self._writer_task, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 logger.warning(
                     "session host outbound writer did not drain before shutdown grace period",
                     extra={"queued_messages": self._outbound_ch.qsize()},
@@ -1243,7 +1243,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             # shield so wait_for timeout does not cancel the future; cleanup is in finally.
             try:
                 resp = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 # The response may have won the race with the timeout callback.
                 if future.done() and not future.cancelled():
                     resp = future.result()

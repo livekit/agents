@@ -63,7 +63,7 @@ class PairedTransport(SessionTransport):
             raise StopAsyncIteration
         try:
             return await asyncio.wait_for(self._inbox.get(), timeout=1.0)
-        except (TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
             raise StopAsyncIteration from None
 
 
@@ -152,7 +152,7 @@ class AdversarialTransport(SessionTransport):
             raise StopAsyncIteration
         try:
             return await asyncio.wait_for(self._inbox.get(), timeout=2.0)
-        except (TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
             raise StopAsyncIteration from None
 
 
@@ -603,7 +603,7 @@ async def test_late_response_after_timeout_is_logged(caplog: pytest.LogCaptureFi
     await client.start()
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(TimeoutError):
+        with pytest.raises((TimeoutError, asyncio.TimeoutError)):
             await client.run("hello", timeout=0.05)
 
         assert client._pending_requests == {}
