@@ -428,6 +428,9 @@ class SessionHost:
             return
         self._started = True
         self._accepting_requests = True
+        # aclose() closes the outbound channel; recreate so start() is restartable.
+        if self._outbound_ch.closed:
+            self._outbound_ch = utils.aio.Chan[_OutboundMessage]()
         await self._transport.start()
         self._writer_task = asyncio.create_task(
             self._writer_loop(), name="SessionHost._writer_loop"
@@ -454,7 +457,10 @@ class SessionHost:
             self._session.off("debug_message", self._on_debug_message)
 
         # Stop accepting new requests, then give in-flight handlers a chance to
-        # queue their responses before we drain the outbound writer.
+        # finish (including queueing/awaiting their responses) before we close
+        # the outbound channel. Unlike the old cancel-all path, this keeps a
+        # completed run_input acknowledgement from being dropped after the
+        # conversation event was already delivered.
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
             self._recv_task = None
@@ -494,7 +500,7 @@ class SessionHost:
                     await self._transport.send_message(item.msg)
                 except asyncio.CancelledError:
                     if item.done is not None and not item.done.done():
-                        item.done.set_exception(asyncio.CancelledError())
+                        item.done.set_exception(RuntimeError("session host writer cancelled"))
                     raise
                 except Exception as e:
                     if item.done is not None and not item.done.done():
@@ -1235,13 +1241,22 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             msg = agent_pb.AgentSessionMessage(request=request)
             await self._transport.send_message(msg)
             # shield so wait_for timeout does not cancel the future; cleanup is in finally.
-            resp = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except TimeoutError:
-            logger.warning(
-                "remote session request timed out",
-                extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
-            )
-            raise
+            try:
+                resp = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            except TimeoutError:
+                # The response may have won the race with the timeout callback.
+                if future.done() and not future.cancelled():
+                    resp = future.result()
+                else:
+                    logger.warning(
+                        "remote session request timed out",
+                        extra={
+                            "request_id": request.request_id,
+                            "type": req_type,
+                            "timeout": timeout,
+                        },
+                    )
+                    raise
         finally:
             self._pending_requests.pop(request.request_id, None)
 

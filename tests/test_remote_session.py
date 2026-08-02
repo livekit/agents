@@ -447,7 +447,9 @@ async def test_shutdown_flushes_queued_run_input_response():
     """Response delayed behind a gate must still be delivered across shutdown.
 
     Reproduces the #6661 failure mode where aclose cancelled in-flight sends
-    after conversation events had already been delivered.
+    after conversation events had already been delivered. The old cancel-all
+    path drops the ack (proven separately); this asserts the new drain path
+    keeps it.
     """
     host_transport, client_transport = AdversarialTransport.create_pair()
     host_transport.pause_responses()
@@ -496,6 +498,92 @@ async def test_shutdown_flushes_queued_run_input_response():
     assert len(host_transport.response_ids) >= 1
 
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_response_arriving_at_timeout_boundary_still_resolves():
+    """If the ack lands in the same tick as the wait timeout, prefer success."""
+    host_transport, client_transport = AdversarialTransport.create_pair()
+    host_transport.pause_responses()
+
+    mock_session = _make_mock_session()
+    mock_session.interrupt = AsyncMock()
+    mock_session.run = MagicMock(return_value=_fake_run_result(text="barely", msg_id="m-race"))
+
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    async def _release_near_timeout() -> None:
+        await asyncio.sleep(0.08)
+        host_transport.release_responses()
+
+    release_task = asyncio.create_task(_release_near_timeout())
+    resp = await client.run("hello", timeout=0.1)
+    await release_task
+
+    assert len(resp.items) == 1
+    assert resp.items[0].message.id == "m-race"
+
+    await client.aclose()
+    await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_host_restart_after_aclose():
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    host = SessionHost(host_transport)
+    host.register_session(_make_mock_session())
+    await host.start()
+    await host.aclose()
+
+    # Reuse the same SessionHost with a fresh transport; start() must recreate
+    # the outbound channel that aclose() closed.
+    host_transport, client_transport = PairedTransport.create_pair()
+    host._transport = host_transport
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+    await client.wait_for_ready(timeout=2.0)
+
+    await client.aclose()
+    await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pending_future_registered_before_send():
+    """A response that arrives during send_message must still resolve."""
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    registered = asyncio.Event()
+    original_send = client_transport.send_message
+
+    async def send_and_signal(msg: agent_pb.AgentSessionMessage) -> None:
+        # By the time send is entered, RemoteSession must already have registered.
+        # We observe this via the client's pending map after a scheduling point.
+        await asyncio.sleep(0)
+        assert any(client._pending_requests), "future must be registered before send"
+        registered.set()
+        await original_send(msg)
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    host = SessionHost(host_transport)
+    host.register_session(_make_mock_session())
+    await host.start()
+
+    client_transport.send_message = send_and_signal  # type: ignore[method-assign]
+    await client.wait_for_ready(timeout=2.0)
+    assert registered.is_set()
+
+    await client.aclose()
+    await host.aclose()
 
 
 @pytest.mark.asyncio
