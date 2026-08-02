@@ -43,7 +43,6 @@ class TestAudioRecognitionAclose:
         audio_recognition._audio_input_atask = None
         audio_recognition._backchannel_boundary_timer = None
         audio_recognition._AudioRecognition__stt_context = None
-        audio_recognition._transcription_timeout_handle = None
 
         return audio_recognition
 

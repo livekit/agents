@@ -1871,8 +1871,8 @@ class AudioRecognition:
             await stream.aclose()
 
     def _cancel_transcription_timeout(self) -> None:
-        if self._transcription_timeout_handle is not None:
-            self._transcription_timeout_handle.cancel()
+        if (handle := getattr(self, "_transcription_timeout_handle", None)) is not None:
+            handle.cancel()
             self._transcription_timeout_handle = None
 
     def _reset_transcription_timeout(self) -> None:
