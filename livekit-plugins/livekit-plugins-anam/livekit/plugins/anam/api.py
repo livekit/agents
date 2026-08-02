@@ -120,6 +120,7 @@ class AnamAPI:
             payload["sessionOptions"] = {
                 "videoWidth": session_options.video_width,
                 "videoHeight": session_options.video_height,
+                "showAIAvatarDisclosure": session_options.show_ai_avatar_disclosure,
             }
 
         headers = {
