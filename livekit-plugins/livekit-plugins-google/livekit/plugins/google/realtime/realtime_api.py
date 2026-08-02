@@ -860,6 +860,15 @@ class RealtimeSession(llm.RealtimeSession):
         if self._current_generation:
             self._mark_current_generation_done()
 
+        # release the genai http clients owned by this session. Without this
+        # they stay open until the garbage collector runs `AsyncClient.__del__`,
+        # which schedules `aclose()` on whatever event loop happens to be
+        # running at that moment.
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         max_retries = self._opts.conn_options.max_retry
