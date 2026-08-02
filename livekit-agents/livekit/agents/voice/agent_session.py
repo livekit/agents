@@ -285,6 +285,7 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    transcription_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -386,6 +387,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -466,6 +468,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
+            transcription_timeout (float, optional): If set, emit a
+                ``user_transcription_timeout`` event when VAD detects user speech
+                during the user's turn but no non-empty final transcript arrives
+                within this amount of time after the speech ends. This can happen
+                because STT failed or because audio was intentionally withheld from
+                STT, such as during AEC warmup or uninterruptible agent speech. Use
+                it to prompt the user to repeat themselves. A non-empty final transcript
+                satisfies the timeout for the current turn even if adaptive interruption
+                detection later discards it as part of a backchannel. Requires both VAD
+                and STT. Disabled by default.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -546,6 +558,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            transcription_timeout=transcription_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms

@@ -1563,6 +1563,171 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
+async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._interruption_enabled = True
+    recognition._agent_speaking = True
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert list(recognition._transcript_buffer) == [event]
+        assert hooks.final_transcripts == []
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = SpeechEvent(
+        type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        alternatives=[SpeechData(text="preflight transcript", language=LanguageCode(""))],
+    )
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert not timeout_handle.cancelled()
+        assert recognition._turn_transcript_received is False
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = True
+    event_loop = asyncio.get_running_loop()
+
+    try:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=1.0,
+                silence_duration=0.5,
+                inference_duration=0.25,
+            )
+        )
+
+        timeout_handle = recognition._transcription_timeout_handle
+        assert timeout_handle is not None
+        assert timeout_handle.when() - event_loop.time() == pytest.approx(1.25)
+    finally:
+        recognition._stt_pipeline = None
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
+async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = False
+
+    try:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=1.0,
+                silence_duration=0.5,
+            )
+        )
+
+        assert recognition._transcription_timeout_handle is None
+    finally:
+        recognition._stt_pipeline = None
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
+async def test_clear_user_turn_resets_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 1.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    recognition._turn_speech_duration = 2.0
+    recognition._turn_transcript_received = True
+    recognition._user_turn_start = time.time()
+
+    try:
+        recognition._clear_user_turn()
+
+        assert timeout_handle.cancelled()
+        assert recognition._transcription_timeout_handle is None
+        assert recognition._turn_speech_duration == 0.0
+        assert recognition._turn_transcript_received is False
+        assert recognition._user_turn_start is None
+
+        recognition._arm_transcription_timeout(1.0, delay=0.0)
+        assert recognition._transcription_timeout_handle is not None
+    finally:
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
 @pytest.mark.parametrize(
     "preemptive_generation, expected_latency",
     [
