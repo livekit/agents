@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
@@ -548,6 +549,76 @@ async def test_shutdown_flushes_queued_run_input_response():
     assert len(host_transport.response_ids) >= 1
 
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_uses_shared_drain_deadline(monkeypatch: pytest.MonkeyPatch):
+    """Handler + writer drains share one budget, not two stacked timeouts."""
+    import time
+
+    import livekit.agents.voice.remote_session as rs
+
+    monkeypatch.setattr(rs, "_SHUTDOWN_DRAIN_TIMEOUT", 0.2)
+
+    host_transport, client_transport = AdversarialTransport.create_pair()
+    host_transport.pause_responses()
+    host_transport._on_response_send = asyncio.Event()
+
+    mock_session = _make_mock_session()
+    mock_session.interrupt = AsyncMock()
+    mock_session.run = MagicMock(return_value=_fake_run_result(delay=0.0))
+
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    run_task = asyncio.create_task(client.run("hello", timeout=5.0))
+    await asyncio.wait_for(host_transport._on_response_send.wait(), timeout=2.0)
+
+    started = time.monotonic()
+    await host.aclose()
+    elapsed = time.monotonic() - started
+
+    # Shared 0.2s budget: must finish well under the old stacked 0.4s worst case.
+    assert elapsed < 0.35
+
+    run_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await run_task
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_writer_exit_closes_outbound_channel_and_fails_fast():
+    """If the writer dies, later sends must fail immediately (not hang)."""
+    host_transport, _client_transport = PairedTransport.create_pair()
+    host = SessionHost(host_transport)
+    host.register_session(_make_mock_session())
+    await host.start()
+    # Let the writer enter its recv wait so cancellation runs the finally block.
+    await asyncio.sleep(0)
+
+    assert host._writer_task is not None
+    host._writer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await host._writer_task
+    host._writer_task = None
+
+    assert host._outbound_ch.closed
+
+    msg = agent_pb.AgentSessionMessage(
+        response=agent_pb.SessionResponse(
+            request_id="req_after_writer_death",
+            pong=agent_pb.SessionResponse.Pong(),
+        )
+    )
+    with pytest.raises(RuntimeError, match="outbound channel is closed"):
+        await asyncio.wait_for(host._send_message(msg), timeout=0.5)
+
+    await host.aclose()
 
 
 @pytest.mark.asyncio

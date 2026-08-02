@@ -65,7 +65,9 @@ if TYPE_CHECKING:
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
-_SHUTDOWN_DRAIN_TIMEOUT = 5.0
+# Total SessionHost.aclose drain budget for in-flight handlers + outbound writer.
+# Must stay well below worker shutdown_process_timeout (default 10s).
+_SHUTDOWN_DRAIN_TIMEOUT = 3.0
 
 
 @dataclass
@@ -74,6 +76,10 @@ class _OutboundMessage:
 
     msg: agent_pb.AgentSessionMessage
     done: asyncio.Future[None] | None = None
+
+
+def _remaining_timeout(deadline: float) -> float:
+    return max(0.0, deadline - asyncio.get_event_loop().time())
 
 
 class SessionTransport(ABC):
@@ -461,33 +467,49 @@ class SessionHost:
         # the outbound channel. Unlike the old cancel-all path, this keeps a
         # completed run_input acknowledgement from being dropped after the
         # conversation event was already delivered.
+        #
+        # Handlers and the writer share one drain deadline so aclose cannot
+        # stack two full grace periods and exhaust the worker process shutdown
+        # budget (default 10s).
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
             self._recv_task = None
 
+        drain_deadline = asyncio.get_event_loop().time() + _SHUTDOWN_DRAIN_TIMEOUT
+
         handler_tasks = self._tasks.tasks
         if handler_tasks:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*handler_tasks, return_exceptions=True),
-                    timeout=_SHUTDOWN_DRAIN_TIMEOUT,
-                )
-            except (TimeoutError, asyncio.TimeoutError):
-                logger.warning(
-                    "session host request handlers did not finish before shutdown grace period",
-                    extra={"pending_handlers": len(self._tasks.tasks)},
-                )
+            remaining = _remaining_timeout(drain_deadline)
+            if remaining > 0:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*handler_tasks, return_exceptions=True),
+                        timeout=remaining,
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning(
+                        "session host request handlers did not finish before shutdown grace period",
+                        extra={"pending_handlers": len(self._tasks.tasks)},
+                    )
+                    await utils.aio.cancel_and_wait(*self._tasks.tasks)
+            else:
                 await utils.aio.cancel_and_wait(*self._tasks.tasks)
 
         self._outbound_ch.close()
         if self._writer_task:
-            try:
-                await asyncio.wait_for(self._writer_task, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
-            except (TimeoutError, asyncio.TimeoutError):
-                logger.warning(
-                    "session host outbound writer did not drain before shutdown grace period",
-                    extra={"queued_messages": self._outbound_ch.qsize()},
-                )
+            remaining = _remaining_timeout(drain_deadline)
+            if remaining > 0 and not self._writer_task.done():
+                try:
+                    await asyncio.wait_for(self._writer_task, timeout=remaining)
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning(
+                        "session host outbound writer did not drain before shutdown grace period",
+                        extra={"queued_messages": self._outbound_ch.qsize()},
+                    )
+                    await utils.aio.cancel_and_wait(self._writer_task)
+                except asyncio.CancelledError:
+                    pass
+            elif not self._writer_task.done():
                 await utils.aio.cancel_and_wait(self._writer_task)
             self._writer_task = None
 
@@ -515,6 +537,9 @@ class SessionHost:
         except Exception:
             logger.warning("session host writer loop failed", exc_info=True)
         finally:
+            # Nothing else consumes the channel: close it so later queue attempts
+            # fail fast instead of waiting on a future nobody will resolve.
+            self._outbound_ch.close()
             # Fail any messages still buffered when the writer exits.
             while True:
                 try:
