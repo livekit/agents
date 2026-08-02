@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from google.protobuf.duration_pb2 import Duration
@@ -34,6 +36,7 @@ from ..metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from ..utils.aio.channel import ChanClosed, ChanEmpty
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
@@ -62,6 +65,15 @@ if TYPE_CHECKING:
 
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
+_SHUTDOWN_DRAIN_TIMEOUT = 5.0
+
+
+@dataclass
+class _OutboundMessage:
+    """A message queued for the SessionHost's serialized writer."""
+
+    msg: agent_pb.AgentSessionMessage
+    done: asyncio.Future[None] | None = None
 
 
 class SessionTransport(ABC):
@@ -122,7 +134,7 @@ class RoomSessionTransport(SessionTransport):
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._recv_ch.closed or not self._room.isconnected():
-            return
+            raise RuntimeError("room session transport is closed")
         try:
             data = msg.SerializeToString()
             dest = [self._remote_identity] if self._remote_identity else None
@@ -134,7 +146,7 @@ class RoomSessionTransport(SessionTransport):
             await writer.write(data)
             await writer.aclose()
         except Exception as e:
-            logger.warning("failed to send binary stream message: %s", e)
+            raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -168,6 +180,7 @@ class TcpSessionTransport(SessionTransport):
         self._writer: asyncio.StreamWriter | None = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._send_lock = asyncio.Lock()
 
     async def start(self) -> None:
         reader, writer = await asyncio.open_connection(self._host, self._port)
@@ -182,19 +195,28 @@ class TcpSessionTransport(SessionTransport):
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None:
-            return
+            raise RuntimeError("tcp session transport is closed")
         data = msg.SerializeToString()
         header = struct.pack(">I", len(data))
-        self._writer.write(header + data)
-        if self._writer.transport.get_write_buffer_size() > 64 * 1024:
-            await self._writer.drain()
+        async with self._send_lock:
+            if self._closed or self._writer is None:
+                raise RuntimeError("tcp session transport is closed")
+            self._writer.write(header + data)
+            if self._writer.transport.get_write_buffer_size() > 64 * 1024:
+                await self._writer.drain()
 
     def send_message_threadsafe(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None or self._loop is None:
             return
         data = msg.SerializeToString()
         payload = struct.pack(">I", len(data)) + data
-        self._loop.call_soon_threadsafe(self._writer.write, payload)
+
+        def _write() -> None:
+            if self._closed or self._writer is None:
+                return
+            self._writer.write(payload)
+
+        self._loop.call_soon_threadsafe(_write)
 
     async def close(self) -> None:
         if self._closed:
@@ -378,8 +400,11 @@ class SessionHost:
         self._audio_input = audio_input
         self._audio_output = audio_output
         self._started = False
+        self._accepting_requests = False
         self._recv_task: asyncio.Task[None] | None = None
+        self._writer_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
+        self._outbound_ch: utils.aio.Chan[_OutboundMessage] = utils.aio.Chan()
         self._session: AgentSession | None = None
         self._events_registered = False
 
@@ -402,13 +427,18 @@ class SessionHost:
         if self._started:
             return
         self._started = True
+        self._accepting_requests = True
         await self._transport.start()
-        self._recv_task = asyncio.create_task(self._recv_loop())
+        self._writer_task = asyncio.create_task(
+            self._writer_loop(), name="SessionHost._writer_loop"
+        )
+        self._recv_task = asyncio.create_task(self._recv_loop(), name="SessionHost._recv_loop")
 
     async def aclose(self) -> None:
         if not self._started:
             return
         self._started = False
+        self._accepting_requests = False
 
         if self._session and self._events_registered:
             self._events_registered = False
@@ -423,18 +453,120 @@ class SessionHost:
             self._session.off("error", self._on_error)
             self._session.off("debug_message", self._on_debug_message)
 
+        # Stop accepting new requests, then give in-flight handlers a chance to
+        # queue their responses before we drain the outbound writer.
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
+            self._recv_task = None
 
-        await utils.aio.cancel_and_wait(*self._tasks.tasks)
+        handler_tasks = self._tasks.tasks
+        if handler_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*handler_tasks, return_exceptions=True),
+                    timeout=_SHUTDOWN_DRAIN_TIMEOUT,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "session host request handlers did not finish before shutdown grace period",
+                    extra={"pending_handlers": len(self._tasks.tasks)},
+                )
+                await utils.aio.cancel_and_wait(*self._tasks.tasks)
+
+        self._outbound_ch.close()
+        if self._writer_task:
+            try:
+                await asyncio.wait_for(self._writer_task, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
+            except TimeoutError:
+                logger.warning(
+                    "session host outbound writer did not drain before shutdown grace period",
+                    extra={"queued_messages": self._outbound_ch.qsize()},
+                )
+                await utils.aio.cancel_and_wait(self._writer_task)
+            self._writer_task = None
+
         await self._transport.close()
+
+    async def _writer_loop(self) -> None:
+        try:
+            async for item in self._outbound_ch:
+                try:
+                    await self._transport.send_message(item.msg)
+                except asyncio.CancelledError:
+                    if item.done is not None and not item.done.done():
+                        item.done.set_exception(asyncio.CancelledError())
+                    raise
+                except Exception as e:
+                    if item.done is not None and not item.done.done():
+                        item.done.set_exception(e)
+                    else:
+                        logger.warning("error sending session message", exc_info=True)
+                else:
+                    if item.done is not None and not item.done.done():
+                        item.done.set_result(None)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("session host writer loop failed", exc_info=True)
+        finally:
+            # Fail any messages still buffered when the writer exits.
+            while True:
+                try:
+                    item = self._outbound_ch.recv_nowait()
+                except (ChanEmpty, ChanClosed):
+                    break
+                if item.done is not None and not item.done.done():
+                    item.done.set_exception(RuntimeError("session host writer closed"))
+
+    def _queue_message(
+        self,
+        msg: agent_pb.AgentSessionMessage,
+        *,
+        wait: bool = False,
+    ) -> asyncio.Future[None] | None:
+        """Enqueue an outbound message on the serialized writer path.
+
+        When ``wait`` is True, returns a future that completes after the
+        transport write finishes (or fails). Event emission uses wait=False.
+        """
+        done: asyncio.Future[None] | None = None
+        if wait:
+            done = asyncio.get_running_loop().create_future()
+
+        if self._outbound_ch.closed:
+            if done is not None:
+                done.set_exception(RuntimeError("session host outbound channel is closed"))
+            return done
+
+        try:
+            self._outbound_ch.send_nowait(_OutboundMessage(msg=msg, done=done))
+        except ChanClosed:
+            if done is not None and not done.done():
+                done.set_exception(RuntimeError("session host outbound channel is closed"))
+        return done
+
+    async def _send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        """Queue a message and wait for the serialized writer to send it."""
+        done = self._queue_message(msg, wait=True)
+        assert done is not None
+        await done
 
     async def _recv_loop(self) -> None:
         try:
             async for msg in self._transport:
                 if msg.HasField("request"):
-                    if self._session is not None:
+                    if self._session is not None and self._accepting_requests:
                         self._tasks.create_task(self._handle_request_safe(msg.request))
+                    else:
+                        # Reject late requests clearly so the client does not hang.
+                        resp = agent_pb.AgentSessionMessage(
+                            response=agent_pb.SessionResponse(
+                                request_id=msg.request.request_id,
+                                error="session host is shutting down",
+                            )
+                        )
+                        with contextlib.suppress(Exception):
+                            await self._send_message(resp)
                 else:
                     msg_type = msg.WhichOneof("message")
                     if msg_type:
@@ -457,7 +589,7 @@ class SessionHost:
         ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
-        self._tasks.create_task(self._transport.send_message(msg))
+        self._queue_message(msg, wait=False)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)
@@ -679,7 +811,7 @@ class SessionHost:
                         error="internal error",
                     )
                 )
-                await self._transport.send_message(resp)
+                await self._send_message(resp)
             except Exception:
                 pass
 
@@ -693,7 +825,7 @@ class SessionHost:
                     pong=agent_pb.SessionResponse.Pong(),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_chat_history"):
             items = [_chat_item_to_proto(item) for item in self._session.history.items]
@@ -705,7 +837,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
@@ -728,7 +860,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("run_input"):
             items_list: list[agent_pb.ChatContext.ChatItem] = []
@@ -761,7 +893,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_session_state"):
             agent = self._session.current_agent
@@ -787,7 +919,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_rtc_stats"):
             from google.protobuf.struct_pb2 import Struct
@@ -822,7 +954,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_session_usage"):
             created_at = Timestamp()
@@ -837,7 +969,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("get_framework_info"):
             resp = agent_pb.AgentSessionMessage(
@@ -849,7 +981,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("update_io"):
             # Honor the remote control's mute/unmute toggles for audio /
@@ -877,7 +1009,7 @@ class SessionHost:
                     update_io=agent_pb.SessionResponse.UpdateIOResponse(),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
         elif req.HasField("finalize_simulation"):
             # The simulator's verdict is passed in so on_simulation_end can read it
@@ -928,7 +1060,7 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            await self._send_message(resp)
 
 
 def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
@@ -1033,19 +1165,24 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             return
         self._started = True
         await self._transport.start()
-        self._recv_task = asyncio.create_task(self._recv_loop())
+        self._recv_task = asyncio.create_task(self._recv_loop(), name="RemoteSession._recv_loop")
 
     async def aclose(self) -> None:
         if not self._started:
             return
         self._started = False
 
-        for future in self._pending_requests.values():
-            future.cancel()
+        pending = list(self._pending_requests.items())
         self._pending_requests.clear()
+        for request_id, future in pending:
+            if not future.done():
+                future.set_exception(
+                    RuntimeError(f"remote session closed (request_id={request_id})")
+                )
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
+            self._recv_task = None
 
         await self._transport.close()
 
@@ -1064,33 +1201,49 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             logger.warning("error processing session message", exc_info=True)
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
-        future = self._pending_requests.pop(response.request_id, None)
-        if future and not future.done():
-            future.set_result(response)
+        future = self._pending_requests.get(response.request_id)
+        if future is None:
+            logger.warning(
+                "received session response for unknown or timed-out request",
+                extra={"request_id": response.request_id},
+            )
+            return
+        if future.done():
+            logger.warning(
+                "received duplicate session response",
+                extra={"request_id": response.request_id},
+            )
+            return
+        future.set_result(response)
 
     async def _send_request(
         self,
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
+        if not self._started:
+            raise RuntimeError("remote session is closed")
+
         req_type = request.WhichOneof("request")
-        future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
+        future: asyncio.Future[agent_pb.SessionResponse] = (
+            asyncio.get_running_loop().create_future()
+        )
+        # Register before send so a fast response cannot arrive unmatched.
         self._pending_requests[request.request_id] = future
 
         try:
             msg = agent_pb.AgentSessionMessage(request=request)
             await self._transport.send_message(msg)
-            resp = await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            self._pending_requests.pop(request.request_id, None)
+            # shield so wait_for timeout does not cancel the future; cleanup is in finally.
+            resp = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except TimeoutError:
             logger.warning(
                 "remote session request timed out",
                 extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
             )
             raise
-        except Exception:
+        finally:
             self._pending_requests.pop(request.request_id, None)
-            raise
 
         if resp.error:
             raise RuntimeError(f"session request {req_type} failed: {resp.error}")
