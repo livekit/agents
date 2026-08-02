@@ -72,6 +72,11 @@ class PostCallTelemetryCollector:
         self._session_ref: weakref.ReferenceType[AgentSession] | None = None
         self._job_ctx: NotGivenOr[JobContext | None] = NOT_GIVEN
         self._cached_report: PostCallReport | None = None
+        # session._started_at at the moment _cached_report was built — lets finalize()
+        # tell a genuinely new call on the SAME AgentSession instance (aclose() then
+        # start() again resets _started_at/_recorded_events) apart from a repeat query
+        # for the same call's report. See finalize() for how this is used.
+        self._cached_report_started_at: float | None = None
 
     @property
     def attached(self) -> bool:
@@ -106,6 +111,7 @@ class PostCallTelemetryCollector:
         self._session_ref = weakref.ref(session)
         self._job_ctx = job_ctx
         self._cached_report = None
+        self._cached_report_started_at = None
         # `.on()`, not `.once()`: EventEmitter.once() registers an internal wrapper
         # closure, not `self._on_close` itself, so a later `.off(event, self._on_close)`
         # in detach() would silently remove nothing and leave the listener firing after
@@ -133,15 +139,31 @@ class PostCallTelemetryCollector:
         (``report.ended is False``) on every call — never cached, since a report built
         mid-call would go stale the moment the call actually ends. Once the session has
         closed, the report is built once and cached; every subsequent call returns that
-        same, authoritative report.
+        same, authoritative report — *unless* the same ``AgentSession`` instance has
+        since been restarted (``aclose()`` then ``start()`` again on the same object,
+        which resets ``session._started_at``/``_recorded_events``), in which case the
+        stale cache is discarded and a fresh report is built for the new call.
 
         Performs no network I/O and never blocks on anything beyond reading in-memory
         session state.
         """
-        if self._cached_report is not None and self._cached_report.ended:
-            return self._cached_report
+        session = self._session_ref() if self._session_ref is not None else None
 
-        session = self._require_session()
+        if self._cached_report is not None and self._cached_report.ended:
+            # A `None` session (detached, or garbage-collected) can't prove the cache
+            # stale, so it's trusted as-is — matching detach()'s documented contract
+            # that the last report stays available. A live session must additionally
+            # match the _started_at captured when the cache was built; an id() compare
+            # on session._recorded_events would NOT work here — finalize() only ever
+            # holds a *copy* of that list, so the original is freed the instant a
+            # restart's start() reassigns it, and CPython's list free-list routinely
+            # hands the freed block straight back out to the next same-size (empty)
+            # list, making an id() match a false positive in exactly this scenario.
+            if session is None or session._started_at == self._cached_report_started_at:
+                return self._cached_report
+
+        if session is None:
+            session = self._require_session()
         # snapshot first: _recorded_events is a live, still-growing list while the
         # session runs, and start() swaps in a brand new list on each restart
         events_snapshot = list(session._recorded_events)
@@ -175,6 +197,7 @@ class PostCallTelemetryCollector:
 
         if report.ended:
             self._cached_report = report
+            self._cached_report_started_at = session._started_at
 
         return report
 

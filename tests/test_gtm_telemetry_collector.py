@@ -122,6 +122,49 @@ async def test_attach_to_new_session_clears_stale_cached_report():
     assert second_report.report_id != first_report.report_id
 
 
+@pytest.mark.asyncio
+async def test_finalize_after_restart_on_same_session_rebuilds_report():
+    # AgentSession supports being restarted on the same instance: aclose() sets
+    # _started=False, a later start() resets _recorded_events/_started_at. attach() is
+    # never re-called in this scenario (it's the same object), so nothing but finalize()
+    # itself can catch a stale cache here.
+    collector = PostCallTelemetryCollector()
+    sess = AgentSession(llm=FakeLLM())
+    collector.attach(sess)
+
+    await sess.start(_EchoAgent())
+    await sess.aclose()
+    report1 = collector.finalize()
+
+    await sess.start(_EchoAgent())
+    await sess.aclose()
+    report2 = collector.finalize()
+
+    assert report2 is not report1
+    assert report2.report_id != report1.report_id
+    assert report1.started_at != report2.started_at
+    assert report2.started_at == sess._started_at
+
+
+@pytest.mark.asyncio
+async def test_finalize_auto_caches_fresh_report_after_restart_close():
+    collector = PostCallTelemetryCollector()
+    sess = AgentSession(llm=FakeLLM())
+    collector.attach(sess)
+
+    await sess.start(_EchoAgent())
+    await sess.aclose()
+    report1 = collector.finalize()
+
+    await sess.start(_EchoAgent())
+    await sess.aclose()
+
+    cached = collector._cached_report
+    assert cached is not None
+    assert cached.report_id != report1.report_id
+    assert cached.started_at == sess._started_at
+
+
 def test_detach_before_attach_is_safe_noop():
     collector = PostCallTelemetryCollector()
     collector.detach()
