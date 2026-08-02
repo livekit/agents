@@ -321,6 +321,22 @@ def test_forwards_multi_arg_plugin_events() -> None:
     assert received == [("a", "b")]
 
 
+def test_multi_arg_forwarding_is_independent_per_subscriber() -> None:
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    all_args: list[tuple[object, ...]] = []
+    first_only: list[object] = []
+    session.on(_PLUGIN_EVENT, lambda *args: all_args.append(args))
+    session.on(_PLUGIN_EVENT, lambda ev: first_only.append(ev))
+
+    primary.active_session.emit(_PLUGIN_EVENT, "a", "b")
+
+    # EventEmitter trims to each callback's own arity, so a single-arg subscriber on the
+    # same event doesn't shorten what the varargs one receives
+    assert all_args == [("a", "b")]
+    assert first_only == ["a"]
+
+
 async def test_restart_emits_no_error() -> None:
     primary = FakeRealtimeModel()
     adapter = RealtimeModelFallbackAdapter([primary])
