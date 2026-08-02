@@ -1526,6 +1526,34 @@ async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> N
         await _close_test_session(session)
 
 
+async def test_empty_final_transcript_keeps_transcription_timeout_armed() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT)
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert not timeout_handle.cancelled()
+        assert recognition._turn_transcript_received is False
+        assert hooks.final_transcripts == []
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
 async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> None:
     session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
     recognition = AudioRecognition(
