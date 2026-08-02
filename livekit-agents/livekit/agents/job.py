@@ -780,6 +780,7 @@ class JobContext:
         _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
+            agent_name=self.job.agent_name,
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],

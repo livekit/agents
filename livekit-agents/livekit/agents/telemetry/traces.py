@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -236,6 +237,7 @@ def _setup_cloud_tracer(
     *,
     room_id: str,
     job_id: str,
+    agent_name: str = "",
     observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
@@ -274,6 +276,18 @@ def _setup_cloud_tracer(
     session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
     base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+    if agent_name:
+        # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
+        # only; the default dispatch has no agent name). Included in both the
+        # resource (traces) and the session metadata (spans + logs).
+        base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
+    # cloud agent id and deployment provided by LiveKit Cloud via env vars.
+    # Included in both the resource and the session metadata like agent_name;
+    # omitted when unset.
+    if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
+        base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
+    if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
+        base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
     session_metadata = dict(base_metadata)
     if metadata:
         session_metadata.update(metadata)

@@ -9,10 +9,12 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
+    AgentSession,
     AgentStateChangedEvent,
     APIConnectionError,
     ConversationItemAddedEvent,
@@ -123,6 +125,45 @@ def test_realtime_user_input_transcription_preserves_item_id() -> None:
     assert captured_events[0].transcript == "hello"
     assert captured_events[0].is_final is False
     assert captured_events[0].item_id == "item_123"
+
+
+@pytest.mark.parametrize(
+    ("has_local_vad", "should_interrupt"),
+    [
+        (False, True),
+        (True, False),
+    ],
+)
+def test_interim_transcript_interrupts_only_without_local_vad(
+    has_local_vad: bool, should_interrupt: bool
+) -> None:
+    captured_events: list[UserInputTranscribedEvent] = []
+    activity = object.__new__(AgentActivity)
+    activity._agent = SimpleNamespace(llm=NOT_GIVEN, vad=NOT_GIVEN)
+    activity._session = SimpleNamespace(
+        _text_only=False,
+        llm=None,
+        vad=Mock(spec=vad.VAD) if has_local_vad else None,
+        _user_input_transcribed=captured_events.append,
+    )
+    activity._turn_detection = None
+    activity._paused_speech = None
+    activity._interrupt_by_audio_activity = Mock()
+
+    activity.on_interim_transcript(
+        SpeechEvent(
+            type=SpeechEventType.INTERIM_TRANSCRIPT,
+            alternatives=[SpeechData(text="hello", language=LanguageCode("en"))],
+        ),
+        speaking=None,
+    )
+
+    assert len(captured_events) == 1
+    assert captured_events[0].transcript == "hello"
+    if should_interrupt:
+        activity._interrupt_by_audio_activity.assert_called_once_with()
+    else:
+        activity._interrupt_by_audio_activity.assert_not_called()
 
 
 async def test_events_and_metrics() -> None:
@@ -874,6 +915,63 @@ def test_on_enter_ignored_tools() -> None:
         assert activity._on_enter_ignored_tools(tool_ctx) == []
     finally:
         _OnEnterContextVar.reset(tk)
+
+
+@pytest.mark.parametrize(
+    ("kind", "attributes", "expected_duration"),
+    [
+        (rtc.ParticipantKind.PARTICIPANT_KIND_SIP, {}, None),
+        (
+            rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+            {"sip.ruleID": "SDR_inbound"},
+            3.0,
+        ),
+        (rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, {}, 3.0),
+    ],
+)
+def test_aec_warmup_default_depends_on_call_type(
+    kind: rtc.ParticipantKind.ValueType,
+    attributes: dict[str, str],
+    expected_duration: float | None,
+) -> None:
+    session = AgentSession(vad=None)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = kind
+    participant.attributes = attributes
+
+    session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
+
+
+@pytest.mark.parametrize("duration", [None, 0.0, 1.5])
+def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
+    duration: float | None,
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=duration)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    participant.attributes = {}
+
+    session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == duration
+    assert session._aec_warmup_remaining == (duration or 0.0)
+
+
+def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
+    session = AgentSession(vad=None)
+    timer = MagicMock(spec=asyncio.TimerHandle)
+    session._aec_warmup_timer = timer
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    participant.attributes = {}
+
+    session._on_room_io_participant_linked(participant)
+
+    timer.cancel.assert_called_once()
+    assert session._aec_warmup_timer is None
 
 
 async def test_aec_warmup() -> None:

@@ -264,7 +264,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_cerebras(
         *,
-        model: str | CerebrasChatModels = "llama-4-scout-17b-16e-instruct",
+        model: str | CerebrasChatModels = "gpt-oss-120b",
         api_key: str | None = None,
         base_url: str = "https://api.cerebras.ai/v1",
         client: openai.AsyncClient | None = None,

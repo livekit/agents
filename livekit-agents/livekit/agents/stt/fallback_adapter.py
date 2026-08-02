@@ -280,6 +280,15 @@ class FallbackAdapter(
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
 
+    def prewarm(self) -> None:
+        """Pre-warm the primary STT.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+        """
+        if self._stt_instances:
+            self._stt_instances[0].prewarm()
+
     async def aclose(self) -> None:
         for stt_status in self._status:
             if stt_status.recovering_recognize_task is not None:

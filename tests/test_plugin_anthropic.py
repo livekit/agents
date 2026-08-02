@@ -17,6 +17,13 @@ def _make_llm(**kwargs):
     return LLM(api_key="sk-ant-test", **kwargs)
 
 
+class TestSDKRetries:
+    def test_disabled_by_default(self) -> None:
+        """The framework owns retries, so Anthropic SDK retries must default to disabled."""
+        llm = _make_llm()
+        assert llm._client.max_retries == 0
+
+
 class TestHttpxTimeoutDefaults:
     def test_default_read_timeout_is_generous(self) -> None:
         """Default read timeout must accommodate adaptive-thinking pauses (≥30 s)."""

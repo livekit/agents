@@ -21,7 +21,14 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..tts._provider_format import drop_bracket_cues
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
@@ -520,8 +527,8 @@ class TTS(tts.TTS):
                 return ""  # older inworld models don't support markup
             return provider
 
-        # llm_instructions / to_text / normalize / convert are inherited from the
-        # base Markup, keyed on _provider_key() above.
+        # llm_instructions / normalize / convert are inherited from the base Markup,
+        # keyed on _provider_key() above.
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
@@ -681,6 +688,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
+        # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
+        # of an unclosed span here between messages
+        self._held_tokens: list[TimedString] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -770,27 +780,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "output_alignment":
-                    from ..voice.io import TimedString
-
+                    aligned: list[TimedString] = []
                     if words := data.get("words"):
-                        for word_info in words:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    word_info["word"],
-                                    start_time=word_info["start"],
-                                    end_time=word_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(w["word"], start_time=w["start"], end_time=w["end"])
+                            for w in words
+                        ]
                     elif chars := data.get("chars"):
-                        for char_info in chars:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    char_info["char"],
-                                    start_time=char_info["start"],
-                                    end_time=char_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(c["char"], start_time=c["start"], end_time=c["end"])
+                            for c in chars
+                        ]
+                    if aligned:
+                        # the provider aligned the *converted* text, so under expressive it
+                        # carries native cues that were never spoken
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues(aligned, self._held_tokens)
+                            if self._expressive
+                            else aligned
+                        )
                 elif data.get("type") == "done":
+                    if self._held_tokens:  # release an unclosed span, cue unresolved
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues([], self._held_tokens, final=True)
+                        )
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
