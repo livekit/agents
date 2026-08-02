@@ -381,8 +381,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 within this amount of time after the speech ends. This can happen
                 because STT failed or because audio was intentionally withheld from
                 STT, such as during AEC warmup or uninterruptible agent speech. Use
-                it to prompt the user to repeat themselves. Requires both VAD and STT.
-                Disabled by default.
+                it to prompt the user to repeat themselves. A non-empty final transcript
+                satisfies the timeout for the current turn even if adaptive interruption
+                detection later discards it as part of a backchannel. Requires both VAD
+                and STT. Disabled by default.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
