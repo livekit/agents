@@ -185,6 +185,8 @@ class AgentActivity(RecognitionHooks):
         # for false interruption handling
         self._paused_speech: _PausedSpeechInfo | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
+        # the timeout elapsed while a turn decision was still open; the resume waits on it
+        self._false_interruption_pending: bool = False
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
         self._stt_eos_received: bool = False
@@ -621,11 +623,8 @@ class AgentActivity(RecognitionHooks):
 
             turn_detection = self._validate_turn_detection(turn_detection)
 
-            if (
-                self._turn_detection == "manual" or turn_detection == "manual"
-            ) and self._false_interruption_timer is not None:
-                self._false_interruption_timer.cancel()
-                self._false_interruption_timer = None
+            if self._turn_detection == "manual" or turn_detection == "manual":
+                self._cancel_false_interruption_timer()
 
             self._turn_detection = turn_detection
             self._default_interruption_by_audio_activity_enabled = self._turn_detection not in (
@@ -1702,9 +1701,7 @@ class AgentActivity(RecognitionHooks):
                 if self._paused_speech and self._paused_speech.handle is self._current_speech:
                     # clear paused speech after generation done
                     self._paused_speech = None
-                    if self._false_interruption_timer is not None:
-                        self._false_interruption_timer.cancel()
-                        self._false_interruption_timer = None
+                    self._cancel_false_interruption_timer()
                     if (audio_output := self._session.output.audio) and audio_output.can_pause:
                         audio_output.resume()
                 self._current_speech = None
@@ -2007,9 +2004,7 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech.allow_interruptions
         ):
             # reset the false interruption timer
-            if self._false_interruption_timer:
-                self._false_interruption_timer.cancel()
-                self._false_interruption_timer = None
+            self._cancel_false_interruption_timer()
 
             # only interrupt if not already interrupting
             if (
@@ -2030,7 +2025,8 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition._on_end_of_agent_speech(
-                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time(),
+                        paused=True,
                     )
                 if self.interruption_enabled:
                     self._restore_interruption_by_audio_activity()
@@ -2058,10 +2054,8 @@ class AgentActivity(RecognitionHooks):
         self._stt_eos_received = False
         self._interruption_detected = False
 
-        if self._false_interruption_timer:
-            # cancel the timer when user starts speaking but leave the paused state unchanged
-            self._false_interruption_timer.cancel()
-            self._false_interruption_timer = None
+        # cancel the timer when user starts speaking but leave the paused state unchanged
+        self._cancel_false_interruption_timer()
 
         if (
             self._session.agent_state != "speaking"
@@ -2147,7 +2141,8 @@ class AgentActivity(RecognitionHooks):
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
+                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at,
+                paused=self._paused_speech is not None,
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -2324,30 +2319,28 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             return False
 
-        # avoid interruption if backchannel is detected with realtime model
+        # avoid interruption if backchannel is detected with realtime model. an unjudged overlap
+        # commits: interrupting the agent is recoverable, discarding a real user turn is not
         if (
             self.stt is None
             and self._turn_detection != "manual"
             and isinstance(self.llm, llm.RealtimeModel)
             and not self._rt_turn_detection_enabled
             and self._interruption_detection_enabled
-            and (
-                # confirmed backchannel for this turn (survives the agent stopping)
-                info.backchannel_over_agent
-                # or agent still speaking with nothing flagged yet
-                or (
-                    not self._interruption_detected
-                    and self._current_speech is not None
-                    and not self._current_speech.interrupted
-                )
-            )
+            and info.backchannel_over_agent
         ):
+            logger.debug("skipping user input, realtime backchannel detected")
             self._cancel_preemptive_generation()
             # no transcript to gatekeep for realtime barge-in — drop the backchannel turn
             # and clear the buffered audio so it can't leak into the next committed turn
             if self._rt_session is not None:
                 self._rt_session.clear_audio()
             return False
+
+        # a replying turn interrupts the paused speech, so cancel the resume that would race it —
+        # but the reply task returns before that in these two cases, so leave the resume armed
+        if not info.skip_reply and not self._rt_turn_detection_enabled:
+            self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
@@ -4244,9 +4237,14 @@ class AgentActivity(RecognitionHooks):
             and self._session.output.audio.can_pause
         )
 
-    def _start_false_interruption_timer(self, timeout: float) -> None:
+    def _cancel_false_interruption_timer(self) -> None:
         if self._false_interruption_timer is not None:
             self._false_interruption_timer.cancel()
+            self._false_interruption_timer = None
+        self._false_interruption_pending = False
+
+    def _start_false_interruption_timer(self, timeout: float) -> None:
+        self._cancel_false_interruption_timer()
 
         def _on_false_interruption() -> None:
             if self._paused_speech is None or (
@@ -4268,7 +4266,9 @@ class AgentActivity(RecognitionHooks):
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
+                    self._audio_recognition._on_start_of_agent_speech(
+                        started_at=time.time(), resumed=True
+                    )
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()
@@ -4282,9 +4282,39 @@ class AgentActivity(RecognitionHooks):
             self._paused_speech = None
             self._false_interruption_timer = None
 
-        self._false_interruption_timer = self._session._loop.call_later(
-            timeout, _on_false_interruption
-        )
+        def _on_turn_settled(settled: asyncio.Task[None]) -> None:
+            if not self._false_interruption_pending:
+                return  # the turn committed, or the pause was resolved another way
+
+            recognition = self._audio_recognition
+            eot_task = recognition._end_of_turn_task if recognition else None
+            # a newer decision superseded this one (e.g. an stt final re-armed the bounce)
+            if eot_task is not None and eot_task is not settled and not eot_task.done():
+                eot_task.add_done_callback(_on_turn_settled)
+                return
+
+            self._false_interruption_pending = False
+            if settled.cancelled() or (recognition is not None and recognition._closing.is_set()):
+                return  # torn down instead of decided; closing releases the pause itself
+
+            _on_false_interruption()
+
+        def _on_timeout() -> None:
+            self._false_interruption_timer = None
+
+            # an open turn decision owns the paused speech: it either commits and interrupts it
+            # or drops it, and only then is the interruption known to be false
+            eot_task = (
+                self._audio_recognition._end_of_turn_task if self._audio_recognition else None
+            )
+            if eot_task is not None and not eot_task.done():
+                self._false_interruption_pending = True
+                eot_task.add_done_callback(_on_turn_settled)
+                return
+
+            _on_false_interruption()
+
+        self._false_interruption_timer = self._session._loop.call_later(timeout, _on_timeout)
 
     async def _cancel_speech_pause(
         self, old_task: asyncio.Task[None] | None = None, *, interrupt: bool = True
@@ -4298,12 +4328,17 @@ class AgentActivity(RecognitionHooks):
                 # the paused speech had no active generation (race condition).
                 logger.debug("previous _cancel_speech_pause task failed, ignoring")
 
-        if self._false_interruption_timer is not None:
-            self._false_interruption_timer.cancel()
-            self._false_interruption_timer = None
+        self._cancel_false_interruption_timer()
 
         if not self._paused_speech:
             return
+
+        # the pause withheld end-of-agent-speech for a resume; interrupting ends the turn
+        # instead. the audio stopped when it was paused, so no playout is left to wait for
+        if interrupt and self._audio_recognition:
+            self._audio_recognition._on_end_of_agent_speech(
+                ignore_user_transcript_until=time.time()
+            )
 
         if (
             interrupt
