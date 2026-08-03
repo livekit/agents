@@ -1,6 +1,6 @@
 # BytePlus TTS plugin for LiveKit Agents
 
-Support for [BytePlus Voice](https://docs.byteplus.com/en/docs/byteplusvoice/docs-overview)
+Support for [BytePlus Voice](https://docs.byteplus.com/en/docs/byteplusvoice/texttospeechv2)
 text-to-speech services in LiveKit Agents.
 
 See the

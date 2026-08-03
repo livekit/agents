@@ -23,7 +23,7 @@ import json
 import math
 import os
 import weakref
-from collections.abc import AsyncIterator, Callable, Collection
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -90,6 +90,7 @@ NUM_CHANNELS = 1
 USER_AGENT = f"livekit-plugins-byteplus/{__version__}"
 
 _DEFAULT_PATH = "/api/v3/tts/unidirectional"
+_PCM_SAMPLE_WIDTH_BYTES = 2
 _MAX_STREAM_BUFFER_CHARS = 32 * 1024 * 1024
 _MAX_ERROR_BODY_CHARS = 4096
 _MAX_EXTRA_ADDITIONS_CHARS = 1024 * 1024
@@ -565,7 +566,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not segment_started:
                     output_emitter.start_segment(segment_id=request_id)
                     segment_started = True
-                request_transcript_end = await _request_and_emit_audio(
+                request_timeline_duration = await _request_and_emit_audio(
                     provider=self._tts,
                     session=self._tts._ensure_session(),
                     opts=self._opts,
@@ -576,7 +577,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     transcript_offset=transcript_offset,
                     decode_compressed_audio=decode_compressed_audio,
                 )
-                transcript_offset += request_transcript_end
+                transcript_offset += request_timeline_duration
                 output_emitter.flush()
             output_emitter.end_input()
 
@@ -603,8 +604,8 @@ async def _request_and_emit_audio(
     """Execute one provider request and emit audio, timestamps, and usage.
 
     Returns:
-        The largest provider timestamp in this request, used as the next sentence's
-        offset when LiveKit input streaming is adapted to multiple HTTP requests.
+        The request timeline duration, measured from emitted audio and extended to the
+        largest provider word timestamp when necessary.
     """
     url = f"{opts.base_url}{_DEFAULT_PATH}"
     headers = _build_headers(opts, request_id=request_id)
@@ -614,6 +615,7 @@ async def _request_and_emit_audio(
     audio_sink: Callable[[bytes], None] = output_emitter.push
     received_compressed_bytes = 0
     decoded_audio_frames = 0
+    emitted_audio_duration = 0.0
 
     if decode_compressed_audio:
         audio_decoder = utils.codecs.AudioStreamDecoder(
@@ -631,13 +633,24 @@ async def _request_and_emit_audio(
         audio_sink = _push_compressed_audio
 
         async def _forward_decoded_audio() -> None:
-            nonlocal decoded_audio_frames
+            nonlocal decoded_audio_frames, emitted_audio_duration
             assert audio_decoder is not None
             async for frame in audio_decoder:
                 decoded_audio_frames += 1
+                emitted_audio_duration += frame.duration
                 output_emitter.push(bytes(frame.data))
 
         decode_task = asyncio.create_task(_forward_decoded_audio())
+    elif opts.audio_format == "pcm":
+
+        def _push_pcm_audio(data: bytes) -> None:
+            nonlocal emitted_audio_duration
+            emitted_audio_duration += len(data) / (
+                opts.sample_rate * NUM_CHANNELS * _PCM_SAMPLE_WIDTH_BYTES
+            )
+            output_emitter.push(data)
+
+        audio_sink = _push_pcm_audio
 
     async def _finish_audio_decoder(*, validate_output: bool) -> None:
         nonlocal audio_decoder, decode_task
@@ -692,7 +705,7 @@ async def _request_and_emit_audio(
                     retryable=status in {408, 429} or status >= 500,
                 )
             request_transcript_end = 0.0
-            async for event in _iter_json_events(resp.content):
+            async for event in _iter_json_events(resp.content.iter_any()):
                 is_terminal, event_transcript_end = _handle_response_event(
                     provider=provider,
                     event=event,
@@ -708,7 +721,7 @@ async def _request_and_emit_audio(
                         "completed BytePlus TTS request",
                         extra={"request_id": provider_request_id},
                     )
-                    return request_transcript_end
+                    return max(emitted_audio_duration, request_transcript_end)
             raise APIConnectionError(
                 "BytePlus TTS response ended before the terminal event. "
                 f"Provider request ID: {provider_request_id}",
@@ -1050,13 +1063,11 @@ def _build_additions(opts: _TTSOptions) -> dict[str, Any]:
     return additions
 
 
-async def _iter_json_events(content: Any) -> AsyncIterator[dict[str, Any]]:
+async def _iter_json_events(content: AsyncIterable[bytes]) -> AsyncIterator[dict[str, Any]]:
     """Incrementally decode concatenated JSON events across arbitrary byte chunks."""
     utf8_decoder = codecs.getincrementaldecoder("utf-8")()
     buffer = ""
     async for raw_chunk in content:
-        if isinstance(raw_chunk, tuple):
-            raw_chunk = raw_chunk[0]
         if not raw_chunk:
             continue
         if not isinstance(raw_chunk, bytes):
