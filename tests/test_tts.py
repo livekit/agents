@@ -177,6 +177,13 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
+    ),
+    pytest.param(
+        lambda: {
             "tts": elevenlabs.TTS(),
             "proxy-upstream": "api.elevenlabs.io:443",
         },
@@ -488,6 +495,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.deepgram.com:443",
         },
         id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
     ),
     pytest.param(
         lambda: {
