@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 import threading
@@ -102,6 +103,57 @@ async def test_model_loading_runs_off_event_loop_on_first_recognition(
         {"model": "iic/SenseVoiceSmall", "device": "cpu", "disable_update": True}
     ]
     assert _FakeAutoModel.init_threads[0] != event_loop_thread
+
+
+async def test_cancelled_recognition_keeps_model_calls_serialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    calls_lock = threading.Lock()
+    calls = 0
+
+    def generate(**kwargs: Any) -> list[dict[str, str]]:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            first_started.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_started.set()
+        return [{"text": "<|en|>hello"}]
+
+    funasr_stt = _load_funasr_stt_module(monkeypatch, generate)
+    stt = funasr_stt.FunASRSTT()
+    first = asyncio.create_task(
+        stt._recognize_impl(
+            [_make_audio_frame()],
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+    )
+    assert await asyncio.to_thread(first_started.wait, 5)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    second = asyncio.create_task(
+        stt._recognize_impl(
+            [_make_audio_frame()],
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+    )
+    try:
+        await asyncio.sleep(0.1)
+        assert not second_started.is_set()
+    finally:
+        release_first.set()
+        await asyncio.wait_for(second, timeout=5)
+
+    assert second_started.is_set()
 
 
 def test_plugin_download_files_prefetches_default_model(
