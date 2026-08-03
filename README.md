@@ -136,6 +136,8 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
+> **Note:** The OpenAI plugin also works with OpenAI-compatible multi-model gateways when you are not self-hosting — for example [DaoXE](https://daoxe.com) at `https://api.daoxe.com/v1` (set `base_url` if the plugin supports it).
+
 You'll need the following environment variables for this example:
 
 - LIVEKIT_URL
