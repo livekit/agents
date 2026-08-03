@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -61,6 +62,10 @@ class MultiSpeakerAdapter(STT):
         self._background_format = background_format
 
         self._stt.on("metrics_collected", self._on_metrics_collected)
+        # the wrapped STT's metrics are the accurate ones (its own label, model/provider and
+        # provider-reported usage), so they are re-emitted here and this adapter does not add a
+        # second measurement for the same audio -- same split as the stream and fallback adapters
+        self._recognize_metrics_needed = False
 
     @property
     def wrapped_stt(self) -> STT:
@@ -129,6 +134,12 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
             primary_format=stt._primary_format,
             background_format=stt._background_format,
         )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
+        # the wrapped stream already reports usage for this audio and the adapter re-emits it,
+        # so measuring the forwarded events here would count every recognition twice
+        async for _ in event_aiter:
+            pass
 
     async def _run(self) -> None:
         async def _forward_input(stream: RecognizeStream) -> None:
