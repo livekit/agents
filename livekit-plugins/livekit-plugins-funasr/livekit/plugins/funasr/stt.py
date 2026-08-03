@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -43,6 +44,14 @@ _FUNASR_LANGUAGES = {"zh", "en", "ja", "ko", "yue", "nospeech"}
 _DETECTED_LANGUAGES = {"zh", "en", "ja", "ko", "yue"}
 _SAMPLE_RATE = 16000
 _LANG_TAG_RE = re.compile(r"<\|([a-z]+)\|>")
+_DEFAULT_MODEL = "iic/SenseVoiceSmall"
+
+
+def _load_model(model: str, device: str) -> Any:
+    logger.info(f"loading FunASR model {model} on {device}...")
+    loaded_model = AutoModel(model=model, device=device, disable_update=True)
+    logger.info("FunASR model loaded")
+    return loaded_model
 
 
 def _normalize_language(language: NotGivenOr[str]) -> str:
@@ -69,7 +78,7 @@ class FunASRSTT(stt.STT):
     def __init__(
         self,
         *,
-        model: str = "iic/SenseVoiceSmall",
+        model: str = _DEFAULT_MODEL,
         device: str = "cpu",
         language: NotGivenOr[str] = NOT_GIVEN,
         use_itn: bool = True,
@@ -86,20 +95,21 @@ class FunASRSTT(stt.STT):
         """
         super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
         self._model_name = model
+        self._device = device
         self._opts = _STTOptions(language=_normalize_language(language), use_itn=use_itn)
         # FunASR's model.generate is not guaranteed thread-safe; serialize access
-        # across concurrent _recognize_impl calls that share this instance.
+        # and lazy initialization across calls that share this instance.
         self._lock = asyncio.Lock()
-        logger.info(f"loading FunASR model {model} on {device}...")
-        self._model = AutoModel(model=model, device=device, disable_update=True)
-        logger.info("FunASR model loaded")
+        self._model: Any | None = None
 
     @property
     def model(self) -> str:
+        """Return the configured FunASR model identifier."""
         return self._model_name
 
     @property
     def provider(self) -> str:
+        """Return the speech-to-text provider name."""
         return "FunASR"
 
     def update_options(
@@ -108,6 +118,12 @@ class FunASRSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         use_itn: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        """Update recognition options used for subsequent requests.
+
+        Args:
+            language: Language code, or leave unset to keep the current value.
+            use_itn: Whether to apply inverse text normalization.
+        """
         if is_given(language):
             self._opts.language = _normalize_language(language)
         if is_given(use_itn):
@@ -140,6 +156,8 @@ class FunASRSTT(stt.STT):
             samples = samples.reshape(-1, channels).mean(axis=1)
 
         def _run() -> str:
+            if self._model is None:
+                self._model = _load_model(self._model_name, self._device)
             result = self._model.generate(
                 input=samples,
                 cache={},

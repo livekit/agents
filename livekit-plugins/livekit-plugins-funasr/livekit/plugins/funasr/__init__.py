@@ -19,7 +19,7 @@ SenseVoice (Chinese, Cantonese, English, Japanese, Korean and more).
 See https://github.com/modelscope/FunASR for more information.
 """
 
-from .stt import FunASRSTT, FunASRSTT as STT
+from .stt import _DEFAULT_MODEL, FunASRSTT, FunASRSTT as STT, _load_model
 from .version import __version__
 
 __all__ = ["FunASRSTT", "STT", "__version__"]
@@ -30,8 +30,15 @@ from .log import logger
 
 
 class FunASRPlugin(Plugin):
+    """Register the FunASR integration and its model-download hook."""
+
     def __init__(self) -> None:
+        """Create the LiveKit plugin registration."""
         super().__init__(__name__, __version__, __package__, logger)
+
+    def download_files(self) -> None:
+        """Download the default SenseVoice model for offline agent startup."""
+        _load_model(_DEFAULT_MODEL, "cpu")
 
 
 Plugin.register_plugin(FunASRPlugin())
