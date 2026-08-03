@@ -57,6 +57,7 @@ members = [
     "livekit-plugins-nltk",
     "livekit-plugins-nvidia",
     "livekit-plugins-openai",
+    "livekit-plugins-palabra",
     "livekit-plugins-perplexity",
     "livekit-plugins-phonic",
     "livekit-plugins-protoface",
@@ -116,6 +117,7 @@ typing = [
     { name = "types-grpcio", specifier = ">=1.0.0.20260607" },
     { name = "types-grpcio-status", specifier = ">=1.0.0.20260408" },
     { name = "types-gunicorn", specifier = ">=26.0.0.20260518" },
+    { name = "types-nanoid", specifier = ">=2.0.0.20260508" },
     { name = "types-openpyxl", specifier = ">=3.1.5.20260518" },
     { name = "types-pexpect", specifier = ">=4.9.0.20260518" },
     { name = "types-psutil", specifier = ">=7.2.2.20260518" },
@@ -1944,6 +1946,9 @@ nvidia = [
 openai = [
     { name = "livekit-plugins-openai" },
 ]
+palabra = [
+    { name = "livekit-plugins-palabra" },
+]
 perplexity = [
     { name = "livekit-plugins-perplexity" },
 ]
@@ -2078,6 +2083,7 @@ requires-dist = [
     { name = "livekit-plugins-nltk", marker = "extra == 'nltk'", editable = "livekit-plugins/livekit-plugins-nltk" },
     { name = "livekit-plugins-nvidia", marker = "extra == 'nvidia'", editable = "livekit-plugins/livekit-plugins-nvidia" },
     { name = "livekit-plugins-openai", marker = "extra == 'openai'", editable = "livekit-plugins/livekit-plugins-openai" },
+    { name = "livekit-plugins-palabra", marker = "extra == 'palabra'", editable = "livekit-plugins/livekit-plugins-palabra" },
     { name = "livekit-plugins-perplexity", marker = "extra == 'perplexity'", editable = "livekit-plugins/livekit-plugins-perplexity" },
     { name = "livekit-plugins-phonic", marker = "extra == 'phonic'", editable = "livekit-plugins/livekit-plugins-phonic" },
     { name = "livekit-plugins-protoface", marker = "extra == 'protoface'", editable = "livekit-plugins/livekit-plugins-protoface" },
@@ -2125,7 +2131,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2839,6 +2845,20 @@ requires-dist = [
     { name = "openai", extras = ["realtime"], specifier = ">=2.36" },
 ]
 provides-extras = ["vertex"]
+
+[[package]]
+name = "livekit-plugins-palabra"
+source = { editable = "livekit-plugins/livekit-plugins-palabra" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "palabra-ai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "palabra-ai", specifier = ">=2.0.2" },
+]
 
 [[package]]
 name = "livekit-plugins-perplexity"
@@ -4029,6 +4049,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d7/f1/e7a6dd94a8d4a5626c03e4e99c87f241ba9e350cd9e6d75123f992427270/packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661", size = 228134, upload-time = "2026-04-24T20:15:23.917Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", size = 100195, upload-time = "2026-04-24T20:15:22.081Z" },
+]
+
+[[package]]
+name = "palabra-ai"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/70/fc/e424c338858d98feeb094e67bb607fb3a712c66909b4c20f314612743df7/palabra_ai-2.0.2.tar.gz", hash = "sha256:c53072c36a20bd5745c67f95ee59ca65e70dc49c367d318a7223fe306e1bc581", size = 65770, upload-time = "2026-07-23T15:40:37.631Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/55/dedd1d351821d1a4031ad7f966e7b0bd0b0f719f65e424a3372dc5fac753/palabra_ai-2.0.2-py3-none-any.whl", hash = "sha256:c50d5f43f40670b85d2b05ee5a6a55a514da7020de72c1d7289fabf86e525ea7", size = 24134, upload-time = "2026-07-23T15:40:36.154Z" },
 ]
 
 [[package]]
@@ -5591,6 +5623,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/1c/a01ec531454c9b1904ac5164bc6fd1c5dfebe97b7976c8cb2135b90625ec/types_gunicorn-26.0.0.20260518.tar.gz", hash = "sha256:40d40019cd1798924f19c62b5fe96bc5a63a2051278706d788c39805fabdb306", size = 34157, upload-time = "2026-05-18T06:07:57.858Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/1a/07fa198168b4023286692d3df4db3232eb94c6815b516e5c5488abd15f71/types_gunicorn-26.0.0.20260518-py3-none-any.whl", hash = "sha256:5b5e1d9d43a1c56e90a380694106a9eba295d4d99e64abbdcbedee44c2c6dc50", size = 52182, upload-time = "2026-05-18T06:07:57.022Z" },
+]
+
+[[package]]
+name = "types-nanoid"
+version = "2.0.0.20260508"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/9a/a9719ba0866c76c378d9ced7c59f76d98da987e8c971f2102aefbefd694b/types_nanoid-2.0.0.20260508.tar.gz", hash = "sha256:4ab493a2bc6dea7aa3c9671e2cb32ed0ed8f6419250a98ec533d49bc619302d7", size = 7351, upload-time = "2026-05-08T04:48:54.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/18/5a305d16ca4d43ce04c63a2c89b2da14de3b555f546d7f31b167a7f2ed55/types_nanoid-2.0.0.20260508-py3-none-any.whl", hash = "sha256:d6d3098c075ac1ba8e9e010e20605ffadf7a3870022eb19517868dc7566579c9", size = 8604, upload-time = "2026-05-08T04:48:53.257Z" },
 ]
 
 [[package]]

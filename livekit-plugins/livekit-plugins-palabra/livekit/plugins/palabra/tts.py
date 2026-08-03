@@ -1,0 +1,425 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Palabra realtime text-to-speech plugin for LiveKit Agents.
+
+Transport is the official ``palabra-ai`` SDK (``palabra_ai.TtsSession``).
+This module is the LiveKit adapter on top of it.
+One ``TtsSession`` (one WebSocket) is shared by every stream of a ``TTS`` instance.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import weakref
+from dataclasses import dataclass
+
+from palabra_ai import (
+    AuthError,
+    Palabra,
+    PalabraError,
+    ServerError,
+    SessionError,
+    TaskError,
+    TtsChunk,
+    TtsSession,
+)
+
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    tokenize,
+    tts,
+    utils,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
+
+from .log import logger
+from .models import (
+    DEFAULT_DEACCENT_STRENGTH,
+    DEFAULT_LANGUAGE,
+    DEFAULT_MODEL,
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_VOICE_ID,
+    TTSModels,
+)
+
+# The Palabra server caps a single text message at 1024 characters.
+_MAX_TEXT_LEN = 1024
+
+# Server `error` codes that are worth retrying.
+_RETRYABLE_ERROR_CODES = frozenset({"SERVICE_UNAVAILABLE", "RATE_LIMIT_EXCEEDED"})
+
+# The server accepts at most 20 text messages per second per identity.
+# Above that it replies with a RATE_LIMIT_EXCEEDED error frame and does not synthesize the text.
+# A base-class retry replays all buffered text at once, so every send is spaced by this interval.
+# 0.06 s is ~16 messages per second, one step below the cap.
+_MIN_SEND_INTERVAL = 0.06
+
+
+def _session_alive(session: TtsSession) -> bool:
+    # The SDK has no public liveness flag; this reads its private `_ws` websocket.
+    # close_code is set once the connection is closed by either side.
+    ws = session._ws
+    return ws is not None and ws.close_code is None
+
+
+@dataclass
+class _TTSOptions:
+    language: str
+    voice_id: str
+    speed: float | None  # None: the server default is used
+    deaccent_strength: float
+    model: TTSModels | str
+    sample_rate: int
+
+
+class TTS(tts.TTS):
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        language: str = DEFAULT_LANGUAGE,
+        voice_id: str = DEFAULT_VOICE_ID,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        deaccent_strength: float = DEFAULT_DEACCENT_STRENGTH,
+        model: TTSModels | str = DEFAULT_MODEL,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        region: str | None = None,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+    ) -> None:
+        """Create a new instance of Palabra realtime TTS.
+
+        Args:
+            api_key: Palabra API Key (create one at https://platform.palabra.ai/api-keys).
+                Falls back to the ``PALABRA_API_KEY`` environment variable.
+            language: BCP-47 language code for synthesis. Defaults to ``"en"``.
+            voice_id: Voice identifier; ``"default_low"`` / ``"default_high"`` pick the
+                language default voice. Defaults to ``"default_low"``.
+            speed: Speech rate in the ``0.0``-``1.0`` range (``0.5`` is natural pace).
+                Unset by default, so the server default is used.
+            deaccent_strength: Foreign-accent reduction in the ``0.0``-``1.0`` range.
+            model: Synthesis model. Defaults to ``"auto"`` (server picks).
+            sample_rate: Output sample rate in Hz (``8000``-``48000``). Defaults to ``24000``.
+            region: Palabra region (``"eu"`` / ``"us"``). Falls back to the
+                ``PALABRA_REGION`` environment variable, then ``"eu"``.
+            tokenizer: Sentence tokenizer used to chunk streamed text into utterances.
+                Defaults to ``livekit.agents.tokenize.blingfire.SentenceTokenizer``.
+
+        Raises:
+            ValueError: no ``api_key`` argument and no ``PALABRA_API_KEY`` in the environment.
+        """
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=True),
+            sample_rate=sample_rate,
+            num_channels=1,
+        )
+        api_key = api_key or os.environ.get("PALABRA_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Palabra api_key is required, either as an argument or set the"
+                " PALABRA_API_KEY environment variable"
+            )
+
+        self._client = Palabra(api_key, region=region)
+        self._opts = _TTSOptions(
+            language=language,
+            voice_id=voice_id,
+            speed=speed if is_given(speed) else None,
+            deaccent_strength=deaccent_strength,
+            model=model,
+            sample_rate=sample_rate,
+        )
+        # Invariants of the shared session state:
+        #   - one TtsSession (one WebSocket) is shared by every stream of this TTS;
+        #   - the `init` frame is sent once per connection, so update_options() only
+        #     marks _opts_dirty and the next _ensure_session() reopens the session;
+        #   - _send_lock orders every socket write (text and cancel) and session open/close;
+        #   - _send_lock is held per operation, never for a stream's lifetime.
+        self._tts_session: TtsSession | None = None
+        self._opts_dirty = False
+        self._send_lock = asyncio.Lock()
+        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
+
+    @property
+    def model(self) -> str:
+        """Active synthesis model id."""
+        return str(self._opts.model)
+
+    @property
+    def provider(self) -> str:
+        """Provider display name used in metrics."""
+        return "Palabra"
+
+    def _new_tts(self) -> TtsSession:
+        return self._client.tts(
+            language=self._opts.language,
+            voice_id=self._opts.voice_id,
+            speed=self._opts.speed,
+            deaccent_strength=self._opts.deaccent_strength,
+            model=self._opts.model,
+            format="pcm",
+            sample_rate=self._opts.sample_rate,
+        )
+
+    async def _ensure_session(self) -> TtsSession:
+        # Caller must hold `self._send_lock`.
+        if self._opts_dirty:
+            await self._reset_session()
+            self._opts_dirty = False
+        if self._tts_session is not None and not _session_alive(self._tts_session):
+            await self._reset_session()
+        if self._tts_session is None:
+            self._tts_session = await self._new_tts().__aenter__()
+        return self._tts_session
+
+    async def _reset_session(self) -> None:
+        session, self._tts_session = self._tts_session, None
+        if session is not None:
+            with contextlib.suppress(Exception):
+                await session.close()
+
+    async def _drop_session(self) -> None:
+        async with self._send_lock:
+            await self._reset_session()
+
+    def prewarm(self) -> None:
+        """Open the realtime TTS session ahead of the first request.
+
+        Returns immediately; the connection is opened in a background task.
+        Failures are ignored — the first stream()/synthesize() call reconnects.
+        Does nothing when called outside a running event loop.
+        """
+        with contextlib.suppress(RuntimeError):
+            asyncio.get_running_loop().create_task(self._safe_prewarm())
+
+    async def _safe_prewarm(self) -> None:
+        with contextlib.suppress(Exception):
+            async with self._send_lock:
+                await self._ensure_session()
+
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        deaccent_strength: NotGivenOr[float] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+    ) -> None:
+        """Update synthesis options; unset arguments keep their current value.
+
+        The Palabra ``init`` frame is sent once per connection, so the session is
+        reopened on the next stream() call for the new options to take effect.
+        Streams already running keep the options they were created with.
+        """
+        if is_given(language):
+            self._opts.language = language
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
+        if is_given(speed):
+            self._opts.speed = speed
+        if is_given(deaccent_strength):
+            self._opts.deaccent_strength = deaccent_strength
+        if is_given(model):
+            self._opts.model = model
+        self._opts_dirty = True
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        """Synthesize ``text`` in a single request, over the shared realtime session."""
+        return self._synthesize_with_stream(text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        """Open a streaming synthesis session that accepts incremental text."""
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        """Close all active streams and the realtime TTS session."""
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        async with self._send_lock:
+            await self._reset_session()
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=self._tts._opts.sample_rate,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+
+        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        send_complete = asyncio.Event()
+        # One generation_id per text message; the server echoes it in every audio_chunk.
+        #   - my_gens = every generation_id this stream sent;
+        #   - pending_gens = the ids still waiting for their last_chunk;
+        #   - a chunk with any other id belongs to a cancelled stream's generation
+        #     and is dropped.
+        my_gens: set[str] = set()
+        pending_gens: set[str] = set()
+        got_audio = False
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    sent_tokenizer_stream.flush()
+                    continue
+                sent_tokenizer_stream.push_text(data)
+            sent_tokenizer_stream.end_input()
+
+        async def _send_task(session: TtsSession) -> None:
+            loop = asyncio.get_running_loop()
+            last_send = 0.0
+            async for ev in sent_tokenizer_stream:
+                text = ev.token
+                if not text:
+                    continue
+                pieces = [text[i : i + _MAX_TEXT_LEN] for i in range(0, len(text), _MAX_TEXT_LEN)]
+                for idx, piece in enumerate(pieces):
+                    delay = last_send + _MIN_SEND_INTERVAL - loop.time()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    gen_id = utils.shortuuid("PLBR_")
+                    # Register before sending: audio_chunk can arrive before send_text returns.
+                    my_gens.add(gen_id)
+                    pending_gens.add(gen_id)
+                    self._mark_started()
+                    try:
+                        async with self._tts._send_lock:
+                            await session.send_text(
+                                piece, eos=idx == len(pieces) - 1, generation_id=gen_id
+                            )
+                    except BaseException:
+                        pending_gens.discard(gen_id)
+                        raise
+                    last_send = loop.time()
+            send_complete.set()
+
+        async def _recv_task(session: TtsSession) -> None:
+            nonlocal got_audio
+            segment_started = False
+            stale_chunks = 0
+            while not (send_complete.is_set() and not pending_gens):
+                if pending_gens:
+                    # The server owes us audio for sent text; silence here is a server stall.
+                    try:
+                        event = await session.receive(timeout=self._conn_options.timeout)
+                    except asyncio.TimeoutError:
+                        # A sent generation never got its last_chunk.
+                        # The server ends errored or stalled generations without one.
+                        if got_audio:
+                            break  # deliver the partial audio instead of failing the reply
+                        raise APITimeoutError() from None
+                else:
+                    # Nothing is outstanding, so a pause here belongs to the input (the LLM).
+                    # Poll with a short timeout instead of a deadline; once _send_task
+                    # registers a generation, the branch above re-arms the real timeout.
+                    try:
+                        event = await session.receive(timeout=0.25)
+                    except asyncio.TimeoutError:
+                        continue
+                if event is None:
+                    raise APIConnectionError("palabra tts session closed unexpectedly")
+                if isinstance(event, ServerError):
+                    logger.error("palabra tts error: %s", event.code)
+                    raise APIError(
+                        f"palabra tts error: {event.code}",
+                        retryable=event.code in _RETRYABLE_ERROR_CODES,
+                    )
+                if isinstance(event, TtsChunk):
+                    if event.generation_id not in my_gens:
+                        stale_chunks += 1
+                        continue
+                    if event.audio:
+                        got_audio = True
+                        if not segment_started:
+                            # One segment per stream: the agent opens a fresh stream() per reply.
+                            output_emitter.start_segment(segment_id=request_id)
+                            segment_started = True
+                        output_emitter.push(event.audio)
+                    if event.last_chunk:
+                        pending_gens.discard(event.generation_id)
+            if stale_chunks:
+                logger.debug("dropped %d audio chunks of cancelled generations", stale_chunks)
+            output_emitter.end_input()
+
+        session: TtsSession | None = None
+        try:
+            async with self._tts._send_lock:
+                session = await self._tts._ensure_session()
+            tasks = [
+                asyncio.create_task(_input_task()),
+                asyncio.create_task(_send_task(session)),
+                asyncio.create_task(_recv_task(session)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await sent_tokenizer_stream.aclose()
+                await utils.aio.gracefully_cancel(*tasks)
+        except asyncio.CancelledError:
+            # Interruption: the framework awaits this task before the next reply, so return fast.
+            # The server `cancel` is session-wide and stops every generation in flight.
+            # It takes _send_lock, so with the default serial streams it lands after our own sends.
+            # With preemptive_tts=True or concurrent streams it can also cancel a later generation.
+            if session is not None and my_gens:
+                logger.debug("interrupted: sending server cancel")
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._send_cancel(session), timeout=1.0)
+                logger.debug("interrupted: server cancel sent")
+            raise
+        except APIError:
+            await self._tts._drop_session()
+            raise
+        except asyncio.TimeoutError:
+            await self._tts._drop_session()
+            raise APITimeoutError() from None
+        except AuthError as e:
+            await self._tts._drop_session()
+            raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
+        except (SessionError, TaskError, PalabraError) as e:
+            await self._tts._drop_session()
+            raise APIConnectionError(str(e)) from e
+        except Exception as e:
+            await self._tts._drop_session()
+            logger.exception("palabra tts error")
+            raise APIConnectionError() from e
+
+    async def _send_cancel(self, session: TtsSession) -> None:
+        async with self._tts._send_lock:
+            await session.cancel()
