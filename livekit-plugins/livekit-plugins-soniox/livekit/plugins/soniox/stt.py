@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, NamedTuple
@@ -39,6 +40,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
+    TimedString,
 )
 
 from .log import logger
@@ -673,11 +675,46 @@ class _LangStats(NamedTuple):
     updated_at: float
 
 
+class _Word(NamedTuple):
+    """One whitespace-delimited word assembled from consecutive sub-word tokens."""
+
+    text: str
+    start_ms: float | None
+    end_ms: float | None
+    confidence: float | None
+    speaker_id: str | None
+
+
+def _is_unspaced_script_char(char: str) -> bool:
+    """True for scripts written without inter-word spaces among Soniox's
+    supported languages (Han for zh, Kana for ja, Thai for th). Tokens in
+    these scripts never arrive with whitespace between them, so token
+    boundaries are used as word boundaries instead; every other supported
+    language delimits words with whitespace."""
+    code_point = ord(char)
+    return (
+        0x0E00 <= code_point <= 0x0E7F  # Thai
+        or 0x3040 <= code_point <= 0x30FF  # Hiragana + Katakana
+        or 0x31F0 <= code_point <= 0x31FF  # Katakana Phonetic Extensions
+        or 0x3400 <= code_point <= 0x4DBF  # CJK Unified Ideographs Extension A
+        or 0x4E00 <= code_point <= 0x9FFF  # CJK Unified Ideographs
+        or 0xF900 <= code_point <= 0xFAFF  # CJK Compatibility Ideographs
+        or 0xFF66 <= code_point <= 0xFF9D  # Halfwidth Katakana
+        or 0x20000 <= code_point <= 0x2FA1F  # CJK Unified Ideographs Extensions B-F
+    )
+
+
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
     Tokens are assumed to arrive in chronological order, so start_time is taken
     from the first token and end_time is continuously overwritten by the latest.
+
+    Per-word metadata is accumulated alongside: Soniox emits sub-word tokens
+    ("walk" + "ing"), which are grouped into words at whitespace boundaries
+    (or at token boundaries for unspaced scripts). A word's confidence is the
+    mean of its tokens' confidences; its timing spans its first token's
+    start_ms to its last token's end_ms.
     """
 
     def __init__(self) -> None:
@@ -691,6 +728,13 @@ class _TokenAccumulator:
         self._has_start_time: bool = False
         self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
         self._lang_stats: dict[str, _LangStats] = {}
+        self._words: list[_Word] = []
+        self._word_parts: list[str] = []
+        self._word_confidence_sum: float = 0.0
+        self._word_confidence_count: int = 0
+        self._word_start_ms: float | None = None
+        self._word_end_ms: float | None = None
+        self._word_speaker_id: str | None = None
 
     def _get_language(self) -> str:
         """Language with the most characters; ties go to the one that reached the count first."""
@@ -728,6 +772,92 @@ class _TokenAccumulator:
                 self._lang_segments[-1] = (lang, t + text)
             else:
                 self._lang_segments.append((lang, text))
+        self._update_words(token)
+
+    def _update_words(self, token: dict[str, Any]) -> None:
+        text = token["text"]
+        if not text:
+            return
+        confidence = token.get("confidence")
+        start_ms = float(token["start_ms"]) if "start_ms" in token else None
+        end_ms = float(token["end_ms"]) if "end_ms" in token else None
+        speaker_id = str(token["speaker"]) if "speaker" in token else None
+
+        for piece in re.split(r"(\s+)", text):
+            if not piece:
+                continue
+            if piece.isspace():
+                self._flush_word()
+                continue
+            if self._word_parts and (
+                _is_unspaced_script_char(self._word_parts[-1][-1])
+                or _is_unspaced_script_char(piece[0])
+            ):
+                self._flush_word()
+            self._word_parts.append(piece)
+            # A token spanning a word boundary contributes its metadata to
+            # every word it touches.
+            if confidence is not None:
+                self._word_confidence_sum += confidence
+                self._word_confidence_count += 1
+            if start_ms is not None and self._word_start_ms is None:
+                self._word_start_ms = start_ms
+            if end_ms is not None:
+                self._word_end_ms = end_ms
+            if speaker_id is not None and self._word_speaker_id is None:
+                self._word_speaker_id = speaker_id
+
+    def _pending_word(self) -> _Word | None:
+        if not self._word_parts:
+            return None
+        return _Word(
+            text="".join(self._word_parts),
+            start_ms=self._word_start_ms,
+            end_ms=self._word_end_ms,
+            confidence=(
+                self._word_confidence_sum / self._word_confidence_count
+                if self._word_confidence_count
+                else None
+            ),
+            speaker_id=self._word_speaker_id,
+        )
+
+    def _flush_word(self) -> None:
+        word = self._pending_word()
+        if word is None:
+            return
+        self._words.append(word)
+        self._word_parts = []
+        self._word_confidence_sum = 0.0
+        self._word_confidence_count = 0
+        self._word_start_ms = None
+        self._word_end_ms = None
+        self._word_speaker_id = None
+
+    def timed_words(self, start_time_offset: float = 0.0) -> list[TimedString] | None:
+        """Words accumulated so far (including the in-progress one) as
+        `TimedString`s, or None when no words have been seen."""
+        pending = self._pending_word()
+        words = self._words + ([pending] if pending is not None else [])
+        if not words:
+            return None
+        return [
+            TimedString(
+                text=word.text,
+                start_time=(
+                    word.start_ms / 1000 + start_time_offset
+                    if word.start_ms is not None
+                    else NOT_GIVEN
+                ),
+                end_time=(
+                    word.end_ms / 1000 + start_time_offset if word.end_ms is not None else NOT_GIVEN
+                ),
+                confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
+                start_time_offset=start_time_offset,
+                speaker_id=word.speaker_id,
+            )
+            for word in words
+        ]
 
     @property
     def confidence(self) -> float:
@@ -746,6 +876,13 @@ class _TokenAccumulator:
         self._has_start_time = False
         self._lang_segments = []
         self._lang_stats = {}
+        self._words = []
+        self._word_parts = []
+        self._word_confidence_sum = 0.0
+        self._word_confidence_count = 0
+        self._word_start_ms = None
+        self._word_end_ms = None
+        self._word_speaker_id = None
 
     def to_speech_data(
         self,
@@ -766,6 +903,7 @@ class _TokenAccumulator:
             start_time=self.start_time / 1000 + start_time_offset,
             end_time=self.end_time / 1000 + start_time_offset,
             confidence=self.confidence,
+            words=self.timed_words(start_time_offset),
         )
 
     def merged_speech_data(
@@ -783,6 +921,9 @@ class _TokenAccumulator:
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
         total_sum = self._confidence_sum + other._confidence_sum
+        merged_words = (self.timed_words(start_time_offset) or []) + (
+            other.timed_words(start_time_offset) or []
+        )
         return stt.SpeechData(
             text=self.text + other.text,
             language=LanguageCode(self.language if self.language else other.language),
@@ -794,4 +935,5 @@ class _TokenAccumulator:
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,
             confidence=total_sum / total_count if total_count > 0 else 0.0,
+            words=merged_words or None,
         )
