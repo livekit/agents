@@ -810,3 +810,16 @@ async def test_generate_reply_reaches_a_model_that_supports_it() -> None:
     session.generate_reply(instructions="say hi")
     assert fake.replies_requested == ["say hi"]
     await session.aclose()
+
+
+async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
+    """Callers pass the model itself; the adapter is the framework's business, not theirs."""
+    from livekit.agents import Agent, AgentSession
+
+    model = _FakeDuplexModel()
+    session = AgentSession(llm=model)
+    assert isinstance(session.llm, llm.DuplexRealtimeAdapter)
+    assert session.llm.duplex_model is model
+
+    agent = Agent(instructions="", llm=model)
+    assert isinstance(agent.llm, llm.DuplexRealtimeAdapter)

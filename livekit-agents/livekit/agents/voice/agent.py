@@ -10,7 +10,15 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm import (
+    LLM,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    RealtimeModel,
+    ToolError,
+    find_function_tools,
+)
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -48,7 +56,9 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
@@ -91,7 +101,10 @@ class Agent:
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
-        self._llm = llm
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm
+        )
         self._tts = tts
         self._vad = vad
 
@@ -265,7 +278,9 @@ class Agent:
         *,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
     ) -> None:
         """Swap the STT, VAD, LLM, or TTS on this agent. Only the models passed are changed.
@@ -285,6 +300,9 @@ class Agent:
             llm = inference.LLM.from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
+
+        if isinstance(llm, DuplexModel):
+            llm = DuplexRealtimeAdapter(llm)
 
         if self._activity is None:
             # not running: replace stored config, applied on the next start
