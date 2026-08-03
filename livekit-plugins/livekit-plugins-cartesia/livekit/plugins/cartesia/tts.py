@@ -83,16 +83,6 @@ class _TTSOptions:
         return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
-def _supports_word_timestamps(model: str, language: str | None) -> bool:
-    """Whether the model/language combination can return word timestamps.
-
-    https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-    """
-    if "preview" in model:
-        return True
-    return language is None or LanguageCode(language).language in {"en", "de", "es", "fr"}
-
-
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -136,14 +126,6 @@ class TTS(tts.TTS):
             text_pacing (tts.SentenceStreamPacer | bool, optional): Stream pacer for the TTS. Set to True to use the default pacer, False to disable.
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
-
-        if word_timestamps and not _supports_word_timestamps(model, language):
-            # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-            logger.warning(
-                "word_timestamps disabled: it is only supported for languages en, de, es, and fr"
-                " with `sonic` models, or all languages with `preview` models"
-            )
-            word_timestamps = False
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -310,6 +292,26 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
+    def _word_timestamps_unavailable(self) -> None:
+        """Stop asking for word timestamps this model/language never returns.
+
+        Which combinations support them is the provider's business and changes
+        over time, so it is learned from the responses rather than declared
+        here: a synthesis that produced audio but no timestamps settles it.
+        """
+        if not self._opts.word_timestamps:
+            return
+
+        logger.warning(
+            "Cartesia returned no word timestamps for model %s (language %s); disabling them "
+            "for this session. See https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints",
+            self._opts.model,
+            self._opts.language.language if self._opts.language else "unset",
+        )
+        self._opts.word_timestamps = False
+        # the transcript can no longer be read from the TTS alignment
+        self._capabilities.aligned_transcript = False
+
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
             if self._opts.speed:
@@ -452,6 +454,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment_id: str | None = None
             await input_sent_event.wait()
             skip_aligning = False
+            # timestamps are only reported for some model/language combinations;
+            # audio without any is how we learn this one is not among them
+            received_audio = False
+            received_timestamps = False
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -480,14 +486,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
                 if data.get("data"):
+                    received_audio = True
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
+                    if self._opts.word_timestamps and received_audio and not received_timestamps:
+                        self._tts._word_timestamps_unavailable()
+
                     if sent_tokenizer_stream.closed:
                         # close only if the input stream is closed
                         output_emitter.end_input()
                         break
                 elif word_timestamps := data.get("word_timestamps"):
+                    received_timestamps = True
                     # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
                         word_timestamps["words"],
