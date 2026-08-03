@@ -41,7 +41,7 @@ class TestLearningFromTheResponse:
         t = TTS(api_key="test-key", language="hi")
 
         with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
-            t._word_timestamps_unavailable()
+            t._word_timestamps_unavailable(model=t._opts.model, language="hi")
 
         # downstream must stop reading the transcript from the TTS alignment
         assert t.capabilities.aligned_transcript is False
@@ -55,7 +55,7 @@ class TestLearningFromTheResponse:
         t = TTS(api_key="test-key", model="sonic-3", language="hi")
 
         with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
-            t._word_timestamps_unavailable()
+            t._word_timestamps_unavailable(model=t._opts.model, language="hi")
 
         record = next(r for r in caplog.records if "no word timestamps" in r.message)
         assert "sonic-3" in record.getMessage()
@@ -65,8 +65,8 @@ class TestLearningFromTheResponse:
         t = TTS(api_key="test-key", language="hi")
 
         with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
-            t._word_timestamps_unavailable()
-            t._word_timestamps_unavailable()
+            t._word_timestamps_unavailable(model=t._opts.model, language="hi")
+            t._word_timestamps_unavailable(model=t._opts.model, language="hi")
 
         assert len([r for r in caplog.records if "no word timestamps" in r.message]) == 1
 
@@ -74,9 +74,25 @@ class TestLearningFromTheResponse:
         t = TTS(api_key="test-key", language="en", word_timestamps=False)
 
         with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
-            t._word_timestamps_unavailable()
+            t._word_timestamps_unavailable(model=t._opts.model, language="en")
 
         assert not caplog.records
+
+    def test_learns_about_the_combination_the_request_used(self) -> None:
+        # a request is sent with a snapshot of the options; update_options may
+        # have moved the instance on before the response comes back, and the
+        # result belongs to the combination that was actually used
+        t = TTS(api_key="test-key", model="sonic-3", language="hi")
+        t.update_options(language="en")
+
+        t._word_timestamps_unavailable(model="sonic-3", language="hi")
+
+        # the combination in use now was never the one that came back empty
+        assert t.capabilities.aligned_transcript is True
+        assert t._opts.word_timestamps is True
+        # and going back to it applies what was learned
+        t.update_options(language="hi")
+        assert t.capabilities.aligned_transcript is False
 
 
 class TestLearnedPerCombination:
@@ -85,7 +101,7 @@ class TestLearnedPerCombination:
 
     def test_changing_language_re_enables(self) -> None:
         t = TTS(api_key="test-key", language="hi")
-        t._word_timestamps_unavailable()
+        t._word_timestamps_unavailable(model=t._opts.model, language="hi")
         assert t.capabilities.aligned_transcript is False
 
         t.update_options(language="en")
@@ -95,7 +111,7 @@ class TestLearnedPerCombination:
 
     def test_changing_model_re_enables(self) -> None:
         t = TTS(api_key="test-key", model="sonic-3", language="hi")
-        t._word_timestamps_unavailable()
+        t._word_timestamps_unavailable(model=t._opts.model, language="hi")
 
         t.update_options(model="sonic-preview")
 
@@ -103,7 +119,7 @@ class TestLearnedPerCombination:
 
     def test_switching_back_keeps_what_was_learned(self, caplog: pytest.LogCaptureFixture) -> None:
         t = TTS(api_key="test-key", language="hi")
-        t._word_timestamps_unavailable()
+        t._word_timestamps_unavailable(model=t._opts.model, language="hi")
         t.update_options(language="en")
 
         caplog.clear()
@@ -124,7 +140,7 @@ class TestLearnedPerCombination:
 
     def test_unrelated_updates_leave_it_alone(self) -> None:
         t = TTS(api_key="test-key", language="hi")
-        t._word_timestamps_unavailable()
+        t._word_timestamps_unavailable(model=t._opts.model, language="hi")
 
         t.update_options(voice="some-voice")
 
