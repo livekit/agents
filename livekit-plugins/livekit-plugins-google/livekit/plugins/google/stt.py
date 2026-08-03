@@ -159,7 +159,7 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
-        credentials: google.auth.credentials.Credentials | None = None,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -196,7 +196,7 @@ class STT(stt.STT):
             credentials(google.auth.credentials.Credentials): a credentials object to use
                 directly, e.g. from Workload Identity Federation, where credentials are
                 obtained in memory and never exist on disk. Takes precedence over
-                ``credentials_info`` and ``credentials_file`` (default: None)
+                ``credentials_info`` and ``credentials_file`` (default: NOT_GIVEN)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
@@ -250,7 +250,7 @@ class STT(stt.STT):
         self._project_id: str | None = None
 
         if (
-            credentials is None
+            not is_given(credentials)
             and not is_given(credentials_file)
             and not is_given(credentials_info)
         ):
@@ -314,7 +314,7 @@ class STT(stt.STT):
         client_cls = SpeechAsyncClientV2 if self._config.version == 2 else SpeechAsyncClientV1
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
-        if self._credentials is not None:
+        if is_given(self._credentials):
             if self._project_id is None:
                 # in-memory credentials (e.g. Workload Identity Federation) may
                 # carry the project directly; resolve it here so _get_recognizer

@@ -86,7 +86,7 @@ class TTS(tts.TTS):
         audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
-        credentials: google.auth.credentials.Credentials | None = None,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
@@ -116,7 +116,7 @@ class TTS(tts.TTS):
             volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
-            credentials (google.auth.credentials.Credentials, optional): A credentials object to use directly, e.g. from Workload Identity Federation, where credentials are obtained in memory and never exist on disk. Takes precedence over ``credentials_info`` and ``credentials_file``. Default is None.
+            credentials (google.auth.credentials.Credentials, optional): A credentials object to use directly, e.g. from Workload Identity Federation, where credentials are obtained in memory and never exist on disk. Takes precedence over ``credentials_info`` and ``credentials_file``. Default is NOT_GIVEN.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
@@ -258,7 +258,7 @@ class TTS(tts.TTS):
             api_endpoint = f"{self._location}-texttospeech.googleapis.com"
 
         if self._client is None:
-            if self._credentials is not None:
+            if is_given(self._credentials):
                 self._client = texttospeech.TextToSpeechAsyncClient(
                     credentials=self._credentials,
                     client_options=ClientOptions(api_endpoint=api_endpoint),
