@@ -8,11 +8,14 @@ to reach the wrapped STT, otherwise the capability the adapter advertises is a n
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
 
 import pytest
 
 from livekit import rtc
+from livekit.agents import APIConnectionError, utils
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import STTMetrics
 from livekit.agents.stt import (
@@ -114,6 +117,37 @@ class _RecordingStream(RecognizeStream):
                 recognition_usage=RecognitionUsage(audio_duration=1.0),
             )
         )
+
+
+class _HiccupSTT(_RecordingSTT):
+    """Its stream delivers a good transcript and then drops the connection, every attempt.
+
+    ``max_retry=0`` on the inner stream mirrors a plugin that has already spent its own retry
+    budget, so each hiccup propagates to the adapter's wrapper.
+    """
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = _CONN,
+    ) -> RecognizeStream:
+        return _HiccupStream(
+            stt=self, conn_options=APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=5.0)
+        )
+
+
+class _HiccupStream(RecognizeStream):
+    async def _run(self) -> None:
+        self._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                request_id="req-1",
+                alternatives=[SpeechData(language="en", text="hello", speaker_id="A")],
+            )
+        )
+        await asyncio.sleep(0)
+        raise APIConnectionError("brief connection hiccup")
 
 
 class _FakeSession(rtc.EventEmitter[Any]):
@@ -237,3 +271,39 @@ async def test_stream_reports_usage_once() -> None:
     assert len(received) == 1, f"one usage report, {len(received)} metrics events"
     assert received[0].label == wrapped.label
     assert received[0].audio_duration == 1.0
+
+
+async def test_successful_transcript_forgives_earlier_hiccups() -> None:
+    """Suppressing the adapter's own metrics must not drop the retry-count reset.
+
+    ``RecognizeStream._main_task`` gives up once ``_num_retries`` exceeds ``max_retry``, and
+    the base metrics monitor resets it on every final transcript. Without that reset,
+    unrelated brief failures accumulate over a long call until recognition dies for good.
+    """
+    inner = _HiccupSTT()
+    adapter = MultiSpeakerAdapter(stt=inner)
+    conn = APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0)
+    stream = adapter.stream(conn_options=conn)
+
+    transcripts: list[str] = []
+    fatal: list[BaseException] = []
+
+    async def _read() -> None:
+        try:
+            async for ev in stream:
+                if ev.type == SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
+                    transcripts.append(ev.alternatives[0].text)
+        except Exception as e:  # noqa: BLE001 - recorded, asserted on below
+            fatal.append(e)
+
+    task = asyncio.create_task(_read())
+    stream.push_frame(_silence())
+    while len(transcripts) < 5 and not fatal:
+        await asyncio.sleep(0)
+
+    assert not fatal, f"recognition died after {len(transcripts)} good transcripts: {fatal}"
+    assert stream._num_retries == 0
+
+    await utils.aio.cancel_and_wait(task)
+    with contextlib.suppress(Exception):
+        await stream.aclose()
