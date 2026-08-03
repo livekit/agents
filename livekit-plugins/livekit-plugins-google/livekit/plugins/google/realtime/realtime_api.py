@@ -407,7 +407,9 @@ class RealtimeModel(llm.RealtimeModel):
         else:
             return "Gemini"
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,
+        # so the pipeline can't gatekeep turns yet; keep can_disable_turn_detection=False for now
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -857,6 +859,15 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._current_generation:
             self._mark_current_generation_done()
+
+        # release the genai http clients owned by this session. Without this
+        # they stay open until the garbage collector runs `AsyncClient.__del__`,
+        # which schedules `aclose()` on whatever event loop happens to be
+        # running at that moment.
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:

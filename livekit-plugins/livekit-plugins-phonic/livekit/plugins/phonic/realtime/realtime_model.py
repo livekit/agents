@@ -9,7 +9,7 @@ import typing
 import weakref
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypedDict
 
 from livekit import rtc
 from livekit.agents import llm, utils
@@ -56,6 +56,16 @@ WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
 
+class PhonicToolConfig(TypedDict, total=False):
+    """Per-tool behavior overrides for ``configs_for_tools`` (see README). ``name`` is required;
+    every other field is optional and falls back to the plugin default when omitted."""
+
+    name: str
+    require_speech_before_tool_call: bool
+    forbid_speech_after_tool_call: bool
+    forbid_tool_call_after_speech: bool
+
+
 @dataclass
 class _RealtimeOptions:
     api_key: str
@@ -76,6 +86,7 @@ class _RealtimeOptions:
     no_input_poke_text: NotGivenOr[str]
     no_input_end_conversation_sec: NotGivenOr[float]
     additional_params: NotGivenOr[dict[str, typing.Any]]
+    configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
     instructions: NotGivenOr[str] = NOT_GIVEN
@@ -133,6 +144,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
@@ -167,14 +179,13 @@ class RealtimeModel(llm.RealtimeModel):
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
             additional_params: Additional runtime parameters forwarded to Phonic.
-            forbid_speech_after_tool_call: Names of tools after which Phonic should NOT
-                auto-generate a spoken reply. Use for tools that always hand off / trigger an
-                agent switch (e.g. advancing a task in a workflow). After such a tool, the
-                outgoing agent would otherwise speak a reply that the handoff's session reset
-                immediately cancels, producing a race / double-speak; forbidding speech lets
-                only the incoming agent speak. Only list tools that ALWAYS hand off — a listed
-                tool that returns without handing off will leave the agent silent. Tools not
-                listed keep the default behavior (a reply is generated after the tool output).
+            configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
+                (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
+                README for the available fields.
+            forbid_speech_after_tool_call: Deprecated. Use ``configs_for_tools`` with
+                ``forbid_speech_after_tool_call`` per tool instead. When set, each listed tool is
+                merged into ``configs_for_tools`` as ``forbid_speech_after_tool_call=True`` (an
+                explicit ``configs_for_tools`` entry for the same tool takes precedence).
             conn_options: Retry/backoff and connection settings.
         """
         super().__init__(
@@ -233,9 +244,17 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_text=no_input_poke_text,
             no_input_end_conversation_sec=no_input_end_conversation_sec,
             additional_params=additional_params,
+            configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
         )
+
+        if is_given(forbid_speech_after_tool_call):
+            logger.warning(
+                "`forbid_speech_after_tool_call` is deprecated and will be removed in a future "
+                "release; set `forbid_speech_after_tool_call` per tool via `configs_for_tools` "
+                "instead."
+            )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
 
@@ -247,7 +266,8 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "phonic"
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -299,7 +319,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
         self._tool_definitions: list[dict] = []
-        self._forbid_speech_after_tool_call: set[str] = set()
+        self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
         self._pending_user_text: str | None = None
 
@@ -378,7 +398,9 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
-                    if item.name in self._forbid_speech_after_tool_call:
+                    if self._configs_for_tools.get(item.name or "", {}).get(
+                        "forbid_speech_after_tool_call", False
+                    ):
                         forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
@@ -419,20 +441,24 @@ class RealtimeSession(llm.RealtimeSession):
     def _serialize_tools(self, tools: list[llm.Tool]) -> list[dict]:
         tool_definitions: list[dict] = []
         for tool_schema in llm.ToolContext(tools).parse_function_tools("openai", strict=True):
-            # We disallow tool chaining and tool calls during agent speech to reduce complexity
-            # of managing state while operating within the LiveKit Realtime generations framework
+            cfg = self._configs_for_tools.get(tool_schema["function"]["name"], {})
             tool_definitions.append(
                 {
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    # fixed, not configurable: the plugin does not support tool chaining or tool
+                    # calls during agent speech within the Realtime generations framework
                     "wait_for_speech_before_tool_call": True,
                     "allow_tool_chaining": False,
-                    # When True, Phonic does not auto-generate a spoken reply after this tool's
-                    # output. Used for tools that always hand off so the outgoing agent doesn't
-                    # speak a reply that the handoff's session reset would cancel.
-                    "forbid_speech_after_tool_call": (
-                        tool_schema["function"]["name"] in self._forbid_speech_after_tool_call
+                    "require_speech_before_tool_call": cfg.get(
+                        "require_speech_before_tool_call", False
+                    ),
+                    "forbid_speech_after_tool_call": cfg.get(
+                        "forbid_speech_after_tool_call", False
+                    ),
+                    "forbid_tool_call_after_speech": cfg.get(
+                        "forbid_tool_call_after_speech", False
                     ),
                 }
             )
@@ -447,11 +473,26 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         self._tools = llm.ToolContext(tools)
-        self._forbid_speech_after_tool_call = set(
-            self._opts.forbid_speech_after_tool_call
-            if is_given(self._opts.forbid_speech_after_tool_call)
-            else []
-        )
+        self._configs_for_tools = {
+            c["name"]: c
+            for c in (
+                self._opts.configs_for_tools if is_given(self._opts.configs_for_tools) else []
+            )
+        }
+        # Deprecated: fold forbid_speech_after_tool_call (list of tool names) into the per-tool
+        # configs; an explicit configs_for_tools entry for the same tool wins.
+        if is_given(self._opts.forbid_speech_after_tool_call):
+            for name in self._opts.forbid_speech_after_tool_call:
+                cfg = self._configs_for_tools.get(name)
+                if cfg is None:
+                    self._configs_for_tools[name] = {
+                        "name": name,
+                        "forbid_speech_after_tool_call": True,
+                    }
+                elif "forbid_speech_after_tool_call" not in cfg:
+                    self._configs_for_tools[name] = typing.cast(
+                        PhonicToolConfig, {**cfg, "forbid_speech_after_tool_call": True}
+                    )
         self._tool_definitions = self._serialize_tools(tools)
         self._tools_ready.set()
 
