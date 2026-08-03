@@ -96,6 +96,7 @@ class FallbackAdapter(
 
         self._tts_instances = tts
         self._max_retry_per_tts = max_retry_per_tts
+        self._closed = False
 
         self._status: list[_TTSStatus] = []
         for t in tts:
@@ -140,6 +141,12 @@ class FallbackAdapter(
         self.emit("metrics_collected", *args, **kwargs)
 
     async def aclose(self) -> None:
+        # set before the sweep: _try_recovery is synchronous, so a probe is
+        # either already in a slot (and cancelled below) or refused by this
+        # flag. A stream still in flight runs its finally after this returns,
+        # and must not start a probe that nothing is left to cancel
+        self._closed = True
+
         for tts_status in self._status:
             if tts_status.recovering_synthesize_task is not None:
                 await aio.cancel_and_wait(tts_status.recovering_synthesize_task)
@@ -192,6 +199,10 @@ class FallbackChunkedStream(ChunkedStream):
 
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
+
+        if self._tts._closed:
+            # nothing would cancel a probe started from here
+            return
 
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
         recovering_task = tts_status.recovering_synthesize_task
@@ -465,6 +476,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
+
+        if self._tts._closed:
+            # a stream still in flight when the adapter closed runs its finally
+            # after the sweep, and nothing would cancel a probe started here
+            return
 
         retry_text = self._pushed_tokens.copy()
         if not retry_text:
