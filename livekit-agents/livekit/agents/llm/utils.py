@@ -783,9 +783,39 @@ def _partial_marker_length(content: str, markers: tuple[str, ...]) -> int:
     )
 
 
+def _flatten_delta_content(content: Any) -> str | None:
+    """Flatten list-shaped streaming delta content to its concatenated text.
+
+    The OpenAI-compatible ecosystem allows ``delta.content`` to be a list of
+    typed content parts (``[{"type": "text", "text": ...}]``) instead of a
+    plain string — Mistral emits this shape on some streamed chunks — and the
+    openai SDK constructs stream models without validation, so the list
+    reaches us as-is when the plugin points at such a provider (#6323).
+    """
+    if content is None or isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        # no text part at all carries no content, unlike a part that carries an
+        # empty string - that one is kept, like a plain "" delta
+        return "".join(parts) if parts else None
+    logger.warning(
+        "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
+    )
+    return None
+
+
 def strip_thinking_tokens(
-    content: str | None, state: ThinkingTokenFilter, *, final: bool = False
+    content: str | list[Any] | None, state: ThinkingTokenFilter, *, final: bool = False
 ) -> str | None:
+    content = _flatten_delta_content(content)
     if content is not None:
         state._buffer += content
 

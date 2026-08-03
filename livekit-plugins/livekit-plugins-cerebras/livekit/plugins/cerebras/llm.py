@@ -103,7 +103,7 @@ class LLM(OpenAILLM):
     def __init__(
         self,
         *,
-        model: str | CerebrasChatModels = "llama3.1-8b",
+        model: str | CerebrasChatModels = "gpt-oss-120b",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = "https://api.cerebras.ai/v1",
         client: openai.AsyncClient | None = None,

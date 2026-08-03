@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
 from livekit.agents._exceptions import APIConnectionError, APIError
@@ -62,6 +65,62 @@ def test_with_azure_preserves_can_disable_turn_detection() -> None:
     assert explicit_off.capabilities.can_disable_turn_detection is False
 
 
+def test_create_response_false_reports_client_side_turn_taking() -> None:
+    # server VAD with create_response=False commits and transcribes the audio server-side but
+    # leaves the reply to the client, so it must not count as server-side turn detection —
+    # otherwise allow_interruptions=False is rejected (issue #6635)
+    manual_reply = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(type="server_vad", create_response=False),
+    )
+    assert manual_reply.capabilities.turn_detection is False
+
+    auto_reply = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(type="server_vad"),
+    )
+    assert auto_reply.capabilities.turn_detection is True
+
+    assert RealtimeModel(api_key="fake").capabilities.turn_detection is True
+
+
+def test_create_response_false_warns_when_the_server_still_interrupts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # interrupt_response is a separate switch, left on the server keeps cancelling its response
+    # on user speech while the client believes it owns interruptions
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(type="server_vad", create_response=False),
+        )
+    assert "pass interrupt_response=False" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.openai"):
+        RealtimeModel(
+            api_key="fake",
+            turn_detection=ServerVad(
+                type="server_vad", create_response=False, interrupt_response=False
+            ),
+        )
+    assert caplog.text == ""
+
+
+def test_legacy_turn_detection_keeps_interrupt_response() -> None:
+    # the deprecated session.TurnDetection carries interrupt_response for server_vad too;
+    # dropping it silently re-enabled server-side interruption
+    model = RealtimeModel(
+        api_key="fake",
+        turn_detection=BetaTurnDetection(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+    )
+    assert model._opts.turn_detection == ServerVad(
+        type="server_vad", create_response=False, interrupt_response=False
+    )
+
+
 def test_update_chat_ctx_deletes_empty_remote_items() -> None:
     remote_ctx = RemoteChatContext()
     audio_item = llm.ChatMessage(id="audio_item", role="user", content=[])
@@ -97,11 +156,14 @@ def test_is_fatal_error_matches_known_codes() -> None:
     assert not _is_fatal_error(None)
 
 
-def _handle_error_session(capture: dict[str, object]) -> RealtimeSession:
+def _handle_error_session(
+    capture: dict[str, object], *, turn_detection: ServerVad | None = None
+) -> RealtimeSession:
     return cast(
         RealtimeSession,
         SimpleNamespace(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
+            _opts=SimpleNamespace(turn_detection=turn_detection),
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -134,6 +196,30 @@ def test_handle_error_ignores_cancellation_failed() -> None:
     event = SimpleNamespace(error=SimpleNamespace(message="Cancellation failed: no response"))
     RealtimeSession._handle_error(_handle_error_session(captured), event)
     assert captured == {}  # early return, nothing emitted
+
+
+def _empty_commit_event() -> SimpleNamespace:
+    return SimpleNamespace(
+        error=SimpleNamespace(
+            message="Error committing input audio buffer: buffer too small.",
+            code="input_audio_buffer_commit_empty",
+        )
+    )
+
+
+def test_handle_error_ignores_empty_commit_with_server_vad() -> None:
+    # our commit raced the server VAD's own; the server owns the buffer, nothing to report
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured, turn_detection=ServerVad(type="server_vad"))
+    RealtimeSession._handle_error(session, _empty_commit_event())
+    assert captured == {}
+
+
+def test_handle_error_reports_empty_commit_without_server_vad() -> None:
+    # nothing else commits the buffer, so an empty commit is a real bug worth surfacing
+    captured: dict[str, object] = {}
+    RealtimeSession._handle_error(_handle_error_session(captured), _empty_commit_event())
+    assert captured["recoverable"] is True
 
 
 def test_response_done_failed_fatal_raises() -> None:
