@@ -35,10 +35,6 @@ RUN git lfs install --system
 WORKDIR /app
 USER appuser
 
-# The example directory is the whole build context, so pyproject.toml has to
-# resolve on its own here — no workspace, no lockfile. A deploy from this repo
-# repoints the livekit-* dependencies at the ref being deployed first:
-#   python scripts/pin_example_to_ref.py examples/<name> --ref <git-ref>
 COPY pyproject.toml ./
 RUN uv sync --no-cache
 ENV PATH="/app/.venv/bin:${PATH}"
