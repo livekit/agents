@@ -433,6 +433,19 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
         )
 
+    async def aclose(self) -> None:
+        await super().aclose()
+
+        # release the genai http clients owned by this LLM. Without this they stay
+        # open until the garbage collector runs `AsyncClient.__del__`, which
+        # schedules `aclose()` on whatever event loop happens to be running at
+        # that moment. This instance always constructs its own client, so there is
+        # nothing borrowed to leave alone.
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
+
 
 class LLMStream(llm.LLMStream):
     def __init__(
