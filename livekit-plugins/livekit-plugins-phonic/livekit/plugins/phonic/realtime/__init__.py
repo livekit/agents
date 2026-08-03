@@ -1,5 +1,4 @@
 from .realtime_model import (
-    BackgroundNoise,
     ConfigurationEndpoint,
     IntelligenceLevel,
     ObservabilityIntegration,
@@ -10,7 +9,6 @@ from .realtime_model import (
 )
 
 __all__ = [
-    "BackgroundNoise",
     "ConfigurationEndpoint",
     "IntelligenceLevel",
     "ObservabilityIntegration",

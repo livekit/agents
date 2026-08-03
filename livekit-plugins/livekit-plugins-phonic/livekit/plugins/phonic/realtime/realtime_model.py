@@ -66,8 +66,6 @@ class PhonicToolConfig(TypedDict, total=False):
     forbid_tool_call_after_speech: bool
 
 
-BackgroundNoise = Literal["office", "call-center", "coffee-shop"]
-
 IntelligenceLevel = Literal["standard", "high"]
 
 ObservabilityIntegration = Literal["braintrust"]
@@ -111,13 +109,10 @@ class _RealtimeOptions:
     websocket_timeout_sec: NotGivenOr[int]
     intelligence_level: NotGivenOr[IntelligenceLevel]
     is_welcome_message_interruptible: NotGivenOr[bool]
-    background_noise: NotGivenOr[BackgroundNoise | None]
-    background_noise_level: NotGivenOr[float]
     vad_prebuffer_duration_ms: NotGivenOr[int]
     vad_min_speech_duration_ms: NotGivenOr[int]
     vad_min_silence_duration_ms: NotGivenOr[int]
     vad_threshold: NotGivenOr[float]
-    push_to_talk: NotGivenOr[bool]
     enable_assistant_backchannel: NotGivenOr[bool]
     assistant_backchannel_aggressiveness: NotGivenOr[float]
     pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]]
@@ -187,13 +182,10 @@ class RealtimeModel(llm.RealtimeModel):
         websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
         intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
         is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
-        background_noise: NotGivenOr[BackgroundNoise | None] = NOT_GIVEN,
-        background_noise_level: NotGivenOr[float] = NOT_GIVEN,
         vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
-        push_to_talk: NotGivenOr[bool] = NOT_GIVEN,
         enable_assistant_backchannel: NotGivenOr[bool] = NOT_GIVEN,
         assistant_backchannel_aggressiveness: NotGivenOr[float] = NOT_GIVEN,
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
@@ -241,14 +233,10 @@ class RealtimeModel(llm.RealtimeModel):
             intelligence_level: LLM intelligence level, ``"standard"`` or ``"high"``.
             is_welcome_message_interruptible: When False, the welcome message cannot be
                 interrupted by the user.
-            background_noise: Background noise type to mix into the conversation
-                (``"office"``, ``"call-center"``, or ``"coffee-shop"``), or None for no noise.
-            background_noise_level: Level of the background noise mixed into the conversation.
             vad_prebuffer_duration_ms: Voice-activity-detection prebuffer duration, in milliseconds.
             vad_min_speech_duration_ms: Minimum speech duration for VAD, in milliseconds.
             vad_min_silence_duration_ms: Minimum silence duration for VAD, in milliseconds.
             vad_threshold: Voice-activity-detection threshold.
-            push_to_talk: When True, the agent only listens between ``unmute``/``mute`` messages.
             enable_assistant_backchannel: When True, the assistant produces backchannel responses
                 (e.g. "mm-hmm", "yeah") while the user is speaking.
             assistant_backchannel_aggressiveness: How aggressively the assistant backchannels.
@@ -331,13 +319,10 @@ class RealtimeModel(llm.RealtimeModel):
             websocket_timeout_sec=websocket_timeout_sec,
             intelligence_level=intelligence_level,
             is_welcome_message_interruptible=is_welcome_message_interruptible,
-            background_noise=background_noise,
-            background_noise_level=background_noise_level,
             vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
             vad_min_speech_duration_ms=vad_min_speech_duration_ms,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
             vad_threshold=vad_threshold,
-            push_to_talk=push_to_talk,
             enable_assistant_backchannel=enable_assistant_backchannel,
             assistant_backchannel_aggressiveness=assistant_backchannel_aggressiveness,
             pronunciation_dictionary=pronunciation_dictionary,
@@ -690,13 +675,10 @@ class RealtimeSession(llm.RealtimeSession):
             "websocket_timeout_sec": self._opts.websocket_timeout_sec,
             "intelligence_level": self._opts.intelligence_level,
             "is_welcome_message_interruptible": self._opts.is_welcome_message_interruptible,
-            "background_noise": self._opts.background_noise,
-            "background_noise_level": self._opts.background_noise_level,
             "vad_prebuffer_duration_ms": self._opts.vad_prebuffer_duration_ms,
             "vad_min_speech_duration_ms": self._opts.vad_min_speech_duration_ms,
             "vad_min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
             "vad_threshold": self._opts.vad_threshold,
-            "push_to_talk": self._opts.push_to_talk,
             "enable_assistant_backchannel": self._opts.enable_assistant_backchannel,
             "assistant_backchannel_aggressiveness": self._opts.assistant_backchannel_aggressiveness,
             "pronunciation_dictionary": self._opts.pronunciation_dictionary,

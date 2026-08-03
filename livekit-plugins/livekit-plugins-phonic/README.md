@@ -103,13 +103,10 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `websocket_timeout_sec` | `int` | Seconds of inactivity before the Phonic websocket is closed |
 | `intelligence_level` | `"standard"` \| `"high"` | LLM intelligence level |
 | `is_welcome_message_interruptible` | `bool` | When False, the welcome message cannot be interrupted |
-| `background_noise` | `"office"` \| `"call-center"` \| `"coffee-shop"` \| `None` | Background noise type mixed into the conversation |
-| `background_noise_level` | `float` | Level of the background noise |
 | `vad_prebuffer_duration_ms` | `int` | Voice-activity-detection prebuffer duration (ms) |
 | `vad_min_speech_duration_ms` | `int` | Minimum speech duration for VAD (ms) |
 | `vad_min_silence_duration_ms` | `int` | Minimum silence duration for VAD (ms) |
 | `vad_threshold` | `float` | Voice-activity-detection threshold |
-| `push_to_talk` | `bool` | When True, the agent only listens between `unmute`/`mute` messages |
 | `enable_assistant_backchannel` | `bool` | When True, the assistant backchannels (e.g. "mm-hmm") while the user speaks |
 | `assistant_backchannel_aggressiveness` | `float` | How aggressively the assistant backchannels (needs `enable_assistant_backchannel`) |
 | `pronunciation_dictionary` | `list[PronunciationEntry]` | `{ word, pronunciation }` entries; words must be unique |
