@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 import types
 from collections.abc import Callable
 from typing import Any
@@ -29,9 +30,13 @@ def test_package_imports_with_declared_dependencies() -> None:
 
 class _FakeAutoModel:
     generate_impl: Callable[..., list[dict[str, str]]]
+    init_calls: list[dict[str, Any]] = []
+    init_threads: list[int] = []
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
+        self.init_calls.append(kwargs)
+        self.init_threads.append(threading.get_ident())
 
     def generate(self, **kwargs: Any) -> list[dict[str, str]]:
         return self.generate_impl(**kwargs)
@@ -55,6 +60,8 @@ def _load_funasr_stt_module(
     monkeypatch.setitem(sys.modules, "funasr.utils.postprocess_utils", fake_postprocess)
 
     _FakeAutoModel.generate_impl = staticmethod(generate)
+    _FakeAutoModel.init_calls = []
+    _FakeAutoModel.init_threads = []
 
     for name in tuple(sys.modules):
         if name == "livekit.plugins.funasr" or name.startswith("livekit.plugins.funasr."):
@@ -71,6 +78,46 @@ def _make_audio_frame(*, sample_rate: int = 16000, num_channels: int = 1) -> rtc
         num_channels=num_channels,
         samples_per_channel=samples_per_channel,
     )
+
+
+async def test_model_loading_runs_off_event_loop_on_first_recognition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    funasr_stt = _load_funasr_stt_module(
+        monkeypatch,
+        lambda **kwargs: [{"text": "<|en|>hello"}],
+    )
+
+    event_loop_thread = threading.get_ident()
+    stt = funasr_stt.FunASRSTT()
+
+    assert _FakeAutoModel.init_calls == []
+
+    await stt._recognize_impl(
+        [_make_audio_frame()],
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+    )
+
+    assert _FakeAutoModel.init_calls == [
+        {"model": "iic/SenseVoiceSmall", "device": "cpu", "disable_update": True}
+    ]
+    assert _FakeAutoModel.init_threads[0] != event_loop_thread
+
+
+def test_plugin_download_files_prefetches_default_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_funasr_stt_module(
+        monkeypatch,
+        lambda **kwargs: [{"text": "<|en|>hello"}],
+    )
+    funasr_plugin = sys.modules["livekit.plugins.funasr"]
+
+    funasr_plugin.FunASRPlugin().download_files()
+
+    assert _FakeAutoModel.init_calls == [
+        {"model": "iic/SenseVoiceSmall", "device": "cpu", "disable_update": True}
+    ]
 
 
 async def test_recognize_uses_named_high_quality_resampler(
