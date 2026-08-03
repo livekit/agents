@@ -197,6 +197,8 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._active = adapter._models[0].session(
             turn_detection_disabled=self._turn_detection_disabled
         )
+        # a fresh session always starts on the primary, even after an earlier failover
+        adapter._active_instance = adapter._models[0]
         self._bind(self._active)
 
     def _bind(self, child: RealtimeSession) -> None:

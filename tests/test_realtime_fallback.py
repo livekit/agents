@@ -78,6 +78,24 @@ async def test_reports_active_model_and_provider() -> None:
     assert adapter.provider == "backup"
 
 
+async def test_new_session_resets_active_model_to_primary() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+    assert adapter.model == "backup-model"
+
+    # a fresh session (e.g. a new agent activity) always starts on the primary,
+    # so the label must follow it instead of sticking to the old failover target
+    adapter.session()
+
+    assert adapter.model == "primary-model"
+    assert adapter.provider == "primary"
+
+
 def test_requires_at_least_one_model() -> None:
     with pytest.raises(ValueError):
         RealtimeModelFallbackAdapter([])
