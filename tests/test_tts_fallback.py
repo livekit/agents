@@ -243,6 +243,48 @@ async def test_tts_recover() -> None:
     await fallback_adapter.aclose()
 
 
+async def test_tts_stream_recover() -> None:
+    # the streamed counterpart of test_tts_recover: a provider that is already unavailable is
+    # skipped by the provider loop, which reaches _try_recovery without awaiting, so
+    # _forward_input_task has not filled _pushed_tokens yet. Bailing out on the empty list meant
+    # such a provider was never probed again and could never recover.
+    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=5.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+    assert fake1.stream_ch.recv_nowait()
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    fake1.update_options(fake_exception=None, fake_audio_duration=5.0)
+
+    # let the recovery probe started by the request above settle, so the next one is not skipped
+    # merely because the single recovering_task slot is still occupied
+    await asyncio.sleep(1.0)
+
+    # fake1 is healthy again, but the adapter only learns that by probing it. This second request
+    # is served by fake2 and must still start a probe for the skipped fake1.
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+    assert (
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 5.0)
+    ).available, "fake1 should have recovered"
+
+    await fallback_adapter.aclose()
+
+
 async def test_audio_resampled() -> None:
     fake1 = FakeTTS(sample_rate=48000, fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeTTS(fake_audio_duration=5.0, sample_rate=16000)

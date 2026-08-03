@@ -29,6 +29,10 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
 )
 
+# synthesized by a recovery probe when no real text is available to replay; the audio is discarded,
+# only whether the request succeeds matters
+_RECOVERY_PROBE_TEXT = "."
+
 
 @dataclass
 class _TTSStatus:
@@ -444,9 +448,12 @@ class FallbackSynthesizeStream(SynthesizeStream):
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
-        retry_text = self._pushed_tokens.copy()
-        if not retry_text:
-            return
+        # A provider that is already unavailable is skipped by the loop in `_run`, which reaches
+        # here without awaiting, so `_forward_input_task` has not run yet and `_pushed_tokens` is
+        # still empty. Bailing out in that case means such a provider is never probed again and
+        # can never recover. A probe does not need the caller's real text, so fall back to a short
+        # placeholder, matching the other adapters, which all probe unconditionally.
+        retry_text = self._pushed_tokens.copy() or [_RECOVERY_PROBE_TEXT]
 
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
         if tts_status.recovering_task is None or tts_status.recovering_task.done():
