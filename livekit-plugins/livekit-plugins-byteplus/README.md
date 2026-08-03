@@ -23,6 +23,9 @@ export BYTEPLUS_API_KEY="your-api-key"
 ```
 
 The API key must have access to the selected resource ID and voice.
+The `X-Api-App-Key` value used by the protocol is a public BytePlus identifier,
+not an account credential. Authentication is provided by `BYTEPLUS_API_KEY` or
+the legacy App ID/access key pair.
 
 ## Usage
 

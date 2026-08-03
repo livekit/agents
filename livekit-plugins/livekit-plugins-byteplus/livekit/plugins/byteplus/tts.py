@@ -85,6 +85,7 @@ from .version import __version__
 DEFAULT_BASE_URL = "https://voice.ap-southeast-1.bytepluses.com"
 DEFAULT_RESOURCE_ID: TTSModel = "seed-tts-2.0"
 DEFAULT_VOICE_ID: TTSVoice = "zh_female_vv_uranus_bigtts"
+# Public protocol identifier; authentication uses api_key or the legacy app/access key pair.
 DEFAULT_API_APP_KEY = "aGjiRDfUWi"
 NUM_CHANNELS = 1
 USER_AGENT = f"livekit-plugins-byteplus/{__version__}"
@@ -215,7 +216,8 @@ class TTS(tts.TTS[Literal["usage_collected"]]):
             api_key: Recommended API key. Falls back to ``BYTEPLUS_API_KEY``.
             app_id: Legacy BytePlus App ID. Must be used together with ``access_key``.
             access_key: Legacy BytePlus access key. Must be used together with ``app_id``.
-            api_app_key: Legacy BytePlus application key.
+            api_app_key: Public BytePlus protocol identifier. This is not an account
+                credential and normally does not need to be changed.
             base_url: HTTPS API origin. Defaults to the BytePlus endpoint.
             request_timeout: Maximum duration of one HTTP synthesis request in seconds.
             speaker_model: Model used by an ICL 2.0 cloned voice.
@@ -940,11 +942,8 @@ def _validate_base_url(value: object) -> None:
 
 
 def _validate_choice(name: str, value: object, choices: Collection[Any]) -> None:
-    """Require a value from a documented finite set."""
-    try:
-        valid = value in choices
-    except TypeError:
-        valid = False
+    """Require an exact-typed value from a documented finite set."""
+    valid = any(type(value) is type(choice) and value == choice for choice in choices)
     if not valid:
         raise ValueError(f"{name} must be one of {sorted(choices)}")
 

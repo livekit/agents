@@ -14,10 +14,11 @@
 
 """BytePlus TTS plugin for LiveKit Agents."""
 
+from .models import AIGCMetadata, TTSUsage
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["TTS", "__version__"]
+__all__ = ["AIGCMetadata", "TTS", "TTSUsage", "__version__"]
 
 from livekit.agents import Plugin
 
