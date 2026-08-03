@@ -212,6 +212,11 @@ class _Utterance:
 
 
 class SpeechStream(stt.RecognizeStream):
+    """Streaming speech recognition over one Palabra STT WebSocket session.
+
+    Created by ``STT.stream()``; not instantiated directly.
+    """
+
     def __init__(self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
@@ -337,9 +342,10 @@ class SpeechStream(stt.RecognizeStream):
 
         session: SttSession | None = None
         try:
-            session = await asyncio.wait_for(
-                _make_session().__aenter__(), timeout=self._conn_options.timeout
-            )
+            # The session object exists before connecting, so the finally below
+            # also closes a connection abandoned by the timeout.
+            session = _make_session()
+            await asyncio.wait_for(session.__aenter__(), timeout=self._conn_options.timeout)
             tasks = [
                 asyncio.create_task(_send_task(session)),
                 asyncio.create_task(_recv_task(session)),

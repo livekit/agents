@@ -163,6 +163,8 @@ class TTS(tts.TTS):
         #   - ServerError has no generation_id: delivered to every mailbox.
         self._routes: dict[str, asyncio.Queue[TtsChunk | ServerError | None]] = {}
         self._reader_task: asyncio.Task[None] | None = None
+        self._prewarm_task: asyncio.Task[None] | None = None
+        self._closed = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
@@ -236,9 +238,12 @@ class TTS(tts.TTS):
             with contextlib.suppress(Exception):
                 await session.close()
 
-    async def _drop_session(self) -> None:
+    async def _drop_session_if_idle(self) -> None:
+        # A failed request must not close the socket under other active streams.
         async with self._send_lock:
-            await self._reset_session()
+            dead = self._tts_session is not None and not _session_alive(self._tts_session)
+            if dead or not self._routes:
+                await self._reset_session()
 
     def prewarm(self) -> None:
         """Open the realtime TTS session ahead of the first request.
@@ -248,11 +253,13 @@ class TTS(tts.TTS):
         Does nothing when called outside a running event loop.
         """
         with contextlib.suppress(RuntimeError):
-            asyncio.get_running_loop().create_task(self._safe_prewarm())
+            self._prewarm_task = asyncio.get_running_loop().create_task(self._safe_prewarm())
 
     async def _safe_prewarm(self) -> None:
         with contextlib.suppress(Exception):
             async with self._send_lock:
+                if self._closed:
+                    return
                 await self._ensure_session()
 
     def update_options(
@@ -298,6 +305,12 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         """Close all active streams and the realtime TTS session."""
+        self._closed = True
+        if self._prewarm_task is not None:
+            self._prewarm_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._prewarm_task
+            self._prewarm_task = None
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
@@ -306,6 +319,11 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
+    """One streaming synthesis request, multiplexed onto the shared ``TtsSession``.
+
+    Created by ``TTS.stream()`` / ``TTS.synthesize()``; not instantiated directly.
+    """
+
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
@@ -412,6 +430,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         pending_gens.discard(event.generation_id)
             output_emitter.end_input()
 
+        async def _teardown() -> None:
+            for gen_id in my_gens:
+                self._tts._routes.pop(gen_id, None)
+            await self._tts._drop_session_if_idle()
+
         session: TtsSession | None = None
         try:
             async with self._tts._send_lock:
@@ -438,19 +461,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 logger.debug("interrupted: server cancel sent")
             raise
         except APIError:
-            await self._tts._drop_session()
+            await _teardown()
             raise
         except asyncio.TimeoutError:
-            await self._tts._drop_session()
+            await _teardown()
             raise APITimeoutError() from None
         except AuthError as e:
-            await self._tts._drop_session()
+            await _teardown()
             raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
         except (SessionError, TaskError, PalabraError) as e:
-            await self._tts._drop_session()
+            await _teardown()
             raise APIConnectionError(str(e)) from e
         except Exception as e:
-            await self._tts._drop_session()
+            await _teardown()
             logger.exception("palabra tts error")
             raise APIConnectionError() from e
         finally:
