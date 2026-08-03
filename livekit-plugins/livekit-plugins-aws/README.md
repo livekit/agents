@@ -18,10 +18,7 @@ If you need the previous behavior, explicitly specify Nova Sonic 1.0:
 ```python
 model = aws.realtime.RealtimeModel.with_nova_sonic_1()
 # or
-model = aws.realtime.RealtimeModel(
-    model="amazon.nova-sonic-v1:0",
-    modalities="audio"
-)
+model = aws.realtime.RealtimeModel(model="amazon.nova-sonic-v1:0", modalities="audio")
 ```
 
 ## Installation
@@ -243,9 +240,7 @@ The `generate_reply()` method accepts two parameters with different behaviors:
 
 **`instructions`** - System-level commands (recommended):
 ```python
-await session.generate_reply(
-    instructions="Greet the user warmly and ask how you can help"
-)
+await session.generate_reply(instructions="Greet the user warmly and ask how you can help")
 ```
 - Sent as a system prompt/command to the model
 - Triggers immediate generation
@@ -254,9 +249,7 @@ await session.generate_reply(
 
 **`user_input`** - Simulated user messages:
 ```python
-await session.generate_reply(
-    user_input="Hello, I need help with my account"
-)
+await session.generate_reply(user_input="Hello, I need help with my account")
 ```
 - Sent as interactive USER role content
 - Added to Nova's conversation context
@@ -294,32 +287,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class Assistant(Agent):
     def __init__(self):
         super().__init__(
             instructions="You are a helpful voice assistant powered by Amazon Nova 2 Sonic."
         )
-    
+
     async def on_enter(self):
-        await self.session.generate_reply(
-            instructions="Greet the user and offer assistance"
-        )
+        await self.session.generate_reply(instructions="Greet the user and offer assistance")
+
 
 server = agents.AgentServer()
+
 
 @server.rtc_session()
 async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
-    
+
     session = AgentSession(
         llm=aws.realtime.RealtimeModel.with_nova_sonic_2(
-            voice="matthew",
-            turn_detection="MEDIUM",
-            tool_choice="auto"
+            voice="matthew", turn_detection="MEDIUM", tool_choice="auto"
         )
     )
-    
+
     await session.start(room=ctx.room, agent=Assistant())
+
 
 if __name__ == "__main__":
     agents.cli.run_app(server)
@@ -334,9 +327,9 @@ from livekit.agents import inference
 from livekit.plugins import aws
 
 session = AgentSession(
-    stt=aws.STT(),                    # Amazon Transcribe
-    llm=aws.LLM(),                    # Nova 2 Lite (default)
-    tts=aws.TTS(),                    # Amazon Polly
+    stt=aws.STT(),  # Amazon Transcribe
+    llm=aws.LLM(),  # Nova 2 Lite (default)
+    tts=aws.TTS(),  # Amazon Polly
     vad=inference.VAD(),
 )
 ```

@@ -112,8 +112,7 @@ async def entrypoint(ctx: agents.JobContext):
         tts=baseten.TTS(
             api_key=BASETEN_API_KEY,
             model_endpoint=(
-                f"https://model-{orpheus_model_id}"
-                ".api.baseten.co/environments/production/predict"
+                f"https://model-{orpheus_model_id}.api.baseten.co/environments/production/predict"
             ),
         ),
         vad=inference.VAD(),
@@ -128,9 +127,7 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
-    )
+    await session.generate_reply(instructions="Greet the user and offer your assistance.")
 
 
 if __name__ == "__main__":

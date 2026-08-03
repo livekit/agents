@@ -32,15 +32,15 @@ Or with options:
 from livekit.plugins import inworld
 
 tts = inworld.TTS(
-    voice="Hades",                 # voice ID (default or custom cloned voice)
-    model="inworld-tts-1",         # or "inworld-tts-1-max"
-    encoding="OGG_OPUS",           # LINEAR16, MP3, OGG_OPUS, ALAW, MULAW, FLAC
-    sample_rate=48000,             # 8000-48000 Hz
-    bit_rate=64000,                # bits per second (for compressed formats)
-    speaking_rate=1.0,             # 0.5-1.5
-    temperature=1.1,               # 0-2
-    timestamp_type="WORD",         # WORD, CHARACTER, or TIMESTAMP_TYPE_UNSPECIFIED
-    text_normalization="OFF",      # ON, OFF, or APPLY_TEXT_NORMALIZATION_UNSPECIFIED
+    voice="Hades",  # voice ID (default or custom cloned voice)
+    model="inworld-tts-1",  # or "inworld-tts-1-max"
+    encoding="OGG_OPUS",  # LINEAR16, MP3, OGG_OPUS, ALAW, MULAW, FLAC
+    sample_rate=48000,  # 8000-48000 Hz
+    bit_rate=64000,  # bits per second (for compressed formats)
+    speaking_rate=1.0,  # 0.5-1.5
+    temperature=1.1,  # 0-2
+    timestamp_type="WORD",  # WORD, CHARACTER, or TIMESTAMP_TYPE_UNSPECIFIED
+    text_normalization="OFF",  # ON, OFF, or APPLY_TEXT_NORMALIZATION_UNSPECIFIED
 )
 ```
 
@@ -55,8 +55,8 @@ from livekit.plugins import inworld
 tts = inworld.TTS(
     voice="Hades",
     model="inworld-tts-1",
-    buffer_char_threshold=100,     # chars before triggering synthesis (default: 100)
-    max_buffer_delay_ms=3000,      # max buffer time in ms (default: 3000)
+    buffer_char_threshold=100,  # chars before triggering synthesis (default: 100)
+    max_buffer_delay_ms=3000,  # max buffer time in ms (default: 3000)
 )
 
 # Create a stream for real-time synthesis
@@ -82,8 +82,8 @@ Use Inworld STT for streaming speech-to-text. Multiple models are supported.
 from livekit.plugins import inworld
 
 session = AgentSession(
-   stt=inworld.STT()
-   # ... llm, tts, etc.
+    stt=inworld.STT()
+    # ... llm, tts, etc.
 )
 ```
 
@@ -93,11 +93,11 @@ With a specific model and voice profile detection:
 from livekit.plugins import inworld
 
 session = AgentSession(
-   stt=inworld.STT(
-       model="inworld/inworld-stt-1",
-       enable_voice_profile=True,
-   )
-   # ... llm, tts, etc.
+    stt=inworld.STT(
+        model="inworld/inworld-stt-1",
+        enable_voice_profile=True,
+    )
+    # ... llm, tts, etc.
 )
 ```
 
@@ -199,8 +199,8 @@ if __name__ == "__main__":
 from livekit.plugins import inworld
 
 session = AgentSession(
-   tts=inworld.TTS(voice="Hades"),
-   stt=inworld.STT(),
-   # ... llm, etc.
+    tts=inworld.TTS(voice="Hades"),
+    stt=inworld.STT(),
+    # ... llm, etc.
 )
 ```

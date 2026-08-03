@@ -210,6 +210,8 @@ class ServerOptions:
     """Number of idle processes to keep warm."""
     shutdown_process_timeout: float = 10.0
     """Maximum amount of time to wait for a job to shut down gracefully"""
+    entrypoint_shutdown_timeout: float = 15.0
+    """Maximum amount of time to wait for entrypoint task to exit after shutdown signal (default: 15.0)."""
     session_end_timeout: float = 300.0
     """Maximum amount of time to wait for on_session_end to complete (default: 5 minutes)."""
     initialize_process_timeout: float = 10.0
@@ -310,6 +312,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
+        entrypoint_shutdown_timeout: float = 15.0,
         session_end_timeout: float = 300.0,
         initialize_process_timeout: float = 10.0,
         permissions: WorkerPermissions = _default_permissions,
@@ -346,6 +349,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._drain_timeout = drain_timeout
         self._num_idle_processes = num_idle_processes
         self._shutdown_process_timeout = shutdown_process_timeout
+        self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
         self._session_end_timeout = session_end_timeout
         self._initialize_process_timeout = initialize_process_timeout
         self._permissions = permissions
@@ -421,6 +425,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             drain_timeout=options.drain_timeout,
             num_idle_processes=options.num_idle_processes,
             shutdown_process_timeout=options.shutdown_process_timeout,
+            entrypoint_shutdown_timeout=options.entrypoint_shutdown_timeout,
             session_end_timeout=options.session_end_timeout,
             initialize_process_timeout=options.initialize_process_timeout,
             permissions=options.permissions,
@@ -628,6 +633,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 mp_ctx=self._mp_ctx,
                 initialize_timeout=self._initialize_process_timeout,
                 close_timeout=self._shutdown_process_timeout,
+                entrypoint_shutdown_timeout=self._entrypoint_shutdown_timeout,
                 session_end_timeout=self._session_end_timeout,
                 memory_warn_mb=self._job_memory_warn_mb,
                 memory_limit_mb=self._job_memory_limit_mb,

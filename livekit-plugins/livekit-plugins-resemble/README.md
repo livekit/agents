@@ -24,6 +24,7 @@ Additionally, you'll need the voice UUID from your Resemble AI account.
 import asyncio
 from livekit.plugins.resemble import TTS
 
+
 async def run_tts_example():
     # Use TTS with async context manager for automatic resource cleanup
     async with TTS(
@@ -36,23 +37,22 @@ async def run_tts_example():
     ) as tts:
         # One-off synthesis (uses REST API)
         audio_stream = tts.synthesize("Hello, world!")
-        
+
         # Process chunks as they arrive
         async for chunk in audio_stream:
             # Audio data is in the 'frame.data' attribute of SynthesizedAudio objects
             audio_data = chunk.frame.data
             print(f"Received chunk: {len(audio_data)} bytes")
-        
+
         # Alternative: collect all audio at once into a single AudioFrame
         audio_stream = tts.synthesize("Another example sentence.")
         audio_frame = await audio_stream.collect()
         print(f"Collected complete audio: {len(audio_frame.data)} bytes")
-        
+
         # Real-time streaming synthesis (uses WebSocket API)
         # Only available for Business plan users in Resemble AI
         stream = tts.stream()
         await stream.synthesize_text("Hello, world!")
-        
 
 
 # Run the example
@@ -67,10 +67,11 @@ If you prefer to manage resources manually, make sure to properly clean up:
 import asyncio
 from livekit.plugins.resemble import TTS
 
+
 async def run_tts_example():
     # Initialize TTS with your credentials
     tts = TTS(
-        api_key="your_api_key", 
+        api_key="your_api_key",
         voice_uuid="your_voice_uuid",
     )
 
@@ -83,6 +84,7 @@ async def run_tts_example():
     finally:
         # Always clean up resources when done
         await tts.aclose()
+
 
 # Run the example
 asyncio.run(run_tts_example())

@@ -192,12 +192,12 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 from livekit.plugins.gnani import STT
 
 stt = STT(
-    language="en-IN",              # Default: "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 44100, 48000)
-    format="verbatim",             # Default: "verbatim" (also: "transcribe" for ITN)
-    itn_native_numerals=False,     # Default: False
-    use_streaming=True,            # Default: True (WebSocket); False = REST + VAD
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    language="en-IN",  # Default: "en-IN"
+    sample_rate=16000,  # Default: 16000 (also: 8000, 44100, 48000)
+    format="verbatim",  # Default: "verbatim" (also: "transcribe" for ITN)
+    itn_native_numerals=False,  # Default: False
+    use_streaming=True,  # Default: True (WebSocket); False = REST + VAD
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```
@@ -208,16 +208,16 @@ stt = STT(
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Pranav",                # Default: "Pranav" (timbre-v2.0: Kaveri, Shubhra, Deepak)
-    model="timbre-v2.0",           # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
-    language=None,                 # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 22050, 44100)
-    encoding="linear_pcm",         # Default: "linear_pcm" (also: "oggopus")
-    container="wav",               # Default: "wav" (also: "raw", "mp3", "ogg")
-    num_channels=1,                # Default: 1
-    bitrate=None,                  # Default: None (also: "96k", "128k", "192k")
-    synthesize_method="rest",      # Default: "rest" (also: "sse", "websocket")
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    voice="Pranav",  # Default: "Pranav" (timbre-v2.0: Kaveri, Shubhra, Deepak)
+    model="timbre-v2.0",  # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
+    language=None,  # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
+    sample_rate=16000,  # Default: 16000 (also: 8000, 22050, 44100)
+    encoding="linear_pcm",  # Default: "linear_pcm" (also: "oggopus")
+    container="wav",  # Default: "wav" (also: "raw", "mp3", "ogg")
+    num_channels=1,  # Default: 1
+    bitrate=None,  # Default: None (also: "96k", "128k", "192k")
+    synthesize_method="rest",  # Default: "rest" (also: "sse", "websocket")
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```

@@ -34,10 +34,7 @@ from livekit.plugins import mistralai
 stt = mistralai.STT()
 
 # With context biasing
-stt = mistralai.STT(
-    model="voxtral-mini-latest",
-    context_bias=["LiveKit", "Voxtral", "Mistral"]
-)
+stt = mistralai.STT(model="voxtral-mini-latest", context_bias=["LiveKit", "Voxtral", "Mistral"])
 ```
 
 #### Realtime streaming transcription
@@ -71,6 +68,7 @@ tts = mistralai.TTS(voice="en_paul_neutral")
 
 # Using zero-shot voice cloning
 import base64
+
 ref_audio_b64 = base64.b64encode(open("sample.mp3", "rb").read()).decode()
 tts = mistralai.TTS(ref_audio=ref_audio_b64)
 ```
@@ -101,7 +99,7 @@ agent = Agent(
         mistralai.tools.WebSearch(),
         mistralai.tools.CodeInterpreter(),
         mistralai.tools.DocumentLibrary(library_ids=["<your-library-id>"]),
-        mistralai.tools.Connector(connector_id="<your_connector_id>")
-    ]
+        mistralai.tools.Connector(connector_id="<your_connector_id>"),
+    ],
 )
 ```

@@ -33,9 +33,10 @@ import asyncio
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, inference
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-    
+
     session: AgentSession[None] = AgentSession(
         allow_interruptions=True,
         vad=inference.VAD(),
@@ -44,13 +45,14 @@ async def entrypoint(ctx: JobContext):
             voice="Mark",
         ),
     )
-    
+
     await session.start(
         agent=Agent(
             instructions="You are a helpful voice assistant.",
         ),
         room=ctx.room,
     )
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
@@ -59,28 +61,39 @@ if __name__ == "__main__":
 ### Voice Assistant with Tools
 
 ```python
-from livekit.agents import function_tool, Agent, AgentSession, JobContext, WorkerOptions, cli, inference
+from livekit.agents import (
+    function_tool,
+    Agent,
+    AgentSession,
+    JobContext,
+    WorkerOptions,
+    cli,
+    inference,
+)
 from livekit.plugins.ultravox.realtime import RealtimeModel
+
 
 @function_tool
 async def get_weather(location: str) -> str:
     """Get weather information for a location."""
     return f"The weather in {location} is sunny and 72°F"
 
+
 @function_tool
 async def book_appointment(date: str, time: str) -> str:
     """Book an appointment."""
     return f"Appointment booked for {date} at {time}"
 
+
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-    
+
     session: AgentSession[None] = AgentSession(
         allow_interruptions=True,
         vad=inference.VAD(),
         llm=RealtimeModel(model_id="fixie-ai/ultravox"),
     )
-    
+
     await session.start(
         agent=Agent(
             instructions="You are a helpful assistant with access to weather and scheduling tools.",
@@ -88,6 +101,7 @@ async def entrypoint(ctx: JobContext):
         ),
         room=ctx.room,
     )
+
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

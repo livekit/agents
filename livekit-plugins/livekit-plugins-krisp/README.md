@@ -30,6 +30,7 @@ using the room JWT the agent framework hands to the `FrameProcessor` automatical
 from livekit.agents import AgentSession, Agent, JobContext, inference, room_io
 from livekit.plugins import krisp, openai
 
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # Default: LiveKit Cloud auth + bundled model. No keys or model files.
@@ -79,9 +80,9 @@ Both factory functions return a `KrispVivaFilterFrameProcessor`. Adjust it while
 session is running:
 
 ```python
-noise_cancellation.enabled = False              # pass audio through unmodified
+noise_cancellation.enabled = False  # pass audio through unmodified
 noise_cancellation.noise_suppression_level = 50  # adjust 0-100 on the fly
-noise_cancellation.close()                       # free resources when done
+noise_cancellation.close()  # free resources when done
 ```
 
 
@@ -119,7 +120,7 @@ from livekit.plugins import krisp
 
 noise_cancellation = krisp.voice_isolation(
     auth_provider=krisp.auth.krisp_license(
-        license_key="...",                    # or KRISP_VIVA_SDK_LICENSE_KEY
+        license_key="...",  # or KRISP_VIVA_SDK_LICENSE_KEY
         model_path="/path/to/noise_model.kef",  # or KRISP_VIVA_FILTER_MODEL_PATH
     ),
     noise_suppression_level=75,

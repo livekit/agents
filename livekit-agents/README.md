@@ -13,23 +13,17 @@ from livekit.plugins import openai
 
 load_dotenv()
 
+
 async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
 
-    session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            voice="coral"
-        )
-    )
+    session = AgentSession(llm=openai.realtime.RealtimeModel(voice="coral"))
 
     await session.start(
-        room=ctx.room,
-        agent=Agent(instructions="You are a helpful voice AI assistant.")
+        room=ctx.room, agent=Agent(instructions="You are a helpful voice AI assistant.")
     )
 
-    await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
-    )
+    await session.generate_reply(instructions="Greet the user and offer your assistance.")
 
 
 if __name__ == "__main__":

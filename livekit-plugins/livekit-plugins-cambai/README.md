@@ -33,6 +33,7 @@ Or obtain it from [Camb.ai Studio](https://studio.camb.ai/public/onboarding).
 import asyncio
 from livekit.plugins.cambai import TTS
 
+
 async def main():
     # Initialize TTS (uses CAMB_API_KEY env var)
     tts = TTS()
@@ -45,6 +46,7 @@ async def main():
     with open("output.wav", "wb") as f:
         f.write(audio_frame.to_wav_bytes())
 
+
 asyncio.run(main())
 ```
 
@@ -54,10 +56,12 @@ asyncio.run(main())
 import asyncio
 from livekit.plugins.cambai import list_voices
 
+
 async def main():
     voices = await list_voices()
     for voice in voices:
         print(f"{voice['name']} ({voice['id']}): {voice['gender']}, {voice['language']}")
+
 
 asyncio.run(main())
 ```
@@ -99,6 +103,7 @@ tts = TTS(
 ```python
 from livekit import agents
 from livekit.plugins.cambai import TTS
+
 
 async def entrypoint(ctx: agents.JobContext):
     # Connect to room

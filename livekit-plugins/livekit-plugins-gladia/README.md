@@ -96,7 +96,7 @@ agent = Agent(
         api_key="your-api-key-here",
         languages=["en"],
         translation_enabled=True,
-        translation_target_languages=["es"]
+        translation_target_languages=["es"],
     )
 )
 

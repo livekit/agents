@@ -150,6 +150,8 @@ This code snippet is abbreviated. For the full example, see [multi_agent.py](exa
 
 ```python
 ...
+
+
 class IntroAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -210,6 +212,8 @@ async def entrypoint(ctx: JobContext):
         agent=IntroAgent(),
         room=ctx.room,
     )
+
+
 ...
 ```
 
@@ -223,9 +227,7 @@ async def test_no_availability() -> None:
     llm = google.LLM()
     async with AgentSession(llm=llm) as sess:
         await sess.start(MyAgent())
-        result = await sess.run(
-            user_input="Hello, I need to place an order."
-        )
+        result = await sess.run(user_input="Hello, I need to place an order.")
         result.expect.skip_next_event_if(type="message", role="assistant")
         result.expect.next_event().is_function_call(name="start_order")
         result.expect.next_event().is_function_call_output()
@@ -234,7 +236,6 @@ async def test_no_availability() -> None:
             .is_message(role="assistant")
             .judge(llm, intent="assistant should be asking the user what they would like")
         )
-
 ```
 
 ## Examples

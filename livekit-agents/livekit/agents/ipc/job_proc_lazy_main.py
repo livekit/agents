@@ -62,6 +62,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     log_cch: socket.socket
     logger_levels: dict[str, int]
+    entrypoint_shutdown_timeout: float = 15.0
     simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
@@ -84,6 +85,7 @@ def proc_main(args: ProcStartArgs) -> None:
         args.job_entrypoint_fnc,
         args.session_end_fnc,
         session_end_timeout=args.session_end_timeout,
+        entrypoint_shutdown_timeout=args.entrypoint_shutdown_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
@@ -192,6 +194,7 @@ class _JobProc:
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         *,
         session_end_timeout: float,
+        entrypoint_shutdown_timeout: float = 15.0,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
         simulation_end_fnc: Callable[[Any], Any] | None = None,
@@ -203,6 +206,7 @@ class _JobProc:
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
+        self._entrypoint_shutdown_timeout = entrypoint_shutdown_timeout
         self._job_task: asyncio.Task[None] | None = None
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -379,7 +383,9 @@ class _JobProc:
         # wait for the entrypoint to finish, cancel if it takes too long
         if not job_entry_task.done():
             try:
-                await asyncio.wait_for(asyncio.shield(job_entry_task), timeout=15)
+                await asyncio.wait_for(
+                    asyncio.shield(job_entry_task), timeout=self._entrypoint_shutdown_timeout
+                )
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
@@ -453,6 +459,7 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
+    entrypoint_shutdown_timeout: float = 15.0
     simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
@@ -468,6 +475,7 @@ def thread_main(
             args.job_entrypoint_fnc,
             args.session_end_fnc,
             session_end_timeout=args.session_end_timeout,
+            entrypoint_shutdown_timeout=args.entrypoint_shutdown_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,
             simulation_end_fnc=args.simulation_end_fnc,
