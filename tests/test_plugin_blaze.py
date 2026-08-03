@@ -360,6 +360,20 @@ def test_stt_default_models() -> None:
     assert stt._ws_url == "ws://localhost/v1/stt/realtime"
 
 
+def test_ws_base_url_upgrades_remote_http_to_wss() -> None:
+    """Auth tokens ride on the first WS frame — remote http:// must become wss://."""
+    from livekit.plugins.blaze._utils import ws_base_url
+
+    assert ws_base_url("https://api.blaze.vn") == "wss://api.blaze.vn"
+    assert ws_base_url("http://api.blaze.vn") == "wss://api.blaze.vn"
+    assert ws_base_url("http://localhost:8080") == "ws://localhost:8080"
+    assert ws_base_url("http://127.0.0.1") == "ws://127.0.0.1"
+    assert ws_base_url("api.example.com") == "wss://api.example.com"
+
+    remote = STT(config=BlazeConfig(api_url="http://api.example.com", api_token="tok"))
+    assert remote._ws_url == "wss://api.example.com/v1/stt/realtime"
+
+
 def test_stt_update_models() -> None:
     stt = STT(config=BlazeConfig(api_url="http://localhost", api_token="tok"))
     stt.update_options(model="v1.0", stream_model="stt-stream-1.5")
@@ -450,6 +464,10 @@ def test_tts_provider_model_and_ws_url() -> None:
     assert tts.model == "v2_pro"
     assert tts._ws_url == "wss://api.example.com/v1/tts/realtime"
     assert tts._speaker_id == "voice-1"
+
+    # Remote http:// base must not yield cleartext ws:// (token on first message).
+    tts_http = TTS(config=BlazeConfig(api_url="http://api.example.com", api_token="tok"))
+    assert tts_http._ws_url == "wss://api.example.com/v1/tts/realtime"
 
 
 def test_tts_invalid_audio_format_falls_back_to_pcm() -> None:

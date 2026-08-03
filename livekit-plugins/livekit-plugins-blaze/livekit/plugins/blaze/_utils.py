@@ -22,6 +22,33 @@ def effective_connect_timeout(
     return conn_options.timeout
 
 
+def ws_base_url(api_url: str) -> str:
+    """Convert an HTTP(S) API base URL to a WebSocket base URL.
+
+    Auth tokens are sent on the first STT/TTS WS message, so remote endpoints
+    always use ``wss://`` (even if ``BLAZE_API_URL`` is ``http://``). Local
+    development hosts keep ``ws://``.
+    """
+    base = api_url.strip().rstrip("/")
+    if base.startswith("https://"):
+        return "wss://" + base[len("https://") :]
+    if base.startswith("wss://"):
+        return base
+    if base.startswith("ws://"):
+        host = base[len("ws://") :].split("/")[0].split(":")[0]
+        if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+            return base
+        return "wss://" + base[len("ws://") :]
+    if base.startswith("http://"):
+        rest = base[len("http://") :]
+        host = rest.split("/")[0].split(":")[0]
+        if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+            return "ws://" + rest
+        return "wss://" + rest
+    # No scheme — assume HTTPS/WSS
+    return "wss://" + base.lstrip("/")
+
+
 def convert_pcm_to_wav(
     pcm_data: bytes,
     sample_rate: int = 16000,

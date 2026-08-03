@@ -47,7 +47,12 @@ from livekit.agents.stt import StreamAdapter
 from livekit.agents.utils import AudioBuffer, shortuuid
 
 from ._config import BlazeConfig
-from ._utils import apply_normalization_rules, convert_pcm_to_wav, effective_connect_timeout
+from ._utils import (
+    apply_normalization_rules,
+    convert_pcm_to_wav,
+    effective_connect_timeout,
+    ws_base_url,
+)
 from .log import logger
 
 # Latest public Blaze STT model identifiers.
@@ -113,8 +118,7 @@ class STT(stt.STT):
         self._timeout = timeout if timeout is not None else self._config.stt_timeout
         self._normalization_rules = normalization_rules
         self._transcribe_url = f"{self._api_url}/v1/stt/transcribe"
-        ws_base = self._api_url.replace("https://", "wss://").replace("http://", "ws://")
-        self._ws_url = f"{ws_base}/v1/stt/realtime"
+        self._ws_url = f"{ws_base_url(self._api_url)}/v1/stt/realtime"
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
         # Frame accumulation: buffer PCM from empty STT segments so short
@@ -458,6 +462,11 @@ class SpeechStream(stt.SpeechStream):
             self._language,
         )
 
+        # When True, we finished reading the input channel (intentional shutdown).
+        # A normal peer close without this set is unexpected and must raise so the
+        # framework STT pump reconnects (see audio_recognition.py).
+        closing_ws = False
+
         try:
             async with websockets.connect(
                 stt_cfg._ws_url,
@@ -504,7 +513,25 @@ class SpeechStream(stt.SpeechStream):
                 if not ready:
                     raise APITimeoutError("STT realtime: timed out waiting for ready")
 
-                send_task = asyncio.create_task(self._send_audio(ws))
+                async def _send_audio() -> None:
+                    """Forward audio frames; mark intentional close when input ends."""
+                    nonlocal closing_ws
+                    try:
+                        async for item in self._input_ch:
+                            if isinstance(item, self._FlushSentinel):
+                                # Blaze/Soniox finalize on silence; no explicit flush frame.
+                                continue
+                            pcm = bytes(item.data)
+                            if pcm:
+                                await ws.send(pcm)
+                        closing_ws = True
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning("[%s] STT send_audio stopped: %s", self._request_id, e)
+                        raise
+
+                send_task = asyncio.create_task(_send_audio())
                 speaking = False
                 try:
                     async for raw in ws:
@@ -563,6 +590,10 @@ class SpeechStream(stt.SpeechStream):
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                 )
+                    # Peer closed with a normal close code ends async-for without raising.
+                    # Only intentional input-end should exit cleanly; otherwise reconnect.
+                    if not closing_ws:
+                        raise APIConnectionError("STT WebSocket closed unexpectedly")
                 finally:
                     send_task.cancel()
                     try:
@@ -573,23 +604,8 @@ class SpeechStream(stt.SpeechStream):
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
         except websockets.exceptions.ConnectionClosed as e:
+            if closing_ws:
+                return
             raise APIConnectionError(f"STT WebSocket closed: {e}") from e
         except Exception as e:
             raise APIConnectionError(f"STT stream error: {e}") from e
-
-    async def _send_audio(self, ws: websockets.ClientConnection) -> None:
-        """Forward audio frames from the LiveKit input channel to the WS."""
-        try:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
-                    # Blaze/Soniox finalize on silence; no explicit flush frame.
-                    continue
-                # AudioFrame → raw PCM bytes
-                pcm = bytes(item.data)
-                if pcm:
-                    await ws.send(pcm)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning("[%s] STT send_audio stopped: %s", self._request_id, e)
-            raise

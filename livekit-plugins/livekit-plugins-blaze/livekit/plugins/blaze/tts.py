@@ -53,7 +53,7 @@ from livekit.agents.utils import is_given, shortuuid
 from livekit.agents.utils.aio.channel import ChanClosed
 
 from ._config import BlazeConfig
-from ._utils import apply_normalization_rules, effective_connect_timeout
+from ._utils import apply_normalization_rules, effective_connect_timeout, ws_base_url
 from .log import logger
 
 _WS_PING_INTERVAL = 20
@@ -226,9 +226,8 @@ class TTS(tts.TTS):
         )
         self._inter_sentence_silence_ms = inter_sentence_silence_ms
 
-        # Build WebSocket URL (convert http(s) to ws(s))
-        ws_base = self._api_url.replace("https://", "wss://").replace("http://", "ws://")
-        self._ws_url = f"{ws_base}/v1/tts/realtime"
+        # Build WebSocket URL (remote http:// upgrades to wss:// so tokens stay encrypted)
+        self._ws_url = f"{ws_base_url(self._api_url)}/v1/tts/realtime"
 
         logger.info(
             f"BlazeTTS initialized (streaming): url={self._api_url}, "
@@ -829,10 +828,14 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                 send_t = asyncio.create_task(_token_send_task())
                                 try:
                                     await asyncio.gather(input_t, send_t)
+                                    # Only mark complete after a successful drain. Setting
+                                    # this in finally would drop remaining tokenizer/input
+                                    # text on WS failure (reconnect would only resend
+                                    # already-sent queries).
+                                    input_done = True
                                 finally:
                                     await utils.aio.gracefully_cancel(input_t, send_t)
                                     await sent_tokenizer_stream.aclose()
-                                    input_done = True
 
                             # Close the single speech session
                             await ws.send(json.dumps({"event": "speech-end"}))
