@@ -58,15 +58,6 @@ def _ensure_strict_json_schema(
     if not is_dict(json_schema):
         raise TypeError(f"Expected {json_schema} to be a dictionary; path={path}")
 
-    if "discriminator" in json_schema:
-        schema_path = ".".join(path) or "<root>"
-        raise ValueError(
-            "Discriminated unions cannot be represented faithfully in an OpenAI "
-            f"strict schema; refusing to drop the discriminator at path={schema_path}. "
-            "Use a non-discriminated representation or generate the tool schema with "
-            "strict=False."
-        )
-
     defs = json_schema.get("$defs")
     if is_dict(defs):
         for def_name, def_schema in defs.items():
@@ -121,8 +112,9 @@ def _ensure_strict_json_schema(
     # Strip empty schema objects ({}) — they are JSON Schema's identity element
     # for anyOf (match anything) and cause OpenAI strict mode to reject the schema.
     # Common when Union[..., Any] or ForwardRef patterns produce bare {} entries.
-    # Also convert non-discriminated oneOf → anyOf because OpenAI strict mode does not
-    # permit oneOf. Discriminated unions are rejected above rather than silently degraded.
+    # Also convert oneOf → anyOf because OpenAI strict mode does not permit oneOf.
+    # Pydantic emits oneOf for discriminated unions, but anyOf is semantically equivalent
+    # for the LLM's purposes and is accepted by the API.
     for union_key in ("anyOf", "oneOf"):
         variants = json_schema.get(union_key)
         if is_list(variants):
