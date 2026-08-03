@@ -7,7 +7,7 @@ context is the example directory alone, so appending a git source for every
 in-repo dependency is what builds the image against this checkout's code
 instead of the latest release on PyPI.
 
-    python scripts/pin_example_to_ref.py examples/hotel_receptionist --ref main
+    python .github/pin_example_to_ref.py examples/hotel_receptionist --ref main
 
 Needs Python 3.11+ for tomllib.
 """
@@ -47,7 +47,7 @@ def monorepo_path(name: str) -> str | None:
 def git_sources(dependencies: list[str], ref: str) -> str:
     lines = [
         "",
-        "# Written by scripts/pin_example_to_ref.py for a deploy: the build context is",
+        "# Written by .github/pin_example_to_ref.py for a deploy: the build context is",
         "# this directory alone, so the in-repo dependencies come from the git ref being",
         f"# deployed ({ref}) rather than from PyPI.",
         "[tool.uv.sources]",

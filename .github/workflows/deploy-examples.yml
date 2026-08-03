@@ -82,7 +82,7 @@ jobs:
           # using ref_name so it's a plain branch/tag git can resolve.
           DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
         run: |
-          python3 scripts/pin_example_to_ref.py \
+          python3 .github/pin_example_to_ref.py \
             "examples/${{ matrix.example }}" --ref "$DEPLOY_REF"
 
       - name: Build secrets file
