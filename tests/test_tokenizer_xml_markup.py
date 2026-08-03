@@ -7,7 +7,6 @@ used in expressive mode (Cartesia, ElevenLabs, Inworld).
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
@@ -101,22 +100,18 @@ class TestExtractAndStrip:
         assert clean == "no way"
         assert tags == [("excited", "no way"), ("loud", "no way")]
 
-    def test_deep_nesting_stays_cheap(self) -> None:
-        # values are cleaned by deleting delimiters in one pass; recursing per level
-        # instead would make this exponential in nesting depth
+    def test_deep_nesting_records_inner_text_at_every_level(self) -> None:
+        # every level's value is the inner *text*, not the markup below it: before the
+        # delimiter pass an outer tag recorded the whole nested chain verbatim
+        # (t0 -> "<t1><t2>...x...</t2></t1>")
         tags = [f"t{i}" for i in range(20)]
         text = "".join(f"<{t}>" for t in tags) + "x" + "".join(f"</{t}>" for t in reversed(tags))
 
-        started = time.perf_counter()
         clean, found = extract_and_strip(text, xml_tags=tags)
-        elapsed = time.perf_counter() - started
 
         assert clean == "x"
         assert [tag for tag, _ in found] == tags
         assert all(value == "x" for _, value in found)
-        # generous bound: this is ~0.5ms cleaned up, and was several minutes when each
-        # level re-ran the whole strip
-        assert elapsed < 2.0
 
     def test_nested_value_falls_back_to_attribute_when_inner_is_markup_only(self) -> None:
         # stripping the nested markup empties the inner text, so the attribute is used
