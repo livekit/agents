@@ -43,6 +43,41 @@ class _StubAgentSession:
         return object()
 
 
+class _NamedRealtimeModel(FakeRealtimeModel):
+    """FakeRealtimeModel with a configurable model/provider so tests can tell instances apart."""
+
+    def __init__(self, *, model: str, provider: str) -> None:
+        super().__init__()
+        self._model_name = model
+        self._provider_name = provider
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider_name
+
+
+async def test_reports_active_model_and_provider() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    # before any swap, the primary is reported
+    assert adapter.model == "primary-model"
+    assert adapter.provider == "primary"
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    # the backup now serves the session, so metrics must be labeled with it
+    assert adapter.model == "backup-model"
+    assert adapter.provider == "backup"
+
+
 def test_requires_at_least_one_model() -> None:
     with pytest.raises(ValueError):
         RealtimeModelFallbackAdapter([])

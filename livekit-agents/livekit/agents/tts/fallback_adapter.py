@@ -93,6 +93,9 @@ class FallbackAdapter(
         self._tts_instances = tts
         self._max_retry_per_tts = max_retry_per_tts
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: TTS = self._tts_instances[0]
+
         self._status: list[_TTSStatus] = []
         for t in tts:
             needs_resampling = sample_rate != t.sample_rate
@@ -107,11 +110,13 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.provider
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
@@ -164,7 +169,11 @@ class FallbackChunkedStream(ChunkedStream):
                     retry_interval=self._conn_options.retry_interval,
                 ),
             ) as stream:
+                should_set_active = not recovering
                 async for audio in stream:
+                    if should_set_active:
+                        should_set_active = False
+                        self._fallback_adapter._active_instance = tts
                     yield audio
 
         except Exception as e:
@@ -317,8 +326,12 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         try:
             async with stream:
+                should_set_active = not recovering
                 async for audio in stream:
                     _capture_started_time()
+                    if should_set_active:
+                        should_set_active = False
+                        self._fallback_adapter._active_instance = tts
                     yield audio
         except Exception as e:
             if recovering:

@@ -120,13 +120,18 @@ class RealtimeModelFallbackAdapter(
         self._regenerate_on_swap = regenerate_on_swap
         self._sessions: weakref.WeakSet[_FallbackRealtimeSession] = weakref.WeakSet()
 
+        # the model currently serving sessions; used to label metrics & traces
+        self._active_instance: RealtimeModel = models[0]
+
     @property
     def model(self) -> str:
-        return "RealtimeModelFallbackAdapter"
+        """The model name of the instance currently serving sessions (the primary until a swap)."""
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance currently serving sessions (the primary until a swap)."""
+        return self._active_instance.provider
 
     def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
         sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
@@ -304,6 +309,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                     )
                     if is_given(self._tool_choice):
                         self._active.update_options(tool_choice=self._tool_choice)
+                    self._adapter._active_instance = self._adapter._models[index]
                     return None
                 except Exception as e:
                     logger.exception("failed to start realtime model on swap, trying next")

@@ -77,16 +77,21 @@ class FallbackAdapter(
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
         ]
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: LLM = self._llm_instances[0]
+
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
 
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.provider
 
     def chat(
         self,
@@ -194,6 +199,7 @@ class FallbackLLMStream(LLMStream):
                     if should_set_current:
                         should_set_current = False
                         self._current_stream = stream
+                        self._fallback_adapter._active_instance = llm
                     yield chunk
 
         except asyncio.TimeoutError:
