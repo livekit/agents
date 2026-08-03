@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -99,7 +100,7 @@ class FunASRSTT(stt.STT):
         self._opts = _STTOptions(language=_normalize_language(language), use_itn=use_itn)
         # FunASR's model.generate is not guaranteed thread-safe; serialize access
         # and lazy initialization across calls that share this instance.
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
         self._model: Any | None = None
 
     @property
@@ -156,19 +157,19 @@ class FunASRSTT(stt.STT):
             samples = samples.reshape(-1, channels).mean(axis=1)
 
         def _run() -> str:
-            if self._model is None:
-                self._model = _load_model(self._model_name, self._device)
-            result = self._model.generate(
-                input=samples,
-                cache={},
-                language=lang,
-                use_itn=self._opts.use_itn,
-            )
-            return result[0]["text"] if result else ""
+            with self._lock:
+                if self._model is None:
+                    self._model = _load_model(self._model_name, self._device)
+                result = self._model.generate(
+                    input=samples,
+                    cache={},
+                    language=lang,
+                    use_itn=self._opts.use_itn,
+                )
+                return result[0]["text"] if result else ""
 
         try:
-            async with self._lock:
-                raw = await asyncio.to_thread(_run)
+            raw = await asyncio.to_thread(_run)
         except Exception as e:
             raise APIConnectionError("failed to run FunASR inference", retryable=False) from e
 
