@@ -384,6 +384,12 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         input_task = asyncio.create_task(_forward_input_task())
 
+        # a probe needs text to synthesize, and _pushed_tokens is only filled
+        # once _forward_input_task has run: an instance that is skipped because
+        # it is already unavailable is reached before that happens, so the
+        # probes are started below, after the input has been consumed
+        pending_recovery: list[TTS] = []
+
         try:
             for i, tts in enumerate(self._fallback_adapter._tts_instances):
                 tts_status = self._fallback_adapter._status[i]
@@ -446,13 +452,16 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             )
                             return
 
-                self._try_recovery(tts)
+                pending_recovery.append(tts)
 
             raise APIConnectionError(
                 f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
             )
         finally:
             await utils.aio.cancel_and_wait(input_task)
+
+            for tts in pending_recovery:
+                self._try_recovery(tts)
 
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
