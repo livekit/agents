@@ -239,13 +239,21 @@ def _add_null_sentinel(json_schema: dict[str, Any]) -> None:
     constraints.
 
     Appending ``"null"`` to a bare ``type`` only works when the schema has a direct type
-    and no value constraints. Literals (``const``/``enum``), unions (``anyOf``), and
-    ``$ref``-ed models need a full null branch instead, otherwise the wire schema either
-    contradicts itself or never advertises the sentinel at all.
+    and no value constraints. Enums, unions (``anyOf``), and ``$ref``-ed models need a full
+    null branch instead, otherwise the wire schema either contradicts itself or never
+    advertises the sentinel at all. A ``const`` gets no sentinel at all.
     """
     typ = json_schema.get("type")
     if typ == "null" or (is_list(typ) and "null" in typ):
         return  # already nullable via type
+
+    # A const field has exactly one legal value, so the model can always produce it and a
+    # null branch would contradict the const. It also has to stay non-nullable: the const
+    # a discriminated union's tag field carries is the only thing that resolves the variant
+    # once the unsupported `discriminator` keyword is stripped, and a nulled tag makes
+    # variants that differ only in their tag collide.
+    if "const" in json_schema:
+        return
 
     for union_key in ("anyOf", "oneOf"):
         variants = json_schema.get(union_key)
@@ -254,15 +262,15 @@ def _add_null_sentinel(json_schema: dict[str, Any]) -> None:
                 variants.append({"type": "null"})
             return
 
-    has_value_constraint = "const" in json_schema or "enum" in json_schema
-    if isinstance(typ, str) and not has_value_constraint:
+    has_enum = "enum" in json_schema
+    if isinstance(typ, str) and not has_enum:
         json_schema["type"] = [typ, "null"]
         return
-    if is_list(typ) and not has_value_constraint:
+    if is_list(typ) and not has_enum:
         json_schema["type"] = [*typ, "null"]
         return
 
-    # const / enum / $ref / allOf: wrap so null is a valid instance without violating
+    # enum / $ref / allOf: wrap so null is a valid instance without violating
     # the original constraints. An empty schema already accepts null — leave it.
     inner = dict(json_schema)
     if not inner:
