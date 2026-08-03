@@ -77,3 +77,55 @@ class TestLearningFromTheResponse:
             t._word_timestamps_unavailable()
 
         assert not caplog.records
+
+
+class TestLearnedPerCombination:
+    """What the responses taught us is about one model/language pair, so it
+    must not outlive a switch to another one."""
+
+    def test_changing_language_re_enables(self) -> None:
+        t = TTS(api_key="test-key", language="hi")
+        t._word_timestamps_unavailable()
+        assert t.capabilities.aligned_transcript is False
+
+        t.update_options(language="en")
+
+        assert t.capabilities.aligned_transcript is True
+        assert t._opts.word_timestamps is True
+
+    def test_changing_model_re_enables(self) -> None:
+        t = TTS(api_key="test-key", model="sonic-3", language="hi")
+        t._word_timestamps_unavailable()
+
+        t.update_options(model="sonic-preview")
+
+        assert t.capabilities.aligned_transcript is True
+
+    def test_switching_back_keeps_what_was_learned(self, caplog: pytest.LogCaptureFixture) -> None:
+        t = TTS(api_key="test-key", language="hi")
+        t._word_timestamps_unavailable()
+        t.update_options(language="en")
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
+            t.update_options(language="hi")
+
+        # no second round-trip needed to rediscover it, and no second warning
+        assert t.capabilities.aligned_transcript is False
+        assert not [r for r in caplog.records if "no word timestamps" in r.message]
+
+    def test_an_explicit_opt_out_survives_an_update(self) -> None:
+        t = TTS(api_key="test-key", language="hi", word_timestamps=False)
+
+        t.update_options(language="en")
+
+        assert t.capabilities.aligned_transcript is False
+        assert t._opts.word_timestamps is False
+
+    def test_unrelated_updates_leave_it_alone(self) -> None:
+        t = TTS(api_key="test-key", language="hi")
+        t._word_timestamps_unavailable()
+
+        t.update_options(voice="some-voice")
+
+        assert t.capabilities.aligned_transcript is False

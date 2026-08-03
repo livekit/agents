@@ -172,6 +172,9 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        # what the caller asked for, kept apart from what the responses taught us
+        self._word_timestamps_requested = word_timestamps
+        self._no_word_timestamps: set[tuple[str, str | None]] = set()
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
@@ -270,6 +273,11 @@ class TTS(tts.TTS):
         if is_given(api_version):
             self._opts.api_version = api_version
 
+        if is_given(model) or is_given(language):
+            # whether timestamps arrive is a property of the combination, so a
+            # negative result learned for the previous one says nothing here
+            self._sync_word_timestamps()
+
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
@@ -292,25 +300,42 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
+    def _word_timestamps_combination(self) -> tuple[str, str | None]:
+        return self._opts.model, self._opts.language.language if self._opts.language else None
+
+    def _sync_word_timestamps(self) -> None:
+        """Request word timestamps unless this combination is known not to send them."""
+        enabled = (
+            self._word_timestamps_requested
+            and self._word_timestamps_combination() not in self._no_word_timestamps
+        )
+        self._opts.word_timestamps = enabled
+        # the transcript can only be read from the TTS alignment when they arrive
+        self._capabilities.aligned_transcript = enabled
+
     def _word_timestamps_unavailable(self) -> None:
         """Stop asking for word timestamps this model/language never returns.
 
         Which combinations support them is the provider's business and changes
         over time, so it is learned from the responses rather than declared
-        here: a synthesis that produced audio but no timestamps settles it.
+        here: a synthesis that produced audio but no timestamps settles it. The
+        result is remembered per combination, so switching model or language
+        starts over rather than staying degraded for the session.
         """
-        if not self._opts.word_timestamps:
+        combination = self._word_timestamps_combination()
+        if not self._opts.word_timestamps or combination in self._no_word_timestamps:
             return
 
+        model, language = combination
         logger.warning(
-            "Cartesia returned no word timestamps for model %s (language %s); disabling them "
-            "for this session. See https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints",
-            self._opts.model,
-            self._opts.language.language if self._opts.language else "unset",
+            "Cartesia returned no word timestamps for model %s (language %s); not requesting "
+            "them for this combination. "
+            "See https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints",
+            model,
+            language or "unset",
         )
-        self._opts.word_timestamps = False
-        # the transcript can no longer be read from the TTS alignment
-        self._capabilities.aligned_transcript = False
+        self._no_word_timestamps.add(combination)
+        self._sync_word_timestamps()
 
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
