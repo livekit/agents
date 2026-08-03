@@ -14,7 +14,7 @@ def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionComplet
     # build a session instance without going through __init__ (no network/model needed)
     session = RealtimeSession.__new__(RealtimeSession)
     session._remote_chat_ctx = RemoteChatContext()  # type: ignore[attr-defined]
-    session._input_transcript_accumulators = {}  # type: ignore[attr-defined]
+    session._reset_input_turn_state()
 
     emitted: list[llm.InputTranscriptionCompleted] = []
     session.emit = lambda name, ev: emitted.append(ev)  # type: ignore[method-assign,assignment]

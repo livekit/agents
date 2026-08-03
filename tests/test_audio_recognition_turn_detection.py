@@ -57,6 +57,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._hooks = MagicMock()
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None
+    ar._stt_pipeline = None
+    ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
     ar._turn_detection_mode = "vad"
 

@@ -161,6 +161,13 @@ class InputTranscriptionCompleted:
     is_final: bool
     confidence: float | None = None
     """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
+    turn_started_at: float | None = None
+    """When the turn this transcript belongs to began (``time.time()``).
+
+    A provider that withholds the final transcript until its reply has finished
+    generating should set this, so the user message can be placed on the session
+    timeline where the turn happened rather than where the transcript arrived.
+    """
 
 
 @dataclass
