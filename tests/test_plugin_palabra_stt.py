@@ -7,6 +7,7 @@ The WS mock defined below stands in for the Palabra realtime STT endpoint.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from aiohttp import web
@@ -236,6 +237,37 @@ async def test_stt_stream_translation(mock_palabra_stt_ws):
     assert data.source_languages == ["en"]
     assert data.source_texts == ["Good morning."]
     assert data.target_texts == ["Buenos días."]
+
+    stream.end_input()
+    await stream.aclose()
+    await stt_.aclose()
+
+
+async def test_late_event_after_final_is_ignored(mock_palabra_stt_ws):
+    """Events arriving after the FINAL for the same transcription_id are dropped.
+
+    The server can re-send tail updates and extra translation targets for a
+    finalized id; they must not restart the utterance or duplicate the transcript.
+    """
+    ws = mock_palabra_stt_ws
+    stt_ = STT(api_key="test-key")
+    stream = stt_.stream()
+    stream.push_frame(_frame())
+    await _wait_for(lambda: len(ws["queries"]) == 1)
+
+    ws["send_queue"].put_nowait(_transcription("Hello world.", is_eos=True))
+    ws["send_queue"].put_nowait(_transcription("Hello world!!", is_eos=True))  # duplicate final
+    ws["send_queue"].put_nowait(_transcription("tail", is_eos=False))  # late interim
+
+    events = []
+    with contextlib.suppress(asyncio.TimeoutError):
+        while True:
+            events.append(await asyncio.wait_for(stream.__anext__(), timeout=1.0))
+
+    types = [ev.type for ev in events]
+    assert types.count(agents_stt.SpeechEventType.START_OF_SPEECH) == 1
+    assert types.count(agents_stt.SpeechEventType.FINAL_TRANSCRIPT) == 1
+    assert types.count(agents_stt.SpeechEventType.END_OF_SPEECH) == 1
 
     stream.end_input()
     await stream.aclose()

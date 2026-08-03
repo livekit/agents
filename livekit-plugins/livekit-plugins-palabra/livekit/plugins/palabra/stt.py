@@ -64,6 +64,10 @@ _CHUNK_MS = 100
 # Server `error` codes that are worth retrying.
 _RETRYABLE_ERROR_CODES = frozenset({"SERVICE_UNAVAILABLE", "RATE_LIMIT_EXCEEDED"})
 
+# Finished utterances stay in the registry (size-capped).
+# A late event for a finished transcription_id must be ignored, not restart the utterance.
+_MAX_TRACKED_UTTERANCES = 128
+
 
 @dataclass
 class _STTOptions:
@@ -304,15 +308,20 @@ class SpeechStream(stt.RecognizeStream):
             self._event_ch.send_nowait(
                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=request_id)
             )
-            utterances.pop(ev.transcription_id, None)
+            # Keep the finished entry on purpose.
+            # The server can resend this transcription_id: segment updates, extra translation targets.
+            # The `done` check above drops those events.
+            utt.source = None  # the stored source transcript is no longer needed
+            if len(utterances) > _MAX_TRACKED_UTTERANCES:
+                for tid, u in list(utterances.items()):  # insertion order = oldest first
+                    if not u.done:
+                        continue
+                    utterances.pop(tid, None)
+                    if len(utterances) <= _MAX_TRACKED_UTTERANCES:
+                        break
 
         async def _recv_task(session: SttSession) -> None:
-            while True:
-                event = await session.receive()
-                if event is None:
-                    if input_closed.is_set():
-                        return
-                    raise APIConnectionError("palabra stt connection closed unexpectedly")
+            async for event in session:
                 if isinstance(event, ServerError):
                     logger.error("palabra stt error: %s", event.code)
                     raise APIError(
@@ -321,6 +330,10 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 if isinstance(event, SttTranscript):
                     _emit(event)
+            # The iterator ends when the connection closes.
+            # That is expected only after _send_task closed the WS at end of input.
+            if not input_closed.is_set():
+                raise APIConnectionError("palabra stt connection closed unexpectedly")
 
         session: SttSession | None = None
         try:
