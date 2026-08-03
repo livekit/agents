@@ -585,8 +585,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         try:
             await asyncio.gather(*tasks)
         finally:
-            await sentence_stream.aclose()
             await utils.aio.gracefully_cancel(*tasks)
+            await sentence_stream.aclose()
 
 
 async def _request_and_emit_audio(
