@@ -66,6 +66,29 @@ class PhonicToolConfig(TypedDict, total=False):
     forbid_tool_call_after_speech: bool
 
 
+BackgroundNoise = Literal["office", "call-center", "coffee-shop"]
+
+IntelligenceLevel = Literal["standard", "high"]
+
+ObservabilityIntegration = Literal["braintrust"]
+
+
+class PronunciationEntry(TypedDict):
+    """A single ``{ word, pronunciation }`` entry of ``pronunciation_dictionary``."""
+
+    word: str
+    pronunciation: str
+
+
+class ConfigurationEndpoint(TypedDict, total=False):
+    """Endpoint the agent calls to fetch per-conversation configuration. ``url`` is required;
+    ``headers`` and ``timeout_ms`` are optional."""
+
+    url: str
+    headers: dict[str, str]
+    timeout_ms: int
+
+
 @dataclass
 class _RealtimeOptions:
     api_key: str
@@ -85,6 +108,24 @@ class _RealtimeOptions:
     no_input_poke_sec: NotGivenOr[float]
     no_input_poke_text: NotGivenOr[str]
     no_input_end_conversation_sec: NotGivenOr[float]
+    websocket_timeout_sec: NotGivenOr[int]
+    intelligence_level: NotGivenOr[IntelligenceLevel]
+    is_welcome_message_interruptible: NotGivenOr[bool]
+    background_noise: NotGivenOr[BackgroundNoise | None]
+    background_noise_level: NotGivenOr[float]
+    vad_prebuffer_duration_ms: NotGivenOr[int]
+    vad_min_speech_duration_ms: NotGivenOr[int]
+    vad_min_silence_duration_ms: NotGivenOr[int]
+    vad_threshold: NotGivenOr[float]
+    push_to_talk: NotGivenOr[bool]
+    enable_assistant_backchannel: NotGivenOr[bool]
+    assistant_backchannel_aggressiveness: NotGivenOr[float]
+    pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]]
+    template_variables: NotGivenOr[dict[str, str]]
+    enable_redaction: NotGivenOr[bool]
+    mcp_servers: NotGivenOr[list[str]]
+    observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
+    configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
     additional_params: NotGivenOr[dict[str, typing.Any]]
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
@@ -143,6 +184,24 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
         no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
+        intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
+        background_noise: NotGivenOr[BackgroundNoise | None] = NOT_GIVEN,
+        background_noise_level: NotGivenOr[float] = NOT_GIVEN,
+        vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        push_to_talk: NotGivenOr[bool] = NOT_GIVEN,
+        enable_assistant_backchannel: NotGivenOr[bool] = NOT_GIVEN,
+        assistant_backchannel_aggressiveness: NotGivenOr[float] = NOT_GIVEN,
+        pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
+        template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
+        observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
+        configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
@@ -178,6 +237,32 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_text: Custom poke message text. Ignored when
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
+            websocket_timeout_sec: Seconds of inactivity before the Phonic websocket is closed.
+            intelligence_level: LLM intelligence level, ``"standard"`` or ``"high"``.
+            is_welcome_message_interruptible: When False, the welcome message cannot be
+                interrupted by the user.
+            background_noise: Background noise type to mix into the conversation
+                (``"office"``, ``"call-center"``, or ``"coffee-shop"``), or None for no noise.
+            background_noise_level: Level of the background noise mixed into the conversation.
+            vad_prebuffer_duration_ms: Voice-activity-detection prebuffer duration, in milliseconds.
+            vad_min_speech_duration_ms: Minimum speech duration for VAD, in milliseconds.
+            vad_min_silence_duration_ms: Minimum silence duration for VAD, in milliseconds.
+            vad_threshold: Voice-activity-detection threshold.
+            push_to_talk: When True, the agent only listens between ``unmute``/``mute`` messages.
+            enable_assistant_backchannel: When True, the assistant produces backchannel responses
+                (e.g. "mm-hmm", "yeah") while the user is speaking.
+            assistant_backchannel_aggressiveness: How aggressively the assistant backchannels.
+                Only applies when ``enable_assistant_backchannel`` is True.
+            pronunciation_dictionary: List of ``{ word, pronunciation }`` entries; words must be unique.
+            template_variables: Variables substituted into the system prompt and welcome message.
+            enable_redaction: When True, PII/PHI is redacted from transcripts and bleeped from audio
+                after the conversation ends.
+            mcp_servers: Names of pre-configured MCP servers to make available to the assistant.
+                Names must be unique.
+            observability_integrations: Names of observability integrations to forward traces to
+                (currently ``"braintrust"``).
+            configuration_endpoint: When set, the agent calls this endpoint to fetch per-conversation
+                configuration options. Pass None to disable.
             additional_params: Additional runtime parameters forwarded to Phonic.
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
@@ -243,6 +328,24 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_poke_sec=no_input_poke_sec,
             no_input_poke_text=no_input_poke_text,
             no_input_end_conversation_sec=no_input_end_conversation_sec,
+            websocket_timeout_sec=websocket_timeout_sec,
+            intelligence_level=intelligence_level,
+            is_welcome_message_interruptible=is_welcome_message_interruptible,
+            background_noise=background_noise,
+            background_noise_level=background_noise_level,
+            vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
+            vad_min_speech_duration_ms=vad_min_speech_duration_ms,
+            vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+            vad_threshold=vad_threshold,
+            push_to_talk=push_to_talk,
+            enable_assistant_backchannel=enable_assistant_backchannel,
+            assistant_backchannel_aggressiveness=assistant_backchannel_aggressiveness,
+            pronunciation_dictionary=pronunciation_dictionary,
+            template_variables=template_variables,
+            enable_redaction=enable_redaction,
+            mcp_servers=mcp_servers,
+            observability_integrations=observability_integrations,
+            configuration_endpoint=configuration_endpoint,
             additional_params=additional_params,
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
@@ -584,6 +687,24 @@ class RealtimeSession(llm.RealtimeSession):
             "no_input_poke_sec": self._opts.no_input_poke_sec,
             "no_input_poke_text": self._opts.no_input_poke_text,
             "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
+            "websocket_timeout_sec": self._opts.websocket_timeout_sec,
+            "intelligence_level": self._opts.intelligence_level,
+            "is_welcome_message_interruptible": self._opts.is_welcome_message_interruptible,
+            "background_noise": self._opts.background_noise,
+            "background_noise_level": self._opts.background_noise_level,
+            "vad_prebuffer_duration_ms": self._opts.vad_prebuffer_duration_ms,
+            "vad_min_speech_duration_ms": self._opts.vad_min_speech_duration_ms,
+            "vad_min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
+            "vad_threshold": self._opts.vad_threshold,
+            "push_to_talk": self._opts.push_to_talk,
+            "enable_assistant_backchannel": self._opts.enable_assistant_backchannel,
+            "assistant_backchannel_aggressiveness": self._opts.assistant_backchannel_aggressiveness,
+            "pronunciation_dictionary": self._opts.pronunciation_dictionary,
+            "template_variables": self._opts.template_variables,
+            "enable_redaction": self._opts.enable_redaction,
+            "mcp_servers": self._opts.mcp_servers,
+            "observability_integrations": self._opts.observability_integrations,
+            "configuration_endpoint": self._opts.configuration_endpoint,
             "additional_params": self._opts.additional_params,
         }
         # Filter out NOT_GIVEN values
