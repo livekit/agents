@@ -124,9 +124,7 @@ class ModelConfig:
     """Immutable configuration for a Sarvam STT model.
 
     Attributes:
-        supports_prompt: Whether the model's endpoint accepts the initial
-            config/prompt message (documented only for the legacy translate
-            endpoint used by saaras:v2.5).
+        supports_prompt: Whether the model accepts prompt parameter.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
         supports_vad_params: Whether the model accepts fine-grained VAD parameters.
@@ -172,9 +170,6 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         allowed_languages=SAARIKA_V25_LANGUAGES,
     ),
     "saaras:v3": ModelConfig(
-        # the /speech-to-text/ws endpoint saaras:v3 connects to documents no
-        # config/prompt message; only the legacy translate endpoint does (see
-        # _model_supports_prompt)
         supports_prompt=False,
         supports_mode=True,
         supports_language=True,
@@ -250,19 +245,12 @@ def _validate_language_for_model(model: str, language: str | None) -> str | None
 
 
 def _model_supports_prompt(model: str) -> bool:
-    """Check whether the model accepts the initial ``config``/``prompt`` message.
-
-    Sarvam only documents that message on the legacy translate endpoint
-    (``/speech-to-text-translate/ws``, used by ``saaras:v2.5``); the current
-    ``/speech-to-text/ws`` endpoint has no such message in its schema, so
-    sending one there is a silent no-op server-side.
-    """
+    """Check whether the model supports prompt parameter."""
     model_config = _get_model_config(model)
     if model_config:
         return model_config.supports_prompt
-    # Unknown models are routed to the non-translate endpoint by
-    # _get_urls_for_model, which has no config/prompt message.
-    return False
+    # Fallback for unknown models: assume saaras-family supports prompt
+    return model.startswith("saaras")
 
 
 def _model_supports_mode(model: str) -> bool:
@@ -301,8 +289,7 @@ class SarvamSTTOptions:
         mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
-        prompt: Optional prompt for STT translate (saaras:v2.5 only; ignored by
-            other models — their endpoint has no config/prompt message)
+        prompt: Optional prompt for STT translate (saaras models only)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -311,7 +298,7 @@ class SarvamSTTOptions:
     mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
-    prompt: str | None = None  # Optional prompt for STT translate (saaras:v2.5 only)
+    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -342,13 +329,6 @@ class SarvamSTTOptions:
         self.mode = _validate_mode_for_model(self.model, self.mode)
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
-        if self.prompt and not _model_supports_prompt(self.model):
-            logger.warning(
-                "prompt is ignored for model %s: its streaming endpoint has no "
-                "config/prompt message (only saaras:v2.5 on the legacy translate "
-                "endpoint documents one)",
-                self.model,
-            )
 
 
 def _get_urls_for_model(model: str) -> tuple[str, str]:
@@ -502,8 +482,7 @@ class STT(stt.STT):
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
-        prompt: Optional prompt for STT translate (saaras:v2.5 only; ignored by
-            other models — their endpoint has no config/prompt message)
+        prompt: Optional prompt for STT translate (saaras models only)
     """
 
     def __init__(
@@ -1163,13 +1142,6 @@ class SpeechStream(stt.SpeechStream):
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
         if prompt is not None:
             self._opts.prompt = prompt
-            if prompt and not _model_supports_prompt(model):
-                self._logger.warning(
-                    "prompt is ignored for model %s: its streaming endpoint has no "
-                    "config/prompt message (only saaras:v2.5 on the legacy translate "
-                    "endpoint documents one)",
-                    model,
-                )
 
         # Use centralised validation
         self._opts.mode = _validate_mode_for_model(model, mode)
@@ -1182,7 +1154,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Send the config/prompt message (translate endpoint, saaras:v2.5 only)."""
+        """Send initial configuration message with prompt for saaras models."""
         try:
             config_message = {"prompt": self._opts.prompt, "type": "config"}
             await ws.send_str(json.dumps(config_message))
