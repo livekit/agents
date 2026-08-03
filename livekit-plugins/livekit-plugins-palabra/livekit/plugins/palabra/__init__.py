@@ -15,7 +15,7 @@
 """Palabra plugin for LiveKit Agents: realtime STT and TTS on the ``palabra-ai`` SDK.
 
 Importing this package registers the plugin via ``Plugin.register_plugin``.
-Docs: https://docs.livekit.io/agents/integrations/stt/ and .../tts/.
+Docs: https://docs.livekit.io/agents/models/stt/ and .../tts/.
 """
 
 from .models import (

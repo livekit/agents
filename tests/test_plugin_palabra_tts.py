@@ -352,7 +352,10 @@ async def test_interruption_sends_cancel_and_exits_fast(mock_palabra_ws):
         if any(m.get("type") == "cancel" for m in ws["received"]):
             break
         await asyncio.sleep(0.01)
-    assert any(m.get("type") == "cancel" for m in ws["received"])
+    cancels = [m for m in ws["received"] if m.get("type") == "cancel"]
+    assert cancels
+    sent_gens = {m["generation_id"] for m in ws["received"] if m.get("type") == "text"}
+    assert all(m.get("generation_id") in sent_gens for m in cancels)
     await tts.aclose()
 
 
@@ -546,4 +549,54 @@ async def test_reply_after_interruption_reuses_session(mock_palabra_ws):
 
     audio = await asyncio.wait_for(_next_turn(), timeout=8.0)
     assert b"\x88" * 2000 in audio
+    await tts.aclose()
+
+
+async def test_overlapping_streams_get_their_own_audio(mock_palabra_ws):
+    """Two live streams on one session receive their own audio in crossed order.
+
+    The session reader routes frames by generation_id, so neither stream can
+    consume or drop the other stream's chunks.
+    """
+    ws = mock_palabra_ws
+    tts = TTS(api_key="test-key")
+
+    s1 = tts.stream()
+    s1.push_text("First reply.")
+    s1.end_input()
+    s2 = tts.stream()
+    s2.push_text("Second reply.")
+    s2.end_input()
+
+    for _ in range(200):
+        if len([m for m in ws["received"] if m.get("type") == "text"]) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    by_text = {m["text"]: m["generation_id"] for m in ws["received"] if m.get("type") == "text"}
+    g1, g2 = by_text["First reply."], by_text["Second reply."]
+
+    a1, a2 = b"\x21" * 2000, b"\x42" * 2000
+    for pcm, gen in ((a2, g2), (a1, g1)):  # crossed: second stream's audio first
+        ws["send_queue"].put_nowait(
+            {
+                "message_type": "audio_chunk",
+                "data": {
+                    "audio": base64.b64encode(pcm).decode(),
+                    "size": len(pcm),
+                    "last_chunk": True,
+                    "generation_id": gen,
+                },
+            }
+        )
+
+    async def collect(stream) -> bytes:
+        out: list[bytes] = []
+        async for ev in stream:
+            if ev.frame is not None:
+                out.append(bytes(ev.frame.data))
+        return b"".join(out)
+
+    r1, r2 = await asyncio.wait_for(asyncio.gather(collect(s1), collect(s2)), timeout=10.0)
+    assert a1 in r1
+    assert a2 in r2
     await tts.aclose()

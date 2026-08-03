@@ -2,7 +2,7 @@
 
 Support for Palabra realtime [Speech-to-Text](https://platform.palabra.ai/docs/speech-to-text/realtime-stt) and [Text-to-Speech](https://platform.palabra.ai/docs/text-to-speech/realtime-tts) APIs, using WebSocket streaming interfaces.
 
-See [STT documentation](https://docs.livekit.io/agents/integrations/stt/palabra/) and [TTS documentation](https://docs.livekit.io/agents/integrations/tts/palabra/) for more information.
+See [STT documentation](https://docs.livekit.io/agents/models/stt/palabra/) and [TTS documentation](https://docs.livekit.io/agents/models/tts/palabra/) for more information.
 
 ## Installation
 

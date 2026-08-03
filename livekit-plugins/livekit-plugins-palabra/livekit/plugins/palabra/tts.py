@@ -156,6 +156,13 @@ class TTS(tts.TTS):
         self._tts_session: TtsSession | None = None
         self._opts_dirty = False
         self._send_lock = asyncio.Lock()
+        # Demultiplexer: one background reader per session.
+        # It routes each received event by generation_id into the sending stream's mailbox.
+        #   - _routes: generation_id -> owning stream's mailbox;
+        #   - unknown generation_id = the generation was already cancelled: dropped;
+        #   - ServerError has no generation_id: delivered to every mailbox.
+        self._routes: dict[str, asyncio.Queue[TtsChunk | ServerError | None]] = {}
+        self._reader_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
@@ -184,16 +191,46 @@ class TTS(tts.TTS):
 
     async def _ensure_session(self) -> TtsSession:
         # Caller must hold `self._send_lock`.
-        if self._opts_dirty:
+        if self._opts_dirty and not self._routes:  # apply new options only when no stream is active
             await self._reset_session()
             self._opts_dirty = False
         if self._tts_session is not None and not _session_alive(self._tts_session):
             await self._reset_session()
         if self._tts_session is None:
             self._tts_session = await self._new_tts().__aenter__()
+            self._reader_task = asyncio.create_task(self._read_loop(self._tts_session))
         return self._tts_session
 
+    async def _read_loop(self, session: TtsSession) -> None:
+        # Sole consumer of the session's events; streams read their own mailboxes.
+        stale_chunks = 0
+        try:
+            async for event in session:
+                if isinstance(event, TtsChunk):
+                    route = self._routes.get(event.generation_id)
+                    if route is None:
+                        stale_chunks += 1  # frame of an already-cancelled generation
+                        continue
+                    route.put_nowait(event)
+                elif isinstance(event, ServerError):
+                    for route in set(self._routes.values()):
+                        route.put_nowait(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("palabra tts reader failed")
+        finally:
+            if stale_chunks:
+                logger.debug("dropped %d audio chunks of cancelled generations", stale_chunks)
+            for route in set(self._routes.values()):
+                route.put_nowait(None)  # the session is gone: wake every stream
+
     async def _reset_session(self) -> None:
+        reader, self._reader_task = self._reader_task, None
+        if reader is not None:
+            reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await reader
         session, self._tts_session = self._tts_session, None
         if session is not None:
             with contextlib.suppress(Exception):
@@ -285,14 +322,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
         send_complete = asyncio.Event()
-        # One generation_id per text message; the server echoes it in every audio_chunk.
-        #   - my_gens = every generation_id this stream sent;
-        #   - pending_gens = the ids still waiting for their last_chunk;
-        #   - a chunk with any other id belongs to a cancelled stream's generation
-        #     and is dropped.
+        # One generation_id per text message.
+        # The TTS reader delivers audio_chunk frames into this mailbox by that id.
+        #   - my_gens = every id this stream sent; its routes are removed on exit;
+        #   - pending_gens = the ids still waiting for their last_chunk.
+        mailbox: asyncio.Queue[TtsChunk | ServerError | None] = asyncio.Queue()
         my_gens: set[str] = set()
         pending_gens: set[str] = set()
-        got_audio = False
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -318,6 +354,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # Register before sending: audio_chunk can arrive before send_text returns.
                     my_gens.add(gen_id)
                     pending_gens.add(gen_id)
+                    self._tts._routes[gen_id] = mailbox
                     self._mark_started()
                     try:
                         async with self._tts._send_lock:
@@ -326,19 +363,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                             )
                     except BaseException:
                         pending_gens.discard(gen_id)
+                        self._tts._routes.pop(gen_id, None)
                         raise
                     last_send = loop.time()
             send_complete.set()
 
-        async def _recv_task(session: TtsSession) -> None:
-            nonlocal got_audio
+        async def _recv_task() -> None:
+            got_audio = False
             segment_started = False
-            stale_chunks = 0
             while not (send_complete.is_set() and not pending_gens):
                 if pending_gens:
-                    # The server owes us audio for sent text; silence here is a server stall.
+                    # Text was sent and its audio has not arrived yet.
+                    # Silence longer than the timeout here means the server is stuck.
                     try:
-                        event = await session.receive(timeout=self._conn_options.timeout)
+                        event = await asyncio.wait_for(
+                            mailbox.get(), timeout=self._conn_options.timeout
+                        )
                     except asyncio.TimeoutError:
                         # A sent generation never got its last_chunk.
                         # The server ends errored or stalled generations without one.
@@ -346,11 +386,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             break  # deliver the partial audio instead of failing the reply
                         raise APITimeoutError() from None
                 else:
-                    # Nothing is outstanding, so a pause here belongs to the input (the LLM).
-                    # Poll with a short timeout instead of a deadline; once _send_task
-                    # registers a generation, the branch above re-arms the real timeout.
+                    # No sent text is waiting for audio: the pause comes from the LLM input.
+                    # Wait in short steps; after the next send the branch above applies the real timeout.
                     try:
-                        event = await session.receive(timeout=0.25)
+                        event = await asyncio.wait_for(mailbox.get(), timeout=0.25)
                     except asyncio.TimeoutError:
                         continue
                 if event is None:
@@ -362,9 +401,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         retryable=event.code in _RETRYABLE_ERROR_CODES,
                     )
                 if isinstance(event, TtsChunk):
-                    if event.generation_id not in my_gens:
-                        stale_chunks += 1
-                        continue
                     if event.audio:
                         got_audio = True
                         if not segment_started:
@@ -374,8 +410,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.push(event.audio)
                     if event.last_chunk:
                         pending_gens.discard(event.generation_id)
-            if stale_chunks:
-                logger.debug("dropped %d audio chunks of cancelled generations", stale_chunks)
             output_emitter.end_input()
 
         session: TtsSession | None = None
@@ -385,7 +419,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_send_task(session)),
-                asyncio.create_task(_recv_task(session)),
+                asyncio.create_task(_recv_task()),
             ]
             try:
                 await asyncio.gather(*tasks)
@@ -394,13 +428,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await utils.aio.gracefully_cancel(*tasks)
         except asyncio.CancelledError:
             # Interruption: the framework awaits this task before the next reply, so return fast.
-            # The server `cancel` is session-wide and stops every generation in flight.
-            # It takes _send_lock, so with the default serial streams it lands after our own sends.
-            # With preemptive_tts=True or concurrent streams it can also cancel a later generation.
-            if session is not None and my_gens:
-                logger.debug("interrupted: sending server cancel")
+            # Cancel only our unfinished generations by id; other streams are not affected.
+            if session is not None and pending_gens:
+                logger.debug("interrupted: cancelling %d generations", len(pending_gens))
                 with contextlib.suppress(Exception):
-                    await asyncio.wait_for(self._send_cancel(session), timeout=1.0)
+                    await asyncio.wait_for(
+                        self._send_cancel(session, set(pending_gens)), timeout=1.0
+                    )
                 logger.debug("interrupted: server cancel sent")
             raise
         except APIError:
@@ -419,7 +453,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             await self._tts._drop_session()
             logger.exception("palabra tts error")
             raise APIConnectionError() from e
+        finally:
+            for gen_id in my_gens:
+                self._tts._routes.pop(gen_id, None)
 
-    async def _send_cancel(self, session: TtsSession) -> None:
+    async def _send_cancel(self, session: TtsSession, gen_ids: set[str]) -> None:
         async with self._tts._send_lock:
-            await session.cancel()
+            for gen_id in gen_ids:
+                # The SDK's cancel() takes no generation argument yet.
+                # Send the frame directly until palabra-ai exposes cancel(generation_id).
+                await session._send({"type": "cancel", "generation_id": gen_id})
