@@ -56,9 +56,9 @@ pytest with the `--allow-uncategorized` option to temporarily disable this rule
 
 ### Running Agents
 ```bash
-python myagent.py console   # Terminal mode with local audio I/O (no server needed)
-python myagent.py dev       # Development mode with hot reload (connects to LiveKit)
-python myagent.py start     # Production mode
+lk agent console myagent.py  # Terminal mode with local audio I/O (no server needed)
+lk agent dev myagent.py      # Development mode with hot reload (connects to LiveKit)
+python myagent.py start      # Production mode
 python myagent.py connect --room <room> --identity <id>  # Connect to existing room
 ```
 

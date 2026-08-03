@@ -351,16 +351,17 @@ For more examples and detailed setup instructions, see the [examples directory](
 ### Testing in terminal
 
 ```shell
-python myagent.py console
+lk agent console myagent.py
 ```
 
 Runs your agent in terminal mode, enabling local audio input and output for testing.
 This mode doesn't require external servers or dependencies and is useful for quickly validating behavior.
+It needs the [LiveKit CLI](https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup).
 
 ### Developing with LiveKit clients
 
 ```shell
-python myagent.py dev
+lk agent dev myagent.py
 ```
 
 Starts the agent server and enables hot reloading when files change. This mode allows each process to host multiple concurrent agents efficiently.
@@ -402,7 +403,7 @@ uv sync --all-extras --dev
 This project includes many examples in the [`examples`](examples/) directory. To run them, create the file `examples/.env` with credentials for LiveKit Server and any necessary model providers (see `examples/.env.example`), then run:
 
 ```shell
-uv run examples/voice_agents/basic_agent.py dev
+lk agent dev examples/voice_agents/basic_agent.py
 ```
 
 For more information, see the [examples README](examples/README.md).

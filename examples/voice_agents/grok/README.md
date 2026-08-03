@@ -31,7 +31,7 @@ uv add "livekit-agents[xai,silero]" livekit-plugins-noise-cancellation
 You can talk to Grok directly in your terminal:
 
 ```bash
-uv run grok_voice_agent_api.py console
+lk agent console grok_voice_agent_api.py
 ```
 
 <img width="2012" height="626" alt="livekit-grok-voice-agents-api-console" src="https://github.com/user-attachments/assets/44f48804-a8c7-4c83-ade9-6ce9bec502ac" />
@@ -41,7 +41,7 @@ uv run grok_voice_agent_api.py console
 LiveKit hosts a playground environment where you can connect to the agent running on your machine. First run the agent:
 
 ```bash
-uv run grok_voice_agent_api.py dev
+lk agent dev grok_voice_agent_api.py
 ```
 
 Then: 
@@ -54,7 +54,7 @@ Then:
 LiveKit offers a bunch of [agent frontend](https://docs.livekit.io/frontends/) starter templates across languages. Like Option 2, the first step is to run the agent on your machine:
 
 ```bash
-uv run grok_voice_agent_api.py dev
+lk agent dev grok_voice_agent_api.py
 ```
 
 Then:

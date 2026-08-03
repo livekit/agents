@@ -45,5 +45,5 @@ result = await WarmTransferTask(
 **Run the agent**
 
 ```python
-python warm_transfer.py dev
+lk agent dev warm_transfer.py
 ```

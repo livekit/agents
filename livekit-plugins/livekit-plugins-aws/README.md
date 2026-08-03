@@ -133,7 +133,7 @@ The `realtime_joke_teller.py` example demonstrates both realtime and pipeline mo
 
 **Realtime Mode (Nova 2 Sonic)** - Recommended for testing:
 ```bash
-python realtime_joke_teller.py console
+lk agent console realtime_joke_teller.py
 ```
 This runs locally using your computer's speakers and microphone. **Use a headset to prevent echo.**
 
@@ -141,14 +141,14 @@ This runs locally using your computer's speakers and microphone. **Use a headset
 
 **Pipeline Mode (Transcribe + Nova Lite + Polly)**:
 ```bash
-python realtime_joke_teller.py console --mode pipeline
+lk agent console realtime_joke_teller.py -- --mode pipeline
 ```
 
 **Dev Mode** (connect to LiveKit room for remote testing):
 ```bash
-python realtime_joke_teller.py dev
+lk agent dev realtime_joke_teller.py
 # or
-python realtime_joke_teller.py dev --mode pipeline
+lk agent dev realtime_joke_teller.py -- --mode pipeline
 ```
 
 Try asking:

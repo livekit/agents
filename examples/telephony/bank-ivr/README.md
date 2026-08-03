@@ -40,14 +40,14 @@ You need a LiveKit configured SIP trunk to allow the agents to receive inbound c
 
 2.  **Start the Mock Bank (The Target)**
     ```bash
-    uv run python examples/bank-ivr/ivr_system_agent.py dev
+    lk agent dev examples/bank-ivr/ivr_system_agent.py
     ```
     This agent acts as the IVR system waiting for calls.
 
 3.  **Start the Navigator Agent (The Caller)**
     Open a new terminal. This agent will wait for a dispatch job to tell it to call.
     ```bash
-    uv run python examples/bank-ivr/ivr_navigator_agent.py dev
+    lk agent dev examples/bank-ivr/ivr_navigator_agent.py
     ```
 
 4.  **Trigger the Call**

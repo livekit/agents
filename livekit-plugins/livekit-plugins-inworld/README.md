@@ -111,8 +111,8 @@ A full voice agent using Inworld for both STT and TTS:
 Demonstrates using Inworld for both speech-to-text and text-to-speech
 in a LiveKit voice agent. Save this as ``inworld_agent.py`` and run:
 
-    uv run inworld_agent.py console   # local console mode
-    uv run inworld_agent.py dev       # LiveKit Cloud (requires LIVEKIT_URL,
+    lk agent console inworld_agent.py   # local console mode
+    lk agent dev inworld_agent.py       # LiveKit Cloud (requires LIVEKIT_URL,
                                       # LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 
 Then connect via https://agents-playground.livekit.io

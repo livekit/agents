@@ -9,9 +9,9 @@ the playground in real time.
 
 ```bash
 python examples/hotel_receptionist/fake_data/seed.py
-python examples/hotel_receptionist/agent.py console
+lk agent console examples/hotel_receptionist/agent.py
 # or, with the LiveKit playground:
-python examples/hotel_receptionist/agent.py dev
+lk agent dev examples/hotel_receptionist/agent.py
 ```
 
 `fake_data/seed.py` prints sample confirmation codes you can use to try
