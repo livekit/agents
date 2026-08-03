@@ -50,10 +50,11 @@ async def _capture_chat_request(max_completion_tokens: int | None = None) -> htt
         http_client=httpx.AsyncClient(transport=transport),
     )
     if max_completion_tokens is None:
-        model = LLM(model="gpt-oss-120b", client=client)
+        model = LLM(model="gpt-oss-120b", api_key="test-key", client=client)
     else:
         model = LLM(
             model="gpt-oss-120b",
+            api_key="test-key",
             client=client,
             max_completion_tokens=max_completion_tokens,
         )
