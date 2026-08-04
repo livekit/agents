@@ -200,6 +200,11 @@ class AgentActivity(RecognitionHooks):
         self._user_silence_event: asyncio.Event = asyncio.Event()
         self._user_silence_event.set()
 
+        # `_wait_for_idle_and_hold` scopes on this activity; while > 0, others block
+        self._idle_holds: int = 0
+        self._idle_released: asyncio.Event = asyncio.Event()
+        self._idle_released.set()
+
         # for false interruption handling
         self._paused_speech: _PausedSpeechInfo | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
@@ -1810,9 +1815,9 @@ class AgentActivity(RecognitionHooks):
                 agent_active = wait_for_agent
                 user_active = wait_for_user
 
-            if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
+            if self._idle_holds > 0 and not _IdleHoldContextVar.get():
                 # another caller holds `_wait_for_idle_and_hold` — block until release
-                await self._session._idle_released.wait()
+                await self._idle_released.wait()
                 agent_active = wait_for_agent
                 user_active = wait_for_user
 
