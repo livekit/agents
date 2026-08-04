@@ -2649,10 +2649,7 @@ class AgentActivity(RecognitionHooks):
         return instructions
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
-        """Resolve the session's internal expressive setting. Returns None if disabled.
-
-        Expressive mode is framework-internal and not publicly exposed; the session
-        hardcodes it to ``False``, so this currently always returns ``None``.
+        """Resolve the session's expressive setting. Returns None if disabled.
 
         Expressive mode requires two things:
         - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup

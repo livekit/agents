@@ -207,7 +207,7 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
+    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``.
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
@@ -381,6 +381,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
+        expressive: bool | ExpressiveOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -459,6 +460,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
+            expressive (bool | ExpressiveOptions, optional): Let the LLM steer how the
+                agent sounds. When enabled, the provider's markup guide is injected into
+                the LLM prompt so it can emit inline delivery tags (emotion, pacing,
+                non-verbal sounds), which are rendered by the TTS and stripped from the
+                transcript. Pass an :class:`ExpressiveOptions` dict to steer or override
+                the injected instructions. Requires ``livekit.agents.inference.TTS`` with
+                a model that declares a markup dialect; it stays off otherwise.
+                Default ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -572,8 +581,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
-        # expressive mode is not publicly exposed; the pipeline stays disabled
-        self._expressive: bool | ExpressiveOptions = False
+        self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
