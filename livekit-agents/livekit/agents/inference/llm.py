@@ -465,11 +465,16 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            retryable = False
+                            # only generation makes a retry duplicate what the caller
+                            # already saw; provider metadata (a gateway deployment
+                            # stamp, a thought signature) is not output
+                            if chat_chunk.delta and (
+                                chat_chunk.delta.content or chat_chunk.delta.tool_calls
+                            ):
+                                retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
-                        retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
                         usage_chunk = llm.ChatChunk(
