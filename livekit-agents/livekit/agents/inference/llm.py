@@ -497,6 +497,10 @@ class LLMStream(llm.LLMStream):
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except httpx.TimeoutException as e:
+            # Only the request call runs inside the openai client's error mapping, so a
+            # timeout waiting on the stream body arrives as the raw httpx exception.
+            raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
             raise APIStatusError(
                 e.message,

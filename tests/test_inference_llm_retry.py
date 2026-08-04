@@ -14,7 +14,7 @@ import httpx
 import openai
 import pytest
 
-from livekit.agents import APIConnectOptions, llm
+from livekit.agents import APIConnectOptions, APITimeoutError, llm
 from livekit.agents.inference import LLM
 
 pytestmark = pytest.mark.unit
@@ -114,3 +114,11 @@ async def test_generated_text_is_not_retried() -> None:
 
     assert len(attempts) == 1, "text already sent to the caller must not be regenerated"
     assert "after" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_stream_read_timeout_is_a_timeout_error() -> None:
+    error, _ = await _run([_TEXT], max_retry=0)
+
+    assert isinstance(error, APITimeoutError), "a stalled stream body is a timeout, not a connect"
+    assert "timed out" in str(error).lower()
