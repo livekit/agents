@@ -20,6 +20,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import (
+    AvatarSession as BaseAvatarSession,
     DataStreamAudioOutput,
 )
 
@@ -33,7 +34,7 @@ class AvalumaException(Exception):
     """Exception for Avaluma errors"""
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """An Avaluma avatar session"""
 
     def __init__(
@@ -43,6 +44,8 @@ class AvatarSession:
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         avatar_server_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        super().__init__()
+
         resolved_license_key = license_key or os.getenv("AVALUMA_LICENSE_KEY")
         if not resolved_license_key:
             raise AvalumaException(
@@ -69,12 +72,25 @@ class AvatarSession:
         self._avatar_participant_identity = f"avatar-{resolved_avatar_id}"
         self._avatar_participant_name = f"avatar-{resolved_avatar_id}"
 
-        self._http_session = utils.http_context.http_session()
-        self._room: rtc.Room | None = None
+        self._http_session: aiohttp.ClientSession | None = None
         self._session_id: str | None = None
         # keep strong references to in-flight RPC tasks so they are not
         # garbage-collected mid-execution (see asyncio.create_task docs)
         self._rpc_tasks: set[asyncio.Task] = set()
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "avaluma"
+
+    def _ensure_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None:
+            self._http_session = utils.http_context.http_session()
+
+        return self._http_session
 
     async def start(
         self,
@@ -85,6 +101,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -94,12 +112,10 @@ class AvatarSession:
                 "by arguments or environment variables"
             )
 
-        self._room = room
-
         # Get local participant identity
         try:
             job_ctx = get_job_context()
-            local_participant_identity = job_ctx.token_claims().identity
+            local_participant_identity = job_ctx.local_participant_identity
         except RuntimeError as e:
             if not room.isconnected():
                 raise AvalumaException("failed to get local participant identity") from e
@@ -145,7 +161,7 @@ class AvatarSession:
 
         for i in range(self._conn_options.max_retry):
             try:
-                async with self._http_session.post(
+                async with self._ensure_http_session().post(
                     self._avatar_server_url + "/v1/livekit/start-avatar",
                     headers={
                         "Content-Type": "application/json",
@@ -190,16 +206,16 @@ class AvatarSession:
 
     def _register_turn_taking_events(self, session: AgentSession) -> None:
         # If the agent or user state changes it sends the new state to the avatar
+        session.on("user_state_changed", self._on_user_state_changed)
+        session.on("agent_state_changed", self._on_agent_state_changed)
 
-        @session.on("user_state_changed")
-        def on_user_state_changed(ev: UserStateChangedEvent) -> None:
-            # States: ["speaking", "listening", "away"]
-            self._send_state_rpc("user_state_changed", ev.new_state)
+    def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
+        # States: ["speaking", "listening", "away"]
+        self._send_state_rpc("user_state_changed", ev.new_state)
 
-        @session.on("agent_state_changed")
-        def on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
-            # States: ["initializing", "idle", "listening", "thinking", "speaking"]
-            self._send_state_rpc("agent_state_changed", ev.new_state)
+    def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
+        # States: ["initializing", "idle", "listening", "thinking", "speaking"]
+        self._send_state_rpc("agent_state_changed", ev.new_state)
 
     def _send_state_rpc(self, method: str, state: str) -> None:
         task = asyncio.create_task(self._perform_state_rpc(method, state))
@@ -219,3 +235,15 @@ class AvatarSession:
             # The avatar may not have joined yet, or the RPC method may not be
             # registered on the avatar side; these failures are non-fatal.
             logger.debug("failed to send %s RPC to avatar", method, exc_info=True)
+
+    async def aclose(self) -> None:
+        # detach before the base class drops its reference to the agent session
+        if self._agent_session is not None:
+            self._agent_session.off("user_state_changed", self._on_user_state_changed)
+            self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
+
+        if self._rpc_tasks:
+            await utils.aio.cancel_and_wait(*self._rpc_tasks)
+            self._rpc_tasks.clear()
+
+        await super().aclose()
