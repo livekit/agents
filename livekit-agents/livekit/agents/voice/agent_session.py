@@ -1606,18 +1606,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 continue
 
     @asynccontextmanager
-    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
+    async def _wait_for_idle_and_hold(
+        self, *, run_state: RunResult | None = None
+    ) -> AsyncIterator[AgentActivity]:
         """Wait for idle, then block other ``wait_for_idle`` callers until exit.
 
-        An active run is guarded for the whole scope, since reaching idle is itself what
-        completes the run: without the guard, whatever the scope does next lands after
-        ``run()`` returned and goes unrecorded.
+        ``run_state`` is the run that owns the turn of the caller. That run is guarded for
+        the whole scope, since reaching idle is itself what completes the run: without the
+        guard, whatever the scope does next lands after ``run()`` returned and goes
+        unrecorded. A caller whose turn already ended guards nothing, so background work
+        cannot hold a later run open.
         """
         from .agent_activity import _IdleHoldContextVar
 
         # registered before the wait below, which is what lets the run complete
         guard: asyncio.Future[None] | None = None
-        if (run_state := self._global_run_state) is not None and not run_state.done():
+        if run_state is not None and run_state is self._global_run_state and not run_state.done():
             guard = asyncio.get_running_loop().create_future()
             run_state._watch_handle(guard)
             self._foreground_guards.add(guard)

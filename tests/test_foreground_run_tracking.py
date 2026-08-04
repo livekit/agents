@@ -54,6 +54,24 @@ class BackgroundWorker(Agent):
             raise
 
 
+class LateFloorWorker(Agent):
+    """Answers early, then asks for the floor long after its own run ended."""
+
+    HOLD = 5.0
+
+    def __init__(self) -> None:
+        super().__init__(instructions="late floor worker")
+        self.resume = asyncio.Event()
+
+    @function_tool
+    async def slow_job(self, ctx: RunContext) -> None:
+        """Report progress, then take the floor much later."""
+        await ctx.update("working on it")
+        await self.resume.wait()
+        async with ctx.foreground():
+            await asyncio.sleep(self.HOLD)
+
+
 class AskNameTask(AgentTask[None]):
     """A task that needs a future user turn to complete."""
 
@@ -200,6 +218,42 @@ async def test_guard_released_when_the_floor_never_arrives(
 
         # the tool raises out of ctx.foreground(); the run still has to come back
         await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+
+async def test_stale_foreground_scope_does_not_hold_a_later_run() -> None:
+    """A tool that takes the floor after its own run ended must not gate the next run.
+
+    The guard belongs to the run that owns the turn of the tool. A later run is a
+    different run, so it gets no guard and keeps its own timing.
+    """
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0.1,
+                duration=0.1,
+                tool_calls=[FunctionToolCall(name="slow_job", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="", content="ok, working on it", ttft=0.1, duration=0.1),
+            FakeLLMResponse(input="second", content="hello again", ttft=0.1, duration=0.1),
+        ]
+    )
+    agent = LateFloorWorker()
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(agent)
+
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+        second_run = sess.run(user_input="second")
+        agent.resume.set()  # the tool of the finished run now asks for the floor
+
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        await asyncio.wait_for(second_run, timeout=60.0)
+        elapsed = loop.time() - started_at
+
+        assert elapsed < agent.HOLD, f"the second run was held open for {elapsed:.2f}s"
 
 
 async def test_agent_task_inside_foreground_does_not_deadlock() -> None:
