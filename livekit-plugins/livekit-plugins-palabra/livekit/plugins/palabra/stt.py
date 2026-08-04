@@ -314,7 +314,7 @@ class SpeechStream(stt.RecognizeStream):
                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=request_id)
             )
             # Keep the finished entry on purpose.
-            # The server can resend this transcription_id: segment updates, extra translation targets.
+            # The server can resend this id: segment updates, extra translation targets.
             # The `done` check above drops those events.
             utt.source = None  # the stored source transcript is no longer needed
             if len(utterances) > _MAX_TRACKED_UTTERANCES:

@@ -363,6 +363,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text = ev.token
                 if not text:
                     continue
+                # Each text message is a separate generation on the server.
+                # It always ends with its own last_chunk, even when eos=False.
                 pieces = [text[i : i + _MAX_TEXT_LEN] for i in range(0, len(text), _MAX_TEXT_LEN)]
                 for idx, piece in enumerate(pieces):
                     delay = last_send + _MIN_SEND_INTERVAL - loop.time()
@@ -405,7 +407,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise APITimeoutError() from None
                 else:
                     # No sent text is waiting for audio: the pause comes from the LLM input.
-                    # Wait in short steps; after the next send the branch above applies the real timeout.
+                    # Wait in short steps.
+                    # After the next send the branch above applies the real timeout.
                     try:
                         event = await asyncio.wait_for(mailbox.get(), timeout=0.25)
                     except asyncio.TimeoutError:
