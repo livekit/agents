@@ -170,7 +170,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         allowed_languages=SAARIKA_V25_LANGUAGES,
     ),
     "saaras:v3": ModelConfig(
-        supports_prompt=True,
+        supports_prompt=False,
         supports_mode=True,
         supports_language=True,
         supports_vad_params=True,

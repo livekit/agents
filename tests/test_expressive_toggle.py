@@ -6,7 +6,6 @@ import pytest
 
 from livekit.agents import Agent
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.voice import presets
 from livekit.agents.voice.generation import (
     EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
     _strip_assistant_markup,
@@ -85,7 +84,7 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
     session = create_session(actions)
-    session._expressive = {"speech_steering": presets.CASUAL}
+    session._expressive = {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide

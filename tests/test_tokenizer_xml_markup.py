@@ -212,6 +212,239 @@ class TestXaiDialect:
         assert pf.normalize_markup("xai", raw) == raw
 
 
+class TestFishAudioDialect:
+    """Fish's native dialect is square brackets: expr markers lower to [very EMOTION] /
+    [SOUND] / [break] / [long-break] / [emphasis] word for the TTS, and the transcript
+    strips both the expr markers and any hallucinated native form (XML or brackets)."""
+
+    def test_llm_instructions_registered(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("fishaudio")
+        # non-None is what the expressive gate keys on
+        assert instr is not None
+        # discrete emotion vocabulary, Fish's sounds, and the emphasis-only prosody
+        for emotion in pf._FISHAUDIO_EMOTIONS:
+            assert emotion in instr
+        assert '<expr type="sound" label="laughing"/>' in instr
+        assert "clear throat" in instr
+        assert '<expr type="prosody" label="emphasis">' in instr
+
+    def test_convert_expr_to_fish_brackets(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="excited"/> We won! '
+            '<expr type="sound" label="laughing"/> <expr type="break" label="500ms"/> '
+            'That was <expr type="prosody" label="emphasis">really</expr> close. '
+            '<expr type="break" label="2s"/>'
+        )
+        assert pf.convert_markup("fishaudio", raw) == (
+            "[very excited] We won! [laughing] [break] "
+            "That was [emphasis] really close. [long-break]"
+        )
+
+    def test_convert_expression_intensified_once(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # "very" is prepended so the emotion lands harder, but never doubled
+        assert pf.convert_markup("fishaudio", '<expr type="expression" label="sad"/>') == (
+            "[very sad]"
+        )
+        assert pf.convert_markup("fishaudio", '<expression value="very sad"/>') == "[very sad]"
+
+    def test_convert_sound_alias(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # other providers advertise "laugh"; a hallucinated one still lowers to a
+        # sound Fish renders
+        assert pf.convert_markup("fishaudio", '<expr type="sound" label="laugh"/>') == "[laughing]"
+
+    def test_split_markup_strips_expr(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="empathetic"/> That sounds '
+            '<expr type="prosody" label="emphasis">really</expr> hard. '
+            '<expr type="sound" label="clear throat"/>'
+        )
+        clean, tags = pf.split_all_markup(raw)
+        assert clean.strip() == "That sounds really hard."
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("expression", "empathetic") in types
+        assert ("prosody", "emphasis") in types
+        assert ("sound", "clear throat") in types
+
+    def test_hallucinated_native_markup_never_leaks(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # hallucinated fish-native XML must vanish from the transcript. Bracket cues
+        # never reach the sinks from the LLM (it only writes expr) — natives produced
+        # by convert_markup are removed on the aligned path by drop_bracket_cues —
+        # so brackets here are prose and survive, matching the other providers.
+        raw = '<expression value="happy"/> Hey there <emphasis>friend</emphasis>'
+        clean, _ = pf.split_all_markup(raw)
+        assert "<" not in clean
+        assert "Hey" in clean and "there" in clean and "friend" in clean
+        # and the same native XML still converts for the TTS
+        assert pf.convert_markup("fishaudio", raw) == "[very happy] Hey there [emphasis] friend"
+
+    def test_steering_filters_sounds_and_examples(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # everything off: the Sounds section and any example demonstrating a sound
+        # are omitted entirely, not advertised and then revoked
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": False})
+        assert instr is not None
+        assert "laughing" not in instr and "clear throat" not in instr
+        assert "Examples:" in instr  # the sound-free example survives
+
+        # sparse opt-out: removing reflex sounds keeps the laugh family
+        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {"reflex_sounds": False}})
+        assert instr is not None
+        assert "laughing" in instr and "clear throat" not in instr
+
+    def test_supported_nonverbals(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # the queryable capabilities matrix: every Fish sound governed by one field
+        assert pf.supported_nonverbals("fishaudio") == {
+            "laughing": ["laughing", "chuckling"],
+            "reflex_sounds": ["clear throat"],
+        }
+        governed = [
+            label for labels in pf._NONVERBAL_SOUND_LABELS["fishaudio"].values() for label in labels
+        ]
+        assert sorted(governed) == sorted(pf._FISHAUDIO_SOUNDS)
+
+    def test_register_rule_in_shared_preamble(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # register inference is provider-neutral: every markup-capable provider's
+        # block carries the rule via the shared preamble, not just fish
+        for provider in ("fishaudio", "inworld", "xai", "cartesia"):
+            instr = pf.llm_instructions(provider)
+            assert instr is not None
+            assert "REGISTER of the moment" in instr, provider
+
+    def test_register_supplement_matches_steering(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        default = pf.llm_instructions("fishaudio")
+        assert default is not None
+        assert "Laughter belongs only" in default
+        assert "Save fillers for relaxed moments" in default
+
+        # an opted-out concept must be absent from the ENTIRE block — not even
+        # mentioned prohibitively, or the LLM receives contradictory directions
+        composed = pf.llm_instructions(
+            "fishaudio", {"nonverbal_sounds": False, "disfluencies": False}
+        )
+        assert composed is not None
+        assert "laugh" not in composed.lower()
+        assert "filler" not in composed.lower()
+        assert "Um, uh" not in composed
+
+    def test_nonverbal_sounds_accepts_bool(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # False disables the whole vocabulary; True (like omission) keeps it all
+        off = pf.llm_instructions("fishaudio", {"nonverbal_sounds": False})
+        on = pf.llm_instructions("fishaudio", {"nonverbal_sounds": True})
+        default = pf.llm_instructions("fishaudio")
+        assert off is not None and on is not None and default is not None
+        assert 'type="sound"' not in off and "laughing" not in off
+        for instr in (on, default):
+            assert "laughing, chuckling, clear throat" in instr
+        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": False}) == []
+        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": True}) == [
+            "laughing",
+            "chuckling",
+            "clear throat",
+        ]
+
+    def test_all_on_forms_render_like_omission(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # equivalent configurations must produce identical instructions: the
+        # explicit all-on forms add no sound guidance the default doesn't have
+        for provider in ("fishaudio", "inworld", "xai"):
+            for steering in ({"nonverbal_sounds": True}, {"nonverbal_sounds": {}}):
+                assert pf.steering_instructions(provider, steering) == "", (provider, steering)
+                assert pf.llm_instructions(provider, steering) == pf.llm_instructions(provider), (
+                    provider,
+                    steering,
+                )
+        # all-off leaves nothing to guide; the vocabulary removal happens in
+        # llm_instructions, not here
+        assert pf.steering_instructions("fishaudio", {"nonverbal_sounds": False}) == ""
+        # a genuine opt-out still draws guidance about what remains — and only
+        # about what remains
+        partial = pf.steering_instructions("fishaudio", {"nonverbal_sounds": {"laughing": False}})
+        assert "clear-throat" in partial
+        assert "laugh" not in partial.lower()
+
+    def test_nonverbal_dict_is_sparse(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # a dict is a sparse opt-out: omitted categories stay enabled, so
+        # {"laughing": False} removes laughter and nothing else
+        steering = {"nonverbal_sounds": {"laughing": False}}
+        assert pf._allowed_sounds("fishaudio", steering) == ["clear throat"]
+        inworld = pf._allowed_sounds("inworld", steering)
+        assert "laugh" not in inworld
+        for kept in ("sigh", "breathe", "clear throat", "cough", "yawn"):
+            assert kept in inworld, kept
+        # xai's laugh-family prosody is governed by the same field
+        assert "laugh-speak" not in pf._allowed_prosody("xai", steering)
+        assert "whisper" in pf._allowed_prosody("xai", steering)
+
+    def test_steering_is_sparse_over_default(self) -> None:
+        from livekit.agents.voice.agent_session import (
+            DEFAULT_EXPRESSIVE_OPTIONS,
+            resolve_expressive_options,
+        )
+
+        # bare default: fillers on, no sound filtering
+        r = resolve_expressive_options(
+            {"speech_steering": {}},
+            provider_key="fishaudio",
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )["speech_steering"]
+        assert r["disfluencies"] is True
+        assert "nonverbal_sounds" not in r
+        # a composed agent: both taken away, regardless of context
+        r2 = resolve_expressive_options(
+            {"speech_steering": {"nonverbal_sounds": False, "disfluencies": False}},
+            provider_key="fishaudio",
+            default=DEFAULT_EXPRESSIVE_OPTIONS,
+        )["speech_steering"]
+        assert r2["nonverbal_sounds"] is False
+        assert r2["disfluencies"] is False
+
+    def test_disfluent_examples_follow_steering(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # fillers are few-shotted only while disfluencies are enabled, so the
+        # examples never contradict the "no fillers" delivery guideline
+        on = pf.llm_instructions("fishaudio", {"disfluencies": True})
+        off = pf.llm_instructions("fishaudio", {"disfluencies": False})
+        default = pf.llm_instructions("fishaudio")  # disfluencies default on
+        assert on is not None and off is not None and default is not None
+        assert "Um, uh" in on and "Um, uh" in default
+        assert "Um, uh" not in off and ", um," not in off
+
+    def test_normalize_closes_unclosed_tags(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        assert pf.normalize_markup("fishaudio", '<expr type="sound" label="laughing"> hi') == (
+            '<expr type="sound" label="laughing"/> hi'
+        )
+        assert pf.normalize_markup("fishaudio", '<expression value="happy"> hi') == (
+            '<expression value="happy"/> hi'
+        )
+
+
 # ===========================================================================
 # Batch sentence tokenizer
 # ===========================================================================

@@ -20,15 +20,15 @@ Inworld TTS, the LiveKit turn detector, and ai-coustics voice isolation.
 
 ## Run locally
 
-From this directory, install the example dependencies and provide LiveKit Cloud
-credentials in `../.env` or the environment:
+Install the workspace dependencies and provide LiveKit Cloud credentials in
+`../.env` or the environment:
 
 ```bash
-pip install -r requirements.txt
-python agent.py console
+uv sync --all-extras --dev   # from the repository root
+uv run agent.py console
 ```
 
-Use `python agent.py dev` to connect the agent to LiveKit Cloud for a frontend or
+Use `uv run agent.py dev` to connect the agent to LiveKit Cloud for a frontend or
 telephony session.
 
 ## Tests and evals
