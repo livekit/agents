@@ -112,6 +112,29 @@ class APIConnectionError(APIError):
     def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
         super().__init__(message, body=None, retryable=retryable)
 
+    def __str__(self) -> str:
+        # `raise ... from e` sets __cause__ after __init__, so the chain is unreachable at
+        # construction and must be read here. The default message carries no detail, and
+        # providers wrap transport failures behind placeholder messages of their own, so the
+        # root of the chain is the only place the actual failure is named.
+        root = self.__cause__
+        for _ in range(10):
+            if root is None or root.__cause__ is None or root.__cause__ is root:
+                break
+            root = root.__cause__
+
+        if root is None:
+            return self.message
+
+        # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
+        # initialized connection key); the type name alone still beats losing the message.
+        try:
+            detail = f"{type(root).__name__}: {root}"
+        except Exception:
+            detail = type(root).__name__
+
+        return f"{self.message} (caused by {detail})"
+
 
 class APITimeoutError(APIConnectionError):
     """Raised when an API request timed out."""

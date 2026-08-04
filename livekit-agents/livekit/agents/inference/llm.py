@@ -495,12 +495,7 @@ class LLMStream(llm.LLMStream):
                 retryable=retryable,
             ) from None
         except Exception as e:
-            # openai raises APIConnectionError with a fixed placeholder message and the transport
-            # failure only on __cause__; both must be in the message to survive serialization.
-            message = f"{type(e).__name__}: {e}"
-            if e.__cause__ is not None:
-                message += f" (caused by {type(e.__cause__).__name__}: {e.__cause__})"
-            raise APIConnectionError(message, retryable=retryable) from e
+            raise APIConnectionError(retryable=retryable) from e
 
     def _parse_choice(
         self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter
