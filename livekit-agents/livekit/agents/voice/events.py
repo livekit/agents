@@ -65,6 +65,16 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # set by a silent update(): the output is recorded but no reply is generated
+        self._suppress_reply = False
+
+        # on a tool the delegation LLM called: the delegate call it belongs to
+        self._delegation_parent: RunContext[Any] | None = None
+
+        # on a delegate call: the handle its delegated tools run against. stands for the turn
+        # that will speak the answer, and _deliver_reply completes it once that reply is done
+        self._delegation_speech_handle: SpeechHandle | None = None
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -99,6 +109,11 @@ class RunContext(Generic[Userdata_T]):
         assistant turn to complete (including all function tools),
         this method only waits for the assistant's spoken response prior running
         this tool to finish playing."""
+        if (parent := self._delegation_parent) is not None:
+            # for a delegated tool that is the conversation model's line handing the request over
+            await parent.wait_for_playout()
+            return
+
         await self.speech_handle._wait_for_generation(step_idx=self._initial_step_idx)
 
     @asynccontextmanager
@@ -157,6 +172,9 @@ class RunContext(Generic[Userdata_T]):
 
         On enter, drains this tool's pending deferred reply first so its speech
         plays before the floor is held — keeps chat order matching code order.
+
+        The floor is the current agent's — work handed to another agent keeps its own, so
+        a tool that agent calls still gets its reply.
         """
         await self._drain_pending_reply()
         async with self._session._wait_for_idle_and_hold() as activity:
@@ -167,6 +185,7 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -180,6 +199,9 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Record the message without voicing it. On the first update this
+                releases control without speaking; on a later one the items still land in
+                the chat context and history, but no reply is generated from them.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -225,17 +247,25 @@ class RunContext(Generic[Userdata_T]):
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
+                    silent=silent,
                 )
             ),
         )
 
+        if (parent := self._delegation_parent) is not None:
+            # re-attributed to the delegate call, and deliberately not releasing this tool:
+            # the delegation LLM would resume and answer on partial facts
+            await parent.update(raw_message, silent=silent)
+            return
+
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = silent
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], silent=silent)
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -495,6 +525,8 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Recorded for the model but never voiced — no reply is generated from it."""
 
 
 class ToolCallEnded(BaseModel):

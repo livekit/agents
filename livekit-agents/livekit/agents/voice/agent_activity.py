@@ -50,6 +50,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .delegation import DelegationOptions, _Delegation
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -200,6 +201,11 @@ class AgentActivity(RecognitionHooks):
         self._user_silence_event: asyncio.Event = asyncio.Event()
         self._user_silence_event.set()
 
+        # `_wait_for_idle_and_hold` scopes on this activity; while > 0, others block
+        self._idle_holds: int = 0
+        self._idle_released: asyncio.Event = asyncio.Event()
+        self._idle_released.set()
+
         # for false interruption handling
         self._paused_speech: _PausedSpeechInfo | None = None
         self._false_interruption_timer: asyncio.TimerHandle | None = None
@@ -234,6 +240,7 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        self._delegation = _Delegation(self)
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -506,15 +513,37 @@ class AgentActivity(RecognitionHooks):
     def tools(
         self,
     ) -> list[llm.Tool | llm.Toolset]:
+        """Every tool the executor can run, whichever brain called it."""
         from .tool_executor import cancel_task, get_running_tasks, has_cancellable_tool
 
         tools = self._session.tools + self._agent.tools + self._mcp_tools
+        if self._delegation.enabled:
+            tools = [*tools, self._delegation.tool]
         # auto-expose cancel_task / get_running_tasks when any tool opts in via
         # ToolFlag.CANCELLABLE. always-on (not per-turn) so the LLM-visible
         # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]
         return tools
+
+    @property
+    def model_tools(self) -> list[llm.Tool]:
+        """The tools the conversation model is offered.
+
+        With a delegation LLM that is ``delegate`` plus the ``NO_DELEGATE`` ones. The
+        executor still resolves the rest, which is what lets a model that emits delegations
+        natively call a tool it was never offered.
+        """
+        if not self._delegation.enabled:
+            return llm.ToolContext(self.tools).flatten()
+        return self._delegation.split()[0]
+
+    @property
+    def delegated_tools(self) -> list[llm.Tool]:
+        """The tools the delegation LLM is offered."""
+        if not self._delegation.enabled:
+            return []
+        return self._delegation.split()[1]
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -572,7 +601,7 @@ class AgentActivity(RecognitionHooks):
             self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
-            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
+            await self._rt_session.update_tools(self.model_tools)
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
@@ -822,6 +851,25 @@ class AgentActivity(RecognitionHooks):
                 # survive pause/resume
                 await self._setup_toolsets()
 
+                user_tools = llm.ToolContext(
+                    [*self._session.tools, *self._agent.tools, *self._mcp_tools]
+                )
+                if user_tools.get_function_tool(llm.DELEGATE_TOOL_NAME) is not None:
+                    raise ValueError(
+                        f"a tool named `{llm.DELEGATE_TOOL_NAME}` collides with the builtin "
+                        "delegation tool"
+                    )
+                if not self._delegation.enabled and (
+                    is_given(self._agent._delegation_options)
+                    or self._session.options.delegation_options
+                ):
+                    logger.warning("delegation options are set but no delegation_llm is configured")
+                elif self._delegation.enabled and not self.delegated_tools:
+                    logger.warning(
+                        "a delegation_llm is configured but every tool is flagged NO_DELEGATE, "
+                        "so the delegation has no tools; it can still escalate reasoning"
+                    )
+
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
@@ -1048,7 +1096,7 @@ class AgentActivity(RecognitionHooks):
                 if reset_instructions
                 else NOT_GIVEN,
                 chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
-                tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
+                tools=self.model_tools if reset_tools else NOT_GIVEN,
             )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
@@ -1082,7 +1130,7 @@ class AgentActivity(RecognitionHooks):
                 instructions=initial_instructions,
                 tools_added=initial_tools,
             )
-            initial_config._tools = llm.ToolContext(self.tools).flatten()
+            initial_config._tools = self.model_tools
             self._agent._chat_ctx.insert(initial_config)
             self._session._chat_ctx.insert(initial_config)
 
@@ -1810,9 +1858,9 @@ class AgentActivity(RecognitionHooks):
                 agent_active = wait_for_agent
                 user_active = wait_for_user
 
-            if self._session._idle_holds > 0 and not _IdleHoldContextVar.get():
+            if self._idle_holds > 0 and not _IdleHoldContextVar.get():
                 # another caller holds `_wait_for_idle_and_hold` — block until release
-                await self._session._idle_released.wait()
+                await self._idle_released.wait()
                 agent_active = wait_for_agent
                 user_active = wait_for_user
 
@@ -3045,6 +3093,11 @@ class AgentActivity(RecognitionHooks):
         tool_ctx = llm.ToolContext(tools)
         tool_ctx._exclude(self._on_enter_ignored_tools(tool_ctx))
 
+        # a delegated tool is hidden from the conversation model but still has to run when called
+        model_tool_ctx = (
+            self._delegation.restrict(tool_ctx) if self._delegation.enabled else tool_ctx
+        )
+
         if new_message is not None:
             chat_ctx.insert(new_message)
 
@@ -3091,16 +3144,23 @@ class AgentActivity(RecognitionHooks):
         # re-issues it and duplicates side effects. inject an in-progress placeholder so it
         # leaves the call alone. mutating chat_ctx directly (not a copy) keeps a custom
         # llm_node's edits; the placeholder is stripped again before chat_ctx is forwarded.
+        # only this model's own calls: a delegated tool it was never offered would read as a
+        # tool it can use, and it would call it
+        offered = {t.info.name for t in self.model_tools if isinstance(t, llm.FunctionTool | llm.RawFunctionTool)}  # fmt: skip
         _inject_running_tool_calls(
             chat_ctx,
-            [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
+            [
+                task.ctx.function_call
+                for task in _RunningTasks.get(self._session, {}).values()
+                if task.ctx.function_call.name in offered
+            ],
         )
 
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
             chat_ctx=chat_ctx,
-            tool_ctx=tool_ctx,
+            tool_ctx=model_tool_ctx,
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
@@ -4556,6 +4616,16 @@ class AgentActivity(RecognitionHooks):
         if self._text_only:
             return None
         return self._agent.stt if is_given(self._agent.stt) else self._session.stt
+
+    # defined before the `llm` property, which shadows the `llm` module for the
+    # annotations of everything after it
+    @property
+    def delegation_llm(self) -> llm.LLM | None:
+        return self._delegation.llm
+
+    @property
+    def delegation_options(self) -> DelegationOptions:
+        return self._delegation.options
 
     @property
     def llm(self) -> llm.LLM | llm.RealtimeModel | None:

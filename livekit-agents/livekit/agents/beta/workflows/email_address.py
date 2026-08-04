@@ -12,9 +12,16 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import WorkflowInstructions
+from .utils import (
+    DELEGATED_SPEAKER_DIRECTIVE,
+    WorkflowInstructions,
+    _delegated_tool_caller_options,
+    _with_directive,
+)
 
 if TYPE_CHECKING:
+    from ...inference.llm import LLMModels
+    from ...voice.delegation import DelegationOptions
     from ...voice.turn import TurnDetectionMode
 
 
@@ -34,6 +41,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
@@ -71,9 +80,19 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             stt=stt,
             vad=vad,
             llm=llm,
+            delegation_llm=delegation_llm,
+            # the delegation runs the tools, so it reads the prompt from that half's side
+            delegation_options=_delegated_tool_caller_options(instructions, delegation_options),
             tts=tts,
             allow_interruptions=allow_interruptions,
         )
+
+    @property
+    def instructions(self) -> str | Instructions:
+        """The prompt, with the speaking half's directive once the tools are delegated."""
+        if self._activity is not None and self._activity.delegated_tools:
+            return _with_directive(self._instructions, DELEGATED_SPEAKER_DIRECTIVE)
+        return self._instructions
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="Ask the user to provide an email address.")

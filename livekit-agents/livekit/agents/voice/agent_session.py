@@ -49,6 +49,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .delegation import DelegationOptions
 from .events import (
     AgentEvent,
     AgentState,
@@ -73,7 +74,7 @@ from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
+from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _ToolExecutor
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -281,6 +282,8 @@ def resolve_expressive_options(
 class AgentSessionOptions:
     turn_handling: TurnHandlingOptions
     stt_context_options: STTContextOptions
+    delegation_options: DelegationOptions
+    """only the keys the user provided; an Agent's keys win over these"""
     endpointing_overrides: EndpointingOptions
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
@@ -370,6 +373,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         stt_context_options: NotGivenOr[STTContextOptions] = NOT_GIVEN,
@@ -555,6 +560,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 user_turn_limit=user_turn_limit,
             ),
             stt_context_options=_resolve_stt_context_options(stt_context),
+            delegation_options=delegation_options if is_given(delegation_options) else {},
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
@@ -583,6 +589,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if isinstance(llm, str):
             llm = inference.LLM.from_model_string(llm)
 
+        if isinstance(delegation_llm, str):
+            delegation_llm = inference.LLM.from_model_string(delegation_llm)
+
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
@@ -592,6 +601,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             vad = inference.VAD(model="silero")
         self._vad = vad or None
         self._llm = llm or None
+        self._delegation_llm = delegation_llm or None
+        self._delegation_tool_executor: _ToolExecutor | None = None
         self._tts = tts or None
 
         # eagerly establish DNS/TLS to the LLM provider so the first inference
@@ -671,12 +682,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_turn_claims: int = 0
         self._user_turn_released: asyncio.Event = asyncio.Event()
         self._user_turn_released.set()
-
-        # count of active `_wait_for_idle_and_hold` scopes; while > 0, non-holder
-        # `wait_for_idle` callers block until release. holder bypasses via contextvar.
-        self._idle_holds: int = 0
-        self._idle_released: asyncio.Event = asyncio.Event()
-        self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
         # TODO(theomonnom): need a better way to expose early assistant metrics
@@ -782,6 +787,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:
         return self._tools
+
+    @property
+    def delegation_llm(self) -> llm.LLM | None:
+        """The LLM answering work the conversation model delegates (see ``Agent.delegation_node``)."""
+        return self._delegation_llm
+
+    def _delegation_executor(self) -> _ToolExecutor:
+        """The executor delegated tools run on.
+
+        Session-scoped so concurrent delegations see each other's in-flight calls, which is
+        what lets ``on_duplicate="replace"`` cancel work a previous one started.
+        """
+        if self._delegation_tool_executor is None:
+            self._delegation_tool_executor = _ToolExecutor(
+                owning_activity=None, async_tool_options=self._async_tool_options
+            )
+        return self._delegation_tool_executor
 
     @property
     def usage(self) -> AgentSessionUsage:
@@ -1257,6 +1279,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     return_exceptions=True,
                 )
 
+            if self._delegation_tool_executor is not None:
+                await self._delegation_tool_executor.drain()
+                await self._delegation_tool_executor.aclose()
+                self._delegation_tool_executor = None
+
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
@@ -1605,20 +1632,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @asynccontextmanager
     async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+        """Wait for idle, then block other ``wait_for_idle`` callers on that activity.
+
+        Per-activity, not per-session: work handed to another agent keeps its own floor,
+        or its replies would wait on the work that is waiting for them.
+        """
         from .agent_activity import _IdleHoldContextVar
 
         activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
+        activity._idle_holds += 1
+        activity._idle_released.clear()
         token = _IdleHoldContextVar.set(True)
         try:
             yield activity
         finally:
             _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            activity._idle_holds -= 1
+            if activity._idle_holds == 0:
+                activity._idle_released.set()
 
     async def _update_activity(
         self,

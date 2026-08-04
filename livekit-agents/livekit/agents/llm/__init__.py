@@ -43,6 +43,7 @@ from .realtime_fallback_adapter import (
     RealtimeModelFallbackAdapter,
 )
 from .tool_context import (
+    DELEGATE_TOOL_NAME,
     FunctionTool,
     ProviderTool,
     RawFunctionTool,
@@ -98,6 +99,7 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "ToolFlag",
+    "DELEGATE_TOOL_NAME",
     "StopResponse",
     "utils",
     "remote_chat_context",

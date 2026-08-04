@@ -153,6 +153,9 @@ class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
     CANCELLABLE = auto()
+    # keep on the conversation model when a delegation LLM is configured, for tools too
+    # latency-sensitive or too simple to route through it
+    NO_DELEGATE = auto()
 
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
@@ -192,6 +195,13 @@ class RawFunctionToolInfo:
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
 """Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
+
+DELEGATE_TOOL_NAME = "lk_agents_delegate"
+"""Name of the builtin tool that hands a request to the delegation LLM.
+
+Fixed rather than configurable, so a model that emits delegations natively can have its
+plugin synthesize a call against it.
+"""
 
 _CONFIRM_DUPLICATE_DESCRIPTION = (
     "Set this to True to confirm you want to run a duplicate. "
@@ -314,6 +324,11 @@ def function_tool(
     | RawFunctionTool[_P, _R]
     | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
+    # a cancellable tool is long-running, which is what delegation moves off the conversation
+    # model, while NO_DELEGATE is for tools too latency-sensitive to delegate
+    if ToolFlag.CANCELLABLE in flags and ToolFlag.NO_DELEGATE in flags:
+        raise ValueError("a tool cannot be both CANCELLABLE and NO_DELEGATE")
+
     def deco_raw(
         func: Callable[_P, _R],
     ) -> RawFunctionTool[_P, _R]:

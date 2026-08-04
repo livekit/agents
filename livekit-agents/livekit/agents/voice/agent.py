@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
@@ -15,7 +15,8 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
-from .events import UserTurnExceededEvent
+from .delegation import DelegationOptions
+from .events import RunContext, UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
@@ -49,6 +50,8 @@ class Agent:
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
@@ -87,11 +90,16 @@ class Agent:
         if isinstance(llm, str):
             llm = inference.LLM.from_model_string(llm)
 
+        if isinstance(delegation_llm, str):
+            delegation_llm = inference.LLM.from_model_string(delegation_llm)
+
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
         self._llm = llm
+        self._delegation_llm = delegation_llm
+        self._delegation_options = delegation_options
         self._tts = tts
         self._vad = vad
 
@@ -368,6 +376,44 @@ class Agent:
         """
         return Agent.default.stt_node(self, audio, model_settings)
 
+    def delegation_node(
+        self,
+        task: str,
+        ctx: RunContext,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> Any | Coroutine[Any, Any, Any]:
+        """
+        A node that answers a request the conversation model delegated to the delegation LLM.
+
+        The text it returns reaches the conversation model as context to speak from — state the facts
+        rather than phrasing a reply. By default this runs the agent's ``delegation_llm`` with
+        the delegated tools, looping on tool calls until it answers (bounded by
+        ``max_tool_steps``).
+
+        Unlike ``llm_node`` this does not stream: the answer is one tool output, delivered
+        once. Use ``ctx.update()`` to say something before it is ready.
+
+        Override it to use a different model, inject retrieved context, hold the floor with
+        ``ctx.foreground()``, or answer without an LLM at all.
+
+        Args:
+            task (str): The delegated request, as the conversation model phrased it.
+            ctx (RunContext): The delegate call's context. ``ctx.update()`` reports progress
+                the conversation model will speak; ``ctx.foreground()`` sequences work after the
+                answer has been spoken.
+            chat_ctx (llm.ChatContext): The conversation so far, with the task appended.
+            tools (list[llm.Tool]): The delegated tools.
+            model_settings (ModelSettings): Configuration and parameters for model execution.
+
+        Returns:
+            Any: The answer, reaching the conversation model as context. Serialized like any
+                tool output, so a dict or a list is fine. ``None`` answers the call without
+                saying anything.
+        """
+        return Agent.default.delegation_node(self, task, ctx, chat_ctx, tools, model_settings)
+
     def llm_node(
         self,
         chat_ctx: llm.ChatContext,
@@ -545,6 +591,72 @@ class Agent:
                     yield chunk
 
         @staticmethod
+        async def delegation_node(
+            agent: Agent,
+            task: str,
+            ctx: RunContext,
+            chat_ctx: llm.ChatContext,
+            tools: list[llm.Tool],
+            model_settings: ModelSettings,
+        ) -> Any:
+            """Default implementation for `Agent.delegation_node`"""
+            from .delegation import EXHAUSTED, SUMMARIZE_ON_FAILURE, StepsExhausted, run_steps
+
+            activity = agent._get_activity_or_raise()
+            delegation_llm = activity.delegation_llm
+            if delegation_llm is None:
+                raise RuntimeError(
+                    "delegation_node called but no delegation LLM is available. Set "
+                    "`delegation_llm` on the AgentSession or the Agent, or override "
+                    "`delegation_node`."
+                )
+
+            call_id = ctx.function_call.call_id
+            # what run_steps appends is this delegation's own work; the conversation before
+            # it holds what earlier ones did, which this one must not claim
+            steps_start = len(chat_ctx.items)
+            try:
+                return await run_steps(activity, ctx, chat_ctx, tools, model_settings)
+            except ToolError:
+                raise  # already phrased for the conversation model
+            except StepsExhausted as e:
+                failure: Exception = e
+                logger.warning(f"delegation stopped: {e}", extra={"call_id": call_id})
+            except Exception as e:
+                failure = e
+                logger.error("delegation failed", exc_info=e, extra={"call_id": call_id})
+
+            steps = chat_ctx.items[steps_start:]
+            if not steps:
+                raise failure  # nothing ran, so there is nothing to report
+
+            # one more call with the tools withheld, purely to describe what it did
+            summary_ctx = llm.ChatContext.empty()
+            summary_ctx.add_message(role="system", content=SUMMARIZE_ON_FAILURE)
+            summary_ctx.add_message(role="user", content=task)
+            summary_ctx.items.extend(steps)
+            try:
+                summary = (
+                    await delegation_llm.chat(
+                        chat_ctx=summary_ctx,
+                        tools=tools,  # kept: the steps above refer to them
+                        tool_choice="none",
+                        # no retries: whatever broke the delegation will likely break this
+                        conn_options=replace(
+                            activity.session.conn_options.llm_conn_options, max_retry=0
+                        ),
+                    ).collect()
+                ).text
+            except Exception:
+                logger.exception(
+                    "delegation could not describe what it had already done",
+                    extra={"call_id": call_id},
+                )
+                summary = ""
+
+            raise ToolError(f"{EXHAUSTED} {summary}" if summary else EXHAUSTED) from failure
+
+        @staticmethod
         async def tts_node(
             agent: Agent,
             text: AsyncIterable[str],
@@ -660,6 +772,20 @@ class Agent:
             NotGivenOr[stt.STT | None]: An optional STT component.
         """  # noqa: E501
         return self._stt
+
+    @property
+    def delegation_llm(self) -> NotGivenOr[llm.LLM | None]:
+        """
+        Retrieves the LLM that answers the work the conversation model delegates.
+
+        If this property was not set at Agent creation, the ``AgentSession``'s
+        ``delegation_llm`` is used at runtime instead. Setting it per agent lets a handoff
+        swap the reasoning model while the conversation model stays the same.
+
+        Returns:
+            NotGivenOr[llm.LLM | None]: The LLM used by ``delegation_node``.
+        """
+        return self._delegation_llm
 
     @property
     def llm(self) -> NotGivenOr[llm.LLM | llm.RealtimeModel | None]:
@@ -800,6 +926,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        delegation_llm: NotGivenOr[llm.LLM | LLMModels | str | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         preserve_function_call_history: bool = False,
         # deprecated
@@ -827,6 +955,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             stt=stt,
             vad=vad,
             llm=llm,
+            delegation_llm=delegation_llm,
+            delegation_options=delegation_options,
             tts=tts,
             mcp_servers=mcp_servers,
             turn_handling=turn_handling,
