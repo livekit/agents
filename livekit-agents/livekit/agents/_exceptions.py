@@ -117,21 +117,29 @@ class APIConnectionError(APIError):
         # construction and must be read here. The default message carries no detail, and
         # providers wrap transport failures behind placeholder messages of their own, so the
         # root of the chain is the only place the actual failure is named.
-        root = self.__cause__
-        for _ in range(10):
-            if root is None or root.__cause__ is None or root.__cause__ is root:
-                break
-            root = root.__cause__
+        # a chain may cycle back on itself, so the walk is bounded by identity, not by depth.
+        root: BaseException | None = None
+        seen = {id(self)}
+        cause = self.__cause__
+        while cause is not None and id(cause) not in seen:
+            seen.add(id(cause))
+            root = cause
+            cause = cause.__cause__
 
         if root is None:
             return self.message
 
-        # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
-        # initialized connection key); the type name alone still beats losing the message.
-        try:
-            detail = f"{type(root).__name__}: {root}"
-        except Exception:
-            detail = type(root).__name__
+        # naming our own type by .message keeps a cycle that ends on one out of __str__, which
+        # would otherwise re-enter here through the same chain.
+        if isinstance(root, APIConnectionError):
+            detail = f"{type(root).__name__}: {root.message}"
+        else:
+            # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
+            # initialized connection key); the type name alone still beats losing the message.
+            try:
+                detail = f"{type(root).__name__}: {root}"
+            except Exception:
+                detail = type(root).__name__
 
         return f"{self.message} (caused by {detail})"
 

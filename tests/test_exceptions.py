@@ -51,6 +51,31 @@ def test_str_terminates_on_a_cyclic_chain() -> None:
     assert "ValueError" in str(_wrap(a))
 
 
+def test_str_terminates_when_the_error_causes_itself() -> None:
+    err = APIConnectionError("failed to connect")
+    err.__cause__ = err
+
+    assert str(err) == "failed to connect"
+
+
+def test_str_terminates_on_a_cycle_between_two_connection_errors() -> None:
+    outer, inner = APIConnectionError("outer"), APIConnectionError("inner")
+    outer.__cause__, inner.__cause__ = inner, outer
+
+    assert str(outer) == "outer (caused by APIConnectionError: inner)"
+
+
+def test_str_reports_the_root_of_a_chain_deeper_than_ten() -> None:
+    """A depth bound would leave intermediate wrappers in the message."""
+    root: BaseException = OSError("peer closed connection")
+    for i in range(20):
+        wrapper = APIConnectionError(f"wrapped {i}")
+        wrapper.__cause__ = root
+        root = wrapper
+
+    assert str(_wrap(root)) == "Connection error. (caused by OSError: peer closed connection)"
+
+
 def test_timeout_subclass_keeps_its_own_message() -> None:
     err = _wrap(TimeoutError(), APITimeoutError())
     assert str(err).startswith("Request timed out. (caused by TimeoutError")
