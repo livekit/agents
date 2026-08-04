@@ -882,9 +882,11 @@ def _word_text(word: dict, *, punctuate: bool) -> str:
     honours `punctuate`, so the word list follows the same option to stay consistent with
     the text it belongs to. Falls back to `word` if the key is missing.
     """
-    if punctuate:
-        return word.get("punctuated_word") or word.get("word", "")
-    return word.get("word", "")
+    raw: str = word.get("word", "")
+    if not punctuate:
+        return raw
+    punctuated: str = word.get("punctuated_word") or raw
+    return punctuated
 
 
 def live_transcription_to_speech_data(
