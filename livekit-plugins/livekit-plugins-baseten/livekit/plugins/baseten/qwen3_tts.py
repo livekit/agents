@@ -54,20 +54,16 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    NotGivenOr,
+    TimedString,
+)
 from livekit.agents.utils import is_given
 
 from ._endpoint import resolve_endpoint
 from .log import logger
-
-try:
-    from livekit.agents.types import TimedString
-
-    _HAS_TIMED_STRING = True
-except ImportError:  # pragma: no cover
-    TimedString = None  # type: ignore[assignment]
-    _HAS_TIMED_STRING = False
-
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -152,9 +148,6 @@ class Qwen3TTS(tts.TTS):
         if not voice:
             raise ValueError("`voice` is required: the Base checkpoint has no presets.")
 
-        if word_timestamps and not _HAS_TIMED_STRING:
-            logger.warning("livekit-agents has no TimedString; disabling alignment")
-            word_timestamps = False
         if speed != 1.0:
             logger.warning("progressive PCM requires speed=1.0; overriding %s", speed)
             speed = 1.0
@@ -587,11 +580,11 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
         offset: float,
     ) -> None:
         """Rebase one sentence's word times onto the segment timeline."""
-        if not timestamp_info or not _HAS_TIMED_STRING:
+        if not timestamp_info:
             return
         alignment = timestamp_info.get("word_alignment") or {}
         timed = [
-            TimedString(  # type: ignore[misc]
+            TimedString(
                 text=f"{word} ",
                 start_time=offset + float(start),
                 end_time=offset + float(end),
@@ -645,7 +638,8 @@ async def _control(model_endpoint: str, api_key: str | None, message: dict) -> d
             max_msg_size=_WS_MAX_MSG_SIZE,
         ) as ws:
             await ws.send_str(json.dumps(message))
-            return json.loads((await ws.receive()).data)
+            response: dict[str, Any] = json.loads((await ws.receive()).data)
+            return response
 
 
 async def register_voice(
@@ -676,7 +670,8 @@ async def register_voice(
     response = await _control(model_endpoint, api_key, message)
     if response.get("type") == "error" or not response.get("success"):
         raise RuntimeError(f"voice.add failed: {response.get('message') or response}")
-    return response.get("voice", response)
+    voice: dict[str, Any] = response.get("voice", response)
+    return voice
 
 
 async def list_voices(*, model_endpoint: str, api_key: str | None = None) -> dict[str, Any]:

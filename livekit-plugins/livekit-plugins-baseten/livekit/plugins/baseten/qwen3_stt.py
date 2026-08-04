@@ -57,55 +57,27 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.language import LanguageCode
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
 from ._endpoint import resolve_endpoint
-from .log import logger
-
-try:
-    from livekit.agents.types import TimedString
-
-    _HAS_TIMED_STRING = True
-except ImportError:  # pragma: no cover
-    TimedString = None  # type: ignore[assignment]
-    _HAS_TIMED_STRING = False
-
 
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 _SAMPLES_PER_CHUNK = SAMPLE_RATE // 10  # 100 ms, matching the reference client
 
-# The server reports a Qwen3-ASR language *name*; LiveKit wants a code.
-# Unlisted names fall through lowercased.
-_LANGUAGE_CODES = {
-    "english": "en",
-    "chinese": "zh",
-    "cantonese": "yue",
-    "spanish": "es",
-    "french": "fr",
-    "german": "de",
-    "italian": "it",
-    "portuguese": "pt",
-    "russian": "ru",
-    "japanese": "ja",
-    "korean": "ko",
-    "arabic": "ar",
-    "hindi": "hi",
-    "turkish": "tr",
-    "vietnamese": "vi",
-    "indonesian": "id",
-    "dutch": "nl",
-    "polish": "pl",
-    "thai": "th",
-    "urdu": "ur",
-}
+# LanguageCode already maps most language *names* to codes ("English" -> "en");
+# these are the Qwen3-ASR languages it leaves untouched.
+_LANGUAGE_OVERRIDES = {"cantonese": "yue", "filipino": "fil"}
 
 
-def _language_code(name: str | None) -> str:
+def _language_code(name: str | None) -> LanguageCode:
+    """Normalize a Qwen3-ASR language name into a LanguageCode."""
     if not name:
-        return ""
-    return _LANGUAGE_CODES.get(name.strip().lower(), name.strip().lower())
+        return LanguageCode("")
+    key = name.strip().lower()
+    return LanguageCode(_LANGUAGE_OVERRIDES.get(key, key))
 
 
 @dataclass
@@ -175,9 +147,6 @@ class Qwen3STT(stt.STT):
         model_endpoint = resolve_endpoint(
             model_endpoint, model_id, chain_id, "BASETEN_STT_ENDPOINT"
         )
-        if word_timestamps and not _HAS_TIMED_STRING:
-            logger.warning("livekit-agents has no TimedString; disabling alignment")
-            word_timestamps = False
 
         self._api_key = api_key
         self._model_endpoint = model_endpoint
@@ -262,7 +231,9 @@ class Qwen3STT(stt.STT):
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(language=code, text=" ".join(texts).strip())],
+            alternatives=[
+                stt.SpeechData(language=LanguageCode(code), text=" ".join(texts).strip())
+            ],
         )
 
 
@@ -412,9 +383,9 @@ class Qwen3SpeechStream(stt.SpeechStream):
         self, event: dict[str, Any], segments: list[dict[str, Any]], text: str
     ) -> stt.SpeechData:
         words = None
-        if self._opts.word_timestamps and _HAS_TIMED_STRING:
+        if self._opts.word_timestamps:
             words = [
-                TimedString(  # type: ignore[misc]
+                TimedString(
                     text=w.get("word", ""),
                     start_time=float(w.get("start_time", 0.0)),
                     end_time=float(w.get("end_time", 0.0)),
