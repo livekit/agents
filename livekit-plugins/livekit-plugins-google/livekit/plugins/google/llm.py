@@ -433,6 +433,15 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
         )
 
+    async def aclose(self) -> None:
+        """Close the LLM and release its GenAI HTTP clients."""
+        await super().aclose()
+
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
+
 
 class LLMStream(llm.LLMStream):
     def __init__(
