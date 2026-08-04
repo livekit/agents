@@ -183,11 +183,7 @@ class TTS(tts.TTS):
             self._opts.voice_name = voice_name
 
     async def aclose(self) -> None:
-        # release the genai http clients owned by this TTS. Without this they stay
-        # open until the garbage collector runs `AsyncClient.__del__`, which
-        # schedules `aclose()` on whatever event loop happens to be running at
-        # that moment. This instance always constructs its own client, so there is
-        # nothing borrowed to leave alone.
+        """Close the TTS and release its GenAI HTTP clients."""
         try:
             await self._client.aio.aclose()
         except Exception:
