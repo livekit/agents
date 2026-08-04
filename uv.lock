@@ -2556,6 +2556,9 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+]
+
+[[package]]
 name = "livekit-plugins-ai-coustics"
 version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
