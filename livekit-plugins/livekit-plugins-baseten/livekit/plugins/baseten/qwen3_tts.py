@@ -117,6 +117,14 @@ class _TurnState:
 
 
 class Qwen3TTS(tts.TTS):
+    """Streaming TTS for a Baseten-hosted Qwen3-TTS deployment.
+
+    Not interchangeable with `TTS`, which targets the Orpheus truss and speaks a
+    different protocol. Keeps one WebSocket warm across turns, since the session
+    config is sticky and re-dialing would add a connect plus a config round trip
+    to every agent response.
+    """
+
     def __init__(
         self,
         *,
@@ -138,6 +146,46 @@ class Qwen3TTS(tts.TTS):
         extra_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Args:
+            model_endpoint: Full ``wss://`` URL of the deployment. Takes priority
+                over ``model_id`` and ``chain_id``; falls back to
+                ``BASETEN_MODEL_ENDPOINT``.
+            model_id: Baseten truss model ID; builds the endpoint URL for you.
+            chain_id: Baseten chain ID; builds the endpoint URL for you.
+            api_key: Baseten API key, or ``BASETEN_API_KEY``.
+            voice: Name of a registered voice clone. Required — the Base
+                checkpoint ships no built-in speakers, so there is no sensible
+                default. See `register_voice`.
+            task_type: ``Base`` for the voice-cloning checkpoint. ``CustomVoice``
+                and ``VoiceDesign`` deployments use their own checkpoints and
+                expose preset speaker names.
+            language: Language hint; ``Auto`` lets the model decide.
+            speed: Playback rate. Forced to 1.0 — progressive PCM is only offered
+                at native speed and the server rejects anything else, which is
+                fatal on a socket that has no session yet.
+            instructions: Style prompt (``CustomVoice``/``VoiceDesign`` only).
+            max_new_tokens: Cap on generated audio tokens per sentence.
+            initial_codec_chunk_frames: First-chunk size. Larger trades
+                time-to-first-audio for slightly better onset quality.
+            x_vector_only_mode: Condition on the speaker embedding alone and skip
+                in-context learning from the reference. Faster, less faithful.
+            ref_audio: Reference clip for inline cloning — an ``http(s)`` URL or a
+                local file path. Only needed when ``voice`` is not already
+                registered on the deployment.
+            ref_text: Transcript of ``ref_audio``. Improves fidelity; without it
+                the server falls back to audio-only (x-vector).
+            word_timestamps: Request word-level alignment and forward it to
+                LiveKit as a timed transcript.
+            extra_config: Merged into ``session.config`` last, for server-side
+                fields newer than this plugin. Note that an unrecognized field
+                invalidates the whole config.
+            http_session: Optional aiohttp session to reuse.
+
+        Raises:
+            ValueError: If no API key or endpoint can be resolved, or if
+                ``voice`` is empty.
+        """
         api_key = api_key or os.environ.get("BASETEN_API_KEY")
         if not api_key:
             raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
@@ -391,6 +439,8 @@ class Qwen3TTS(tts.TTS):
 
 
 class Qwen3SynthesizeStream(tts.SynthesizeStream):
+    """One agent turn: text in over the input channel, PCM out via the emitter."""
+
     def __init__(self, *, tts: Qwen3TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: Qwen3TTS = tts

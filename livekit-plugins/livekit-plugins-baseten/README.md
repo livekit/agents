@@ -177,7 +177,8 @@ session = AgentSession(
 ```
 
 Both accept `model_endpoint`, `model_id`, or `chain_id` (same precedence as
-`STT`) and read `BASETEN_API_KEY` from the environment.
+`STT`, falling back to `BASETEN_MODEL_ENDPOINT`) and read `BASETEN_API_KEY`
+from the environment.
 
 ### Qwen3 TTS voices
 

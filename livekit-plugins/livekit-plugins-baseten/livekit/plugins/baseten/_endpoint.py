@@ -17,8 +17,12 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
+
+from .log import logger
 
 _TRUSS_URL_TEMPLATE = "wss://model-{model_id}.api.baseten.co/environments/production/websocket"
+_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 _CHAIN_URL_TEMPLATE = "wss://chain-{chain_id}.api.baseten.co/environments/production/websocket"
 
 
@@ -41,5 +45,14 @@ def resolve_endpoint(
         raise ValueError(
             f"This model is served over WebSocket only; got {endpoint!r}. Endpoints "
             "look like wss://model-<id>.api.baseten.co/environments/production/websocket"
+        )
+    if endpoint.startswith("ws://") and urlparse(endpoint).hostname not in _LOOPBACK:
+        # ws:// stays allowed for local proxies and tests, but the API key rides in
+        # an Authorization header and the audio is unencrypted, so plaintext to
+        # anything off-host is worth shouting about.
+        logger.warning(
+            "endpoint %r is plaintext ws://: the Baseten API key and all audio will be "
+            "sent unencrypted. Use wss:// for any non-local host.",
+            endpoint,
         )
     return endpoint

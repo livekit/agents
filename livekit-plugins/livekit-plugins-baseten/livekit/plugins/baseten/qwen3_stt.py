@@ -111,6 +111,13 @@ class _STTOptions:
 
 
 class Qwen3STT(stt.STT):
+    """Streaming STT for a Baseten-hosted Qwen3-ASR deployment.
+
+    Not interchangeable with `STT`, which targets the streaming-Whisper truss and
+    speaks a different protocol. The server runs Silero VAD, so turns end on
+    their own; an explicit flush commits the buffered audio early.
+    """
+
     def __init__(
         self,
         *,
@@ -128,9 +135,33 @@ class Qwen3STT(stt.STT):
         word_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """`language` is a Qwen3-ASR canonical name ("English", "Cantonese") or
-        "auto". Forcing a language also sets the *output* language, so it can
-        translate — use it only to pin what is actually being spoken.
+        """
+        Args:
+            model_endpoint: Full ``wss://`` URL of the deployment. Takes priority
+                over ``model_id`` and ``chain_id``; falls back to
+                ``BASETEN_MODEL_ENDPOINT``.
+            model_id: Baseten truss model ID; builds the endpoint URL for you.
+            chain_id: Baseten chain ID; builds the endpoint URL for you.
+            api_key: Baseten API key, or ``BASETEN_API_KEY``.
+            language: A Qwen3-ASR canonical language name (``"English"``,
+                ``"Cantonese"``) or ``"auto"``. Forcing a language also sets the
+                *output* language and can translate, so use it only to pin what
+                is actually being spoken.
+            interim_results: Emit revisable partials during a turn. Partials are
+                replace-style: each re-states the whole current hypothesis.
+            partial_transcript_interval_s: Cadence of those partials.
+            final_transcript_max_duration_s: Longest turn before the server
+                forces a final.
+            vad_threshold: Server-side Silero VAD speech probability threshold.
+            vad_min_silence_duration_ms: Silence needed to end a turn.
+            vad_speech_pad_ms: Padding added around detected speech.
+            word_timestamps: Request word-level alignment on finals. Requires
+                ``STREAM_ALIGNER=mms`` and ``STREAM_ALIGNER_DEVICE=cuda`` on the
+                deployment; otherwise the server ignores it.
+            http_session: Optional aiohttp session to reuse.
+
+        Raises:
+            ValueError: If no API key or endpoint can be resolved.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -145,7 +176,7 @@ class Qwen3STT(stt.STT):
             raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
 
         model_endpoint = resolve_endpoint(
-            model_endpoint, model_id, chain_id, "BASETEN_STT_ENDPOINT"
+            model_endpoint, model_id, chain_id, "BASETEN_MODEL_ENDPOINT"
         )
 
         self._api_key = api_key
@@ -238,6 +269,8 @@ class Qwen3STT(stt.STT):
 
 
 class Qwen3SpeechStream(stt.SpeechStream):
+    """A single recognition session: audio frames in, speech events out."""
+
     def __init__(
         self, *, stt: Qwen3STT, opts: _STTOptions, conn_options: APIConnectOptions
     ) -> None:
@@ -273,26 +306,9 @@ class Qwen3SpeechStream(stt.SpeechStream):
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=_SAMPLES_PER_CHUNK,
             )
-            try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        frames = chunker.flush()
-                        commit = True
-                    else:
-                        frames = chunker.write(data.data.tobytes())
-                        commit = False
-                    for frame in frames:
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "type": "input_audio_buffer.append",
-                                    "audio": base64.b64encode(frame.data.tobytes()).decode(),
-                                }
-                            )
-                        )
-                    if commit:
-                        await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
-                for frame in chunker.flush():
+
+            async def append(frames: list[rtc.AudioFrame]) -> None:
+                for frame in frames:
                     await ws.send_str(
                         json.dumps(
                             {
@@ -301,7 +317,24 @@ class Qwen3SpeechStream(stt.SpeechStream):
                             }
                         )
                     )
-                await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
+
+            # `end_input()` pushes a flush sentinel *and then* closes the channel,
+            # so this has to remember whether the last thing it did was commit —
+            # otherwise the trailing commit below doubles it and the server
+            # answers an extra, empty turn.
+            committed = False
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        await append(chunker.flush())
+                        await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
+                        committed = True
+                    else:
+                        await append(chunker.write(data.data.tobytes()))
+                        committed = False
+                if not committed:
+                    await append(chunker.flush())
+                    await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
             finally:
                 input_ended.set()
 
