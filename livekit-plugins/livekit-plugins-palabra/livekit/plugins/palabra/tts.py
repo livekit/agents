@@ -157,6 +157,7 @@ class TTS(tts.TTS):
         self._opts_dirty = False
         self._send_lock = asyncio.Lock()
         self._last_send = 0.0
+        self._active_streams_cnt = 0
         # Demultiplexer: one background reader per session.
         # It routes each received event by generation_id into the sending stream's mailbox.
         #   - _routes: generation_id -> owning stream's mailbox;
@@ -194,7 +195,7 @@ class TTS(tts.TTS):
 
     async def _ensure_session(self, timeout: float) -> TtsSession:
         # Caller must hold `self._send_lock`.
-        if self._opts_dirty and not self._routes:  # apply new options only when no stream is active
+        if self._opts_dirty and self._active_streams_cnt == 0:
             await self._reset_session()
             self._opts_dirty = False
         if self._tts_session is not None and not _session_alive(self._tts_session):
@@ -246,11 +247,13 @@ class TTS(tts.TTS):
             with contextlib.suppress(Exception):
                 await session.close()
 
-    async def _drop_session_if_idle(self) -> None:
+    async def _drop_session_if_idle(self, *, current_stream_active: bool) -> None:
         # A failed request must not close the socket under other active streams.
         async with self._send_lock:
             dead = self._tts_session is not None and not _session_alive(self._tts_session)
-            if dead or not self._routes:
+            # Error teardown runs before the failing stream releases its active count.
+            other_streams = self._active_streams_cnt - int(current_stream_active)
+            if dead or other_streams <= 0:
                 await self._reset_session()
 
     def prewarm(self) -> None:
@@ -443,12 +446,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _teardown() -> None:
             for gen_id in my_gens:
                 self._tts._routes.pop(gen_id, None)
-            await self._tts._drop_session_if_idle()
+            await self._tts._drop_session_if_idle(current_stream_active=session_acquired)
 
         session: TtsSession | None = None
+        session_acquired = False
         try:
             async with self._tts._send_lock:
                 session = await self._tts._ensure_session(self._conn_options.timeout)
+                self._tts._active_streams_cnt += 1
+                session_acquired = True
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_send_task(session)),
@@ -489,6 +495,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         finally:
             for gen_id in my_gens:
                 self._tts._routes.pop(gen_id, None)
+            if session_acquired:
+                async with self._tts._send_lock:
+                    self._tts._active_streams_cnt -= 1
 
     async def _send_cancel(self, session: TtsSession, gen_ids: set[str]) -> None:
         async with self._tts._send_lock:
