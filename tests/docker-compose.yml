@@ -61,6 +61,7 @@ services:
       - INWORLD_API_KEY
       - MISTRAL_API_KEY
       - MURF_API_KEY
+      - PALABRA_API_KEY
 
     extra_hosts:
       - "polly.us-west-2.amazonaws.com:172.30.0.10"
@@ -82,6 +83,7 @@ services:
       - "api.inworld.ai:172.30.0.10"
       - "api.mistralai.com:172.30.0.10"
       - "api.murf.ai:172.30.0.10"
+      - "stream.palabra.ai:172.30.0.10"
     networks:
       - toxinet
 

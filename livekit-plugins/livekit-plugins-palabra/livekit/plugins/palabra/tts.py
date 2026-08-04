@@ -156,6 +156,7 @@ class TTS(tts.TTS):
         self._tts_session: TtsSession | None = None
         self._opts_dirty = False
         self._send_lock = asyncio.Lock()
+        self._last_send = 0.0
         # Demultiplexer: one background reader per session.
         # It routes each received event by generation_id into the sending stream's mailbox.
         #   - _routes: generation_id -> owning stream's mailbox;
@@ -191,7 +192,7 @@ class TTS(tts.TTS):
             sample_rate=self._opts.sample_rate,
         )
 
-    async def _ensure_session(self) -> TtsSession:
+    async def _ensure_session(self, timeout: float) -> TtsSession:
         # Caller must hold `self._send_lock`.
         if self._opts_dirty and not self._routes:  # apply new options only when no stream is active
             await self._reset_session()
@@ -199,8 +200,15 @@ class TTS(tts.TTS):
         if self._tts_session is not None and not _session_alive(self._tts_session):
             await self._reset_session()
         if self._tts_session is None:
-            self._tts_session = await self._new_tts().__aenter__()
-            self._reader_task = asyncio.create_task(self._read_loop(self._tts_session))
+            session = self._new_tts()
+            try:
+                await asyncio.wait_for(session.__aenter__(), timeout=timeout)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await session.close()
+                raise
+            self._tts_session = session
+            self._reader_task = asyncio.create_task(self._read_loop(session))
         return self._tts_session
 
     async def _read_loop(self, session: TtsSession) -> None:
@@ -260,7 +268,7 @@ class TTS(tts.TTS):
             async with self._send_lock:
                 if self._closed:
                     return
-                await self._ensure_session()
+                await self._ensure_session(DEFAULT_API_CONNECT_OPTIONS.timeout)
 
     def update_options(
         self,
@@ -358,7 +366,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _send_task(session: TtsSession) -> None:
             loop = asyncio.get_running_loop()
-            last_send = 0.0
             async for ev in sent_tokenizer_stream:
                 text = ev.token
                 if not text:
@@ -367,9 +374,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # It always ends with its own last_chunk, even when eos=False.
                 pieces = [text[i : i + _MAX_TEXT_LEN] for i in range(0, len(text), _MAX_TEXT_LEN)]
                 for idx, piece in enumerate(pieces):
-                    delay = last_send + _MIN_SEND_INTERVAL - loop.time()
-                    if delay > 0:
-                        await asyncio.sleep(delay)
                     gen_id = utils.shortuuid("PLBR_")
                     # Register before sending: audio_chunk can arrive before send_text returns.
                     my_gens.add(gen_id)
@@ -378,14 +382,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                     self._mark_started()
                     try:
                         async with self._tts._send_lock:
+                            delay = self._tts._last_send + _MIN_SEND_INTERVAL - loop.time()
+                            if delay > 0:
+                                await asyncio.sleep(delay)
                             await session.send_text(
                                 piece, eos=idx == len(pieces) - 1, generation_id=gen_id
                             )
+                            self._tts._last_send = loop.time()
                     except BaseException:
                         pending_gens.discard(gen_id)
                         self._tts._routes.pop(gen_id, None)
                         raise
-                    last_send = loop.time()
             send_complete.set()
 
         async def _recv_task() -> None:
@@ -441,7 +448,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         session: TtsSession | None = None
         try:
             async with self._tts._send_lock:
-                session = await self._tts._ensure_session()
+                session = await self._tts._ensure_session(self._conn_options.timeout)
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_send_task(session)),
