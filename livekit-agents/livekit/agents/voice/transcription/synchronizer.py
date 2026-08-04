@@ -147,6 +147,12 @@ class _SegmentSynchronizerImpl:
         # fragments — each would otherwise be paced as if it were spoken
         self._pacing_stripper = TranscriptMarkupStripper()
 
+        # monotonic cursor for _visible_hyphens: the target offset only moves forward, so
+        # each character is counted once per turn rather than once per word (quadratic)
+        self._vis_len = 0
+        self._vis_hyphens = 0
+        self._vis_stripper = TranscriptMarkupStripper()
+
         self._next_in_chain = next_in_chain
         self._start_wall_time: float | None = None
         self._start_fut: asyncio.Event = asyncio.Event()
@@ -400,8 +406,8 @@ class _SegmentSynchronizerImpl:
             ):
                 # use the actual speaking rate
                 target_len = int(annotated.accumulate_to(elapsed))
-                forwarded_len = len(self._text_data.forwarded_text)
-                d_hyphens = self._visible_hyphens(target_len) - self._visible_hyphens(forwarded_len)
+                # forwarded_hyphens is already the visible count for the forwarded prefix
+                d_hyphens = self._visible_hyphens(target_len) - self._text_data.forwarded_hyphens
 
             elif self._speed_on_speaking_unit:
                 # use the estimated speed from speaking rate
@@ -430,9 +436,29 @@ class _SegmentSynchronizerImpl:
         The annotated-rate offsets live in raw-text space (timing annotations count raw
         characters, markup included) and may fall inside a tag; the hyphen count must
         match ``word_hyphens``' unit — markup-stripped text.
+
+        Advances a cursor rather than rescanning the prefix, keeping the pacing loop
+        linear. The stripper holds a straddling tag until it completes, so an offset
+        landing mid-tag needs no truncation.
         """
-        prefix = self._text_data.pushed_text[:length]
-        return len(self._calc_hyphens(strip_all_markup(prefix)))
+        text = self._text_data.pushed_text
+        length = max(0, min(length, len(text)))
+        if length < self._vis_len:  # offset moved back (impl reuse): recount from scratch
+            self._vis_len, self._vis_hyphens = 0, 0
+            self._vis_stripper = TranscriptMarkupStripper()
+        if length > self._vis_len:
+            end = length
+            if end < len(text) and not text[end - 1].isspace():
+                # stop at a word boundary: splitting a word across two advances would
+                # count it twice and pace the transcript a few percent fast
+                boundary = text.rfind(" ", self._vis_len, end)
+                end = boundary + 1 if boundary >= self._vis_len else self._vis_len
+            if end > self._vis_len:
+                clean = self._vis_stripper.push(text[self._vis_len : end])
+                if clean.strip():
+                    self._vis_hyphens += len(self._calc_hyphens(clean))
+                self._vis_len = end
+        return self._vis_hyphens
 
     def _calc_hyphens(self, text: str) -> list[str]:
         """Calculate hyphens for text."""

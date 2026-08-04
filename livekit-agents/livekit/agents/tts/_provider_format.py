@@ -21,7 +21,12 @@ import re
 from typing import TYPE_CHECKING, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
-from .markup_utils import convert_expression_tags, extract_and_strip, vanish_trail
+from .markup_utils import (
+    convert_expression_tags,
+    extract_and_strip,
+    scan_and_replace,
+    vanish_trail,
+)
 
 
 class ExpressiveTag(TypedDict):
@@ -752,7 +757,7 @@ def _expr_attrs(attrs: str) -> dict[str, str]:
     return dict(_EXPR_ATTR_RE.findall(attrs))
 
 
-def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
+def _split_expr(text: str, *, prev_char: str = "") -> tuple[str, list[ExpressiveTag]]:
     """Strip expr markers and collect (type, label) pairs, in document order.
 
     The generic ``extract_and_strip`` pass can't produce the right ExpressiveTag for
@@ -766,13 +771,18 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
 
     tags: list[ExpressiveTag] = []
 
-    def _repl(m: re.Match[str]) -> str:
+    def _repl(m: re.Match[str], before: str) -> str:
         attrs = _expr_attrs(m.group(1))
         tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return vanish_trail(m, m.group("trail"))
+        return vanish_trail(before, m.group("trail"))
 
-    clean = _EXPR_OPEN_STRIP_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_STRIP_RE.sub(lambda m: vanish_trail(m, m.group("trail")), clean)
+    clean = scan_and_replace(_EXPR_OPEN_STRIP_RE, text, _repl, prev_char=prev_char)
+    clean = scan_and_replace(
+        _EXPR_CLOSE_STRIP_RE,
+        clean,
+        lambda m, before: vanish_trail(before, m.group("trail")),
+        prev_char=prev_char,
+    )
     return clean, tags
 
 
@@ -891,7 +901,7 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
 _ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
 
-def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+def split_all_markup(text: str, *, prev_char: str = "") -> tuple[str, list[ExpressiveTag]]:
     """Strip the union of every provider's expressive XML markup (provider-agnostic).
 
     The transcript sinks strip downstream, where the originating TTS/provider is no
@@ -909,8 +919,8 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     if "<" not in text:
         return text, []
 
-    text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS)
+    text, expr_tags = _split_expr(text, prev_char=prev_char)
+    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS, prev_char=prev_char)
     return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
@@ -942,13 +952,19 @@ def _drop_open_tail(text: str) -> str:
     return text
 
 
-def strip_all_markup(text: str) -> str:
+def strip_all_markup(text: str, *, drop_open_tail: bool = False) -> str:
     """:func:`split_all_markup` returning only the clean text (tags discarded).
 
-    Also drops a trailing unterminated tag, so callers slicing text at arbitrary
-    character offsets that may fall inside a tag never see a partial tag.
+    Args:
+        text: The text to strip.
+        drop_open_tail: Also drop a trailing unterminated tag. For prefixes and
+            mid-stream accumulations only — it is lossy on complete text
+            (``"the <emotion I felt was strong"`` -> ``"the "``), so leave it off
+            for final transcripts and stored chat history.
     """
-    return split_all_markup(_drop_open_tail(text))[0]
+    if drop_open_tail:
+        text = _drop_open_tail(text)
+    return split_all_markup(text)[0]
 
 
 def strip_expr_markup(text: str) -> str:
@@ -1001,10 +1017,9 @@ class TranscriptMarkupStripper:
     def __init__(self) -> None:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
-        # last emitted char was whitespace (or nothing emitted yet): a stripped tag
-        # often leaves its separating space in the next chunk, so lstrip the next
-        # emission rather than surface a doubled/leading space
-        self._tail_ws = True
+        # last character emitted ("" until the first emission), so a tag opening a chunk
+        # keeps the space separating it from the previous one instead of gluing words
+        self._last_char = ""
 
     def _has_open_tag(self) -> bool:
         # hold a trailing "<" that could still be a known tag (so "3 < 5" or "i<n then"
@@ -1013,30 +1028,37 @@ class TranscriptMarkupStripper:
         return _open_tag_fragment(self._buf)
 
     def _emit(self, clean: str) -> str:
-        if self._tail_ws:
-            clean = clean.lstrip()
+        # a stripped tag leaves its separator at the head of the next chunk. Spaces/tabs
+        # only: newlines and indentation are transcript content, not leftover separators
+        if not self._last_char or self._last_char in " \t":
+            clean = clean.lstrip(" \t")
         if clean:
-            self._tail_ws = clean[-1].isspace()
+            self._last_char = clean[-1]
         return clean
+
+    def _consume(self, upto: int | None = None) -> str:
+        head = self._buf if upto is None else self._buf[:upto]
+        self._buf = "" if upto is None else self._buf[upto:]
+        if not head:
+            return ""
+        clean, tags = split_all_markup(head, prev_char=self._last_char)
+        self._tags.extend(tags)
+        return self._emit(clean)
 
     def push(self, text: str) -> str:
         """Feed a chunk; return the clean text ready to emit (may be empty)."""
         self._buf += text
         if self._has_open_tag():
-            return ""
-        clean, tags = split_all_markup(self._buf)
-        self._buf = ""
-        self._tags.extend(tags)
-        return self._emit(clean)
+            # hold only the partial tag: the text in front of it was spoken earlier, so it
+            # belongs to the current wire segment and must not stall until the tag closes
+            return self._consume(self._buf.rfind("<"))
+        return self._consume()
 
     def flush(self) -> str:
         """Drain any buffered text at segment end; return the remaining clean text."""
         if not self._buf:
             return ""
-        clean, tags = split_all_markup(self._buf)
-        self._buf = ""
-        self._tags.extend(tags)
-        return self._emit(clean)
+        return self._consume()
 
     @property
     def tags(self) -> list[ExpressiveTag]:

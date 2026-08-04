@@ -279,7 +279,7 @@ class _ParticipantLegacyTranscriptionOutput:
         # Stripping the whole accumulation each time avoids partial-tag edge cases; the
         # expression is dropped here — the deprecated rtc Transcription API has no
         # attribute channel (the stream-based output carries lk.expression instead).
-        clean_text = strip_all_markup(self._pushed_text)
+        clean_text = strip_all_markup(self._pushed_text, drop_open_tail=True)
         await self._publish_transcription(self._current_id, clean_text, final=False)
 
     @utils.log_exceptions(logger=logger)
@@ -481,17 +481,28 @@ class _ParticipantStreamTranscriptionOutput:
     async def _rotate_writer(self, pending: list[ExpressiveTag]) -> None:
         """Finalize the current wire segment and open a new one led by the pending expression."""
         assert self._writer is not None
+        old_writer = self._writer
+
+        # open the replacement first: closing first would strand self._writer on a closed
+        # writer if stream_text fails, silently dropping the rest of the turn
+        prev_id = self._current_id
+        self._current_id = utils.shortuuid("SG_")
+        try:
+            new_writer = await self._create_text_writer(
+                extra_attributes=expression_attribute(pending)
+            )
+        except BaseException:
+            self._current_id = prev_id
+            raise
+
+        self._writer = new_writer
+        self._writer_expression_sent = True
+        self._writer_has_text = False
+
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
-        await self._writer.aclose(attributes=attributes)
-
-        self._current_id = utils.shortuuid("SG_")
-        self._writer = await self._create_text_writer(
-            extra_attributes=expression_attribute(pending)
-        )
-        self._writer_expression_sent = True
-        self._writer_has_text = False
+        await old_writer.aclose(attributes=attributes)
 
     async def _capture_delta(self, piece: str, timing_src: str) -> None:
         clean_text = self._stripper.push(piece)
@@ -548,10 +559,14 @@ class _ParticipantStreamTranscriptionOutput:
                     await self._capture_delta(piece, text)
             else:  # always create a new writer
                 clean_text, self._segment_tags = split_all_markup(text)
-                if not clean_text or not self._room.isconnected():
+                if not clean_text:
                     return
+                # record before the connection check: flush() republishes _latest_text, so
+                # skipping it while disconnected would finalize an earlier chunk's text
                 payload = self._encode(clean_text, text)
                 self._latest_text = payload
+                if not self._room.isconnected():
+                    return
                 tmp_writer = await self._create_text_writer(
                     extra_attributes=expression_attribute(self._segment_tags)
                 )
@@ -587,9 +602,7 @@ class _ParticipantStreamTranscriptionOutput:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
     def flush(self) -> None:
-        # only emit on a segment that captured text (keeps lk.transcription cadence intact).
-        # The closing header carries the expression only as a fallback when the stream
-        # never got one — e.g. the tag only completed in the flush remainder.
+        # only emit on a segment that captured text (keeps lk.transcription cadence intact)
         if self._participant_identity is None or not self._capturing:
             return
 
@@ -600,8 +613,9 @@ class _ParticipantStreamTranscriptionOutput:
         extra_attributes: dict[str, str] | None = None
         if self._is_delta_stream:
             remaining = self._stripper.flush()
-            if not self._writer_expression_sent:
-                extra_attributes = expression_attribute(self._pending_expressions())
+            # lk.expression rides the opening header only (see
+            # ATTRIBUTE_TRANSCRIPTION_EXPRESSION); one completing in the flush remainder
+            # has no text left to apply to
         else:
             remaining = ""
             extra_attributes = expression_attribute(self._segment_tags)

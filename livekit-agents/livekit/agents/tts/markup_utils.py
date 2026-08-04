@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 _EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
 _SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
@@ -16,19 +17,55 @@ def convert_expression_tags(text: str) -> str:
 _VALUE_ATTR_RE = re.compile(r'\b[\w-]+\s*=\s*"([^"]*)"')
 
 
-def vanish_trail(m: re.Match[str], trail: str) -> str:
+def scan_and_replace(
+    pattern: re.Pattern[str],
+    text: str,
+    replace: Callable[[re.Match[str], str], str],
+    *,
+    prev_char: str = "",
+) -> str:
+    """``pattern.sub`` that also tells ``replace`` what character precedes each match.
+
+    The character is the last of the *output* so far, so back-to-back tags all see the
+    one before the first of them. ``prev_char`` seeds it for text continuing an earlier
+    chunk (``""`` means start of stream).
+    """
+    out: list[str] = []
+    last = prev_char
+    pos = 0
+    for m in pattern.finditer(text):
+        gap = text[pos : m.start()]
+        if gap:
+            out.append(gap)
+            last = gap[-1]
+        rep = replace(m, last)
+        if rep:
+            out.append(rep)
+            last = rep[-1]
+        pos = m.end()
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def vanish_trail(before: str, trail: str) -> str:
     """Trailing spaces of a fully removed tag.
 
-    A tag with nothing visible before it on the line takes its trailing spaces with
-    it (``"a <t/> b"`` -> ``"a b"``, ``"<t/> b"`` -> ``"b"``); one glued to the
-    preceding word keeps them as the word separator (``"a.<t/> b"`` -> ``"a. b"``).
+    A tag with nothing visible before it takes its trailing spaces with it
+    (``"a <t/> b"`` -> ``"a b"``, ``"<t/> b"`` -> ``"b"``); one glued to the preceding
+    word keeps them as the word separator (``"a.<t/> b"`` -> ``"a. b"``).
+
+    ``before`` is the preceding character in the *output* (see :func:`scan_and_replace`),
+    so stacked markers collapse to one separator and a tag opening a chunk still sees the
+    previous chunk.
     """
-    if m.start() == 0 or m.string[m.start() - 1].isspace():
+    if not before or before.isspace():
         return ""
     return trail
 
 
-def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tuple[str, str]]]:
+def extract_and_strip(
+    text: str, *, xml_tags: list[str], prev_char: str = ""
+) -> tuple[str, list[tuple[str, str]]]:
     """Strip XML markup tags and collect the stripped tags in a single pass.
 
     One regex scan both removes the markup and records each removed tag, so
@@ -46,14 +83,15 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
       ``"A7X9"``), else its first quoted attribute value
       (``<emotion value="happy"/>`` -> ``"happy"``), falling back to ``""``.
 
-    Wrapping tags keep their inner content in ``clean_text`` (only the delimiters
-    are removed); self-closing and lone tags are removed entirely, along with their
-    trailing spaces where those were only separating the tag from its neighbours
-    (see :func:`vanish_trail`).
+    Wrapping tags keep their inner content in ``clean_text`` (only the delimiters are
+    removed); self-closing and lone tags are removed entirely, along with any trailing
+    spaces that were only separating them (see :func:`vanish_trail`).
 
     Args:
         text: The text containing markup.
         xml_tags: XML tag names to handle (e.g. ``["emotion", "sound"]``).
+        prev_char: Character preceding ``text`` in the stream (``""`` = start of
+            stream), so a tag opening a chunk keeps its separator from the previous one.
     """
     if not xml_tags:
         return text, []
@@ -71,7 +109,7 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     )
     tags: list[tuple[str, str]] = []
 
-    def _repl(m: re.Match[str]) -> str:
+    def _repl(m: re.Match[str], before: str) -> str:
         groups = m.groupdict()
         trail = groups.get("trail") or ""
         tag = groups.get("tag")
@@ -84,9 +122,9 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
                 value = attr_match.group(1) if attr_match else ""
             tags.append((tag, value))
             # wrapping tags keep their inner content; self-closing/lone tags vanish
-            return inner + trail if inner is not None else vanish_trail(m, trail)
+            return inner + trail if inner is not None else vanish_trail(before, trail)
 
-        return vanish_trail(m, trail)  # lone closing tag
+        return vanish_trail(before, trail)  # lone closing tag
 
     # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
     # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
@@ -96,5 +134,5 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     prev = None
     while clean != prev:
         prev = clean
-        clean = pattern.sub(_repl, clean)
+        clean = scan_and_replace(pattern, clean, _repl, prev_char=prev_char)
     return clean, tags
