@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
     TranscriptMarkupStripper,
     convert_markup,
@@ -18,7 +19,7 @@ from livekit.agents.tts._provider_format import (
     llm_instructions,
     normalize_markup,
     split_all_markup,
-    split_markup,
+    strip_expr_markup,
 )
 
 pytestmark = pytest.mark.unit
@@ -148,13 +149,12 @@ def test_convert_stray_expr_never_reaches_tts() -> None:
 
 
 # ---------------------------------------------------------------------------
-# transcript stripping (per-provider + provider-agnostic)
+# transcript stripping (provider-agnostic: the sinks strip without knowing the TTS)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", ["xai", "inworld", "cartesia"])
-def test_split_markup_strips_expr(provider: str) -> None:
-    clean, tags = split_markup(provider, JOKE)
+def test_split_all_markup_strips_expr() -> None:
+    clean, tags = split_all_markup(JOKE)
     assert clean.strip() == "Why did the burger go to the gym? Because it wanted better buns!"
     assert tags == [
         {"type": "expression", "value": "say playfully"},
@@ -163,12 +163,12 @@ def test_split_markup_strips_expr(provider: str) -> None:
     ]
 
 
-def test_split_markup_wrapping_keeps_inner_text() -> None:
+def test_split_all_markup_wrapping_keeps_inner_text() -> None:
     text = (
         'She said <expr type="prosody" label="whisper">keep it secret</expr> — '
         'code <expr type="spell">A7X9</expr>.'
     )
-    clean, tags = split_markup("xai", text)
+    clean, tags = split_all_markup(text)
     assert clean == "She said keep it secret — code A7X9."
     assert tags == [
         {"type": "prosody", "value": "whisper"},
@@ -177,19 +177,27 @@ def test_split_markup_wrapping_keeps_inner_text() -> None:
 
 
 def test_split_all_markup_mixed_expr_and_native() -> None:
-    text = '<expr type="expression" label="say playfully"/> Hello! <sound value="laugh"/> [sigh]'
+    text = '<expr type="expression" label="say playfully"/> Hello! <sound value="laugh"/>'
     clean, tags = split_all_markup(text)
     assert clean.strip() == "Hello!"
     assert {"type": "expression", "value": "say playfully"} in tags
     assert {"type": "sound", "value": "laugh"} in tags
-    assert {"type": "", "value": "sigh"} in tags
+
+
+def test_split_all_markup_keeps_square_brackets() -> None:
+    # bracket spans are a TTS-only native form (convert_markup emits them on the audio
+    # path), so the transcript strip must leave markdown links and prose brackets intact
+    text = 'Press [Enter], then read [the docs](https://docs.livekit.io). <sound value="sigh"/>'
+    clean, tags = split_all_markup(text)
+    assert clean == "Press [Enter], then read [the docs](https://docs.livekit.io). "
+    assert tags == [{"type": "sound", "value": "sigh"}]
 
 
 def test_expr_regex_does_not_match_native_expression_tag() -> None:
     # "<expr" is a prefix of "<expression" — the word boundary in the expr regexes
     # must keep the native Inworld tag on the generic strip path with its own type
     text = '<expression value="speak calmly"/> Hi <expr type="break" label="1s"/> there.'
-    clean, tags = split_markup("inworld", text)
+    clean, tags = split_all_markup(text)
     assert clean == "Hi there."
     assert {"type": "expression", "value": "speak calmly"} in tags
     assert {"type": "break", "value": "1s"} in tags
@@ -232,7 +240,7 @@ def test_transcript_stripper_no_leftover_spaces() -> None:
 
 
 def test_expression_attribute_from_expr() -> None:
-    _, tags = split_markup("inworld", JOKE)
+    _, tags = split_all_markup(JOKE)
     attr = expression_attribute(tags)
     assert attr is not None
     assert '"say playfully"' in next(iter(attr.values()))
@@ -310,3 +318,65 @@ def test_llm_instructions_xai_kinds() -> None:
 def test_llm_instructions_none_for_unknown_provider() -> None:
     assert llm_instructions("") is None
     assert llm_instructions("openai") is None
+
+
+# ---------------------------------------------------------------------------
+# strip_expr_markup + ChatMessage.text_content / raw_text_content
+# ---------------------------------------------------------------------------
+
+# assistant text mixing expr markers with content that must survive an expr-only strip:
+# provider-native tags, bracket spans, markdown links, and stray angle brackets
+MIXED = (
+    '<expr type="expression" label="happy"/> Press [Enter] to see <b>bold</b>, '
+    'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
+    '<expr type="prosody" label="whisper">keep it secret</expr>'
+)
+MIXED_CLEAN = (
+    # the leading marker takes its trailing space with it (vanish_trail)
+    "Press [Enter] to see <b>bold</b>, "
+    'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
+    "keep it secret"
+)
+
+
+def test_strip_expr_markup_only_touches_expr() -> None:
+    assert strip_expr_markup(MIXED) == MIXED_CLEAN
+
+
+def test_strip_expr_markup_noop_without_expr() -> None:
+    text = 'plain text with [brackets] and <sound value="laugh"/>'
+    assert strip_expr_markup(text) == text
+
+
+def test_assistant_text_content_strips_expr_only() -> None:
+    msg = ChatMessage(role="assistant", content=[MIXED])
+    assert msg.text_content == MIXED_CLEAN
+    assert msg.raw_text_content == MIXED
+
+
+@pytest.mark.parametrize("role", ["user", "system", "developer"])
+def test_non_assistant_text_content_stays_raw(role: str) -> None:
+    # only assistant messages carry expressive markup; other roles are never stripped
+    msg = ChatMessage(role=role, content=[JOKE])
+    assert msg.text_content == JOKE
+    assert msg.raw_text_content == JOKE
+
+
+def test_text_content_none_without_text() -> None:
+    msg = ChatMessage(role="assistant", content=[])
+    assert msg.text_content is None
+    assert msg.raw_text_content is None
+
+
+def test_to_dict_strip_markup_is_expr_only_and_assistant_only() -> None:
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=[MIXED])
+    chat_ctx.add_message(role="assistant", content=[MIXED])
+
+    items = chat_ctx.to_dict(strip_markup=True)["items"]
+    assert items[0]["content"] == [MIXED]  # user content untouched
+    assert items[1]["content"] == [MIXED_CLEAN]  # assistant loses only expr tags
+
+    # default keeps the raw content for persistence
+    items = chat_ctx.to_dict()["items"]
+    assert items[1]["content"] == [MIXED]

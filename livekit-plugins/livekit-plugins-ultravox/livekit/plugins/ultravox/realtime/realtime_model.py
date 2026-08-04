@@ -224,7 +224,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._http_session = utils.http_context.http_session()
         return self._http_session
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Create a new Ultravox real-time session.
 
         Returns
@@ -232,6 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
         RealtimeSession
             An instance of the Ultravox real-time session.
         """
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(realtime_model=self)
         self._sessions.add(sess)
         return sess
@@ -375,19 +376,19 @@ class RealtimeSession(
                 continue
 
             if item.type == "message" and item.role in ("system", "developer"):
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
                         UserTextMessageEvent(
-                            text=f"<instruction>{item.text_content}</instruction>",
+                            text=f"<instruction>{item.raw_text_content}</instruction>",
                             defer_response=True,
                         )
                     )
 
             elif item.type == "message" and item.role == "user":
                 # Inject user message as context; do not trigger an immediate response
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
-                        UserTextMessageEvent(text=item.text_content, defer_response=True)
+                        UserTextMessageEvent(text=item.raw_text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId

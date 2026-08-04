@@ -86,9 +86,12 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             conn_options=conn_options,
         )
         self._capabilities.per_response_tool_choice = False
+        # client turn-taking is not stable during testing, mark it as unsupported for now
+        self._capabilities.can_disable_turn_detection = False
         self._provider_label = "xAI Realtime API"
 
-    def session(self) -> "RealtimeSession":
+    def session(self, *, turn_detection_disabled: bool = False) -> "RealtimeSession":
+        # manual turn-taking is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -223,7 +226,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         if remote_item := self._remote_chat_ctx.get(event.item_id):
             if (
                 remote_item.item.type == "message"
-                and remote_item.item.text_content == event.transcript
+                and remote_item.item.raw_text_content == event.transcript
             ):
                 remote_item.item.content.clear()
         super()._handle_conversion_item_input_audio_transcription_completed(event)

@@ -38,7 +38,7 @@ from livekit.agents.voice.avatar import (
     VideoGenerator,
 )
 
-from .log import logger
+from .log import logger, print_unsupported_python
 
 if TYPE_CHECKING:
     from bithuman import AsyncBithuman
@@ -249,7 +249,11 @@ class AvatarSession(BaseAvatarSession):
             raise BitHumanException(f"Invalid mode: {self._mode}")
 
     async def _start_local(self, agent_session: AgentSession, room: rtc.Room) -> None:
-        from bithuman import AsyncBithuman
+        try:
+            from bithuman import AsyncBithuman
+        except ImportError:
+            print_unsupported_python()
+            raise
 
         if self._runtime:
             runtime = self._runtime

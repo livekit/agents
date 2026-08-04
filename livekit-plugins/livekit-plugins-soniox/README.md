@@ -46,6 +46,7 @@ session = AgentSession(
     tts=soniox.TTS(
         language="en",
         voice="Maya",
+        speed=1.0,  # 0.7-1.3
     ),
     # ... stt, llm, etc.
 )

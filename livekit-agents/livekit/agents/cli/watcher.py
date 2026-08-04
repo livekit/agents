@@ -30,12 +30,12 @@ class WatchClient:
     def __init__(
         self,
         worker: AgentServer,
-        reload_addr: str,
+        cli_addr: str,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._worker = worker
-        self._reload_addr = reload_addr
+        self._cli_addr = cli_addr
         self._main_task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -43,7 +43,7 @@ class WatchClient:
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        host, port_str = self._reload_addr.rsplit(":", 1)
+        host, port_str = self._cli_addr.rsplit(":", 1)
         reader, writer = await asyncio.open_connection(host, int(port_str))
 
         try:

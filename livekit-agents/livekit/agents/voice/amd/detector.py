@@ -72,6 +72,7 @@ class DetectionOptions(TypedDict, total=False):
     machine_silence_threshold: float
     no_speech_threshold: float
     timeout: float
+    max_endpointing_delay: float
     prompt: str
 
 
@@ -81,6 +82,7 @@ _DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
     "machine_silence_threshold": MACHINE_SILENCE_THRESHOLD,
     "no_speech_threshold": NO_SPEECH_THRESHOLD,
     "timeout": TIMEOUT,
+    "max_endpointing_delay": MAX_ENDPOINTING_DELAY,
     "prompt": AMD_PROMPT,
 }
 
@@ -143,15 +145,20 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             strings. Has no effect on classification behavior.
         detection_options: Optional overrides for timing thresholds and the AMD
             classification prompt (see :class:`DetectionOptions`). When
-            omitted, library defaults apply.
+            omitted, library defaults apply. ``max_endpointing_delay`` can be
+            set here to override the session activity's endpointing backstop
+            for AMD.
         wait_until_finished: If ``True``, once any speech has been heard the
             ``detection_timeout`` no longer forces emission — AMD will keep
-            waiting for the post-speech silence and a positive end-of-turn
-            from the session's turn detector before emitting. Useful for
-            outbound voicemail flows where leaving a message early would
-            overlap the greeting. ``no_speech_timeout`` (uncertain) still fires
-            normally (no audio at all means there is nothing to wait for).
-            Defaults to ``False``.
+            waiting for post-speech silence and either a session end-of-turn
+            signal or the session's max endpointing delay before emitting.
+            Useful for outbound voicemail flows where leaving a message early
+            would overlap the greeting. ``no_speech_timeout`` (uncertain)
+            still fires normally (no audio at all means there is nothing to
+            wait for). Continuous audio without a speech-end or end-of-turn can
+            therefore extend detection beyond ``timeout``; set this to
+            ``False`` when ``timeout`` should remain a hard cap after speech
+            starts. Defaults to ``True``.
     """
 
     _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
@@ -168,7 +175,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
-        wait_until_finished: bool = False,
+        wait_until_finished: bool = True,
     ) -> None:
         super().__init__()
 
@@ -199,11 +206,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._closed = False
         self._span: trace.Span | None = None
 
-        self._opts: DetectionOptions = (
-            {**_DEFAULT_DETECTION_OPTIONS, **detection_options}
-            if is_given(detection_options)
-            else _DEFAULT_DETECTION_OPTIONS
+        self._provided_detection_options: DetectionOptions = (
+            detection_options if is_given(detection_options) else {}
         )
+        self._opts: DetectionOptions = {
+            **_DEFAULT_DETECTION_OPTIONS,
+            **self._provided_detection_options,
+        }
 
         if not self._suppress_compatibility_warning:
             if is_given(self._stt):
@@ -395,6 +404,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 self._classifier.start_detection_timer()
                 self._classifier.start_listening()
         else:
+            # Start the outer budget before waiting for a publication, so AMD
+            # can settle even if the participant never publishes audio.
+            if self._classifier:
+                self._classifier.start_detection_timer()
             room = session._room_io.room
             publication = await wait_for_track_publication(
                 room=room,
@@ -404,8 +417,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             )
             if self._closed or not self._classifier:
                 return
-            # outer budget runs from track-up so AMD bails out even if the
-            # call never reaches the active state
+            # Reset the budget at track-up so normal AMD timing runs from the
+            # subscribed publication, matching the active audio source.
             self._classifier.start_detection_timer()
 
             if self._participant_identity:
@@ -576,9 +589,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
         if _llm:
             max_endpointing_delay = (
-                session._activity.max_endpointing_delay
-                if session._activity
-                else MAX_ENDPOINTING_DELAY
+                self._provided_detection_options["max_endpointing_delay"]
+                if "max_endpointing_delay" in self._provided_detection_options
+                else (
+                    session._activity.max_endpointing_delay
+                    if session._activity
+                    else self._opts["max_endpointing_delay"]
+                )
             )
             return _AMDClassifier(
                 _llm,
