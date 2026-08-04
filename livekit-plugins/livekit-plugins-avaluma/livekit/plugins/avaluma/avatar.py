@@ -44,6 +44,17 @@ class AvatarSession(BaseAvatarSession):
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         avatar_server_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """
+        Args:
+            license_key: Avaluma license key. Falls back to the
+                ``AVALUMA_LICENSE_KEY`` environment variable.
+            avatar_id: the avatar to run. Falls back to the
+                ``AVALUMA_AVATAR_ID`` environment variable. It also determines the
+                identity the avatar joins the room under (``avatar-<avatar_id>``).
+            avatar_server_url: base URL of the avatar server. Falls back to the
+                ``AVALUMA_AVATAR_SERVER_URL`` environment variable and defaults to
+                Avaluma's hosted service; only set it when self-hosting.
+        """
         super().__init__()
 
         resolved_license_key = license_key or os.getenv("AVALUMA_LICENSE_KEY")
@@ -101,6 +112,29 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        """Start the avatar worker and route the session's audio to it.
+
+        Asks the avatar server to join ``room``, then replaces the tail of the
+        session's audio output so speech is streamed to the avatar instead of
+        published directly. The avatar publishes audio and video on behalf of
+        the local agent participant. Agent and user state changes are forwarded
+        to the avatar over RPC.
+
+        Args:
+            agent_session: the session whose audio output is routed to the avatar.
+            room: the room the avatar joins.
+            livekit_url: LiveKit server URL. Falls back to ``LIVEKIT_URL``.
+            livekit_api_key: LiveKit API key. Falls back to ``LIVEKIT_API_KEY``.
+            livekit_api_secret: LiveKit API secret. Falls back to
+                ``LIVEKIT_API_SECRET``.
+
+        Raises:
+            AvalumaException: if the LiveKit credentials are missing or the local
+                participant identity cannot be determined.
+            APIConnectionError: if the avatar server cannot be reached.
+            APIStatusError: if the avatar server rejects the request with a
+                non-retryable error, such as invalid credentials.
+        """
         await super().start(agent_session, room)
 
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
