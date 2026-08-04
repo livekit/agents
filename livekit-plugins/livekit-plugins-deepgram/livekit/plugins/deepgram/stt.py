@@ -872,6 +872,17 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
+def _word_text(word: dict) -> str:
+    """Prefer Deepgram's punctuated form so words match SpeechData.text.
+
+    Deepgram returns both `word` (lowercase, unpunctuated) and, when `punctuate` is
+    enabled, `punctuated_word`. `SpeechData.text` comes from `alt["transcript"]`, which is
+    punctuated, so using `word` left the word list disagreeing with the text it belongs to.
+    Falls back to `word` when punctuation is disabled or the key is absent.
+    """
+    return word.get("punctuated_word") or word.get("word", "")
+
+
 def live_transcription_to_speech_data(
     language: str, data: dict, *, is_final: bool, start_time_offset: float
 ) -> list[stt.SpeechData]:
@@ -895,7 +906,7 @@ def live_transcription_to_speech_data(
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
-                    text=word.get("word", ""),
+                    text=_word_text(word),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
                     start_time_offset=start_time_offset,
@@ -936,7 +947,7 @@ def prerecorded_transcription_to_speech_event(
                 text=alt["transcript"],
                 words=[
                     TimedString(
-                        text=word.get("word", ""),
+                        text=_word_text(word),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
                     )
