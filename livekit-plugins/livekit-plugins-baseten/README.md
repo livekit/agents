@@ -150,6 +150,74 @@ tts = baseten.TTS(
 )
 ```
 
+## Qwen3 (STT + TTS)
+
+Baseten also hosts **Qwen3-ASR** and **Qwen3-TTS**, which speak different wire
+protocols from the Whisper/Orpheus trusses above. They have their own classes —
+`baseten.Qwen3STT` and `baseten.Qwen3TTS` — and are not drop-in swaps for
+`baseten.STT` / `baseten.TTS`.
+
+| | `STT` / `TTS` | `Qwen3STT` / `Qwen3TTS` |
+|---|---|---|
+| Models | Whisper Streaming, Orpheus | Qwen3-ASR Streaming, Qwen3-TTS |
+| STT audio | raw binary PCM | base64 `input_audio_buffer.append` |
+| STT results | `message_type` / `transcript` | `type: "transcription"` / `segments[].text` |
+| TTS transport | HTTP or WS with an `__END__` sentinel | `session.config` / `input.text` / `input.done` |
+| TTS voices | preset names (`tara`) | registered voice clones |
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import baseten
+
+session = AgentSession(
+    stt=baseten.Qwen3STT(model_id="your-qwen3-asr-model-id"),
+    tts=baseten.Qwen3TTS(model_id="your-qwen3-tts-model-id", voice="your-voice"),
+    # llm=...
+)
+```
+
+Both accept `model_endpoint`, `model_id`, or `chain_id` (same precedence as
+`STT`) and read `BASETEN_API_KEY` from the environment.
+
+### Qwen3 TTS voices
+
+Qwen3-TTS Base ships **no built-in speakers** — there is no `tara` equivalent.
+Register a clone from 10–20s of clean speech, then pass its name as `voice`:
+
+```python
+from livekit.plugins.baseten import register_voice, list_voices
+
+await register_voice(
+    model_endpoint="wss://model-{model_id}.api.baseten.co/environments/production/websocket",
+    name="my_voice",
+    ref_audio_path="./reference.wav",
+    ref_text="Transcript of the reference audio.",
+)
+await list_voices(model_endpoint=...)  # {"voices": [...], "uploaded_voices": [...]}
+```
+
+The server stores uploaded voices on the container's local disk, so a voice
+registered at runtime lives on **one replica** and is lost when that container
+restarts. For anything beyond single-replica testing, bake the reference audio
+into the deployment (`REQUIRED_VOICES`) so every replica starts with it, or pass
+`ref_audio`/`ref_text` to `Qwen3TTS` to clone inline on each session.
+
+### Qwen3 configuration
+
+| Parameter | Default | Description |
+|---|---|---|
+| `Qwen3STT.language` | `"auto"` | Qwen3-ASR canonical name (`"English"`, `"Cantonese"`). Forcing a language also sets the *output* language and can translate. |
+| `Qwen3STT.interim_results` | `True` | Emit revisable partials during a turn |
+| `Qwen3STT.partial_transcript_interval_s` | `0.5` | Cadence of partials |
+| `Qwen3STT.vad_*` | `0.5` / `500` / `100` | Server-side Silero VAD endpointing |
+| `Qwen3STT.word_timestamps` | `False` | Needs `STREAM_ALIGNER=mms` on the deployment |
+| `Qwen3TTS.voice` | required | Name of a registered voice clone |
+| `Qwen3TTS.task_type` | `"Base"` | `Base` (cloning), or `CustomVoice`/`VoiceDesign` deployments |
+| `Qwen3TTS.ref_audio` / `ref_text` | — | Clone inline instead of pre-registering |
+| `Qwen3TTS.word_timestamps` | `False` | Word-level aligned transcript |
+| `Qwen3TTS.extra_config` | `{}` | Merged into `session.config` for newer server fields |
+
+
 ## LLM (Large Language Model)
 
 The LLM plugin wraps Baseten's OpenAI-compatible inference endpoint.
