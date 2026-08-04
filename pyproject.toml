@@ -15,6 +15,7 @@ livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-bland = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
@@ -77,7 +78,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents"]
+members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive-thru", "examples/frontdesk", "examples/healthcare", "examples/homepage", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",

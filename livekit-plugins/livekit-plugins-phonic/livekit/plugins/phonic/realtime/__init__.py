@@ -1,3 +1,19 @@
-from .realtime_model import PhonicToolConfig, RealtimeModel, RealtimeSession
+from .realtime_model import (
+    ConfigurationEndpoint,
+    IntelligenceLevel,
+    ObservabilityIntegration,
+    PhonicToolConfig,
+    PronunciationEntry,
+    RealtimeModel,
+    RealtimeSession,
+)
 
-__all__ = ["PhonicToolConfig", "RealtimeModel", "RealtimeSession"]
+__all__ = [
+    "ConfigurationEndpoint",
+    "IntelligenceLevel",
+    "ObservabilityIntegration",
+    "PhonicToolConfig",
+    "PronunciationEntry",
+    "RealtimeModel",
+    "RealtimeSession",
+]
