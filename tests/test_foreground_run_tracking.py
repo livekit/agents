@@ -80,6 +80,18 @@ class Surveyor(Agent):
         async with ctx.foreground():
             await AskNameTask()
 
+    @function_tool
+    async def ask_over_speech(self, ctx: RunContext) -> None:
+        """Called when the user wants the survey read out first."""
+        async with ctx.foreground():
+            await self.session.generate_reply(instructions="ask_via_tool")
+
+    @function_tool
+    async def collect_name(self, ctx: RunContext) -> str:
+        """Called when the name is needed."""
+        await AskNameTask()
+        return "collected"
+
 
 def _router_llm() -> FakeLLM:
     return FakeLLM(
@@ -225,3 +237,40 @@ async def test_agent_task_inside_foreground_does_not_deadlock() -> None:
 
         second_result = await asyncio.wait_for(sess.run(user_input="Bob"), timeout=5.0)
         second_result.expect.contains_function_call(name="record_name")
+
+
+async def test_agent_task_under_a_foregrounded_reply_does_not_deadlock() -> None:
+    """The same circular wait one level deeper: the foreground scope holds a
+    ``generate_reply``, and a tool of that reply awaits the task.
+
+    Only the deadlock is asserted. Whether the task survives to the next turn is a
+    separate question, and it behaves the same way with or without the guard.
+    """
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="ready",
+                content="",
+                ttft=0.1,
+                duration=0.1,
+                tool_calls=[
+                    FunctionToolCall(name="ask_over_speech", arguments="{}", call_id="call_1")
+                ],
+            ),
+            FakeLLMResponse(
+                input="ask_via_tool",
+                content="",
+                ttft=0.1,
+                duration=0.1,
+                tool_calls=[
+                    FunctionToolCall(name="collect_name", arguments="{}", call_id="call_2")
+                ],
+            ),
+            FakeLLMResponse(input="ask_name", content="what is your name?", ttft=0.1, duration=0.1),
+            FakeLLMResponse(input="collected", content="all done", ttft=0.1, duration=0.1),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(Surveyor())
+
+        await asyncio.wait_for(sess.run(user_input="ready"), timeout=5.0)
