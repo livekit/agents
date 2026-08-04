@@ -4,9 +4,8 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.voice import presets
 from livekit.agents.voice.generation import (
     EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
     _strip_assistant_markup,
@@ -21,7 +20,13 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 SESSION_TIMEOUT = 60
 
 
-MARKED_UP = '<expression value="happy"/> Welcome back! [chuckling] Glad you called again.'
+# what an expressive turn actually leaves in history: the expr markers the LLM emitted,
+# plus (defensively) a hallucinated native tag. Square brackets are *not* markup here —
+# they reach history as prose or markdown links, so the scrub must leave them alone.
+MARKED_UP = (
+    '<expr type="expression" label="happy"/> Welcome back! <sound value="chuckle"/> '
+    "Glad you called again. Docs: [the guide](https://docs.livekit.io)."
+)
 
 
 def test_strip_assistant_markup() -> None:
@@ -38,10 +43,12 @@ def test_strip_assistant_markup() -> None:
         for item in ctx.items
         if item.type == "message" and item.role == "assistant"
     ]
-    assert "<expression" not in (assistant_texts[0] or "")
-    assert "[chuckling]" not in (assistant_texts[0] or "")
+    assert "<expr" not in (assistant_texts[0] or "")
+    assert "<sound" not in (assistant_texts[0] or "")
     assert "Welcome back!" in (assistant_texts[0] or "")
     assert "Glad you called again." in (assistant_texts[0] or "")
+    # markdown links survive: brackets are prose, not markup
+    assert "[the guide](https://docs.livekit.io)" in (assistant_texts[0] or "")
 
     # user content is never touched, tag-shaped or not
     user_text = next(
@@ -51,26 +58,6 @@ def test_strip_assistant_markup() -> None:
 
     # tag-free assistant content is left as-is (fast path)
     assert plain.content is plain_content
-
-
-def test_update_options_expressive() -> None:
-    session = AgentSession()
-    assert session._expressive is False
-
-    session.update_options(expressive={"speech_steering": presets.FORMAL})
-    assert session._expressive == {"speech_steering": presets.FORMAL}
-
-    # turn off
-    session.update_options(expressive=False)
-    assert session._expressive is False
-
-    # turn back on with a different preset
-    session.update_options(expressive={"speech_steering": presets.CASUAL})
-    assert session._expressive == {"speech_steering": presets.CASUAL}
-
-    # untouched when not given
-    session.update_options()
-    assert session._expressive == {"speech_steering": presets.CASUAL}
 
 
 def test_update_and_remove_expressive_instructions() -> None:
@@ -97,7 +84,7 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
     session = create_session(actions)
-    session._expressive = {"speech_steering": presets.FORMAL}
+    session._expressive = {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide
@@ -118,9 +105,10 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     ]
     assert assistant_texts, "expected assistant messages in history"
     for text in assistant_texts:
-        assert "<expression" not in (text or "")
-        assert "[chuckling]" not in (text or "")
-    # the seeded message's visible text survives the scrub
+        assert "<expr" not in (text or "")
+        assert "<sound" not in (text or "")
+    # the seeded message's visible text survives the scrub, links included
     assert any("Welcome back!" in (t or "") for t in assistant_texts)
+    assert any("[the guide](https://docs.livekit.io)" in (t or "") for t in assistant_texts)
     # and the new reply went through normally
     assert any("I'm doing well" in (t or "") for t in assistant_texts)

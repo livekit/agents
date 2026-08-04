@@ -30,6 +30,7 @@ from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
     azure,
+    bland,
     cartesia,
     deepgram,
     elevenlabs,
@@ -156,6 +157,13 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": bland.TTS(),
+            "proxy-upstream": "api.bland.ai:443",
+        },
+        id="bland",
+    ),
+    pytest.param(
+        lambda: {
             "tts": aws.TTS(region="us-west-2"),
             "proxy-upstream": "polly.us-west-2.amazonaws.com:443",
         },
@@ -174,6 +182,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.deepgram.com:443",
         },
         id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
     ),
     pytest.param(
         lambda: {
@@ -488,6 +503,13 @@ STREAM_TTS = [
             "proxy-upstream": "api.deepgram.com:443",
         },
         id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
     ),
     pytest.param(
         lambda: {

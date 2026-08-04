@@ -10,10 +10,10 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, utils
 from livekit.agents.tts import TTS, AvailabilityChangedEvent, FallbackAdapter
 from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
-from livekit.agents.types import USERDATA_TTS_STARTED_TIME
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
 
-from .fake_tts import FakeTTS
+from .fake_tts import FakeSynthesizeStream, FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -327,3 +327,82 @@ async def test_timeout():
     assert await asyncio.wait_for(fake2.stream_ch.recv(), 1.0)
 
     await fallback_adapter.aclose()
+
+
+class _GateTTS(FakeTTS):
+    """FakeTTS whose recovery probe (the second `stream()`) blocks until `gate` is set.
+
+    Blocking on an event rather than a timer keeps the probe pending for exactly as long as the
+    test needs, with nothing racing it to completion.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.gate = asyncio.Event()
+        self._stream_calls = 0
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        self._stream_calls += 1
+        if self._stream_calls == 1:
+            return super().stream(conn_options=conn_options)
+
+        gate = self.gate
+
+        class _Blocking(FakeSynthesizeStream):
+            async def _run(self, output_emitter) -> None:  # type: ignore[no-untyped-def]
+                await gate.wait()
+                await super()._run(output_emitter)
+
+        stream = _Blocking(tts=self, conn_options=conn_options)
+        self._stream_ch.send_nowait(stream)
+        return stream
+
+
+async def test_recovery_is_not_suppressed_across_paths() -> None:
+    """A recovery probe in flight on one path must not stop the other path from probing.
+
+    The two paths each keep their own recovery slot (as the STT adapter does). With a single
+    shared slot, the streamed probe below would sit in it and the chunked request would skip
+    recovery entirely, leaving the provider marked unavailable.
+    """
+    fake1 = _GateTTS(fake_exception=APIConnectionError("fake1 failed"), fake_exception_count=99)
+    fake2 = FakeTTS(fake_audio_duration=1.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2], max_retry_per_tts=0)
+
+    # streamed request: fake1 fails only after tokens were pushed, so the streamed recovery
+    # actually starts, and then parks on the gate.
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    assert await asyncio.wait_for(fake1.stream_ch.recv(), 1.0)  # the failing attempt
+    assert await asyncio.wait_for(fake1.stream_ch.recv(), 1.0)  # the recovery probe, now gated
+
+    # chunked request on the same adapter and provider: it must start its own probe rather than
+    # skip recovery because the streamed probe is still running.
+    async with fallback_adapter.synthesize("hello test") as chunked:
+        async for _ in chunked:
+            pass
+
+    assert await asyncio.wait_for(fake1.synthesize_ch.recv(), 1.0), (
+        "chunked path did not probe fake1 while the streamed probe was in flight"
+    )
+
+    status = fallback_adapter._status[0]
+    stream_task = status.recovering_stream_task
+    assert stream_task is not None and not stream_task.done()
+    assert status.recovering_synthesize_task is not None
+
+    # aclose() must cancel both slots, not just whichever one was written last
+    await fallback_adapter.aclose()
+    assert stream_task.done()
+
+    fake1.gate.set()

@@ -120,7 +120,8 @@ def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
     for item in chat_ctx.items:
         if item.type != "message" or item.role != "assistant":
             continue
-        if not any(isinstance(c, str) and ("<" in c or "[" in c) for c in item.content):
+        # markup is XML-only here: strip_all_markup leaves square-bracket spans alone
+        if not any(isinstance(c, str) and "<" in c for c in item.content):
             continue
         item.content = [strip_all_markup(c) if isinstance(c, str) else c for c in item.content]
 

@@ -8,9 +8,9 @@ its state to the playground in real time.
 ## Running
 
 ```bash
-python -m examples.hotel_receptionist.agent console
+uv run python -m examples.hotel_receptionist.agent console
 # or, with the LiveKit playground:
-python -m examples.hotel_receptionist.agent dev
+uv run python -m examples.hotel_receptionist.agent dev
 ```
 
 Each call starts with a fresh database built from `fake_data/seed.py`; the

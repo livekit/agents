@@ -8,7 +8,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, inference
-from livekit.agents.voice import presets
 
 from .common import Userdata, resolve_today
 from .evaluation import on_session_end, on_simulation_end
@@ -98,7 +97,24 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         ),
         max_tool_steps=5,
     )
-    session.update_options(expressive={"speech_steering": presets.FORMAL} if expressive else False)
+    # Composed, formal delivery (the old presets.FORMAL): breathing and light
+    # fillers stay on, every other non-verbal sound is disabled.
+    session.update_options(
+        expressive={
+            "speech_steering": {
+                "nonverbal_sounds": {
+                    "laughing": False,
+                    "sighing": False,
+                    "crying": False,
+                    "vocalizing": False,
+                    "mouth_sounds": False,
+                    "reflex_sounds": False,
+                },
+            },
+        }
+        if expressive
+        else False
+    )
 
     SuggestedReplies(
         session,

@@ -11,6 +11,7 @@ Provider docs:
 - Inworld: https://docs.inworld.ai/tts/best-practices/prompting-for-tts-2
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
+- Fish Audio: https://docs.fish.audio/developer-guide/core-features/emotions
 """
 
 from __future__ import annotations
@@ -19,17 +20,16 @@ import json
 import re
 from typing import TYPE_CHECKING, TypedDict
 
-from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION
-from .markup_utils import convert_expression_tags, extract_and_strip, vanish_trail
+from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
+from .markup_utils import convert_expression_tags, extract_and_strip
 
 
 class ExpressiveTag(TypedDict):
     """An expressive markup tag stripped from a transcript, surfaced for the frontend.
 
-    ``type`` is the markup tag name (``"emotion"``, ``"expression"``, ``"sound"``, ...),
-    or ``""`` for square-bracket tags which carry no name. ``value`` is the spoken or
-    semantic payload (the ``value="..."`` attribute, the tag's inner text, or the bracket
-    content).
+    ``type`` is the markup tag name (``"emotion"``, ``"expression"``, ``"sound"``, ...) or
+    the expr marker type. ``value`` is the spoken or semantic payload (the ``value="..."``
+    attribute, the expr ``label``, or the tag's inner text).
     """
 
     type: str
@@ -118,6 +118,55 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
     return "[long-pause]" if secs >= 1.0 else "[pause]"
 
 
+# Fish Audio (s2 family) speech markers, from the Fish docs
+# (https://docs.fish.audio/developer-guide/core-features/emotions).
+#
+# The LLM is instructed in the expr dialect (below); expr lowering produces the
+# framework-standard intermediates (<expression value="..."/>, <sound value="..."/>,
+# <break time="..."/>, <emphasis>word</emphasis>) and convert_markup rewrites them to
+# Fish's native square brackets: [very EMOTION], [SOUND], [break]/[long-break], and
+# [emphasis] word (a prefix marker stressing the word that follows). The tag names stay
+# in _FISHAUDIO_TAGS so hallucinated native markup is still stripped from transcripts.
+_FISHAUDIO_EMOTIONS = [
+    "regretful",
+    "hopeful",
+    "happy",
+    "excited",
+    "curious",
+    "surprised",
+    "sad",
+    "empathetic",
+    "sarcastic",
+]
+_FISHAUDIO_SOUNDS = ["laughing", "chuckling", "clear throat"]
+_FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
+
+_FISHAUDIO_EXPRESSION_RE = re.compile(
+    r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)'
+)
+_FISHAUDIO_BREAK_RE = re.compile(r'<break\s+time="([^"]*)"\s*/?>')
+_FISHAUDIO_EMPHASIS_RE = re.compile(r"<emphasis(?:\s[^>]*)?>([^<]*)</emphasis\s*>", re.IGNORECASE)
+
+
+def _fishaudio_expression_to_bracket(match: re.Match[str]) -> str:
+    # intensify with a leading "very" so the emotion lands harder in Fish's audio
+    # ([very regretful] steers more strongly than [regretful]); never doubled
+    value = match.group(1).strip()
+    if value and not value.lower().startswith("very "):
+        value = f"very {value}"
+    return f"[{value}]"
+
+
+def _fishaudio_break_to_bracket(match: re.Match[str]) -> str:
+    # Fish has two pause levels ([break], [long-break]); use the longer past ~1s
+    raw = match.group(1).strip().lower()
+    try:
+        secs = float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+    except ValueError:
+        secs = 0.0
+    return "[long-break]" if secs >= 1.0 else "[break]"
+
+
 # --- LiveKit expression markers (expr) ---
 # The LLM emits a single marker tag,
 # <expr type="..." label="..."/>, instead of provider-native tags. The *syntax* is shared,
@@ -149,12 +198,20 @@ _EXPR_PREAMBLE = """\
 You control speech delivery with a single XML marker tag: <expr/>. Every marker has a \
 type attribute. Use only the marker types listed below, and where a type lists a label \
 vocabulary, only those labels. Use the markers often and diversify them so the voice \
-never sounds flat while ensuring the markers are appropriate for the moment.
+never sounds flat while ensuring the markers are appropriate for the moment. Write the \
+words themselves the way people talk: use contractions ("I'm", "you're", "don't") — \
+spelled-out forms like "I am" or "do not" sound stiff when spoken.
 
 Just as important is knowing when NOT to reach for a marker. Reserve surprise openers \
 like "oh" or "ah" for genuine surprise — an ordinary request isn't one. Don't stack markers \
 on short replies or decorate every sentence. If a reaction wouldn't happen in a real \
-conversation, skip it — there's always another genuine beat to lean into."""
+conversation, skip it — there's always another genuine beat to lean into.
+
+Match your delivery to the REGISTER of the moment, and reassess every turn. When the \
+moment is professional, high-stakes, or emotionally heavy — bad news, an emergency, \
+real distress — keep delivery composed and restrained. When the moment is casual, \
+playful, or celebratory, let it loosen and brighten. A serious turn in an otherwise \
+casual conversation still gets a composed reply."""
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -198,6 +255,8 @@ _INWORLD_EXAMPLES = [
     '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
     '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
     '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
+    '<expr type="expression" label="warm and welcoming"/> Welcome to the hotel. <expr type="expression" label="upbeat, warm questioning"/> How can I help you today?',  # noqa: E501
+    '<expr type="expression" label="easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
 ]
 
 
@@ -217,19 +276,63 @@ def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
    <expr type="expression" label="DESCRIPTION"/>
    The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
 in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
-"drop to a whisper", "speak slowly and clearly, patient and reassuring"."""
+"drop to a whisper", "speak slowly and clearly, patient and reassuring".
+   Match the expression tag's energy to the sentence's punctuation. An exclamation \
+needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
+label flattens the "!". Never lead an exclamatory sentence with a calm tag.
+   Put each question in its own sentence — don't comma-splice it onto a statement. \
+Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
+how can I help you today?", so the question carries its own delivery tag instead of \
+inheriting the statement's.
+   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
+questioning" steers far more reliably than "rising tone".
+   Use at most two adjectives per tag, and make sure they align — with the mood of \
+the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
+and muddy the delivery.
+   Don't open a turn with a "slow" tag. The first expression colors the whole turn, \
+and a slow lead flattens questions and drags the energy down. Keep the pace neutral \
+by default and reserve slow, clearly-enunciated delivery for the specific line that \
+needs it (a total, date, address, or confirmation code).
+   Rotate expression labels — don't reuse the same one two turns in a row, and vary \
+the descriptor. A starting palette:
+     greeting / warm open: "bright, genuine warmth" / "warm and welcoming" / \
+"cheerful, glad you called"
+     asking a question: "upbeat, warm questioning" / "warm and curious" / "bright \
+and inviting" / "gently curious, welcoming"
+     good news / exclamation: "bright, upbeat energy" / "delighted and warm" / \
+"pleased and bright"
+     reassuring / taking a request in stride: "calm and confident" / \
+"easygoing and reassuring" / "warm and grounded"
+     empathy / a problem or bad news: "soft, with genuine care" / \
+"sincere and concerned" / "gentle and steady"
+     reading back a total, date, or code: "slow and clearly enunciated\""""
     ]
     if sounds:
-        sections.append(
-            f"""Sounds - a non-verbal sound between sentences. Self-closing.
+        fits = " (a clear-throat when shifting to a new step or topic, for example)"
+        section = f"""Sounds - a non-verbal sound between sentences. Self-closing.
    <expr type="sound" label="{sounds[0]}"/>
-   Labels are a fixed vocabulary: {", ".join(sounds)}."""
-        )
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits{fits if "clear throat" in sounds else ""}. An enabled \
+sound gets over-used otherwise."""
+        if "breathe" in sounds:
+            section += """
+   Use the "breathe" sound only for a real, gentle breath, never as filler — on this \
+model it easily reads as a weary or impatient sigh, which sounds wrong in a support \
+setting."""
+        sections.append(section)
     sections.append(
         """Pauses - insert silence when appropriate. Self-closing.
    <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
-right next to one — pick one or the other."""
+right next to one — pick one or the other.
+   Use only periods, commas, question marks, exclamation points, and ellipses for \
+pacing. Avoid semicolons and dashes; the model doesn't pace them reliably. Rewrite \
+them as separate sentences or commas.
+   After any <expr type="break"/>, give the sentence that follows its own expression \
+tag — a fresh one, not necessarily the same as before (a break is often where the mood \
+shifts). A break resets delivery to neutral, so an untagged sentence after a break is \
+spoken flat."""
     )
 
     parts = [
@@ -296,32 +399,131 @@ the listener to catch what comes next.""",
     return "\n\n".join(parts)
 
 
+# Examples carried over from the original Fish expressive block (PR #6232), rewritten
+# in the expr dialect. Breaks appear only mid-sentence, never beside a period/?/! —
+# an example pairing a break with sentence punctuation few-shots the LLM into
+# double-pausing every boundary.
+_FISHAUDIO_EXAMPLES = [
+    '<expr type="expression" label="excited"/> That\'s hilarious! <expr type="sound" label="laughing"/> <expr type="expression" label="happy"/> You always lighten the mood.',  # noqa: E501
+    '<expr type="expression" label="empathetic"/> <expr type="sound" label="clear throat"/> That sounds like a <expr type="prosody" label="emphasis">really</expr> difficult experience.',  # noqa: E501
+    '<expr type="expression" label="sad"/> Oh, my goodness <expr type="sound" label="clear throat"/> <expr type="break" label="2s"/> that\'s a real shame.',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="expression" label="happy"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the <expr type="prosody" label="emphasis">ninth</expr>. <expr type="expression" label="curious"/> Is there anything else I can help you with?',  # noqa: E501
+]
+
+# The original block baked light disfluencies into the few-shots — that's what made
+# fillers actually show up in generations. Appended only while steering has
+# disfluencies enabled, so the examples never contradict the "no fillers" guideline.
+_FISHAUDIO_DISFLUENT_EXAMPLES = [
+    '<expr type="expression" label="curious"/> Um, uh... really? <expr type="expression" label="sad"/> Well, I\'m really sorry to hear that.',  # noqa: E501
+    '<expr type="expression" label="regretful"/> I really wish I\'d, um, called sooner. <expr type="expression" label="hopeful"/> But I\'m here now if, if you want to talk.',  # noqa: E501
+    '<expr type="expression" label="surprised"/> What?! No way! I, I\'m flabbergasted! <expr type="expression" label="sarcastic"/> Fair play, I guess.',  # noqa: E501
+]
+
+
+def _fishaudio_expr_llm_instructions(sounds: list[str], disfluencies: bool = True) -> str:
+    sections = [
+        f"""Emotion - sets how a sentence sounds. Self-closing; place at the START of a sentence.
+   <expr type="expression" label="EMOTION"/>
+   Labels are a fixed vocabulary, NOT free-form descriptions: {", ".join(_FISHAUDIO_EMOTIONS)}.
+   Give every sentence its own emotion marker — repeat the same label to carry a \
+feeling across sentences, or switch labels when the feeling shifts."""
+    ]
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal sound between sentences. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits. An enabled sound gets over-used otherwise."""
+        )
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> or <expr type="break" label="2s"/>.
+   NEVER place a break next to a period, question mark, exclamation point, or ellipsis \
+— sentence punctuation already pauses, and a break beside it double-pauses. Most \
+replies need no break markers at all; reserve them for a deliberate mid-sentence beat \
+before a key detail (a date, a name, a number)."""
+    )
+    sections.append(
+        """Emphasis - stresses exactly the ONE word it wraps.
+   Are you <expr type="prosody" label="emphasis">sure</expr> you want to do this?
+   Wrap a single word, never a phrase. "emphasis" is the only prosody label for this \
+voice — there are no other wrapping style markers. Never nest it, and always close it \
+with </expr>."""
+    )
+
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        """Write for the EAR, not the page: no em or en dashes anywhere in spoken text — \
+use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
+semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
+sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — labels are a fixed vocabulary, never translated.""",
+    ]
+
+    # Vocabulary-specific register guidance on top of the preamble's neutral rule.
+    # Each clause mentions only concepts this steering actually enables, so an
+    # opted-out option is never referenced (not even prohibitively).
+    register = [
+        "At heavy moments reach for empathetic, sad, regretful, or hopeful — never a "
+        'bright label like "happy" or "excited" against hard news; bright labels belong '
+        "to bright moments."
+    ]
+    if any(s in sounds for s in ("laughing", "chuckling")):
+        register.append(
+            "Laughter belongs only in genuinely playful or celebratory beats, never at "
+            "a serious moment."
+        )
+    if disfluencies:
+        register.append(
+            "Save fillers for relaxed moments — never in an emergency or against grave news."
+        )
+    parts.append(" ".join(register))
+
+    pool = _FISHAUDIO_EXAMPLES + (_FISHAUDIO_DISFLUENT_EXAMPLES if disfluencies else [])
+    if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
+
+
 # Every provider's full expr sound vocabulary (the advertised labels before any
 # speech_steering filtering). Providers absent here have no non-verbal sounds.
 _PROVIDER_SOUNDS: dict[str, list[str]] = {
     "inworld": _INWORLD_SOUNDS,
     "xai": _XAI_INLINE,
+    "fishaudio": _FISHAUDIO_SOUNDS,
 }
 
 
 def _steering_removed(
     table: dict[str, dict[str, list[str]]], provider: str, steering: SpeechSteeringOptions | None
 ) -> set[str]:
-    """Labels from a per-provider governance table that *steering* disables."""
+    """Labels from a per-provider governance table that *steering* disables.
+
+    ``nonverbal_sounds`` accepts a bool or a sparse per-category dict:
+    ``True`` (like omitting the key) keeps the full vocabulary, ``False``
+    disables every sound, and in a dict an omitted category stays ENABLED —
+    ``{"laughing": False}`` removes laughter and nothing else.
+    """
     nonverbals = steering.get("nonverbal_sounds") if steering else None
     labels = table.get(provider)
-    if nonverbals is None or labels is None:
+    if nonverbals is None or nonverbals is True or labels is None:
         return set()
+    if nonverbals is False:
+        return {lb for lbs in labels.values() for lb in lbs}
     flags = dict(nonverbals)
-    return {lb for f, lbs in labels.items() if not flags.get(f, False) for lb in lbs}
+    return {lb for f, lbs in labels.items() if not flags.get(f, True) for lb in lbs}
 
 
 def _allowed_sounds(provider: str, steering: SpeechSteeringOptions | None) -> list[str]:
     """The provider's sound vocabulary minus labels steering disables.
 
     Every label is governed by a ``NonverbalOptions`` field, so passing
-    ``nonverbal_sounds`` with everything off returns an empty list — the
-    instruction builders then omit the Sounds section entirely.
+    ``nonverbal_sounds=False`` returns an empty list — the instruction
+    builders then omit the Sounds section entirely.
     """
     removed = _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering)
     return [s for s in _PROVIDER_SOUNDS.get(provider, []) if s not in removed]
@@ -343,8 +545,8 @@ def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> l
 # has no sound for that field (nothing to filter). _allowed_sounds uses this to
 # remove disabled labels from the advertised vocabulary, so a sound steering turns
 # off is never exposed to the LLM in the first place. Every label in
-# _PROVIDER_SOUNDS must be governed by exactly one field, so a preset controls
-# the full vocabulary.
+# _PROVIDER_SOUNDS must be governed by exactly one field, so a steering config
+# controls the full vocabulary.
 _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     "inworld": {
         "laughing": ["laugh"],
@@ -363,6 +565,15 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
         "vocalizing": ["hum-tune"],  # non-lexical voiced sounds
         "mouth_sounds": ["tsk", "tongue-click", "lip-smack"],
         "reflex_sounds": [],  # xAI has no cough/yawn sounds
+    },
+    "fishaudio": {
+        "laughing": ["laughing", "chuckling"],
+        "breathing": [],
+        "sighing": [],
+        "crying": [],
+        "vocalizing": [],
+        "mouth_sounds": [],
+        "reflex_sounds": ["clear throat"],
     },
 }
 
@@ -399,13 +610,16 @@ def supported_nonverbals(provider: str) -> dict[str, list[str]]:
 # sentence. Keyed by label, not NonverbalOptions field, so it's provider-agnostic.
 _SOUND_USAGE_HINTS: dict[str, str] = {
     "laugh": "a laugh at something obviously funny",
+    "laughing": "a laugh at something obviously funny",
     "chuckle": "a chuckle at something subtly humorous",
+    "chuckling": "a chuckle at something subtly humorous",
     "giggle": "a chuckle at something subtly humorous",
     "sigh": "a sigh when commiserating",
     "inhale": "a sharp inhale before a big reveal",
     "lip-smack": "a lip-smack or tongue-click as a tiny beat of thought",
     "tongue-click": "a lip-smack or tongue-click as a tiny beat of thought",
     "tsk": "a tsk for mock-disapproval",
+    "clear throat": "a clear-throat when shifting to a new step or topic",
 }
 
 
@@ -425,14 +639,18 @@ def _sound_guidance(sounds: list[str]) -> str:
 def steering_instructions(provider: str, steering: SpeechSteeringOptions) -> str:
     """Render a ``SpeechSteeringOptions`` into delivery guidelines for *provider*.
 
-    Only set fields produce output, so an empty dict adds nothing on top of the
-    base template. Disabled sounds never appear here: ``llm_instructions`` filters
-    them out of the advertised vocabulary (via ``_allowed_sounds``), so the only
-    sound guidance left is how sparingly to use what remains.
+    Only fields that change the default produce output, so an empty dict adds
+    nothing on top of the base template. Disabled sounds never appear here:
+    ``llm_instructions`` filters them out of the advertised vocabulary (via
+    ``_allowed_sounds``), so the only sound guidance left is how sparingly to
+    use what remains.
     """
     lines: list[str] = []
 
-    if steering.get("nonverbal_sounds") is not None and (
+    # sound guidance only when steering actually removes part of the vocabulary:
+    # the explicit all-on forms (True, an empty dict) must render identically to
+    # omitting the key, and all-off leaves nothing to guide
+    if _steering_removed(_NONVERBAL_SOUND_LABELS, provider, steering) and (
         allowed := _allowed_sounds(provider, steering)
     ):
         lines.append(_sound_guidance(allowed))
@@ -463,6 +681,9 @@ _MAX_INPUT_LEN: dict[str, int] = {
     # well under xAI's 15,000-char request limit; sized as an expressive batch
     # target (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
     "xai": 1000,
+    # fishaudio is deliberately absent: its markers are sentence-scoped (every
+    # sentence carries its own [very EMOTION]), so per-sentence emission loses no
+    # steering and keeps time-to-first-audio low
 }
 
 
@@ -496,9 +717,6 @@ _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 # any <expr ...> or <expr .../> tag (open or self-closing; attrs in group 1)
 _EXPR_OPEN_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
 _EXPR_CLOSE_RE = re.compile(r"</expr\s*>")
-# strip variants also capture the tag's trailing spaces (see vanish_trail)
-_EXPR_OPEN_STRIP_RE = re.compile(_EXPR_OPEN_RE.pattern + r"(?P<trail>[ \t]*)")
-_EXPR_CLOSE_STRIP_RE = re.compile(_EXPR_CLOSE_RE.pattern + r"(?P<trail>[ \t]*)")
 # self-closing markers only (the trailing / is required)
 _EXPR_SELF_RE = re.compile(r"<expr\b([^>]*?)/\s*>")
 # a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
@@ -512,6 +730,11 @@ _EXPR_UNCLOSED_RE = re.compile(
 
 # expr sound labels that differ from xAI's native cue names
 _XAI_SOUND_ALIASES = {"breathe": "breath"}
+
+# expr sound labels that differ from Fish's native marker names (other providers
+# advertise "laugh"/"chuckle", so a hallucinated one still lowers to a sound Fish
+# renders)
+_FISHAUDIO_SOUND_ALIASES = {"laugh": "laughing", "chuckle": "chuckling"}
 
 # Cartesia prosody labels -> native point controls (coarse steps of the numeric ratios)
 _CARTESIA_PROSODY = {
@@ -543,10 +766,10 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
     def _repl(m: re.Match[str]) -> str:
         attrs = _expr_attrs(m.group(1))
         tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return vanish_trail(m, m.group("trail"))
+        return ""
 
-    clean = _EXPR_OPEN_STRIP_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_STRIP_RE.sub(lambda m: vanish_trail(m, m.group("trail")), clean)
+    clean = _EXPR_OPEN_RE.sub(_repl, text)
+    clean = _EXPR_CLOSE_RE.sub("", clean)
     return clean, tags
 
 
@@ -581,6 +804,9 @@ def _convert_expr(provider: str, text: str) -> str:
         if provider == "cartesia":
             # wrapping form of the point controls: apply before the span
             return _CARTESIA_PROSODY.get(label, "") + inner
+        if provider == "fishaudio":
+            # emphasis is Fish's only wrapping control; other labels are dropped
+            return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
         return inner
 
     text = _EXPR_WRAP_RE.sub(_wrap, text)
@@ -593,7 +819,7 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "cartesia":
                 # Cartesia's discrete emotion vocabulary (instructions list it)
                 return f'<emotion value="{label}"/>'
-            if provider == "inworld":
+            if provider in ("inworld", "fishaudio"):
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
@@ -601,6 +827,8 @@ def _convert_expr(provider: str, text: str) -> str:
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
+            if provider == "fishaudio":
+                label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
             return f'<break time="{label}"/>'
@@ -635,94 +863,61 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
         return _xai_expr_llm_instructions(
             _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)
         )
+    if provider == "fishaudio":
+        return _fishaudio_expr_llm_instructions(
+            _allowed_sounds(provider, steering),
+            disfluencies=steering.get("disfluencies", True) if steering else True,
+        )
     return None
 
 
-# Per-provider markup spec: (xml tag names, whether square-bracket tags are used).
-_PROVIDER_MARKUP: dict[str, tuple[list[str], bool]] = {
-    "cartesia": (_CARTESIA_TAGS, False),
-    "inworld": (_INWORLD_TAGS, True),
-    # every tag the LLM is taught is XML (expr markers; native sounds/pauses become
-    # [..] only for the TTS in convert_markup), so the transcript has no brackets to strip
-    "xai": (_XAI_TAGS, False),
+# Per-provider native XML tag names. Membership also marks a provider as markup-capable
+# (see :func:`normalize_markup` / :func:`convert_markup`); the LLM only ever writes expr
+# markers, so these names exist to lower expr onto and to catch hallucinated natives.
+_PROVIDER_MARKUP: dict[str, list[str]] = {
+    "cartesia": _CARTESIA_TAGS,
+    "inworld": _INWORLD_TAGS,
+    "xai": _XAI_TAGS,
+    # fish's native dialect is square brackets, produced only by convert_markup for
+    # the TTS; these names exist to catch hallucinated XML natives in transcripts
+    "fishaudio": _FISHAUDIO_TAGS,
 }
-
-
-def split_markup(provider: str, text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip provider markup and collect the stripped tags in a single pass.
-
-    Returns ``(clean_text, tags)`` — the user-visible transcript plus the expressive
-    tags that were removed (in document order), the single source of truth for both
-    :func:`strip_markup` and :func:`extract_markup`. ``([], text)`` for providers
-    without markup support.
-    """
-    spec = _PROVIDER_MARKUP.get(provider)
-    if spec is None:
-        return text, []
-    text, expr_tags = _split_expr(text)
-    xml_tags, brackets = spec
-    clean, raw_tags = extract_and_strip(text, xml_tags=xml_tags, brackets=brackets)
-    return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
-
-
-def strip_markup(provider: str, text: str) -> str:
-    """Strip provider-specific markup tags from text, preserving content."""
-    return split_markup(provider, text)[0]
-
-
-def extract_markup(provider: str, text: str) -> list[ExpressiveTag]:
-    """Extract the markup tags that :func:`strip_markup` would remove, in order.
-
-    Lets the framework surface stripped expressive tags (e.g. as ``lk.transcription``
-    attributes for the frontend) instead of discarding them. Returns ``[]`` for
-    providers without markup support.
-    """
-    return split_markup(provider, text)[1]
-
 
 # Union of every provider's XML tag names — used by the transcript sinks to strip markup
 # without knowing which provider produced it (see :class:`TranscriptMarkupStripper`).
-_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags, _ in _PROVIDER_MARKUP.values() for tag in tags})
+_ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
 
 def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
-    """Strip the union of every provider's expressive markup (provider-agnostic).
+    """Strip the union of every provider's expressive XML markup (provider-agnostic).
 
     The transcript sinks strip downstream, where the originating TTS/provider is no
-    longer in scope, so they remove every provider's tags (XML + square brackets) at
-    once. These tag shapes never appear in real spoken text — the LLM only emits them
-    as audio directives — so a universal strip is safe.
+    longer in scope, so they remove every provider's XML tags at once: expr markers
+    (all the LLM is ever taught) plus every native tag name, so a hallucinated native
+    tag is stripped rather than leaked.
+
+    Square-bracket spans are *not* stripped: the LLM only writes expr, so brackets in its
+    output are prose (a ``[text](url)`` link) that a strip would mangle. Provider-native
+    brackets never arrive here — :func:`drop_bracket_cues` removes them at their source.
     """
+    # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
+    # sinks call this per streamed chunk and expressive is off by default, making this the
+    # overwhelmingly common case — skip the tag-union scan entirely
+    if "<" not in text:
+        return text, []
+
     text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS, brackets=True)
+    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS)
     return clean, expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
 
 
-# tag names a trailing fragment may be cut from: every provider's XML tags plus "expr"
-_TAIL_TAG_NAMES = tuple(sorted({*_ALL_MARKUP_TAGS, "expr"}))
-_TAIL_TAG_NAME_RE = re.compile(r"[a-zA-Z-]*")
-
-
-def _open_tag_fragment(text: str) -> bool:
-    """True if ``text`` ends in an unterminated ``<...`` that could still be a known tag.
-
-    Only fragments that could grow into a known tag qualify, so real text containing a
-    stray ``<`` (e.g. ``i<n then stop``) is never mistaken for markup.
-    """
-    last_lt = text.rfind("<")
-    if last_lt <= text.rfind(">"):
-        return False
-    frag = text[last_lt + 1 :].removeprefix("/")
-    name = _TAIL_TAG_NAME_RE.match(frag).group()  # type: ignore[union-attr]
-    return name in _TAIL_TAG_NAMES or (
-        name == frag and any(t.startswith(name) for t in _TAIL_TAG_NAMES)
-    )
-
-
 def _drop_open_tail(text: str) -> str:
-    """Drop a trailing unterminated markup tag (text sliced/cut mid-tag)."""
-    if _open_tag_fragment(text):
-        return text[: text.rfind("<")]
+    """Drop a trailing unterminated tag-shaped fragment (text sliced/cut mid-tag)."""
+    last_lt = text.rfind("<")
+    if last_lt > text.rfind(">"):
+        nxt = text[last_lt + 1 : last_lt + 2]
+        if not nxt or nxt == "/" or nxt.isalpha():
+            return text[:last_lt]
     return text
 
 
@@ -738,8 +933,8 @@ def strip_all_markup(text: str) -> str:
 def strip_expr_markup(text: str) -> str:
     """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
 
-    Unlike :func:`strip_all_markup`, provider-native tags and square-bracket spans
-    survive.
+    Unlike :func:`strip_all_markup`, provider-native tags survive (both leave
+    square-bracket spans alone).
     """
     return _split_expr(text)[0]
 
@@ -759,7 +954,6 @@ def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     }
 
 
-# a complete self-closing expressive marker (<expr/>, <expression/>, or <emotion/>)
 _EXPR_MARKER_SPLIT_RE = re.compile(r"(<(?:expr|expression|emotion)\b[^>]*?/\s*>)")
 
 
@@ -776,34 +970,26 @@ class TranscriptMarkupStripper:
     """Stateful, provider-agnostic markup stripper for one transcript segment.
 
     Fed text chunk-by-chunk, it returns the user-visible text and accumulates the
-    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` or ``[...``
-    arriving split across chunks) is held back until it closes, so a tag straddling a
-    chunk boundary is never emitted half-stripped. Shared by the transcript sinks (room
-    output + transcript synchronizer) so stripping and expression extraction stay
-    identical across them.
+    stripped tags. A tag-shaped trailing fragment (a partial ``<...`` arriving split
+    across chunks) is held back until it closes, so a tag straddling a chunk boundary is
+    never emitted half-stripped. Shared by the transcript sinks (room output + transcript
+    synchronizer) so stripping and expression extraction stay identical across them.
     """
 
     def __init__(self) -> None:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
-        # last emitted char was whitespace (or nothing emitted yet): a stripped tag
-        # often leaves its separating space in the next chunk, so lstrip the next
-        # emission rather than surface a doubled/leading space
-        self._tail_ws = True
 
     def _has_open_tag(self) -> bool:
-        # hold a trailing "<" that could still be a known tag (so "3 < 5" or "i<n then"
-        # isn't stalled), and any unclosed "[" (bracket tags have no such ambiguity)
-        if _open_tag_fragment(self._buf):
-            return True
-        return self._buf.rfind("[") > self._buf.rfind("]")
-
-    def _emit(self, clean: str) -> str:
-        if self._tail_ws:
-            clean = clean.lstrip()
-        if clean:
-            self._tail_ws = clean[-1].isspace()
-        return clean
+        # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled. An
+        # unclosed "[" is not held: brackets aren't markup here, and stalling on one would
+        # delay every markdown link until its "]" arrives
+        last_lt = self._buf.rfind("<")
+        if last_lt > self._buf.rfind(">"):
+            nxt = self._buf[last_lt + 1 : last_lt + 2]
+            if not nxt or nxt == "/" or nxt.isalpha():
+                return True
+        return False
 
     def push(self, text: str) -> str:
         """Feed a chunk; return the clean text ready to emit (may be empty)."""
@@ -813,7 +999,7 @@ class TranscriptMarkupStripper:
         clean, tags = split_all_markup(self._buf)
         self._buf = ""
         self._tags.extend(tags)
-        return self._emit(clean)
+        return clean
 
     def flush(self) -> str:
         """Drain any buffered text at segment end; return the remaining clean text."""
@@ -822,7 +1008,7 @@ class TranscriptMarkupStripper:
         clean, tags = split_all_markup(self._buf)
         self._buf = ""
         self._tags.extend(tags)
-        return self._emit(clean)
+        return clean
 
     @property
     def tags(self) -> list[ExpressiveTag]:
@@ -834,9 +1020,80 @@ class TranscriptMarkupStripper:
         return expression_attribute(self._tags)
 
 
+_BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
+# cap on how long an unclosed "[" is held before it is released as plain text
+_MAX_HELD_CHARS = 256
+
+
+def _retext(token: TimedString, text: str) -> TimedString:
+    """A copy of *token* carrying *text*, keeping the alignment metadata."""
+    return TimedString(
+        text,
+        start_time=token.start_time,
+        end_time=token.end_time,
+        confidence=token.confidence,
+        start_time_offset=token.start_time_offset,
+        speaker_id=token.speaker_id,
+    )
+
+
+def drop_bracket_cues(
+    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
+) -> list[TimedString]:
+    """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
+
+    ``use_tts_aligned_transcript`` makes the provider's alignment of the text it was sent
+    the transcript, and that text is post-``convert_markup``, so it carries native
+    ``[laugh]``/``[speak calmly]`` cues as words the agent never spoke. Every bracket span
+    goes: the provider reads them all as cues, so none is ever audio, and markdown links
+    are already gone (``filter_markdown`` runs on TTS input by default).
+
+    Alignment arrives in messages finer-grained than a cue — often one word at a time — so
+    *held* carries the tail of an unclosed span across calls; pass the same list every time
+    and call once more with ``final=True`` at end of stream to release it.
+    """
+    tokens = held + tokens
+    held.clear()
+    text = "".join(tokens)
+    if "[" not in text:
+        return tokens
+
+    dropped: set[int] = set()
+    for match in _BRACKET_SPAN_RE.finditer(text):
+        start, end = match.span()
+        # take one of the spaces the cue sat between, so it leaves a single separator
+        if start > 0 and text[start - 1] == " " and (end == len(text) or text[end] == " "):
+            start -= 1
+        elif start == 0 and end < len(text) and text[end] == " ":
+            end += 1
+        dropped.update(range(start, end))
+
+    # hold from an unclosed "[" so a cue straddling messages is still judged as a whole;
+    # past _MAX_HELD_CHARS give up, since a lone bracket must not stall the transcript
+    hold_from = len(text)
+    if not final and (open_at := text.rfind("[")) > text.rfind("]"):
+        if len(text) - open_at <= _MAX_HELD_CHARS:
+            hold_from = open_at
+
+    out: list[TimedString] = []
+    pos = 0
+    for token in tokens:
+        emit = "".join(
+            c for i, c in enumerate(token, start=pos) if i < hold_from and i not in dropped
+        )
+        keep = "".join(c for i, c in enumerate(token, start=pos) if i >= hold_from)
+        pos += len(token)
+        if emit:
+            out.append(token if emit == str(token) else _retext(token, emit))
+        if keep:
+            held.append(token if keep == str(token) else _retext(token, keep))
+    return out
+
+
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
     "inworld": ["expression", "sound", "break"],
+    "fishaudio": ["expression", "sound", "break"],
 }
 
 
@@ -869,5 +1126,13 @@ def convert_markup(provider: str, text: str) -> str:
     if provider == "xai":
         # xAI has no <break>; map it to its native [pause]/[long-pause]
         text = _XAI_BREAK_RE.sub(_xai_break_to_bracket, text)
+    if provider == "fishaudio":
+        # <expression value="X"/> -> [very X] first (the intensified form steers
+        # harder), then the generic pass lowers the remaining <sound value="X"/> -> [X]
+        text = _FISHAUDIO_EXPRESSION_RE.sub(_fishaudio_expression_to_bracket, text)
+        text = convert_expression_tags(text)
+        text = _FISHAUDIO_BREAK_RE.sub(_fishaudio_break_to_bracket, text)
+        # Fish's per-word stress marker: <emphasis>word</emphasis> -> [emphasis] word
+        text = _FISHAUDIO_EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
     # <break> is otherwise passed through unchanged: Inworld accepts it as native SSML.
     return text
