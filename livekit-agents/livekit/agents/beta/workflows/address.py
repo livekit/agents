@@ -75,7 +75,14 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their address.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's address. First scan the conversation - if an address was already "
+                "given earlier, record it with update_address and ask a short confirmation "
+                "question rather than collecting it from scratch. Only ask fresh when the "
+                "conversation has no address yet."
+            )
+        )
 
     def _build_update_address_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance

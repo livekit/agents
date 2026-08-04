@@ -66,6 +66,23 @@ from .hotel_schema import (
 
 logger = logging.getLogger("hotel-receptionist.db")
 
+
+def _new_code(prefix: str) -> str:
+    """Generated reference codes are stored uppercase: the caller only ever hears
+    a code spelled out in uppercase (_speak_code), and the model passes back the
+    form it heard - a lowercase stored form would never match a by-code lookup."""
+    return shortuuid(prefix).upper()
+
+
+def wall_clock_iso(t: time) -> str:
+    """The stored form of a caller-given time: local wall clock, no offset.
+
+    LLM-supplied times can arrive tz-aware ("17:40:00Z" parses with tzinfo), and a
+    raw isoformat() would then store "17:40:00+00:00" alongside naive times.
+    """
+    return t.replace(tzinfo=None).isoformat()
+
+
 OnChange = Callable[[], Awaitable[None]]
 
 
@@ -226,7 +243,7 @@ class HotelDB:
         view: str | None = None,
     ) -> RoomBooking:
         clean_extras = sorted(e for e in extras if e in ALLOWED_EXTRAS)
-        code = shortuuid("HTL-")
+        code = _new_code("HTL-")
         conn = self.connection
         with conn:
             row = conn.execute(
@@ -411,7 +428,7 @@ class HotelDB:
         # Normalize to the canonical room id (and reject a mis-heard room) so storage
         # matches every other room-referencing table regardless of how it was spoken.
         room_id = self._require_room(room)
-        code = shortuuid("DND-")
+        code = _new_code("DND-")
         with self.connection as conn:
             _insert(conn, "do_not_disturb", {"code": code, "room_id": room_id})
         await self._notify_change()
@@ -429,7 +446,7 @@ class HotelDB:
     ) -> str:
         """Record a waitlist entry for dates the hotel is sold out on, and return a
         reference. No room is held - the desk calls back only if something frees up."""
-        code = shortuuid("WL-")
+        code = _new_code("WL-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -486,12 +503,16 @@ class HotelDB:
         conn = self.connection
         row = conn.execute(
             _SQL_FREE_TABLE,
-            {"party_size": party_size, "date": on_date.isoformat(), "time": at_time.isoformat()},
+            {
+                "party_size": party_size,
+                "date": on_date.isoformat(),
+                "time": wall_clock_iso(at_time),
+            },
         ).fetchone()
         if not row:
             raise Unavailable(f"restaurant full: {on_date} {at_time}")
         table_id = row[0]
-        code = shortuuid("RES-")
+        code = _new_code("RES-")
         reservation_id = _insert(
             conn,
             "restaurant_reservations",
@@ -503,7 +524,7 @@ class HotelDB:
                 "phone": normalize_phone(phone),
                 "party_size": party_size,
                 "date": on_date.isoformat(),
-                "time": at_time.isoformat(),
+                "time": wall_clock_iso(at_time),
                 "notes": notes,
             },
         )
@@ -566,7 +587,7 @@ class HotelDB:
                 {
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "code": code,
                     "current_table_id": current_table_id,
                 },
@@ -581,7 +602,7 @@ class HotelDB:
                     "table_id": table_id,
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                 },
                 {"code": code, "status": "confirmed"},
             )
@@ -625,7 +646,7 @@ class HotelDB:
         caller_phone: str,
         summary: str,
     ) -> str:
-        code = shortuuid("FUP-")
+        code = _new_code("FUP-")
         conn = self.connection
         with conn:
             _insert(
@@ -653,7 +674,7 @@ class HotelDB:
         room_id = self._require_room(room)
         conn = self.connection
         self._require_future(call_date)
-        code = shortuuid("WUC-")
+        code = _new_code("WUC-")
         with conn:
             _insert(
                 conn,
@@ -663,7 +684,7 @@ class HotelDB:
                     "room_id": room_id,
                     "guest_name": guest_name,
                     "date": call_date.isoformat(),
-                    "time": call_time.isoformat(),
+                    "time": wall_clock_iso(call_time),
                 },
             )
         await self._notify_change()
@@ -685,7 +706,7 @@ class HotelDB:
         if party_size > tour.max_party:
             raise Unavailable(f"{tour.name} takes at most {tour.max_party} guests")
         total = tour.flat_price or (tour.price_per_person or 0) * party_size
-        code = shortuuid("TUR-")
+        code = _new_code("TUR-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -722,7 +743,7 @@ class HotelDB:
         if party_size > service.max_party:
             raise Unavailable(f"{service.name} takes at most {service.max_party} guests")
         total = service.price * party_size
-        code = shortuuid("SPA-")
+        code = _new_code("SPA-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -733,7 +754,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": normalize_phone(guest_phone),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "party_size": party_size,
                     "total": total,
                 },
@@ -761,7 +782,7 @@ class HotelDB:
         if duration_hours > service.max_hours:
             raise Unavailable(f"{service.name} is booked for at most {service.max_hours} hours")
         total = service.flat_price or (service.price_per_hour or 0) * duration_hours
-        code = shortuuid("BIZ-")
+        code = _new_code("BIZ-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -772,7 +793,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": normalize_phone(guest_phone),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "duration_hours": duration_hours,
                     "total": total,
                 },
@@ -786,9 +807,11 @@ class HotelDB:
         arrangement_id: str,
         guest_name: str,
         guest_phone: str,
-        deliver_to: str,
         on_date: date,
         card_message: str,
+        room_id: str | None = None,
+        recipient_name: str | None = None,
+        delivery_instructions: str = "",
     ) -> tuple[str, FloralArrangement, int]:
         arrangement = FLORIST_ARRANGEMENTS.get(arrangement_id)
         if arrangement is None:
@@ -797,8 +820,18 @@ class HotelDB:
                 f"{', '.join(FLORIST_ARRANGEMENTS)}"
             )
         self._require_future(on_date)
+        room_id = (room_id or "").strip() or None
+        recipient_name = (recipient_name or "").strip() or None
+        if room_id is None and recipient_name is None:
+            raise Unavailable(
+                "no delivery destination: a room/suite or a recipient name is required"
+            )
+        if room_id is not None:
+            if not self._room_exists(room_id):
+                raise NotFound(f"no such room: {room_id}")
+            recipient_name = None  # the room is the destination; exactly one is stored
         total = arrangement.price
-        code = shortuuid("FLR-")
+        code = _new_code("FLR-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -808,14 +841,27 @@ class HotelDB:
                     "arrangement_id": arrangement_id,
                     "guest_name": guest_name,
                     "guest_phone": normalize_phone(guest_phone),
-                    "deliver_to": deliver_to,
+                    "room_id": room_id,
+                    "recipient_name": recipient_name,
                     "date": on_date.isoformat(),
                     "message": card_message,
+                    "delivery_instructions": delivery_instructions,
                     "total": total,
                 },
             )
         await self._notify_change()
         return code, arrangement, total
+
+    async def amend_florist_order(self, *, code: str, delivery_instructions: str) -> None:
+        changed = _update(
+            self.connection,
+            "florist_orders",
+            {"delivery_instructions": delivery_instructions},
+            {"code": code, "status": "confirmed"},
+        )
+        if changed == 0:
+            raise NotFound(f"florist order not found: {code}")
+        await self._notify_change()
 
     async def send_email(self, *, recipient: str, kind: str) -> str:
         """Stub email send: records that a document of `kind` was sent to `recipient`
@@ -825,7 +871,7 @@ class HotelDB:
             raise NotFound(
                 f"unknown email kind: {kind} - options: {', '.join(get_args(EmailKind))}"
             )
-        code = shortuuid("EML-")
+        code = _new_code("EML-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -846,7 +892,7 @@ class HotelDB:
             raise NotFound(
                 f"unknown destination: {destination} - options: {', '.join(get_args(TransferDestination))}"
             )
-        code = shortuuid("XFR-")
+        code = _new_code("XFR-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -869,9 +915,10 @@ class HotelDB:
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
+        departure_time: time | None = None,
     ) -> str:
         room_id = self._require_room(room)
-        code = shortuuid("FLT-")
+        code = _new_code("FLT-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -887,6 +934,7 @@ class HotelDB:
                         c for c in booking_reference if c.isalnum()
                     ).upper(),
                     "seat_check": int(seat_check),
+                    "departure_time": wall_clock_iso(departure_time) if departure_time else None,
                 },
             )
         await self._notify_change()
@@ -902,7 +950,7 @@ class HotelDB:
     ) -> str:
         room_id = self._require_room(room)
         self._require_future(pickup_date)
-        code = shortuuid("CAR-")
+        code = _new_code("CAR-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -911,7 +959,7 @@ class HotelDB:
                     "code": code,
                     "room_id": room_id,
                     "pickup_date": pickup_date.isoformat(),
-                    "pickup_time": pickup_time.isoformat(),
+                    "pickup_time": wall_clock_iso(pickup_time),
                     "passengers": passengers,
                 },
             )
@@ -926,7 +974,7 @@ class HotelDB:
                 f"unknown emergency kind: {kind} - options: {', '.join(get_args(EmergencyKind))}"
             )
         room_id = self._require_room(room)
-        code = shortuuid("EMG-")
+        code = _new_code("EMG-")
         with self.connection as conn:
             _insert(
                 conn,
@@ -999,7 +1047,7 @@ class HotelDB:
                 conn,
                 "walk_arrangements",
                 {
-                    "code": shortuuid("WLK-"),
+                    "code": _new_code("WLK-"),
                     "booking_code": booking_code,
                     "partner_hotel": WALK_PARTNER_HOTEL,
                     "return_date": return_date.isoformat(),
@@ -1008,16 +1056,36 @@ class HotelDB:
         await self._notify_change()
         return ConflictResolution(walk_partner=WALK_PARTNER_HOTEL, walk_return_date=return_date)
 
-    def _require_room(self, room: str) -> str:
-        """Normalize a spoken room number ("304") to its id and require it exists."""
+    @staticmethod
+    def _normalize_room(room: str) -> str:
+        """Normalize a spoken room number ("304") to its id."""
         room_id = room.strip().upper()
         if not room_id.startswith("RM_"):
             room_id = f"RM_{room_id}"
-        if not self.connection.execute(
-            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
-        ).fetchone():
+        return room_id
+
+    def _room_exists(self, room_id: str) -> bool:
+        return bool(
+            self.connection.execute(
+                "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
+            ).fetchone()
+        )
+
+    def _require_room(self, room: str) -> str:
+        """Normalize a spoken room number ("304") to its id and require it exists."""
+        room_id = self._normalize_room(room)
+        if not self._room_exists(room_id):
             raise NotFound(f"no such room: {room}")
         return room_id
+
+    def room_view(self, room_id: str) -> str:
+        """The view of a room in inventory ("city", "ocean", "garden", "interior")."""
+        row = self.connection.execute(
+            "SELECT room_view FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone()
+        if not row:
+            raise NotFound(f"no such room: {room_id}")
+        return str(row[0])
 
     async def take_guest_message(
         self,
@@ -1030,7 +1098,7 @@ class HotelDB:
         """Record a message addressed to a (possibly) in-house guest. Whether the
         recipient actually has a stay here is resolved internally and never
         returned, so the agent taking the message cannot leak guest presence."""
-        code = shortuuid("MSG-")
+        code = _new_code("MSG-")
         conn = self.connection
         with conn:
             in_house = conn.execute(
@@ -1101,7 +1169,7 @@ class HotelDB:
         check_in: date,
         nights: int,
     ) -> str:
-        code = shortuuid("GRP-")
+        code = _new_code("GRP-")
         conn = self.connection
         with conn:
             _insert(
@@ -1134,7 +1202,7 @@ class HotelDB:
         outcome: str,
         refund_amount: int,
     ) -> str:
-        case_number = shortuuid("DSP-")
+        case_number = _new_code("DSP-")
         conn = self.connection
         with conn:
             _insert(

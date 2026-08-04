@@ -150,7 +150,10 @@ async def test_room_availability_formats_view_specific_prices(hotel_db: HotelDB)
         "king",
     )
 
-    assert result == "king: city $240/night; ocean $260–$280/night"
+    assert result == (
+        "the views on a type's line are the only views that type has:\n"
+        "- king: city $240/night; ocean $260\u2013$280/night - ask which of those views they want"
+    )
 
 
 async def test_booking_selects_the_lowest_rate_it_advertises() -> None:

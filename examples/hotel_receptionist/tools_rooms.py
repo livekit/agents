@@ -21,9 +21,9 @@ from .hotel import (
     NotFound,
     Unavailable,
     cancellation_penalty_applies,
+    describe_room_options,
     format_date,
     format_month_day,
-    format_room_type_availability,
     speak_usd,
 )
 from .hotel_agent import HotelAgent
@@ -32,6 +32,9 @@ from .verify_booking import VerifyBookingTask
 
 logger = logging.getLogger("hotel-receptionist")
 
+DisputeResolutionStatus = Literal["pending", "accepted", "declined"]
+FinalDisputeResolutionStatus = Literal["accepted", "declined"]
+
 
 def _resolve_dispute_outcome(
     *,
@@ -39,19 +42,20 @@ def _resolve_dispute_outcome(
     amount_cents: int,
     line_item_label: str,
     invoice_line_items: list[tuple[str, int]],
-    accepts: bool,
+    resolution_status: FinalDisputeResolutionStatus,
 ) -> tuple[str, int]:
+    accepted = resolution_status == "accepted"
     action = policy.action
     if action == "auto_refund_if_under_threshold":
         if amount_cents <= PRICING.minibar_auto_refund_threshold:
             return ("auto_refunded", amount_cents)
-        return ("credit_offered", amount_cents) if accepts else ("escalated_to_manager", 0)
+        return ("credit_offered", amount_cents) if accepted else ("escalated_to_manager", 0)
     if action == "verify_explain_then_offer_credit":
-        return ("credit_offered", amount_cents) if accepts else ("escalated_to_manager", 0)
+        return ("credit_offered", amount_cents) if accepted else ("escalated_to_manager", 0)
     if action == "explain_no_refund":
-        return ("escalated_to_manager", 0) if not accepts else ("explained_no_action", 0)
+        return ("explained_no_action", 0) if accepted else ("escalated_to_manager", 0)
     if action == "explain_policy_offer_goodwill":
-        return ("goodwill_waived", amount_cents) if accepts else ("escalated_to_manager", 0)
+        return ("goodwill_waived", amount_cents) if accepted else ("escalated_to_manager", 0)
     if action == "correct_immediately_or_open_ticket":
         same = sum(
             1
@@ -91,9 +95,16 @@ def _say_dispute_outcome(
     if outcome == "explained_no_action":
         return f"{policy_explanation}"
     if outcome == "escalated_to_manager":
+        # The position from the record comes FIRST - "I've escalated it" with no
+        # explanation reads as a brush-off and skips the policy stance the caller
+        # is owed (e.g. a card-guaranteed no-show charge that stands).
         return (
-            f"I've escalated this to the manager - they'll review and follow up by email. "
-            f"Your case number is {_speak_code(case_number)}."
+            f"{policy_explanation} | Explain that position to the caller calmly first, "
+            f"then let them know it's been escalated to the manager, who will review and "
+            f"follow up - case number {_speak_code(case_number)}. Take the caller's callback "
+            'number and record it (record_followup, kind="callback") so the manager can '
+            "reach them; do NOT offer a live transfer unless the caller explicitly asks to "
+            "be put through."
         )
     if outcome == "accounting_ticket_opened":
         return (
@@ -101,6 +112,52 @@ def _say_dispute_outcome(
             f"Case number {_speak_code(case_number)}."
         )
     return f"Logged. Case number {_speak_code(case_number)}."
+
+
+def _select_dispute_resolution(
+    *,
+    resolution_status: DisputeResolutionStatus,
+    accepted_resolution: tuple[str, int],
+    declined_resolution: tuple[str, int],
+) -> tuple[str, int] | None:
+    """Select a final policy outcome, or None while caller input is pending.
+
+    Policies whose accepted and declined outcomes are identical are automatic and
+    resolve immediately regardless of status. All other policies remain non-persisting
+    while pending, then use the outcome matching the caller's explicit decision.
+    """
+    if accepted_resolution == declined_resolution:
+        return accepted_resolution
+    if resolution_status == "pending":
+        return None
+    if resolution_status == "declined":
+        return declined_resolution
+    return accepted_resolution
+
+
+def _say_dispute_offer(
+    *,
+    outcome: str,
+    refund: int,
+    line_item: str,
+    policy_explanation: str,
+) -> str:
+    """Hand the agent the policy resolution to present before anything is persisted."""
+    if outcome == "goodwill_waived":
+        next_step = (
+            f"offer to waive the {line_item} charge as a one-time courtesy "
+            f"({speak_usd(refund)} back)"
+        )
+    elif outcome == "credit_offered":
+        next_step = f"offer to apply a {speak_usd(refund)} credit toward the {line_item}"
+    else:
+        next_step = "ask whether that explanation resolves the caller's concern"
+    return (
+        f"NOT resolved yet - no dispute was filed. {policy_explanation} | "
+        f"Explain that to the caller first, then {next_step}. If they accept, call "
+        'dispute_charge again with resolution_status="accepted"; if they reject it, '
+        'push back, or ask for a manager, call it with resolution_status="declined".'
+    )
 
 
 class RoomToolsMixin(HotelAgent):
@@ -125,12 +182,16 @@ class RoomToolsMixin(HotelAgent):
         return (
             f"no room in the house fits (every room was checked) - walk arranged at "
             f"{r.walk_partner} (two blocks away, room and taxi both on us), guest's room back "
-            f"here {format_date(r.walk_return_date)} | deliver this per the guest_walks "
-            "policy: own the overbooking and explain plainly why it happened, then the plan above, "
-            "all at no extra cost to them. The guest is angry and will interrupt - give it in short "
-            "pieces and make sure every piece lands before the call ends, resuming any that got "
-            "talked over. If still upset after the full plan, record a manager callback "
-            '(record_followup, kind="callback") before wrapping up.'
+            f"here {format_date(r.walk_return_date)} | say all four parts of this in "
+            "THIS turn, as short clauses in one reply: that we oversold the night and you're "
+            f"sorry, tonight's room at {r.walk_partner}, that the room and the taxi are both "
+            "paid by us, and that their own room here is theirs again "
+            f'{format_date(r.walk_return_date)} - with "at no extra cost to you" in '
+            "those words. One sentence per reply does not apply here, and a part saved for a "
+            "later turn is a part the guest never hears. The guest is angry and will interrupt: "
+            "repeat any part that got talked over, stay calm, and don't argue. This walk IS the "
+            "resolution - deliver it rather than offering a manager, and no further tool call "
+            "is needed."
         )
 
     @function_tool
@@ -168,8 +229,12 @@ class RoomToolsMixin(HotelAgent):
             )
             what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
-        return " | ".join(
-            f"{a.type.replace('_', ' ')}: {format_room_type_availability(a)}" for a in avail
+        # Same one-row-per-type render as set_stay: browsing feeds the same view
+        # blob into context, so a smeared type->view pair offered here survives
+        # into the booking flow.
+        return (
+            "the views on a type's line are the only views that type has:\n"
+            f"{describe_room_options(avail)}"
         )
 
     @function_tool
@@ -199,9 +264,22 @@ class RoomToolsMixin(HotelAgent):
                 "room, ask them to confirm that first; otherwise just ask if there's anything else."
             )
 
-        booking = await BookRoomTask(
-            ctx.userdata.db, ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx)
-        )
+        # Inline AgentTasks cannot run in parallel: a second activation supplants the
+        # first and its function call never resolves, deadlocking the session. Bounce
+        # a same-turn second call back to the model instead of starting the task.
+        if ctx.userdata.room_booking_in_flight:
+            raise ToolError(
+                "a room-booking flow is already in progress - booking flows run one at a "
+                "time. Finish this room through confirm_booking first; start_room_booking "
+                "for the next room only after this one has returned its result."
+            )
+        ctx.userdata.room_booking_in_flight = True
+        try:
+            booking = await BookRoomTask(
+                ctx.userdata.db, ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx)
+            )
+        finally:
+            ctx.userdata.room_booking_in_flight = False
         ctx.userdata.last_room_booking = booking
         ctx.userdata.caller_turns_at_last_booking = _count_caller_turns(self.session.history)
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)
@@ -221,7 +299,20 @@ class RoomToolsMixin(HotelAgent):
             raise ToolError(
                 f"booking {booking.code} is {booking.status} - there's no active booking to update"
             )
-        card = await GetCardTask(ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx))
+        try:
+            card = await GetCardTask(ctx.userdata.today, chat_ctx=speech_only(self.chat_ctx))
+        except ToolError as e:
+            # The capture ended without a usable card (refused, or their only card is
+            # expired/failing). The card on file stays; hand the agent the resolution.
+            # The callback offer is spoken, not recorded: record_followup is not in the
+            # billing area, and naming it here made the model drop the clause instead.
+            raise ToolError(
+                f"{e} - the booking stays held on the current card and a working card "
+                "isn't needed until check-in. Reassure the caller of that, and make the "
+                "question for this turn the callback offer: ask whether they'd like the "
+                "desk to call them back to retry the card once they've had a chance to "
+                "check with their card issuer. Speaking that offer is the whole action."
+            ) from None
         await ctx.userdata.db.update_booking_card(
             booking_code=booking.code, card_last4=card.card_number[-4:]
         )
@@ -234,6 +325,22 @@ class RoomToolsMixin(HotelAgent):
     @function_tool
     async def start_booking_modification(self, ctx: RunContext[Userdata]) -> str:
         """Start the booking-modification flow for an existing reservation. Verifies the caller, then hands off to a focused task that lets them change the stay dates, room type, room view, extras, and party size on the booking - this is the path for a guest unhappy that their room's view or type doesn't match what they booked (it moves them to a matching room). Identity fields (name, email, phone) are NOT modifiable through this flow - record_followup with kind="identity_change" covers those, and a new card goes through start_card_update. NOT for cancellations: if the caller wants to cancel - even after asking for a change first - call cancel_room_booking directly instead."""
+        # Idempotency: after a modification completes, the model sometimes re-invokes
+        # this with no new caller input instead of relaying the result - re-opening the
+        # flow on the freshly-updated booking and looping through the same changes while
+        # the confirmation (and any refund) never reaches the caller. With no caller
+        # turn since the last modification there is nothing new to change: re-surface
+        # that outcome. A genuine second change is always preceded by the caller asking.
+        if (
+            ctx.userdata.caller_turns_at_last_modification >= 0
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_modification
+        ):
+            return (
+                "the modification already completed moments ago - do NOT re-open the flow. "
+                "Relay the outcome to the caller: "
+                f"{ctx.userdata.last_modification_message}"
+            )
         booking = await self._verified_booking(ctx)
         if booking.status != "confirmed":
             raise ToolError("that booking was cancelled - nothing to modify")
@@ -250,22 +357,29 @@ class RoomToolsMixin(HotelAgent):
         # made no changes (it completes with `self._existing`); identity check
         # is the cleanest signal that the modify flow was a no-op.
         if updated is booking:
-            return (
+            msg = (
                 "Booking left unchanged | the modification flow is CLOSED - don't re-open it or "
                 "re-ask for dates. If the caller pivoted to something else (most often: they "
                 "decided to CANCEL instead), do that now with the right tool (cancel_room_booking)."
             )
-        delta = updated.total - booking.total
-        if delta == 0:
-            money = f"total stays at {speak_usd(updated.total)}"
         else:
-            direction = "added to" if delta > 0 else "refunded to"
-            money = f"new total is {speak_usd(updated.total)}; {speak_usd(abs(delta))} {direction} the card ending in {updated.card_last4}"
-        return (
-            f"Your booking is updated; {money}. "
-            "| modification complete - relay all of this information to the caller (what changed, "
-            "the new total, and any amount added or refunded); no further tool call is needed."
-        )
+            delta = updated.total - booking.total
+            if delta == 0:
+                money = f"total stays at {speak_usd(updated.total)}"
+            else:
+                direction = "added to" if delta > 0 else "refunded to"
+                money = f"new total is {speak_usd(updated.total)}; {speak_usd(abs(delta))} {direction} the card ending in {updated.card_last4}"
+            msg = (
+                f"Your booking is updated; {money}. "
+                "| modification complete - relay all of this information to the caller (what "
+                "changed, the new total, and any amount added or refunded); no further tool "
+                "call is needed."
+            )
+        # Remember the outcome + when it happened, so an immediate re-invocation (above)
+        # relays this instead of re-opening the flow on the just-updated booking.
+        ctx.userdata.last_modification_message = msg
+        ctx.userdata.caller_turns_at_last_modification = _count_caller_turns(self.session.history)
+        return msg
 
     @function_tool
     async def lookup_booking(self, ctx: RunContext[Userdata]) -> str:
@@ -281,6 +395,10 @@ class RoomToolsMixin(HotelAgent):
             f"checking in {format_date(b.check_in)} and out {format_date(b.check_out)} "
             f"({nights} night{'s' if nights != 1 else ''}, {b.guests} guest{'s' if b.guests != 1 else ''}), "
             f"extras: {extras}. Total {speak_usd(b.total)} on card ending in {b.card_last4}."
+            " | a caller checking or confirming their own booking gets the record's key facts "
+            "read back - room type, smoking status, dates, party size, and extras - not just "
+            "the one field their question named; this is their chance to catch a mismatch "
+            "before arrival. The hold-back rule is for option lists, not the caller's own record."
         )
         if conflict := await ctx.userdata.db.room_conflict(booking_code=b.code):
             info += (
@@ -380,10 +498,19 @@ class RoomToolsMixin(HotelAgent):
         """Verify the caller, fetch their invoice, and read it back."""
         booking = await self._verified_booking(ctx)
         invoice = await ctx.userdata.db.get_invoice(booking.code)
-        items = ", ".join(f"{li.label} {speak_usd(li.amount_cents)}" for li in invoice.line_items)
+        # Quote each label so the label/amount boundary is unambiguous: rendered as
+        # "Room (2 nights) 560 dollars", the model copies the merged string into
+        # dispute_charge's line_item_label and the exact-label match fails.
+        items = ", ".join(
+            f'"{li.label}" at {speak_usd(li.amount_cents)}' for li in invoice.line_items
+        )
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
-            f"{items}. I can email an itemized copy to the address on file, {booking.email}, if you'd like - just say the word."
+            f"{items}. The quoted labels are the exact line-item names dispute_charge takes - "
+            "the label only, never with the amount appended. I can email an itemized copy to "
+            f"the address on file, {booking.email}, "
+            "if you'd like - just say the word. | This turn: read the total and every line "
+            "item and offer to email the itemized folio; do not call dispute_charge yet."
         )
 
     @function_tool
@@ -393,18 +520,18 @@ class RoomToolsMixin(HotelAgent):
         category: DisputeCategory,
         line_item_label: str,
         caller_note: str,
-        accepts_offered_resolution: bool,
+        resolution_status: DisputeResolutionStatus,
     ) -> str:
         """Handle a guest dispute on a line item.
 
         Args:
-            category: Pick the category that best matches what the caller is disputing.
-            line_item_label: The label of the line item on the invoice, as it appears.
+            category: Pick the category that best matches what the caller is disputing. A charge for a stay the guest never arrived for, with no cancellation on record ("I never showed up", "I thought I cancelled"), is "no_show" - never "cancellation_fee", which is only for a fee from an actual recorded cancellation.
+            line_item_label: The label of the line item exactly as lookup_invoice quoted it - the label only, never with the amount appended to it.
             caller_note: A short summary of what the caller said about the charge.
-            accepts_offered_resolution: Required. Set true ONLY after the caller has actually
-                accepted the policy outcome you offered (a goodwill waiver, a credit, etc.).
-                Set false if they pushed back, asked for a manager, or haven't been offered
-                anything yet. Never default to true to skip the conversation.
+            resolution_status: Required. Use "pending" on the first call, before the policy
+                resolution has been offered. After presenting the returned resolution, use
+                "accepted" only if the caller actually accepts it, or "declined" if they reject
+                it, push back, or ask for a manager. Never skip the pending step.
         """
         if category not in DISPUTE_POLICIES:
             raise ToolError(f"unknown dispute category: {category}")
@@ -418,20 +545,48 @@ class RoomToolsMixin(HotelAgent):
         target = line_item_label.casefold()
         item = next((li for li in invoice.line_items if li.label.casefold() == target), None)
         if item is None:
+            labels = ", ".join(f'"{li.label}"' for li in invoice.line_items)
             raise ToolError(
-                f"No line item labelled {line_item_label!r} on that invoice. "
-                "Read the line items back and ask the caller to pick one."
+                f"No line item labelled {line_item_label!r} on that invoice - do NOT retry "
+                f"the same value. The invoice's exact labels are: {labels}. If one of those "
+                "is the charge the caller is contesting, call again with it exactly as quoted "
+                "(no amount appended). If the charge they described is not among them, there "
+                "is no line to dispute: tell them plainly it isn't on their invoice, then "
+                'load_capability("guest_services") and record_followup so a human '
+                "investigates. Don't call lookup_invoice or dispute_charge again."
             )
 
         amount = item.amount_cents
-        outcome, refund = _resolve_dispute_outcome(
+        invoice_line_items = [(li.label, li.amount_cents) for li in invoice.line_items]
+        accepted_resolution = _resolve_dispute_outcome(
             policy=policy,
             amount_cents=amount,
             line_item_label=item.label,
-            invoice_line_items=[(li.label, li.amount_cents) for li in invoice.line_items],
-            accepts=accepts_offered_resolution,
+            invoice_line_items=invoice_line_items,
+            resolution_status="accepted",
+        )
+        declined_resolution = _resolve_dispute_outcome(
+            policy=policy,
+            amount_cents=amount,
+            line_item_label=item.label,
+            invoice_line_items=invoice_line_items,
+            resolution_status="declined",
         )
 
+        resolution = _select_dispute_resolution(
+            resolution_status=resolution_status,
+            accepted_resolution=accepted_resolution,
+            declined_resolution=declined_resolution,
+        )
+        if resolution is None:
+            return _say_dispute_offer(
+                outcome=accepted_resolution[0],
+                refund=accepted_resolution[1],
+                line_item=item.label,
+                policy_explanation=policy.explanation,
+            )
+
+        outcome, refund = resolution
         case_number = await ctx.userdata.db.file_dispute(
             booking_code=booking.code,
             line_item=item.label,

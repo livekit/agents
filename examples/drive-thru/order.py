@@ -5,7 +5,7 @@ import secrets
 import string
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -43,7 +43,7 @@ class OrderedRegular(BaseModel):
     size: Literal["S", "M", "L"] | None = None
 
 
-OrderedItem = Annotated[OrderedCombo | OrderedHappy | OrderedRegular, Field(discriminator="type")]
+OrderedItem = OrderedCombo | OrderedHappy | OrderedRegular
 
 
 @dataclass

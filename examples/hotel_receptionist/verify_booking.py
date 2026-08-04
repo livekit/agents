@@ -94,8 +94,9 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
                 ToolError(
                     f"couldn't verify the booking: {reason} | verification is closed - your full "
                     "toolset is back: continue with what the caller actually wants (a new booking "
-                    "-> start_room_booking; a followup -> record_followup). Nothing was booked or "
-                    "recorded during verification - don't claim otherwise."
+                    '-> start_room_booking; a followup -> load_capability("guest_services") '
+                    "first, since record_followup is not in the rooms area). Nothing was booked "
+                    "or recorded during verification - don't claim otherwise."
                 )
             )
 
@@ -106,14 +107,17 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
         ):
             if not self.done():
                 self.complete(VerifyBookingResult(booking=booking))
+            # complete() ends this activity; a non-None return here would schedule a reply
+            # in it, and the handoff merge strips the output either way.
             return None
         if self._attempts >= 3:
             if not self.done():
                 self.complete(
                     ToolError(
                         "verification failed after 3 attempts - don't keep trying. "
-                        "Apologize, then call record_followup with kind='verification_help' "
-                        "so a manager can follow up."
+                        'Apologize, then load_capability("guest_services") and call '
+                        "record_followup with kind='verification_help' so a manager can "
+                        "follow up; record_followup is not in the rooms area."
                     )
                 )
             return None

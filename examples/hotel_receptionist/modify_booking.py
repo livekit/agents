@@ -23,7 +23,7 @@ from .hotel_db import HotelDB
 from .persona import common_instructions
 
 _MODIFY_INSTRUCTIONS = """\
-You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Your job is to apply ONLY the changes the caller asks for, then call confirm_changes().
+You're modifying an existing room booking. The caller has been verified and the booking is loaded - dates, room, extras, and party size are pre-filled with the current values. Verification already succeeded, whether or not it was spoken about: never re-verify, and never ask for a confirmation code or card digits. Your job is to apply ONLY the changes the caller asks for, then call confirm_changes().
 
 Identity fields (name, email, phone, card) cannot be changed here. If the caller wants to change any of those, say so plainly and steer back to what this flow handles.
 
@@ -74,11 +74,14 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         # and to produce a faithful summary of what changed.
         self._changed: set[str] = set()
         # The model is asked to read the booking back - so the booking's actual
-        # facts must be IN its context, or it will invent dates and amounts.
+        # facts must be IN its context, or it will invent dates and amounts. The
+        # room's view is part of those facts: without it, a booking that was just
+        # moved for its view reads back as if the move never happened.
         extras = ", ".join(existing.extras) if existing.extras else "none"
+        view = db.room_view(existing.room_id)
         booking_facts = (
             f"\nThe loaded booking: {existing.first_name} {existing.last_name}, "
-            f"{existing.room_type.replace('_', ' ')}, "
+            f"{view}-view {existing.room_type.replace('_', ' ')}, "
             f"check-in {format_date(existing.check_in)}, "
             f"check-out {format_date(existing.check_out)}, "
             f"{existing.guests} guest{'s' if existing.guests != 1 else ''}, "
@@ -94,7 +97,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         self.session.generate_reply(
             instructions=(
                 "Read the booking back briefly in one sentence (guest name, dates, room "
-                "type, current extras if any) and ask what the caller wants to change. "
+                "type and view, current extras if any) and ask what the caller wants to change. "
                 "Do not list every column - just enough that the caller recognizes the "
                 "booking and can say what to update."
             )

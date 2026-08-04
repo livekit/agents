@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -13,7 +13,7 @@ from livekit.agents.voice.agent import AgentTask
 from .context import speech_only
 from .hotel import MAX_PARTY_SIZE, RestaurantReservation, Unavailable, format_date, speak_time
 from .hotel_db import HotelDB
-from .persona import PHONE_READBACK_INSTRUCTIONS, common_instructions
+from .persona import common_instructions
 
 _BOOK_RESTAURANT_INSTRUCTIONS = """\
 You're handling a restaurant reservation from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
@@ -26,6 +26,16 @@ Each tool's return ends with a directive for the next action (e.g. "next: call o
 
 Never speak the same question twice in a row. If a field was just captured ("name recorded", "time recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
+
+_RESTAURANT_PHONE_INSTRUCTIONS = """\
+Caller cannot provide the phone number or does not have it handy: call
+`decline_phone_number_capture` immediately. Do not say or imply that the table or
+reservation is booked.
+"""
+
+
+class RestaurantReservationNotCreatedError(ToolError):
+    """The restaurant flow ended before a reservation was written."""
 
 
 class BookRestaurantTask(AgentTask[RestaurantReservation]):
@@ -72,6 +82,18 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             return "name captured - next: call open_phone_dialog"
         return "all required details captured - call confirm_reservation() now to finalize the reservation"
 
+    def _not_reserved(self) -> str:
+        # Same split as BookRoomTask._not_booked: _status() is progress text, and
+        # read as the result of a refused confirm_reservation it says only "here
+        # is the next step" - nothing in it says no table was reserved. The
+        # is_error flag never reaches the model (the OpenAI provider format sends
+        # this string as the whole tool message), so it has to state the outcome.
+        return (
+            "NOT reserved - no reservation was created and no confirmation code exists. "
+            "Never tell the caller the table is reserved and never speak a confirmation code. "
+            f"Where the reservation actually stands: {self._status()}"
+        )
+
     @function_tool()
     async def set_party(self, on_date: date, party_size: Annotated[int, Field(ge=1)]) -> str:
         """Record the date + party size. The return lists the open time slots - offer them to the caller and let them pick; don't choose a slot yourself.
@@ -110,13 +132,22 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return f"party recorded ({format_date(on_date)}, {party_size} guests); open times: {labels} | {self._status()}"
 
     @function_tool()
-    async def choose_time(self, at_time: time, notes: str | None = None) -> str:
+    async def choose_time(
+        self,
+        hr: Annotated[int, Field(ge=1, le=12)],
+        minute: Annotated[int, Field(ge=0, le=59)],
+        ampm: Literal["am", "pm"],
+        notes: str | None = None,
+    ) -> str:
         """Record the chosen time slot and any special request.
 
         Args:
-            at_time: The slot the CALLER picked, from the open times set_party returned.
+            hr: Hour of the slot the CALLER picked, from 1 through 12.
+            minute: Minute of the slot the CALLER picked, from 0 through 59.
+            ampm: Whether the chosen slot is in the morning ("am") or evening ("pm").
             notes: Optional special request (allergy, anniversary...), or null.
         """
+        at_time = time(hour=(hr % 12) + (12 if ampm == "pm" else 0), minute=minute)
         if self._date is None:
             raise ToolError("date and party size not yet recorded")
         if at_time not in self._open_times:
@@ -140,12 +171,22 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
 
     @function_tool()
-    async def open_phone_dialog(self) -> str:
+    async def open_phone_dialog(self) -> str | None:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
-        r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=speech_only(self.chat_ctx),
-            extra_instructions=common_instructions(self._today) + PHONE_READBACK_INSTRUCTIONS,
-        )
+        try:
+            r = await beta.workflows.GetPhoneNumberTask(
+                chat_ctx=speech_only(self.chat_ctx),
+                extra_instructions=(
+                    f"{common_instructions(self._today)}\n\n{_RESTAURANT_PHONE_INSTRUCTIONS}"
+                ),
+            )
+        except beta.workflows.PhoneNumberCaptureDeclinedError:
+            error = RestaurantReservationNotCreatedError(
+                "reservation not created: a phone number is required"
+            )
+            if not self.done():
+                self.complete(error)
+            return f"{error} | never tell the caller the table is reserved"
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
@@ -156,7 +197,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         on_date, party_size, at_time = self._date, self._party_size, self._time
         first_name, phone = self._first_name, self._phone
         if not (on_date and party_size and at_time and first_name and phone):
-            raise ToolError(self._status())
+            raise ToolError(self._not_reserved())
         try:
             reservation = await self._db.book_restaurant(
                 first_name=first_name,

@@ -167,9 +167,8 @@ def _ensure_strict_json_schema(
                 for i, entry in enumerate(all_of)
             ]
 
-    # popped before the default handling below so a wrapped schema doesn't retain them
+    # popped before the default handling below so a wrapped schema doesn't retain it
     json_schema.pop("title", None)
-    json_schema.pop("discriminator", None)
 
     # strict mode doesn't support default
     if "default" in json_schema:

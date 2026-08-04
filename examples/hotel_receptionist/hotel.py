@@ -214,6 +214,26 @@ def format_room_type_availability(availability: RoomTypeAvailability) -> str:
     return "; ".join(parts)
 
 
+def describe_room_options(avail: list[RoomTypeAvailability]) -> str:
+    """The available types as one line each, with the view verdict on the type's own line.
+
+    A single pipe-delimited line ("queen 2beds (city or garden views) | ... | double
+    queen (ocean view)") reads as one blob: the model binds a neighboring type's view
+    to the type the caller picked and offers a garden-view double queen, which has
+    never existed. One row per type keeps the binding local, and spelling out whether
+    the view is a question or a fact stops the offer from becoming a false choice.
+    """
+    return "\n".join(
+        f"- {a.type.replace('_', ' ')}: {format_room_type_availability(a)}"
+        + (
+            " - ask which of those views they want"
+            if len(a.views) > 1
+            else f" - {a.views[0]} view only: say so as a fact, there is no view to ask about"
+        )
+        for a in avail
+    )
+
+
 @dataclass
 class RoomBooking:
     id: int
@@ -469,6 +489,12 @@ FLORIST_ARRANGEMENTS: dict[str, FloralArrangement] = {
     "roses": FloralArrangement(name="Dozen long-stem roses", price=9500),
     "centerpiece": FloralArrangement(name="Table centerpiece arrangement", price=14000),
 }
+
+
+def speak_room(room_id: str) -> str:
+    suffix = room_id.removeprefix("RM_")
+    return "the penthouse suite" if suffix == "PH" else f"room {suffix}"
+
 
 # The partner property used when a confirmed guest has to be walked.
 WALK_PARTNER_HOTEL = "the Harbor House"

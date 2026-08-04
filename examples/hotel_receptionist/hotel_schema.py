@@ -172,16 +172,19 @@ CREATE TABLE IF NOT EXISTS business_center_bookings (
 );
 
 CREATE TABLE IF NOT EXISTS florist_orders (
-    id             INTEGER PRIMARY KEY,
-    code           TEXT    NOT NULL UNIQUE,
-    arrangement_id TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
-    guest_name     TEXT    NOT NULL,
-    guest_phone    TEXT    NOT NULL,
-    deliver_to     TEXT    NOT NULL,
-    date           DATE    NOT NULL,
-    message        TEXT    NOT NULL DEFAULT '',
-    total          INTEGER NOT NULL,
-    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+    id                    INTEGER PRIMARY KEY,
+    code                  TEXT    NOT NULL UNIQUE,
+    arrangement_id        TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
+    guest_name            TEXT    NOT NULL,
+    guest_phone           TEXT    NOT NULL,
+    room_id               TEXT    REFERENCES hotel_rooms(id),
+    recipient_name        TEXT,
+    date                  DATE    NOT NULL,
+    message               TEXT    NOT NULL DEFAULT '',
+    delivery_instructions TEXT    NOT NULL DEFAULT '',
+    total                 INTEGER NOT NULL,
+    status                TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled')),
+    CHECK ((room_id IS NULL) <> (recipient_name IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS emails_sent (
@@ -234,6 +237,7 @@ CREATE TABLE IF NOT EXISTS flight_reconfirmations (
     airline           TEXT    NOT NULL,
     flight_number     TEXT    NOT NULL,
     flight_date       DATE    NOT NULL,
+    departure_time    TIME,
     booking_reference TEXT    NOT NULL,
     seat_check        BOOLEAN NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL DEFAULT 'pending'

@@ -8,6 +8,7 @@ import apsw
 import pytest
 
 from examples.hotel_receptionist.agent import HotelReceptionistAgent, _close_session_resources
+from examples.hotel_receptionist.capabilities import CAPABILITIES
 from examples.hotel_receptionist.ui_view import UiView
 from livekit import rtc
 
@@ -66,7 +67,21 @@ class _FakeRoom:
 def test_agent_collects_tools_from_every_tool_module() -> None:
     agent = HotelReceptionistAgent(today=date(2026, 6, 8))
 
-    assert len(agent.tools) == 33
+    # Capability gating: only the resident pair is visible until load_capability.
+    assert {t.info.name for t in agent.tools} == {
+        "load_capability",
+        "say_goodbye_and_close_call",
+    }
+    # ...but the registry holds every mixin tool, ready to be switched on, and
+    # every tool a capability advertises actually exists.
+    assert len(agent._registry) == 36
+    missing = {
+        name
+        for area in CAPABILITIES.values()
+        for name in area.tools
+        if name not in agent._registry
+    }
+    assert not missing
 
 
 @pytest.mark.asyncio
