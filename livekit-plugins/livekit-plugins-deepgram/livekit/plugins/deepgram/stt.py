@@ -285,6 +285,7 @@ class STT(stt.STT):
                 return prerecorded_transcription_to_speech_event(
                     config.language,
                     await res.json(),
+                    punctuate=config.punctuate,
                 )
 
         except asyncio.TimeoutError as e:
@@ -826,6 +827,7 @@ class SpeechStream(stt.SpeechStream):
                 data,
                 is_final=is_final_transcript,
                 start_time_offset=self.start_time_offset,
+                punctuate=self._opts.punctuate,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -872,19 +874,26 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("received unexpected message from deepgram %s", data)
 
 
-def _word_text(word: dict) -> str:
-    """Prefer Deepgram's punctuated form so words match SpeechData.text.
+def _word_text(word: dict, *, punctuate: bool) -> str:
+    """Return the word form matching what the caller asked Deepgram for.
 
-    Deepgram returns both `word` (lowercase, unpunctuated) and, when `punctuate` is
-    enabled, `punctuated_word`. `SpeechData.text` comes from `alt["transcript"]`, which is
-    punctuated, so using `word` left the word list disagreeing with the text it belongs to.
-    Falls back to `word` when punctuation is disabled or the key is absent.
+    Deepgram returns `word` (lowercase, unpunctuated) and, when `punctuate` is enabled,
+    `punctuated_word` alongside it. `SpeechData.text` comes from `alt["transcript"]`, which
+    honours `punctuate`, so the word list follows the same option to stay consistent with
+    the text it belongs to. Falls back to `word` if the key is missing.
     """
-    return word.get("punctuated_word") or word.get("word", "")
+    if punctuate:
+        return word.get("punctuated_word") or word.get("word", "")
+    return word.get("word", "")
 
 
 def live_transcription_to_speech_data(
-    language: str, data: dict, *, is_final: bool, start_time_offset: float
+    language: str,
+    data: dict,
+    *,
+    is_final: bool,
+    start_time_offset: float,
+    punctuate: bool = True,
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
@@ -906,7 +915,7 @@ def live_transcription_to_speech_data(
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
-                    text=_word_text(word),
+                    text=_word_text(word, punctuate=punctuate),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
                     start_time_offset=start_time_offset,
@@ -925,6 +934,8 @@ def live_transcription_to_speech_data(
 def prerecorded_transcription_to_speech_event(
     language: str | None,  # language should be None when 'detect_language' is enabled
     data: dict,
+    *,
+    punctuate: bool = True,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
     request_id = data["metadata"]["request_id"]
@@ -947,7 +958,7 @@ def prerecorded_transcription_to_speech_event(
                 text=alt["transcript"],
                 words=[
                     TimedString(
-                        text=_word_text(word),
+                        text=_word_text(word, punctuate=punctuate),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
                     )
