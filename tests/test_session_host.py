@@ -34,6 +34,24 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
+# Every session event the host forwards to a remote consumer. Asserting the set
+# rather than its size says which events are forwarded, and pairs register with
+# aclose: an `on` added without its `off` leaks a handler across reconnects and
+# only shows up as a mismatch between these two.
+FORWARDED_EVENTS = {
+    "agent_false_interruption",
+    "agent_state_changed",
+    "conversation_item_added",
+    "debug_message",
+    "error",
+    "function_tools_executed",
+    "overlapping_speech",
+    "session_usage_updated",
+    "tool_execution_updated",
+    "user_input_transcribed",
+    "user_state_changed",
+}
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------
@@ -278,7 +296,8 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 10
+        subscribed = {call.args[0] for call in mock_session.on.call_args_list}
+        assert subscribed == FORWARDED_EVENTS
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -660,4 +679,5 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 10
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
