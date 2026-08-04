@@ -1,0 +1,45 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Anam virtual avatar plugin for LiveKit Agents
+
+See https://docs.livekit.io/agents/integrations/avatar/anam/ for setup, and
+https://anam.ai/docs/integrations/livekit/configuration for persona config and the API reference.
+"""
+
+from .avatar import AvatarSession
+from .errors import AnamException
+from .types import DirectorNotes, PersonaConfig, SessionOptions
+from .version import __version__
+
+__all__ = [
+    "AnamException",
+    "AvatarSession",
+    "DirectorNotes",
+    "PersonaConfig",
+    "SessionOptions",
+    "__version__",
+]
+
+from livekit.agents import Plugin
+
+from .log import logger
+
+
+class AnamPlugin(Plugin):
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
+
+
+Plugin.register_plugin(AnamPlugin())

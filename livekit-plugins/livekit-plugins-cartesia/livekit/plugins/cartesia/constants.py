@@ -1,0 +1,14 @@
+from typing import Literal
+
+from .version import __version__
+
+API_AUTH_HEADER = "X-API-Key"
+API_VERSION_HEADER = "Cartesia-Version"
+API_VERSION = "2025-04-16"
+API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "2024-11-13"
+MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS = "sonic-2-2025-03-07"
+USER_AGENT = f"LiveKit Agents Cartesia Plugin/{__version__}"
+REQUEST_ID_HEADER = "X-Request-Id"
+
+# LiveKit uses this encoding for all audio
+AUDIO_ENCODING: Literal["pcm_s16le"] = "pcm_s16le"

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+Example: Voice Agent with Krisp Noise Cancellation
+
+This example demonstrates how to integrate Krisp noise cancellation
+into a LiveKit voice agent for human-to-bot conversations.
+
+The audio pipeline:
+    Room → RoomIO (with voice_isolation) → VAD → STT → LLM → TTS → Room
+
+Authentication:
+    By default the plugin uses ``krisp.auth.livekit_cloud()`` — auth + metering
+    happen via the room's existing JWT, which the agent framework hands to the
+    FrameProcessor automatically. No Krisp env vars are required when running
+    against LiveKit Cloud. To use your own Krisp license + ``.kef`` model file
+    instead, see the commented ``auth_provider=`` block below.
+
+Prerequisites:
+    1. Standard agent env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+    2. Install required packages:
+       - livekit-agents (with PR #4145 support for FrameProcessor)
+       - livekit-plugins-krisp
+       - livekit-plugins-openai (or your preferred STT/LLM/TTS)
+
+Usage:
+    python krisp_agent_example.py dev
+"""
+
+import logging
+
+from dotenv import load_dotenv
+
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    cli,
+    inference,
+    room_io,
+)
+from livekit.plugins import krisp, openai
+
+logger = logging.getLogger("krisp-agent-example")
+load_dotenv()
+
+
+class KrispAgent(Agent):
+    """Voice agent that uses Krisp for noise cancellation."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            instructions=(
+                "You are a helpful voice assistant. "
+                "Keep your responses concise and conversational. "
+                "Do not use emojis or special characters in your responses."
+            ),
+        )
+
+    async def on_enter(self):
+        """Called when the agent enters the session."""
+        logger.info("Krisp agent entered session")
+        # Generate initial greeting (uninterruptible for AEC calibration)
+        self.session.generate_reply(allow_interruptions=False)
+
+
+server = AgentServer()
+
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    """Main entrypoint for the agent session."""
+
+    # Configure the agent session
+    session = AgentSession(
+        vad=inference.VAD(),
+        stt=openai.STT(model="whisper-1"),
+        llm=openai.LLM(model="gpt-4o-mini"),
+        tts=openai.TTS(voice="alloy"),
+        allow_interruptions=True,
+        min_endpointing_delay=0.5,
+        max_endpointing_delay=3.0,
+    )
+
+    logger.info("Starting agent session with RoomIO and Krisp noise cancellation")
+
+    # Create the Krisp voice isolation FrameProcessor.
+    # Defaults to krisp.auth.livekit_cloud() — the framework pushes the room's
+    # JWT to the FrameProcessor via _on_credentials_updated and auto-refreshes
+    # it on token rotation. No manual credential plumbing required. Input frames
+    # of any size and sample rate are buffered and adapted automatically.
+    noise_cancellation = krisp.voice_isolation(
+        noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
+    )
+    # For telephony audio (for example, SIP participants), use
+    # krisp.voice_isolation_telephony() instead.
+
+    # To use a Krisp license key + .kef model file instead, supply an explicit
+    # auth provider:
+    #
+    #     noise_cancellation = krisp.KrispVivaFilterFrameProcessor(
+    #         auth_provider=krisp.auth.krisp_license(
+    #             # Both default to env vars KRISP_VIVA_SDK_LICENSE_KEY and
+    #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted.
+    #             license_key="...",
+    #             model_path="/path/to/model.kef",
+    #         ),
+    #         noise_suppression_level=100,
+    #     )
+
+    # Start the session with RoomIO configuration.
+    await session.start(
+        agent=KrispAgent(),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=noise_cancellation,  # Pass the FrameProcessor directly
+            ),
+        ),
+    )
+
+    logger.info("✅ Krisp noise cancellation active")
+
+
+if __name__ == "__main__":
+    cli.run_app(server)
