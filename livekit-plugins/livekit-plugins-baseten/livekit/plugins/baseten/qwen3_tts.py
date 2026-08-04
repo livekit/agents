@@ -391,6 +391,13 @@ class Qwen3TTS(tts.TTS):
         """
         while not self._closing:
             await asyncio.sleep(_KEEPALIVE_INTERVAL)
+
+            # Take the socket *out* of the slot before flushing. The lock is on
+            # the hot path for every turn, so holding it across the round trip
+            # would stall a reply that starts mid-keepalive by up to
+            # _KEEPALIVE_TIMEOUT. Removing it also keeps the invariant that a
+            # turn and the keepalive never touch the same socket: a turn
+            # arriving now finds an empty slot and dials its own.
             async with self._warm_lock:
                 warm = self._warm
                 if warm is None:
@@ -400,12 +407,22 @@ class Qwen3TTS(tts.TTS):
                     return
                 if not warm.config:
                     continue
-                if await self._empty_flush(warm.ws):
-                    warm.last_activity = time.monotonic()
-                else:
-                    self._warm = None
-                    await self._shutdown_ws(warm.ws, notify=False)
-                    return
+                self._warm = None
+
+            if not await self._empty_flush(warm.ws):
+                await self._shutdown_ws(warm.ws, notify=False)
+                return
+
+            warm.last_activity = time.monotonic()
+            async with self._warm_lock:
+                surplus = self._warm is not None
+                if not surplus:
+                    self._warm = warm
+            if surplus:
+                # A turn started during the flush and parked its own socket on
+                # the way out, so ours is now redundant.
+                await self._shutdown_ws(warm.ws, notify=True)
+                return
 
     async def _empty_flush(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         try:
