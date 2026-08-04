@@ -30,6 +30,7 @@ from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
     azure,
+    bland,
     cartesia,
     deepgram,
     elevenlabs,
@@ -153,6 +154,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.cartesia.ai:443",
         },
         id="cartesia",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": bland.TTS(),
+            "proxy-upstream": "api.bland.ai:443",
+        },
+        id="bland",
     ),
     pytest.param(
         lambda: {
