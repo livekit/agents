@@ -679,6 +679,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
+        # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
+        self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -1605,20 +1607,39 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @asynccontextmanager
     async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit.
+
+        An active run is guarded for the whole scope, since reaching idle is itself what
+        completes the run: without the guard, whatever the scope does next lands after
+        ``run()`` returned and goes unrecorded.
+        """
         from .agent_activity import _IdleHoldContextVar
 
-        activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
-        token = _IdleHoldContextVar.set(True)
+        # registered before the wait below, which is what lets the run complete
+        guard: asyncio.Future[None] | None = None
+        if (run_state := self._global_run_state) is not None and not run_state.done():
+            guard = asyncio.get_running_loop().create_future()
+            run_state._watch_handle(guard)
+            self._foreground_guards.add(guard)
+
         try:
-            yield activity
+            activity = await self.wait_for_idle()
+            self._idle_holds += 1
+            self._idle_released.clear()
+            token = _IdleHoldContextVar.set(True)
+            try:
+                yield activity
+            finally:
+                _IdleHoldContextVar.reset(token)
+                self._idle_holds -= 1
+                if self._idle_holds == 0:
+                    self._idle_released.set()
         finally:
-            _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            if guard is not None:
+                self._foreground_guards.discard(guard)
+                # the run re-checks from the done callback; releasing here rather than on
+                # the way out of the inner block covers a floor that never arrives
+                guard.set_result(None)
 
     async def _update_activity(
         self,
