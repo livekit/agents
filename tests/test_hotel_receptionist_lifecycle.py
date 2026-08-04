@@ -7,7 +7,11 @@ from typing import Any, cast
 import apsw
 import pytest
 
-from examples.hotel_receptionist.agent import HotelReceptionistAgent, _close_session_resources
+from examples.hotel_receptionist.agent import (
+    HotelReceptionistAgent,
+    _close_session_resources,
+    _expressive_options,
+)
 from examples.hotel_receptionist.capabilities import CAPABILITIES
 from examples.hotel_receptionist.ui_view import UiView
 from livekit import rtc
@@ -64,6 +68,29 @@ class _FakeRoom:
         self.listeners[event].remove(callback)
 
 
+def test_expressive_options_resolve_against_the_sdk() -> None:
+    """The demo flips AgentSession's private ``_expressive`` switch (there is no
+    public API for the pipeline yet); this pins the config shape to what the
+    SDK's resolver actually accepts, so an upstream change fails here instead
+    of crashing every simulation at startup."""
+    from livekit.agents.voice.agent_session import (
+        DEFAULT_EXPRESSIVE_OPTIONS,
+        resolve_expressive_options,
+    )
+
+    assert _expressive_options(False) is False
+
+    opts = _expressive_options(True)
+    assert isinstance(opts, dict)
+    resolved = resolve_expressive_options(
+        opts,  # type: ignore[arg-type]
+        provider_key="xai",
+        default=DEFAULT_EXPRESSIVE_OPTIONS,
+    )
+    assert resolved["tts_instructions_template"]
+    assert resolved["speech_steering"]
+
+
 def test_agent_collects_tools_from_every_tool_module() -> None:
     agent = HotelReceptionistAgent(today=date(2026, 6, 8))
 
@@ -76,10 +103,7 @@ def test_agent_collects_tools_from_every_tool_module() -> None:
     # every tool a capability advertises actually exists.
     assert len(agent._registry) == 36
     missing = {
-        name
-        for area in CAPABILITIES.values()
-        for name in area.tools
-        if name not in agent._registry
+        name for area in CAPABILITIES.values() for name in area.tools if name not in agent._registry
     }
     assert not missing
 

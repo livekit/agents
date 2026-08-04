@@ -41,6 +41,26 @@ logger = logging.getLogger("hotel-receptionist")
 EXPRESSIVE_ATTRIBUTE = "expressive"
 
 
+def _expressive_options(expressive: bool) -> bool | dict[str, object]:
+    """The session's expressive-pipeline config: composed, formal delivery
+    (the old presets.FORMAL) - breathing and light fillers stay on, every
+    other non-verbal sound is disabled."""
+    if not expressive:
+        return False
+    return {
+        "speech_steering": {
+            "nonverbal_sounds": {
+                "laughing": False,
+                "sighing": False,
+                "crying": False,
+                "vocalizing": False,
+                "mouth_sounds": False,
+                "reflex_sounds": False,
+            },
+        },
+    }
+
+
 class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin):
     def __init__(self, *, today: date) -> None:
         super().__init__(instructions=core_instructions(today), tools=[build_lookup_policy_tool()])
@@ -147,24 +167,11 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         # leaving the task wedged with nothing written.
         max_tool_steps=8,
     )
-    # Composed, formal delivery (the old presets.FORMAL): breathing and light
-    # fillers stay on, every other non-verbal sound is disabled.
-    session.update_options(
-        expressive={
-            "speech_steering": {
-                "nonverbal_sounds": {
-                    "laughing": False,
-                    "sighing": False,
-                    "crying": False,
-                    "vocalizing": False,
-                    "mouth_sounds": False,
-                    "reflex_sounds": False,
-                },
-            },
-        }
-        if expressive
-        else False
-    )
+    # The expressive pipeline is framework-internal (AgentSession exposes no
+    # public switch yet - update_options() grew no expressive kwarg when the
+    # pipeline landed upstream), so flip the same private attribute the
+    # framework's own expressive tests use.
+    session._expressive = _expressive_options(expressive)
 
     # Token-usage instrumentation: the inference gateway enforces a per-minute LLM
     # token quota project-wide, so log every LLM request's token counts plus a
