@@ -65,15 +65,15 @@ def test_str_terminates_on_a_cycle_between_two_connection_errors() -> None:
     assert str(outer) == "outer (caused by APIConnectionError: inner)"
 
 
-def test_str_reports_the_root_of_a_chain_deeper_than_ten() -> None:
-    """A depth bound would leave intermediate wrappers in the message."""
+def test_str_stops_after_ten_distinct_causes() -> None:
+    """The 10th is named on its own; nothing deeper is walked or nested into the message."""
     root: BaseException = OSError("peer closed connection")
     for i in range(20):
         wrapper = APIConnectionError(f"wrapped {i}")
         wrapper.__cause__ = root
         root = wrapper
 
-    assert str(_wrap(root)) == "Connection error. (caused by OSError: peer closed connection)"
+    assert str(_wrap(root)) == "Connection error. (caused by APIConnectionError: wrapped 10)"
 
 
 def test_timeout_subclass_keeps_its_own_message() -> None:

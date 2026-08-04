@@ -117,11 +117,14 @@ class APIConnectionError(APIError):
         # construction and must be read here. The default message carries no detail, and
         # providers wrap transport failures behind placeholder messages of their own, so the
         # root of the chain is the only place the actual failure is named.
-        # a chain may cycle back on itself, so the walk is bounded by identity, not by depth.
+        # a chain may cycle back on itself, so the walk stops at the first repeated exception
+        # and after 10 distinct ones.
         root: BaseException | None = None
         seen = {id(self)}
         cause = self.__cause__
-        while cause is not None and id(cause) not in seen:
+        for _ in range(10):
+            if cause is None or id(cause) in seen:
+                break
             seen.add(id(cause))
             root = cause
             cause = cause.__cause__
