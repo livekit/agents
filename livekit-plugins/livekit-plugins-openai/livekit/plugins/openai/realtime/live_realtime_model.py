@@ -24,6 +24,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
 
 from ..log import logger
 
@@ -289,6 +290,8 @@ class GPTLiveSession(
         # response.function_call_arguments.done omits the function name; capture it from the
         # earlier response.output_item.added, keyed by item_id
         self._pending_fnc_calls: dict[str, dict[str, Any]] = {}
+        # calls this connection delegated; only their results mean anything to the backend
+        self._delegated_calls: set[str] = set()
 
         # local mirror of items already synced to the server; used to diff tool outputs
         self._remote_chat_ctx = llm.ChatContext.empty()
@@ -399,6 +402,7 @@ class GPTLiveSession(
         self._user_transcripts.clear()
         self._assistant_transcripts.clear()
         self._pending_fnc_calls.clear()
+        self._delegated_calls.clear()
         # a new connection is a new session, so its usage counters restart from zero
         self._usage_total = {}
         self._session_id = None
@@ -714,6 +718,7 @@ class GPTLiveSession(
         )
         # mirror the call so update_chat_ctx can diff the matching output
         self._remote_chat_ctx.items.append(fnc_call)
+        self._delegated_calls.add(call_id)
         self.emit("function_call", fnc_call)
 
     # -- metrics and errors ----------------------------------------------------------------------
@@ -873,19 +878,41 @@ class GPTLiveSession(
         self._config_ready.set()
 
     async def _update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        # the framework hands over the whole context; gpt-live can only be told what is new, so
-        # what has not been sent yet is recovered by id and routed to the matching protocol event
-        existing_ids = {item.id for item in self._remote_chat_ctx.items}
-        for item in chat_ctx.items:
-            if item.id in existing_ids:
-                continue
-            if isinstance(item, llm.FunctionCallOutput):
-                self.send_delegation_output(call_id=item.call_id, output=item.output)
-                self._remote_chat_ctx.items.append(item)
-            elif isinstance(item, llm.ChatMessage) and item.role == "user":
-                if text := "\n".join(c for c in item.content if isinstance(c, str)):
-                    self.append_context(text)
-                self._remote_chat_ctx.items.append(item)
+        # the framework hands over the whole context, so what is new is recovered by diffing it
+        # against what has already gone out, then routed to the protocol event that carries it
+        chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
+        remove_instructions(chat_ctx)
+        diff = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx, chat_ctx)
+
+        # a revision the model cannot apply is the same defect as a deletion it cannot apply
+        if stale := (diff.to_remove + [item_id for _, item_id in diff.to_update]):
+            logger.error(
+                "gpt-live context is append-only; the model keeps what it has been told",
+                extra={"item_ids": stale},
+            )
+
+        # one append for the whole turn: the model reads context as a block, so a transcript of who
+        # said what stays coherent where message-per-event would arrive as disconnected fragments
+        transcript: list[str] = []
+        for _, item_id in diff.to_create:
+            item = chat_ctx.get_by_id(item_id)
+            if isinstance(item, llm.FunctionCall):
+                # a call this connection made is already the backend's; anything else is history
+                if item.call_id not in self._delegated_calls:
+                    transcript.append(f"tool call: {item.name}({item.arguments})")
+            elif isinstance(item, llm.FunctionCallOutput):
+                if item.call_id in self._delegated_calls:
+                    # answers a call still open on the backend, so it goes back on its own channel
+                    self.send_delegation_output(call_id=item.call_id, output=item.output)
+                else:
+                    transcript.append(f"tool result: {item.output}")
+            elif isinstance(item, llm.ChatMessage) and (text := item.text_content):
+                transcript.append(f"{item.role}: {text}")
+
+        if transcript:
+            self.append_context("\n".join(transcript))
+
+        self._remote_chat_ctx = chat_ctx
 
     def _update_options(
         self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN

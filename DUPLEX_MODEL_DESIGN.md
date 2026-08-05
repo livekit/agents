@@ -495,6 +495,31 @@ class GPTLiveModel(llm.DuplexModel):
 already names the other OpenAI API in this same plugin (`openai.realtime.RealtimeModel`). The API is
 alpha, so the rename is free now and expensive later.
 
+### Syncing the chat context
+
+`_update_chat_ctx` diffs the incoming context against what has already gone out with
+`llm.utils.compute_chat_ctx_diff`, the same machinery the Realtime plugin uses, and routes what is
+new by kind. A result answering a call **this connection delegated** goes back on
+`delegation.function_call_output.create`, the backend model's channel, and is not context at all.
+Everything else becomes **one** `session.context.append` carrying a `role: text` transcript of what
+was added since the last sync.
+
+Which side a tool call falls on is tracked, not assumed. A resumed call, an agent handoff and a
+reconnect all hand over prior `function_call_output` items whose `call_id` the backend never issued
+— and `_reset_for_reconnect` clears the mirror, so after a drop the entire history re-syncs. Sent
+blind, every one of those becomes a delegation output answering nothing. The session therefore
+records the calls it delegates, clears them with the connection, and renders the rest into the
+transcript as `tool call:` / `tool result:` lines, where they read as history instead of as protocol.
+
+One append rather than one per message, because the Live API's context entries carry no role: split
+across events, a user question and the answer to it arrive as unattributed fragments. Written as a
+transcript in a single block they stay legible, which also answers how to seed a resumed call —
+flattening prior history into one text block is not a workaround here, it is the shape the protocol
+has.
+
+A removal or a revision is logged as an error and otherwise ignored. The model keeps what it has
+been told, and pretending otherwise would leave the plugin's mirror disagreeing with the session.
+
 A known limitation disappears: *"`turn.done`(assistant) lags the turn's last audio delta, so the
 filler streamed in between is forwarded as part of the segment"* is no longer a defect, because
 inter-turn audio is supposed to be forwarded — it is simply untranscribed.
