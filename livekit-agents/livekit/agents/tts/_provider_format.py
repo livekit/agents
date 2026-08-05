@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, TypedDict
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from .markup_utils import (
     LEADING_WS,
+    _dedup_removal_space,
     convert_expression_tags,
-    dedup_removal_space,
     extract_and_strip,
 )
 
@@ -719,7 +719,7 @@ def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceT
 
 
 _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
-# every marker pattern captures the space before it as "pre" so dedup_removal_space can
+# every marker pattern captures the space before it as "pre" so _dedup_removal_space can
 # drop it when the marker vanishes from between two spaces
 # any <expr ...> or <expr .../> tag (open or self-closing)
 _EXPR_OPEN_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/?\s*>")
@@ -775,10 +775,10 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
     def _repl(m: re.Match[str]) -> str:
         attrs = _expr_attrs(m.group("attrs"))
         tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return dedup_removal_space(m, "")
+        return _dedup_removal_space(m, "")
 
     clean = _EXPR_OPEN_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_RE.sub(lambda m: dedup_removal_space(m, ""), clean)
+    clean = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), clean)
     return clean, tags
 
 
@@ -818,10 +818,10 @@ def _convert_expr(provider: str, text: str) -> str:
             return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
         return inner
 
-    # a marker the provider doesn't support lowers to "" — dedup_removal_space keeps its
+    # a marker the provider doesn't support lowers to "" — _dedup_removal_space keeps its
     # removal from leaving two spaces behind (this text is the transcript when
     # use_tts_aligned_transcript is on)
-    text = _EXPR_WRAP_RE.sub(lambda m: dedup_removal_space(m, _wrap(m)), text)
+    text = _EXPR_WRAP_RE.sub(lambda m: _dedup_removal_space(m, _wrap(m)), text)
 
     def _self(m: re.Match[str]) -> str:
         attrs = _expr_attrs(m.group("attrs"))
@@ -849,11 +849,11 @@ def _convert_expr(provider: str, text: str) -> str:
             return _CARTESIA_PROSODY.get(label.strip().lower(), "")
         return ""
 
-    text = _EXPR_SELF_RE.sub(lambda m: dedup_removal_space(m, _self(m)), text)
+    text = _EXPR_SELF_RE.sub(lambda m: _dedup_removal_space(m, _self(m)), text)
     # a stray unpaired expr tag (e.g. a prosody wrapper split across stream chunks)
     # must never reach the TTS as literal text — drop the delimiters, keep the words
-    text = _EXPR_OPEN_RE.sub(lambda m: dedup_removal_space(m, ""), text)
-    text = _EXPR_CLOSE_RE.sub(lambda m: dedup_removal_space(m, ""), text)
+    text = _EXPR_OPEN_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
+    text = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
     return text
 
 

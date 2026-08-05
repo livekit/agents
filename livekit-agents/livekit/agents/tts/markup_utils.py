@@ -16,19 +16,32 @@ def convert_expression_tags(text: str) -> str:
 _VALUE_ATTR_RE = re.compile(r'\b[\w-]+\s*=\s*"([^"]*)"')
 
 # horizontal whitespace immediately before a tag. Every removal pattern captures it as
-# ``pre`` so :func:`dedup_removal_space` can decide whether to keep it; newlines are
+# ``pre`` so :func:`_dedup_removal_space` can decide whether to keep it; newlines are
 # excluded so paragraph breaks are never touched.
 LEADING_WS = r"(?P<pre>[^\S\r\n]*)"
 
 
-def dedup_removal_space(m: re.Match[str], kept: str) -> str:
+def _dedup_removal_space(m: re.Match[str], kept: str) -> str:
     """Replacement text for a stripped tag, minus the space its removal would double.
 
-    A tag between two spaces (``"Hi. <sound value=\"x\"/> There"``) leaves both behind
-    once it goes, so punctuation ends up followed by two spaces. When nothing of the tag
-    survives and whitespace follows the match, the whitespace captured *before* it (the
-    ``pre`` group) is dropped so a single separator remains — matching what
-    ``_provider_format.drop_bracket_cues`` already does for bracket cues.
+    The instructions place an expression marker before *every* sentence, so a turn is
+    written with a marker delimited like a word — a space on each side — at every sentence
+    boundary::
+
+        <expr type="expression" label="sincere and concerned"/> Oh no, I'm sorry to hear
+        that. <expr type="expression" label="warm and grounded"/> I can certainly see what
+        we have available for you. <expr type="expression" label="upbeat, warm questioning"/>
+        Just to be sure, are you looking to check out tomorrow, Friday the seventeenth?
+
+    Both spaces are correct while the marker is there. Stripping it for the transcript
+    collapses its width to zero and leaves both behind, so every sentence lands with two
+    spaces after its punctuation (``"to hear that.  I can certainly"``) — every sentence
+    of every expressive turn, not an edge case.
+
+    When nothing of the tag survives and whitespace follows the match, the whitespace
+    captured *before* it (the ``pre`` group) is therefore dropped so a single separator
+    remains — matching what ``_provider_format.drop_bracket_cues`` already does for
+    bracket cues.
 
     Whitespace before a tag at the very end of *text* is kept: it may be the separator
     for words still streaming in, and the sinks dedup that seam themselves.
@@ -101,9 +114,9 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
                 value = attr_match.group(1) if attr_match else ""
             tags.append((tag, value))
             # wrapping tags keep their inner content; self-closing/lone tags vanish
-            return dedup_removal_space(m, inner or "")
+            return _dedup_removal_space(m, inner or "")
 
-        return dedup_removal_space(m, "")  # lone closing tag
+        return _dedup_removal_space(m, "")  # lone closing tag
 
     # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
     # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
