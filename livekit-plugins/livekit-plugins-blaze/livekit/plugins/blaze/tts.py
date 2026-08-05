@@ -25,7 +25,8 @@ Protocol:
   3. Send {"event": "speech-start", ...params}
   4. Send {"query": "<text>"}
   5. Send {"event": "speech-end"}
-  6. Receive JSON {"status": "started-byte-stream"} + binary frames + {"status": "finished-byte-stream"}
+  6. Receive JSON {"status": "started-byte-stream"} + binary frames
+     + {"status": "finished-byte-stream"}
 Output: Streaming PCM audio chunks
 """
 
@@ -619,9 +620,11 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         query_count = 0
         seg_count = 0
         sent_queries: list[str] = []
-        # After the first successful pass over input, reconnects only resend
-        # queries already accepted by the gateway (tokenizer is not rewound).
+        # After a successful full input drain, reconnects only resend queries.
+        # Once we start reading input_ch, private reconnect is unsafe (partial
+        # tokenizer text would be lost) — raise and let the framework retry.
         input_done = False
+        input_started = False
 
         try:
             for ws_attempt in range(1, max_ws_attempts + 1):
@@ -649,7 +652,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         ack = await ws_guard.recv(ws)
                         logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
 
-                        if sent_queries and ws_attempt > 1:
+                        if sent_queries and ws_attempt > 1 and input_done:
                             logger.warning(
                                 "[%s] TTS WS reconnect attempt %d/%d — resending %d query(ies)",
                                 request_id,
@@ -802,40 +805,38 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                         try:
                             if not input_done:
-                                sent_tokenizer_stream = tts_cfg._sentence_tokenizer.stream()
+                                input_started = True
+                                sent_tok = tts_cfg._sentence_tokenizer.stream()
 
                                 async def _input_task(
-                                    tokenizer_stream: tokenize.SentenceStream = sent_tokenizer_stream,
+                                    stream: tokenize.SentenceStream = sent_tok,
                                 ) -> None:
                                     try:
                                         async for data in self._input_ch:
                                             if isinstance(data, self._FlushSentinel):
-                                                tokenizer_stream.flush()
+                                                stream.flush()
                                                 continue
-                                            tokenizer_stream.push_text(data)
+                                            stream.push_text(data)
                                     except ChanClosed:
                                         pass
                                     finally:
-                                        tokenizer_stream.end_input()
+                                        stream.end_input()
 
                                 async def _token_send_task(
-                                    tokenizer_stream: tokenize.SentenceStream = sent_tokenizer_stream,
+                                    stream: tokenize.SentenceStream = sent_tok,
                                 ) -> None:
-                                    async for ev in tokenizer_stream:
+                                    async for ev in stream:
                                         await _send_query(ev.token)
 
                                 input_t = asyncio.create_task(_input_task())
                                 send_t = asyncio.create_task(_token_send_task())
                                 try:
                                     await asyncio.gather(input_t, send_t)
-                                    # Only mark complete after a successful drain. Setting
-                                    # this in finally would drop remaining tokenizer/input
-                                    # text on WS failure (reconnect would only resend
-                                    # already-sent queries).
+                                    # Only mark complete after a successful drain.
                                     input_done = True
                                 finally:
                                     await utils.aio.gracefully_cancel(input_t, send_t)
-                                    await sent_tokenizer_stream.aclose()
+                                    await sent_tok.aclose()
 
                             # Close the single speech session
                             await ws.send(json.dumps({"event": "speech-end"}))
@@ -844,7 +845,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             seg_count, _ = await reader_task
                         finally:
                             # Always cancel and await reader_task to prevent
-                            # "Task destroyed but pending" / exception-not-retrieved warnings.
+                            # "Task destroyed but pending" / exception-not-retrieved.
                             await utils.aio.gracefully_cancel(reader_task)
 
                         if not stream_initialized:
@@ -852,15 +853,19 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             _ensure_output_initialized()
                         break
                 except websockets.exceptions.ConnectionClosed as e:
-                    if stream_initialized or ws_attempt >= max_ws_attempts:
+                    # Private reconnect is only safe before we start draining
+                    # input_ch (tokenizer partials / consumed channel items cannot
+                    # be reconstructed). After input starts, raise so the
+                    # framework SynthesizeStream retry can replay buffered text.
+                    if stream_initialized or input_started or ws_attempt >= max_ws_attempts:
                         raise APIConnectionError(
                             f"TTS WebSocket closed: {e}",
                             retryable=not stream_initialized,
                         ) from e
                     retry_interval = self._conn_options._interval_for_retry(ws_attempt - 1)
                     logger.warning(
-                        "[%s] TTS WebSocket closed before first audio (attempt %d/%d), "
-                        "retrying in %.1fs",
+                        "[%s] TTS WebSocket closed before first audio "
+                        "(attempt %d/%d), retrying in %.1fs",
                         request_id,
                         ws_attempt,
                         max_ws_attempts,

@@ -264,7 +264,9 @@ class LLMStream(llm.LLMStream):
 
         Blaze API accepts OpenAI-compatible tool format::
 
-            [{"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}]
+            [{"type": "function", "function": {
+                "name": "...", "description": "...", "parameters": {...}
+            }}]
         """
         if not self._tools:
             return None

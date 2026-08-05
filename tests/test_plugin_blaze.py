@@ -314,6 +314,26 @@ async def test_stt_discards_pending_when_duration_limit_exceeded() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_stt_pending_pcm_is_task_local() -> None:
+    """Each asyncio Task keeps its own empty-segment PCM buffer (ContextVar)."""
+    import asyncio
+    import contextvars
+
+    stt = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
+    results: dict[str, bytes] = {}
+
+    async def worker(name: str, marker: bytes) -> None:
+        stt._pending_pcm = marker
+        await asyncio.sleep(0)
+        results[name] = stt._pending_pcm
+
+    await asyncio.gather(worker("a", b"\x01\x00"), worker("b", b"\x02\x00"))
+    assert results["a"] == b"\x01\x00"
+    assert results["b"] == b"\x02\x00"
+    await stt.aclose()
+
+
 async def test_stt_clears_stale_pending_buffer_after_idle_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

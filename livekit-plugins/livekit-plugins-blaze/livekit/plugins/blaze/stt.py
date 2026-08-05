@@ -24,10 +24,12 @@ Realtime API: WS /v1/stt/realtime (model default: stt-stream-1.5)
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import io
 import json
 import time
 import uuid
+from dataclasses import dataclass
 
 import httpx
 import websockets
@@ -58,6 +60,25 @@ from .log import logger
 # Latest public Blaze STT model identifiers.
 DEFAULT_BATCH_MODEL = "v2.0"
 DEFAULT_STREAM_MODEL = "stt-stream-1.5"
+
+
+@dataclass
+class _RecognizePending:
+    """Per-task empty-segment PCM buffer (isolated across concurrent streams)."""
+
+    pcm: bytes = b""
+    sample_rate: int = 16000
+    num_channels: int = 1
+    empty_count: int = 0
+    last_recognize_time: float = 0.0
+
+
+# Each asyncio Task gets its own ContextVar copy, so concurrent StreamAdapter /
+# AgentSession recognize() calls on one STT instance do not share pending PCM.
+_pending_var: contextvars.ContextVar[_RecognizePending | None] = contextvars.ContextVar(
+    "blaze_stt_recognize_pending",
+    default=None,
+)
 
 
 class STT(stt.STT):
@@ -121,15 +142,8 @@ class STT(stt.STT):
         self._ws_url = f"{ws_base_url(self._api_url)}/v1/stt/realtime"
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=5.0))
 
-        # Frame accumulation: buffer PCM from empty STT segments so short
-        # leading fragments (hesitant speech) are prepended to the next segment.
-        self._pending_pcm: bytes = b""
-        self._pending_sample_rate: int = sample_rate
-        self._pending_num_channels: int = 1
-        self._pending_empty_count: int = 0
-        self._last_recognize_time: float = 0.0
-
-        # Safety limits
+        # Safety limits for empty-segment PCM accumulation (state is per-task via
+        # contextvars — see _recognize_pending()).
         self._max_pending_duration: float = 5.0  # seconds of buffered audio
         self._max_pending_segments: int = 3  # consecutive empty segments
         self._pending_idle_timeout: float = 10.0  # auto-clear after idle gap
@@ -158,6 +172,39 @@ class STT(stt.STT):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    def _recognize_pending(self) -> _RecognizePending:
+        """Return task-local pending PCM state (not shared across sessions)."""
+        pending = _pending_var.get()
+        if pending is None:
+            pending = _RecognizePending(sample_rate=self._sample_rate)
+            _pending_var.set(pending)
+        return pending
+
+    # Back-compat accessors used by unit tests (map onto task-local state).
+    @property
+    def _pending_pcm(self) -> bytes:
+        return self._recognize_pending().pcm
+
+    @_pending_pcm.setter
+    def _pending_pcm(self, value: bytes) -> None:
+        self._recognize_pending().pcm = value
+
+    @property
+    def _pending_empty_count(self) -> int:
+        return self._recognize_pending().empty_count
+
+    @_pending_empty_count.setter
+    def _pending_empty_count(self, value: int) -> None:
+        self._recognize_pending().empty_count = value
+
+    @property
+    def _last_recognize_time(self) -> float:
+        return self._recognize_pending().last_recognize_time
+
+    @_last_recognize_time.setter
+    def _last_recognize_time(self, value: float) -> None:
+        self._recognize_pending().last_recognize_time = value
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -234,6 +281,7 @@ class STT(stt.STT):
         """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
+        pending = self._recognize_pending()
 
         # Merge audio frames from the buffer
         pcm_parts: list[bytes] = []
@@ -248,27 +296,27 @@ class STT(stt.STT):
 
         # Auto-clear stale pending buffer if too much time elapsed
         now = time.monotonic()
-        if self._pending_pcm and self._last_recognize_time > 0:
-            idle_gap = now - self._last_recognize_time
+        if pending.pcm and pending.last_recognize_time > 0:
+            idle_gap = now - pending.last_recognize_time
             if idle_gap > self._pending_idle_timeout:
                 logger.debug(
                     "[%s] Clearing stale pending buffer (%.1fs idle)",
                     request_id,
                     idle_gap,
                 )
-                self._pending_pcm = b""
-                self._pending_empty_count = 0
-        self._last_recognize_time = now
+                pending.pcm = b""
+                pending.empty_count = 0
+        pending.last_recognize_time = now
 
         # Prepend any buffered PCM from previous empty segments
-        if self._pending_pcm:
+        if pending.pcm:
             logger.info(
                 "[%s] Prepending %d bytes pending PCM to %d bytes new segment",
                 request_id,
-                len(self._pending_pcm),
+                len(pending.pcm),
                 len(segment_pcm),
             )
-            pcm_data = self._pending_pcm + segment_pcm
+            pcm_data = pending.pcm + segment_pcm
         else:
             pcm_data = segment_pcm
 
@@ -341,7 +389,7 @@ class STT(stt.STT):
         confidence = float(_raw_confidence) if _raw_confidence is not None else 1.0
         latency = time.monotonic() - start_time
 
-        # --- Frame accumulation logic ---
+        # --- Frame accumulation logic (task-local pending) ---
         # Compute duration of the current segment (not including pending)
         bytes_per_sample = 2 * num_channels  # 16-bit PCM
         segment_duration = (
@@ -350,26 +398,26 @@ class STT(stt.STT):
             else 0.0
         )
         pending_duration = (
-            len(self._pending_pcm) / (sample_rate * bytes_per_sample) if self._pending_pcm else 0.0
+            len(pending.pcm) / (sample_rate * bytes_per_sample) if pending.pcm else 0.0
         )
 
         if not text.strip():
             # Empty result — decide whether to buffer or discard
-            self._pending_empty_count += 1
+            pending.empty_count += 1
             total_pending_duration = pending_duration + segment_duration
 
             if (
-                self._pending_empty_count <= self._max_pending_segments
+                pending.empty_count <= self._max_pending_segments
                 and total_pending_duration <= self._max_pending_duration
             ):
                 # Buffer this segment's PCM for the next call
-                self._pending_pcm = pcm_data  # includes already-prepended pending
-                self._pending_sample_rate = sample_rate
-                self._pending_num_channels = num_channels
+                pending.pcm = pcm_data  # includes already-prepended pending
+                pending.sample_rate = sample_rate
+                pending.num_channels = num_channels
                 logger.info(
                     "[%s] STT empty → buffered (count=%d, duration=%.1fs, latency=%.3fs)",
                     request_id,
-                    self._pending_empty_count,
+                    pending.empty_count,
                     total_pending_duration,
                     latency,
                 )
@@ -379,12 +427,12 @@ class STT(stt.STT):
                     "[%s] STT empty → discarded pending buffer "
                     "(count=%d, duration=%.1fs, latency=%.3fs)",
                     request_id,
-                    self._pending_empty_count,
+                    pending.empty_count,
                     total_pending_duration,
                     latency,
                 )
-                self._pending_pcm = b""
-                self._pending_empty_count = 0
+                pending.pcm = b""
+                pending.empty_count = 0
 
             # Return empty so StreamAdapter skips this segment as usual
             return stt.SpeechEvent(
@@ -400,10 +448,9 @@ class STT(stt.STT):
             )
 
         # Got real text — clear pending buffer
-        had_pending = self._pending_empty_count > 0
-        self._pending_pcm = b""
-        self._pending_empty_count = 0
-
+        had_pending = pending.empty_count > 0
+        pending.pcm = b""
+        pending.empty_count = 0
         logger.info(
             "[%s] STT completed: text='%s', confidence=%.3f, latency=%.3fs%s",
             request_id,
