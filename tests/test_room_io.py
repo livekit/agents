@@ -530,3 +530,54 @@ async def test_unconsumed_reservation_does_not_leak_to_the_next_item() -> None:
     second = output._current_id
 
     assert second != first, "the new utterance overwrote the previous one's segment"
+
+
+@pytest.mark.asyncio
+async def test_realtime_flow_binds_the_item_to_the_open_segment() -> None:
+    # the realtime session opens the segment with an empty, item-less update when the
+    # user stops speaking; the transcript carrying the item id lands in that already
+    # open capture, so the item has to be bound then rather than only when a segment starts
+    room = _FakeRoom()
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="user")
+
+    output._capture_item(None)  # InputSpeechStopped: transcript="", is_final=False
+    await output.capture_text("")
+    output._capture_item("item_a")
+    await output.capture_text("hello")
+    first = output._current_id
+    output.flush()
+    if output._flush_atask is not None:
+        await output._flush_atask
+
+    output._capture_item("item_a")  # the provider revises the same item
+    await output.capture_text("hello there, how are you")
+    assert output._current_id == first, "the first revision still opened a second line"
+
+
+@pytest.mark.asyncio
+async def test_late_revision_does_not_hijack_a_newer_utterance() -> None:
+    # a correction arriving after the next utterance has started must not be written
+    # into that newer utterance's line
+    room = _FakeRoom()
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="user")
+
+    output._capture_item("item_a")
+    await output.capture_text("first utterance")
+    output.flush()
+    if output._flush_atask is not None:
+        await output._flush_atask
+
+    # the next utterance opens with the empty item-less update, then its own item
+    output._capture_item(None)
+    await output.capture_text("")
+    output._capture_item("item_b")
+    await output.capture_text("second utterance")
+    newer = output._current_id
+    output.flush()
+    if output._flush_atask is not None:
+        await output._flush_atask
+
+    output._capture_item("item_a")  # late correction of the older item
+    await output.capture_text("first utterance, corrected")
+
+    assert output._current_id != newer, "the late correction overwrote a newer utterance"

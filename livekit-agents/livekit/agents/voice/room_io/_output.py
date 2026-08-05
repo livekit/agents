@@ -221,8 +221,9 @@ class _ParticipantLegacyTranscriptionOutput:
         self._closed = False
 
         # see _ParticipantStreamTranscriptionOutput._capture_item
-        self._item_id: str | None = None
-        self._item_segment_id: str | None = None
+        self._current_item_id: str | None = None
+        self._bound_item_id: str | None = None
+        self._bound_segment_id: str | None = None
         self._next_segment_id: str | None = None
 
         self._reset_state()
@@ -230,23 +231,23 @@ class _ParticipantLegacyTranscriptionOutput:
 
     def _capture_item(self, item_id: str | None) -> None:
         """Tie the text that follows to a provider item, reusing its segment on a revision."""
-        # nothing guarantees a capture consumes the reservation - capture_text returns
-        # early until a participant and track are known - so it is re-derived every time
-        # rather than left behind for whatever text arrives next
-        reuse = item_id is not None and item_id == self._item_id and self._item_segment_id
-        self._next_segment_id = self._item_segment_id if reuse else None
-
-        if item_id:
-            self._item_id = item_id
+        # see _ParticipantStreamTranscriptionOutput._capture_item
+        self._current_item_id = item_id
+        reuse = item_id is not None and item_id == self._bound_item_id and self._bound_segment_id
+        self._next_segment_id = self._bound_segment_id if reuse else None
 
     def _remember_item_segment(self) -> None:
-        """Record the segment a started capture publishes under.
+        """Record the segment the text being captured is published under.
 
-        Done here rather than in ``_reset_state``: the legacy output also resets after
-        flushing, which would leave the item pointing at a segment never published.
+        Done per capture rather than in ``_reset_state`` or only when a segment opens:
+        the legacy output resets after flushing (which would point the item at a segment
+        never published), and in the realtime flow the segment is opened by the empty
+        update sent when the user stops speaking, before the transcript that carries the
+        item id arrives.
         """
-        if self._item_id is not None:
-            self._item_segment_id = self._current_id
+        if self._current_item_id is not None:
+            self._bound_item_id = self._current_item_id
+            self._bound_segment_id = self._current_id
 
     def set_participant(
         self,
@@ -294,7 +295,8 @@ class _ParticipantLegacyTranscriptionOutput:
         if not self._capturing:
             self._reset_state()
             self._capturing = True
-            self._remember_item_segment()
+
+        self._remember_item_segment()
 
         if self._is_delta_stream:
             self._pushed_text += text
@@ -415,8 +417,9 @@ class _ParticipantStreamTranscriptionOutput:
 
         # a provider item can be finalized more than once; the segment it was
         # published under is reused so the revision lands in place
-        self._item_id: str | None = None
-        self._item_segment_id: str | None = None
+        self._current_item_id: str | None = None
+        self._bound_item_id: str | None = None
+        self._bound_segment_id: str | None = None
         self._next_segment_id: str | None = None
 
         self._reset_state()
@@ -430,24 +433,28 @@ class _ParticipantStreamTranscriptionOutput:
         new segment and the revisions stack up client-side instead of replacing the one
         already shown.
 
-        Nothing guarantees a capture consumes the reservation - capture_text returns
-        early until a participant is known - so it is re-derived every time rather than
-        left behind for whatever text arrives next.
+        Both fields are re-derived on every call. Nothing guarantees a capture consumes
+        the reservation (capture_text returns early until a participant is known), and
+        text that carries no item - the empty update sent when the user stops speaking,
+        or any stt path - must not inherit the previous item's association, or a late
+        revision of that item would land in a newer utterance's segment.
         """
-        reuse = item_id is not None and item_id == self._item_id and self._item_segment_id
-        self._next_segment_id = self._item_segment_id if reuse else None
-
-        if item_id:
-            self._item_id = item_id
+        self._current_item_id = item_id
+        reuse = item_id is not None and item_id == self._bound_item_id and self._bound_segment_id
+        self._next_segment_id = self._bound_segment_id if reuse else None
 
     def _remember_item_segment(self) -> None:
-        """Record the segment a started capture publishes under.
+        """Record the segment the text being captured is published under.
 
-        Done here rather than in ``_reset_state``: the legacy output also resets after
-        flushing, which would leave the item pointing at a segment never published.
+        Done per capture rather than in ``_reset_state`` or only when a segment opens:
+        the legacy output resets after flushing (which would point the item at a segment
+        never published), and in the realtime flow the segment is opened by the empty
+        update sent when the user stops speaking, before the transcript that carries the
+        item id arrives.
         """
-        if self._item_id is not None:
-            self._item_segment_id = self._current_id
+        if self._current_item_id is not None:
+            self._bound_item_id = self._current_item_id
+            self._bound_segment_id = self._current_id
 
     def set_participant(
         self,
@@ -530,7 +537,8 @@ class _ParticipantStreamTranscriptionOutput:
         if not self._capturing:
             self._reset_state()
             self._capturing = True
-            self._remember_item_segment()
+
+        self._remember_item_segment()
 
         # the raw text (expressive markup intact) arrives here; publish only the visible
         # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
