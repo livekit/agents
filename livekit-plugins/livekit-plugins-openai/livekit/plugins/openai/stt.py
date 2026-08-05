@@ -140,7 +140,7 @@ def _transcription(opts: _STTOptions) -> AudioTranscription:
     transcription = AudioTranscription(model=opts.model)
     if is_given(opts.prompt) and opts.prompt:
         transcription.prompt = opts.prompt
-    if opts.keywords and _supports_context_hints(opts.model):
+    if opts.keywords:
         transcription.keywords = opts.keywords
     if opts.languages:
         # both fields want ISO-639-1; the API rejects regional tags such as en-US
@@ -481,7 +481,12 @@ class STT(stt.STT):
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
         self._user_keywords = user_keywords
-        self._opts.keywords = list(dict.fromkeys([*user_keywords, *self._session_keyterms]))
+        # detected keyterms must not survive a switch to a model that rejects keywords
+        self._opts.keywords = (
+            list(dict.fromkeys([*user_keywords, *self._session_keyterms]))
+            if self.capabilities.keyterms
+            else []
+        )
         if is_given(detect_language):
             self._opts.detect_language = detect_language
         if is_given(prompt):
@@ -503,7 +508,7 @@ class STT(stt.STT):
             if model_changed:
                 stream.reconnect()
             else:
-                stream.apply_options(self._opts)
+                stream.apply_options()
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if not self.capabilities.keyterms:
@@ -514,7 +519,7 @@ class STT(stt.STT):
         self._session_keyterms = list(keyterms)
         self._opts.keywords = list(dict.fromkeys([*self._user_keywords, *keyterms]))
         for stream in self._streams:
-            stream.apply_options(self._opts)
+            stream.apply_options()
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         query_params: dict[str, str] = {
@@ -536,10 +541,9 @@ class STT(stt.STT):
             url = url.replace("http", "ws", 1)
 
         session = self._ensure_session()
-        ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
-        event = _session_update(self._opts)
-        await ws.send_json(event.model_dump(by_alias=True, exclude_unset=True))
-        return ws
+        # the config is sent once the stream acquires the connection, since the pool also
+        # hands back sockets it opened earlier
+        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -620,6 +624,8 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
+        # the STT mutates these in place; every acquired connection is configured from them
+        self._opts = stt._opts
         self._language = _transcript_language(stt._opts.languages)
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
@@ -628,11 +634,11 @@ class SpeechStream(stt.SpeechStream):
         self._vad = vad_instance
         self._speaking = False
 
-    def apply_options(self, opts: _STTOptions) -> None:
+    def apply_options(self) -> None:
         """Apply an option change on the open connection instead of reconnecting."""
-        self._language = _transcript_language(opts.languages)
+        self._language = _transcript_language(self._opts.languages)
         self._update_task = asyncio.create_task(
-            self._send_update(_session_update(opts), old_task=self._update_task)
+            self._send_update(_session_update(self._opts), old_task=self._update_task)
         )
 
     async def _send_update(
@@ -643,7 +649,7 @@ class SpeechStream(stt.SpeechStream):
                 await old_task
 
         if self._ws is None:
-            return  # the next connection is built from the current options anyway
+            return  # the next connection is configured when the stream acquires it
 
         try:
             await self._ws.send_json(event.model_dump(by_alias=True, exclude_unset=True))
@@ -653,6 +659,7 @@ class SpeechStream(stt.SpeechStream):
 
     def reconnect(self) -> None:
         """Drop the connection so the next one is built with the current options."""
+        self._language = _transcript_language(self._opts.languages)
         self._pool.invalidate()
         self._reconnect_event.set()
 
@@ -876,6 +883,10 @@ class SpeechStream(stt.SpeechStream):
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
+                )
+                # a pooled connection may have been configured for older options
+                await ws.send_json(
+                    _session_update(self._opts).model_dump(by_alias=True, exclude_unset=True)
                 )
                 vad_stream = self._vad.stream() if self._vad is not None else None
                 # option updates are sent on whichever connection is live

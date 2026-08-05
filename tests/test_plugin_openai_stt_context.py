@@ -48,11 +48,15 @@ def _offline_stt(**kwargs: Any) -> stt.STT:
     return instance
 
 
+def _audio_input(instance: stt.STT) -> dict[str, Any]:
+    payload = stt._session_update(instance._opts).model_dump(by_alias=True, exclude_unset=True)
+    audio_input = payload["session"]["audio"]["input"]
+    assert isinstance(audio_input, dict)
+    return audio_input
+
+
 async def _transcription_config(instance: stt.STT) -> dict[str, Any]:
-    session = _FakeSession()
-    instance._session = session  # type: ignore[assignment]
-    await instance._connect_ws(5)
-    config = session.ws.sent[0]["session"]["audio"]["input"]["transcription"]
+    config = _audio_input(instance)["transcription"]
     assert isinstance(config, dict)
     return config
 
@@ -248,9 +252,23 @@ async def test_a_new_model_reconnects() -> None:
     stream = instance.stream()
     await _connected(stream)
 
-    instance.update_options(model="gpt-4o-mini-transcribe")
+    instance.update_options(model="gpt-4o-mini-transcribe", language="fr")
 
     assert stream._reconnect_event.is_set()
+    # the transcripts of the rebuilt connection carry the new language, not the old one
+    assert stream._language == "fr"
+
+    await stream.aclose()
+
+
+async def test_detected_keyterms_do_not_block_a_new_stream() -> None:
+    instance = _offline_stt(model="gpt-live-transcribe")
+    instance._update_session_keyterms(["Acme Corp"])
+    instance.update_options(model="gpt-4o-mini-transcribe", keywords=[])
+
+    # the detected terms are gone, so an explicit language does not trip validation
+    stream = instance.stream(language="fr")
+    assert instance._opts.keywords == []
 
     await stream.aclose()
 
@@ -270,11 +288,30 @@ async def test_live_transcribe_omits_turn_detection() -> None:
     # the model rejects any turn_detection config and needs a client-side commit
     instance = stt.STT(api_key="test-key", model="gpt-live-transcribe", use_realtime=True, vad=None)
 
-    session = _FakeSession()
-    instance._session = session  # type: ignore[assignment]
-    await instance._connect_ws(5)
+    assert "turn_detection" not in _audio_input(instance)
 
-    assert "turn_detection" not in session.ws.sent[0]["session"]["audio"]["input"]
+    # every other model still gets server-side VAD
+    other = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True)
+    assert _audio_input(other)["turn_detection"]["type"] == "server_vad"
+
+
+async def test_a_reused_connection_is_reconfigured() -> None:
+    # the pool hands back sockets it configured earlier, so acquiring must re-send the config
+    instance = _offline_stt(model="gpt-live-transcribe")
+    first = instance.stream()
+    ws = await _connected(first)
+    await first.aclose()
+
+    # the change lands while nothing is streaming, so no live socket receives it
+    instance.update_options(keywords=["Acme Corp"])
+    assert "keywords" not in _sent_transcription(ws)
+
+    second = instance.stream()
+    await _connected(second)
+
+    assert _sent_transcription(ws)["keywords"] == ["Acme Corp"]
+
+    await second.aclose()
 
 
 async def test_session_keyterms_reach_the_next_connection() -> None:
