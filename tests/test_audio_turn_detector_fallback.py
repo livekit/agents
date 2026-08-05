@@ -7,8 +7,6 @@ Covers:
 - Explicit-cloud missing creds raises.
 - Cloud → local fallback triggers (transport raise, predict timeout).
 - Fallback persistence across turns.
-- ``local_fallback=False`` keeping the cloud detector cloud-only (the local mini
-  weights are never constructed, whichever way the cloud fails).
 - Local-failure handling (default 1.0, retry on next turn).
 - Per-session warning dedupe (one warning per failure mode).
 - Server-provided default thresholds adopted from ``SessionCreated`` (protocol 1.1.13).
@@ -27,7 +25,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.inference.eot import TurnDetector
 from livekit.agents.inference.eot.base import (
@@ -134,7 +131,6 @@ def _make_stream_with_transport(
     *,
     model: str = "turn-detector-v1",
     user_threshold: NotGivenOr[float | dict[str, float]] = NOT_GIVEN,
-    local_fallback: bool = True,
 ) -> _BaseStreamingTurnDetectorStream:
     """Construct a stream wired to a scripted transport.
 
@@ -153,7 +149,6 @@ def _make_stream_with_transport(
         opts=opts,
         transport=transport,
         model=model,  # type: ignore[arg-type]
-        local_fallback=local_fallback,
     )
 
 
@@ -234,109 +229,6 @@ class TestFallback:
             stream.predict()
             assert stream.model == "turn-detector-v1-mini"
             await stream.aclose()
-
-
-def _frame(samples: int = 160) -> rtc.AudioFrame:
-    return rtc.AudioFrame(
-        data=b"\x00\x00" * samples,
-        sample_rate=16000,
-        num_channels=1,
-        samples_per_channel=samples,
-    )
-
-
-class TestLocalFallbackDisabled:
-    """``local_fallback=False`` keeps a cloud detector cloud-only, whichever way
-    the cloud fails."""
-
-    @staticmethod
-    def _no_local_transport() -> Any:
-        # _LocalTransport.__init__ constructs EOT(), which pages in the mini
-        # model's weights for the life of the process; never get that far
-        return patch.object(
-            _LocalTransport,
-            "__init__",
-            side_effect=AssertionError("local EOT model must not be constructed"),
-        )
-
-    async def test_transport_error_does_not_swap_in_local(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.WARNING, logger="livekit.agents")
-        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
-        with self._no_local_transport():
-            stream = _make_stream_with_transport(transport, local_fallback=False)
-            await _wait_for(lambda: stream.is_degraded)
-
-            assert stream.model == "turn-detector-v1"  # never downgraded
-            assert stream.is_fallback is False
-            assert stream._transport is transport
-            # cloud ran once and was not retried in a loop
-            assert transport.run_calls == 1
-            assert ("detach", None) not in transport.events
-            warnings = [r for r in caplog.records if "local fallback is disabled" in r.getMessage()]
-            assert len(warnings) == 1
-            await stream.aclose()
-
-    async def test_predict_timeout_does_not_swap_in_local(self) -> None:
-        """A timeout leaves the cloud transport mounted, so the next turn retries it."""
-        transport = _ScriptedTransport(run_behavior="idle")
-        with self._no_local_transport():
-            stream = _make_stream_with_transport(transport, local_fallback=False)
-            fut = stream.predict()
-            stream.cancel_inference(timed_out=True)
-
-            assert fut.result().end_of_turn_probability == 0.0
-            assert stream.model == "turn-detector-v1"
-            assert stream.is_fallback is False
-            assert stream.is_degraded is False  # transport is alive; cloud gets another turn
-            assert stream._transport is transport
-            await stream.aclose()
-
-    async def test_degraded_predictions_resolve_to_default_immediately(self) -> None:
-        """Nothing is left to answer a request, so the caller must not have to
-        burn its prediction timeout every turn to find that out."""
-        transport = _ScriptedTransport(run_behavior="raise", run_exc=APIConnectionError("boom"))
-        with self._no_local_transport():
-            stream = _make_stream_with_transport(transport, local_fallback=False)
-            await _wait_for(lambda: stream.is_degraded)
-
-            fut = stream.predict()
-            assert fut.done()
-            assert fut.result().end_of_turn_probability == 1.0
-            # no inference was requested from the dead transport
-            assert not [e for e in transport.events if e[0] == "run_inference"]
-            await stream.aclose()
-
-    async def test_degrading_stops_buffering_audio(self) -> None:
-        """``_drain_audio_channel`` only runs inside ``transport.run()``. Once that
-        is gone for good, pushed frames would pile up in the channel unread for
-        the rest of the session, so degrading has to drop the backlog and close."""
-        transport = _ScriptedTransport(run_behavior="idle")
-        with self._no_local_transport():
-            stream = _make_stream_with_transport(transport, local_fallback=False)
-            # queue frames the (idle) transport never drains, then kill the cloud
-            for _ in range(5):
-                stream.push_audio(_frame())
-            assert stream._audio_ch.qsize() > 0
-
-            stream._fallback_to_local(reason=APIConnectionError("boom"))
-            stream._degrade()
-
-            assert stream._audio_ch.qsize() == 0  # backlog dropped
-            assert stream._audio_ch.closed
-            stream.push_audio(_frame())  # further pushes are no-ops
-            assert stream._audio_ch.qsize() == 0
-            await stream.aclose()
-
-    def test_warns_when_flag_cannot_apply(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.WARNING, logger="livekit.agents")
-        with _clean_env(LIVEKIT_REMOTE_EOT_URL=None):
-            detector = TurnDetector(local_fallback=False)
-        # auto-select landed on the local model, so the flag is meaningless
-        assert detector.model == "turn-detector-v1-mini"
-        warnings = [r for r in caplog.records if "has no effect on the" in r.getMessage()]
-        assert len(warnings) == 1
 
 
 class TestDetectorViewAfterFallback:

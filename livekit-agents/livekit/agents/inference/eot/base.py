@@ -329,7 +329,8 @@ class _BaseStreamingTurnDetectorStream:
         a local transport in-place. ``turn-detector-v1-mini`` just runs the
         transport once and surfaces failures to the caller via
         ``_resolve_prediction`` (default 1.0). With ``local_fallback=False``
-        there is nothing to swap in, so a dead cloud transport is terminal."""
+        there is nothing to swap in, so a dead cloud transport is terminal.
+        """
         while True:
             task = asyncio.create_task(self._transport.run())
             self._transport_task = task
@@ -356,25 +357,14 @@ class _BaseStreamingTurnDetectorStream:
                 return
 
     def _degrade(self) -> None:
-        """Give up on detection for the rest of the stream.
-
-        Re-running the dead transport would spin, and no other transport is
-        coming, so nothing will drain ``_audio_ch`` or answer a prediction
-        again. Closing it makes ``push_audio`` and ``flush`` no-ops and lets
-        ``predict`` resolve to the positive default, so turns commit on the
-        endpointing delay instead of buffering audio nobody reads.
-        """
+        """Give up on detection: no transport is left to drain audio or predict."""
         self._degraded = True
         while not self._audio_ch.empty():  # close() alone would retain the backlog
             self._audio_ch.recv_nowait()
         self._audio_ch.close()
 
     def _fallback_to_local(self, *, reason: BaseException) -> bool:
-        """Swap the cloud transport for the local mini model.
-
-        Returns False when ``local_fallback=False`` disabled the swap, leaving
-        the stream on its (possibly dead) cloud transport.
-        """
+        """Swap the cloud transport for the local mini model, False if disabled."""
         if not self._local_fallback:
             if not self._warned_cloud_failure:
                 logger.warning(
