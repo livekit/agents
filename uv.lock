@@ -2355,7 +2355,7 @@ requires-dist = [
 [[package]]
 name = "livekit-example-drive-thru"
 version = "0"
-source = { virtual = "examples/drive-thru" }
+source = { virtual = "examples/drive_thru" }
 dependencies = [
     { name = "livekit-agents" },
     { name = "livekit-plugins-silero" },
