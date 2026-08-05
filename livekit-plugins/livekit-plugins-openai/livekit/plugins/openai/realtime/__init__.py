@@ -1,8 +1,11 @@
+from .live_realtime_model import GPTLiveModel, GPTLiveSession
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
     "RealtimeSession",
     "RealtimeModel",
+    "GPTLiveModel",
+    "GPTLiveSession",
 ]
 
 # Cleanup docs of unexported modules
