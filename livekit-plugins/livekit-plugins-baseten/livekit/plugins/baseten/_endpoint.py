@@ -22,8 +22,11 @@ from urllib.parse import urlparse
 from .log import logger
 
 _TRUSS_URL_TEMPLATE = "wss://model-{model_id}.api.baseten.co/environments/production/websocket"
-_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 _CHAIN_URL_TEMPLATE = "wss://chain-{chain_id}.api.baseten.co/environments/production/websocket"
+
+# Hosts exempt from the plaintext-ws:// warning below: local proxies and tests
+# legitimately use ws://127.0.0.1, and nothing leaves the machine there.
+_LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
 
 def resolve_endpoint(
