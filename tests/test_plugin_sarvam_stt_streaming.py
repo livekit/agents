@@ -6,10 +6,12 @@ import logging
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
 import pytest
 
 from livekit.agents import APIStatusError
-from livekit.plugins.sarvam import stt_streaming
+from livekit.plugins import sarvam
+from livekit.plugins.sarvam import stt_streaming, tts
 
 pytestmark = pytest.mark.unit
 
@@ -25,8 +27,8 @@ class _FakeEventChannel:
 def _make_stream(
     *,
     endpointing: str = "vad",
-) -> stt_streaming.StreamingSpeechStream:
-    stream = object.__new__(stt_streaming.StreamingSpeechStream)
+) -> stt_streaming.RealtimeSpeechStream:
+    stream = object.__new__(stt_streaming.RealtimeSpeechStream)
     stream._event_ch = _FakeEventChannel()
     stream._request_id = ""
     stream._session_id = ""
@@ -41,14 +43,14 @@ def _make_stream(
     stream._local_audio_duration = 0.0
     stream._server_audio_duration_reported = False
     stream._conn_options = stt_streaming.DEFAULT_API_CONNECT_OPTIONS
-    stream._opts = stt_streaming.StreamingSTTOptions(
+    stream._opts = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
         endpointing=endpointing,
     )
-    stream._logger = stt_streaming.logger.getChild("StreamingSpeechStream")
-    stream._build_log_context = stt_streaming.StreamingSpeechStream._build_log_context.__get__(
-        stream, stt_streaming.StreamingSpeechStream
+    stream._logger = stt_streaming.logger.getChild("RealtimeSpeechStream")
+    stream._build_log_context = stt_streaming.RealtimeSpeechStream._build_log_context.__get__(
+        stream, stt_streaming.RealtimeSpeechStream
     )
     stream._pending_eos = False
     stream._pending_eos_time = None
@@ -63,8 +65,8 @@ def _make_stream(
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
     stream._audio_duration_collector = stt_streaming.PeriodicCollector(
-        callback=stt_streaming.StreamingSpeechStream._on_audio_duration_report.__get__(
-            stream, stt_streaming.StreamingSpeechStream
+        callback=stt_streaming.RealtimeSpeechStream._on_audio_duration_report.__get__(
+            stream, stt_streaming.RealtimeSpeechStream
         ),
         duration=5.0,
     )
@@ -75,6 +77,14 @@ def _parse_ws_url(url: str) -> dict[str, str]:
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
     return {key: value[0] for key, value in qs.items()}
+
+
+def test_realtime_stt_exports_and_legacy_aliases() -> None:
+    assert sarvam.STTRealtime is stt_streaming.STTRealtime
+    assert sarvam.RealtimeSpeechStream is stt_streaming.RealtimeSpeechStream
+    assert sarvam.STTStreaming is sarvam.STTRealtime
+    assert sarvam.StreamingSpeechStream is sarvam.RealtimeSpeechStream
+    assert stt_streaming.StreamingSTTOptions is stt_streaming.RealtimeSTTOptions
 
 
 def test_streaming_disables_connection_retries(
@@ -88,10 +98,10 @@ def test_streaming_disables_connection_retries(
 
     monkeypatch.setattr(
         stt_streaming,
-        "StreamingSpeechStream",
+        "RealtimeSpeechStream",
         _CapturedStream,
     )
-    stt = stt_streaming.STTStreaming(
+    stt = stt_streaming.STTRealtime(
         api_key="sk_test",
         http_session=object(),  # type: ignore[arg-type]
     )
@@ -114,7 +124,7 @@ def test_streaming_disables_connection_retries(
 
 
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
-    opts = stt_streaming.StreamingSTTOptions(
+    opts = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
         stream_type="fast",
@@ -144,7 +154,7 @@ def test_realtime_ws_url_includes_core_and_vad_params() -> None:
 
 
 def test_realtime_ws_url_omits_vad_params_for_manual_endpointing() -> None:
-    opts = stt_streaming.StreamingSTTOptions(
+    opts = stt_streaming.RealtimeSTTOptions(
         language="en-IN",
         api_key="sk_test",
         endpointing="manual",
@@ -161,7 +171,7 @@ def test_realtime_ws_url_omits_vad_params_for_manual_endpointing() -> None:
 
 
 def test_realtime_ws_url_includes_prompt_and_timestamp_controls() -> None:
-    opts = stt_streaming.StreamingSTTOptions(
+    opts = stt_streaming.RealtimeSTTOptions(
         language="en-IN",
         api_key="sk_test",
         prompt="LiveKit terminology",
@@ -176,26 +186,148 @@ def test_realtime_ws_url_includes_prompt_and_timestamp_controls() -> None:
     assert params["return_timestamps"] == "true"
 
 
+def test_realtime_ws_url_includes_connection_only_vad_and_lid_controls() -> None:
+    opts = stt_streaming.RealtimeSTTOptions(
+        language="auto",
+        api_key="sk_test",
+        vad_prefix_padding_ms=320,
+        lid_gate_seconds=2.5,
+        lid_confidence_threshold=0.85,
+    )
+
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+
+    assert params["prefix_padding_ms"] == "320"
+    assert params["lid_gate_seconds"] == "2.5"
+    assert params["lid_confidence_threshold"] == "0.85"
+
+
+def test_realtime_ws_url_omits_prefix_padding_for_manual_endpointing() -> None:
+    opts = stt_streaming.RealtimeSTTOptions(
+        language="en-IN",
+        api_key="sk_test",
+        endpointing="manual",
+        vad_prefix_padding_ms=320,
+    )
+
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+
+    assert "prefix_padding_ms" not in params
+
+
 def test_streaming_options_validate_realtime_contract() -> None:
     with pytest.raises(ValueError, match="sample_rate must be one of"):
-        stt_streaming.StreamingSTTOptions(language="hi-IN", api_key="sk_test", sample_rate=44100)
+        stt_streaming.RealtimeSTTOptions(language="hi-IN", api_key="sk_test", sample_rate=44100)
 
     with pytest.raises(ValueError, match="language od-IN is not supported"):
-        stt_streaming.StreamingSTTOptions(language="od-IN", api_key="sk_test")
+        stt_streaming.RealtimeSTTOptions(language="od-IN", api_key="sk_test")
+
+    with pytest.raises(ValueError, match="vad_prefix_padding_ms"):
+        stt_streaming.RealtimeSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            vad_prefix_padding_ms=-1,
+        )
+
+    with pytest.raises(ValueError, match="lid_gate_seconds"):
+        stt_streaming.RealtimeSTTOptions(
+            language="auto",
+            api_key="sk_test",
+            lid_gate_seconds=-1,
+        )
+
+    with pytest.raises(ValueError, match="lid_confidence_threshold"):
+        stt_streaming.RealtimeSTTOptions(
+            language="auto",
+            api_key="sk_test",
+            lid_confidence_threshold=1.1,
+        )
+
+    with pytest.raises(ValueError, match="mode must be one of"):
+        stt_streaming.RealtimeSTTOptions(
+            language="hi-IN",
+            api_key="sk_test",
+            mode="indic-en",
+        )
 
 
 def test_streaming_options_reject_server_tuned_vad_smoothing() -> None:
     with pytest.raises(TypeError, match="vad_smoothing_alpha"):
-        stt_streaming.StreamingSTTOptions(
+        stt_streaming.RealtimeSTTOptions(
             language="hi-IN",
             api_key="sk_test",
             vad_smoothing_alpha=0.5,
         )
 
 
+@pytest.mark.parametrize("encoding", ["linear16", "linear32", "mulaw", "alaw"])
+def test_streaming_options_accept_all_contract_encodings(encoding: str) -> None:
+    opts = stt_streaming.RealtimeSTTOptions(
+        language="hi-IN",
+        api_key="sk_test",
+        encoding=encoding,
+    )
+
+    assert opts.encoding == encoding
+
+
+@pytest.mark.parametrize("encoding", ["mulaw", "alaw"])
+def test_realtime_pcm_telephony_encoders_round_trip(encoding: str) -> None:
+    pcm = np.array([-30000, -1000, 0, 1000, 30000], dtype="<i2").tobytes()
+
+    encoded = stt_streaming._encode_pcm_for_wire(encoding, pcm)
+    decoded = np.frombuffer(tts._decode_telephony(encoding, encoded), dtype="<i2")
+
+    assert len(encoded) == 5
+    assert np.max(np.abs(decoded.astype(np.int32) - np.frombuffer(pcm, dtype="<i2"))) < 1500
+
+
+def test_realtime_pcm_linear32_encoder_preserves_full_scale() -> None:
+    pcm = np.array([-32768, -1, 0, 1, 32767], dtype="<i2").tobytes()
+
+    encoded = stt_streaming._encode_pcm_for_wire("linear32", pcm)
+
+    assert np.frombuffer(encoded, dtype="<i4").tolist() == [
+        -2147483648,
+        -65536,
+        0,
+        65536,
+        2147418112,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_begin_records_resolved_config() -> None:
+    stream = _make_stream()
+    resolved_config = {
+        "encoding": "mulaw",
+        "sample_rate": 8000,
+        "prefix_padding_ms": 320,
+    }
+
+    await stream._handle_message(
+        {
+            "event": "session.begin",
+            "request_id": "req_123",
+            "config": resolved_config,
+        }
+    )
+    resolved_config["sample_rate"] = 16000
+
+    assert stream.resolved_config == {
+        "encoding": "mulaw",
+        "sample_rate": 8000,
+        "prefix_padding_ms": 320,
+    }
+
+
 @pytest.mark.parametrize("endpointing", ["vad", "manual"])
 def test_auto_language_is_valid_for_all_contract_endpointing_modes(endpointing: str) -> None:
-    opts = stt_streaming.StreamingSTTOptions(
+    opts = stt_streaming.RealtimeSTTOptions(
         language="auto",
         api_key="sk_test",
         stream_type="fast",
@@ -211,7 +343,7 @@ def test_auto_language_is_valid_for_all_contract_endpointing_modes(endpointing: 
 
 
 def test_simulated_streaming_allows_auto_language_and_mode() -> None:
-    opts = stt_streaming.StreamingSTTOptions(
+    opts = stt_streaming.RealtimeSTTOptions(
         language="auto",
         api_key="sk_test",
         stream_type="simulated",
@@ -238,7 +370,7 @@ def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
     stream = _make_stream()
     stream._ws = None
     stream._reconnect_event = _ReconnectEvent()
-    updated_options = stt_streaming.StreamingSTTOptions(
+    updated_options = stt_streaming.RealtimeSTTOptions(
         language="en-IN",
         api_key="sk_test",
         stream_type="fast",
@@ -268,7 +400,7 @@ def test_active_stream_keeps_connection_only_options_on_update(
     stream._pending_config_update = None
     stream._reconnect_event = SimpleNamespace(set_called=False)
     stream._reconnect_event.set = lambda: setattr(stream._reconnect_event, "set_called", True)
-    updated_options = stt_streaming.StreamingSTTOptions(
+    updated_options = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
         sample_rate=8000,
@@ -293,14 +425,14 @@ def test_streaming_option_updates_merge_before_the_next_audio_frame() -> None:
     stream = _make_stream()
     stream._pending_config_update = None
     stream.update_options(
-        stt_streaming.StreamingSTTOptions(
+        stt_streaming.RealtimeSTTOptions(
             language="hi-IN",
             api_key="sk_test",
             prompt="LiveKit",
         )
     )
     stream.update_options(
-        stt_streaming.StreamingSTTOptions(
+        stt_streaming.RealtimeSTTOptions(
             language="hi-IN",
             api_key="sk_test",
             prompt="LiveKit",
@@ -316,18 +448,18 @@ def test_streaming_option_updates_merge_before_the_next_audio_frame() -> None:
 
 
 def test_streaming_option_update_clears_prompt_with_empty_string() -> None:
-    previous = stt_streaming.StreamingSTTOptions(
+    previous = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
         prompt="LiveKit",
     )
-    current = stt_streaming.StreamingSTTOptions(
+    current = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
         prompt=None,
     )
 
-    assert stt_streaming.StreamingSpeechStream._config_update_payload(previous, current) == {
+    assert stt_streaming.RealtimeSpeechStream._config_update_payload(previous, current) == {
         "event": "config.update",
         "prompt": "",
     }
@@ -341,7 +473,7 @@ def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None
     stream._endpointing_update_acknowledged = False
     stream._pending_config_update = None
     stream.update_options(
-        stt_streaming.StreamingSTTOptions(
+        stt_streaming.RealtimeSTTOptions(
             language="hi-IN",
             api_key="sk_test",
             endpointing="manual",
@@ -833,8 +965,8 @@ async def test_streaming_usage_event_is_converted_to_livekit_stt_metrics(
     async def _idle_run(self: object) -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(stt_streaming.StreamingSpeechStream, "_run", _idle_run)
-    stt_impl = stt_streaming.STTStreaming(api_key="sk_test")
+    monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _idle_run)
+    stt_impl = stt_streaming.STTRealtime(api_key="sk_test")
     metrics = []
     stt_impl.on("metrics_collected", metrics.append)
     stream = stt_impl.stream()

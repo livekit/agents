@@ -21,10 +21,11 @@ import platform
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlencode
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -53,16 +54,53 @@ REALTIME_MODEL = "saaras:v3-realtime"
 
 RealtimeStreamType = Literal["fast", "balanced", "simulated"]
 RealtimeEndpointing = Literal["vad", "manual"]
-RealtimeEncoding = Literal["linear16"]
-RealtimeMode = Literal["transcribe", "translate", "indic-en", "verbatim", "translit", "codemix"]
+RealtimeEncoding = Literal["linear16", "linear32", "mulaw", "alaw"]
+RealtimeMode = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 SUPPORTED_SAMPLE_RATES = {8000, 16000}
 SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
-SUPPORTED_ENCODINGS = {"linear16"}
-SUPPORTED_MODES = {"transcribe", "translate", "indic-en", "verbatim", "translit", "codemix"}
+SUPPORTED_ENCODINGS = {"linear16", "linear32", "mulaw", "alaw"}
+SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 STREAM_TYPE_CHUNK_MS = {"fast": 500, "balanced": 1000, "simulated": 1000}
 EOS_FALLBACK_TIMEOUT = 2.0
+
+
+def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
+    """Encode little-endian signed 16-bit PCM for Sarvam's realtime wire format."""
+    if len(pcm) % 2:
+        raise ValueError("PCM data must contain whole 16-bit samples")
+    if encoding == "linear16":
+        return pcm
+
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)
+    if encoding == "linear32":
+        return (samples.astype(np.int64) * (1 << 16)).astype("<i4").tobytes()
+    if encoding == "mulaw":
+        return _encode_mulaw(samples)
+    if encoding == "alaw":
+        return _encode_alaw(samples)
+    raise ValueError(f"Unsupported realtime encoding: {encoding}")
+
+
+def _encode_mulaw(samples: np.ndarray) -> bytes:
+    """Encode signed linear PCM samples as 8-bit ITU-T G.711 mu-law."""
+    magnitude = np.minimum(np.abs(samples), 32635) + 0x84
+    exponent = np.clip(np.floor(np.log2(magnitude)).astype(np.int32) - 7, 0, 7)
+    mantissa = (magnitude >> (exponent + 3)) & 0x0F
+    sign = np.where(samples < 0, 0x80, 0)
+    return cast(bytes, (~(sign | (exponent << 4) | mantissa) & 0xFF).astype(np.uint8).tobytes())
+
+
+def _encode_alaw(samples: np.ndarray) -> bytes:
+    """Encode signed linear PCM samples as 8-bit ITU-T G.711 A-law."""
+    magnitude = np.minimum(np.abs(samples), 32767)
+    exponent = np.clip(np.floor(np.log2(np.maximum(magnitude, 1))).astype(np.int32) - 7, 0, 7)
+    mantissa = (magnitude >> (exponent + 3)) & 0x0F
+    encoded = np.where(magnitude < 256, magnitude >> 4, (exponent << 4) | mantissa)
+    xor_mask = np.where(samples >= 0, 0xD5, 0x55)
+    return cast(bytes, (encoded ^ xor_mask).astype(np.uint8).tobytes())
+
 
 SUPPORTED_LANGUAGES = {
     "en-IN",
@@ -93,7 +131,7 @@ SUPPORTED_LANGUAGES = {
 
 
 @dataclass
-class StreamingSTTOptions:
+class RealtimeSTTOptions:
     language: str
     api_key: str
     stream_type: RealtimeStreamType | str = "balanced"
@@ -108,6 +146,9 @@ class StreamingSTTOptions:
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
     vad_min_silence_ms: int | None = None
+    vad_prefix_padding_ms: int | None = None
+    lid_gate_seconds: float | None = None
+    lid_confidence_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if self.model != REALTIME_MODEL:
@@ -136,9 +177,18 @@ class StreamingSTTOptions:
             raise ValueError("vad_min_speech_ms must be greater than or equal to 0")
         if self.vad_min_silence_ms is not None and self.vad_min_silence_ms < 0:
             raise ValueError("vad_min_silence_ms must be greater than or equal to 0")
+        if self.vad_prefix_padding_ms is not None and self.vad_prefix_padding_ms < 0:
+            raise ValueError("vad_prefix_padding_ms must be greater than or equal to 0")
+        if self.lid_gate_seconds is not None and self.lid_gate_seconds < 0:
+            raise ValueError("lid_gate_seconds must be greater than or equal to 0")
+        if (
+            self.lid_confidence_threshold is not None
+            and not 0.0 <= self.lid_confidence_threshold <= 1.0
+        ):
+            raise ValueError("lid_confidence_threshold must be between 0.0 and 1.0")
 
 
-def _build_realtime_ws_url(base_url: str, opts: StreamingSTTOptions) -> str:
+def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
     params: dict[str, str] = {
         "language_code": opts.language,
         "stream_type": opts.stream_type,
@@ -152,6 +202,10 @@ def _build_realtime_ws_url(base_url: str, opts: StreamingSTTOptions) -> str:
     params["return_timestamps"] = str(opts.return_timestamps).lower()
     if opts.prompt is not None:
         params["prompt"] = opts.prompt
+    if opts.lid_gate_seconds is not None:
+        params["lid_gate_seconds"] = str(opts.lid_gate_seconds)
+    if opts.lid_confidence_threshold is not None:
+        params["lid_confidence_threshold"] = str(opts.lid_confidence_threshold)
 
     if opts.endpointing == "vad":
         if opts.vad_sot_threshold is not None:
@@ -160,11 +214,13 @@ def _build_realtime_ws_url(base_url: str, opts: StreamingSTTOptions) -> str:
             params["min_speech_duration_ms"] = str(opts.vad_min_speech_ms)
         if opts.vad_min_silence_ms is not None:
             params["silence_duration_ms"] = str(opts.vad_min_silence_ms)
+        if opts.vad_prefix_padding_ms is not None:
+            params["prefix_padding_ms"] = str(opts.vad_prefix_padding_ms)
 
     return f"{base_url}?{urlencode(params)}"
 
 
-class STTStreaming(stt.STT):
+class STTRealtime(stt.STT):
     def __init__(
         self,
         *,
@@ -182,6 +238,9 @@ class STTStreaming(stt.STT):
         vad_sot_threshold: float | None = None,
         vad_min_speech_ms: int | None = None,
         vad_min_silence_ms: int | None = None,
+        vad_prefix_padding_ms: int | None = None,
+        lid_gate_seconds: float | None = None,
+        lid_confidence_threshold: float | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -199,7 +258,7 @@ class STTStreaming(stt.STT):
                 "Provide it directly or set SARVAM_API_KEY environment variable."
             )
 
-        self._opts = StreamingSTTOptions(
+        self._opts = RealtimeSTTOptions(
             language=language,
             api_key=api_key,
             stream_type=stream_type,
@@ -213,10 +272,13 @@ class STTStreaming(stt.STT):
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
             vad_min_silence_ms=vad_min_silence_ms,
+            vad_prefix_padding_ms=vad_prefix_padding_ms,
+            lid_gate_seconds=lid_gate_seconds,
+            lid_confidence_threshold=lid_confidence_threshold,
         )
         self._session = http_session
         self._owns_session = http_session is None
-        self._streams = weakref.WeakSet[StreamingSpeechStream]()
+        self._streams = weakref.WeakSet[RealtimeSpeechStream]()
 
     @property
     def model(self) -> str:
@@ -259,8 +321,11 @@ class STTStreaming(stt.STT):
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        vad_prefix_padding_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        lid_gate_seconds: NotGivenOr[float | None] = NOT_GIVEN,
+        lid_confidence_threshold: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
-        opts = StreamingSTTOptions(
+        opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
             stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
@@ -282,6 +347,15 @@ class STTStreaming(stt.STT):
             vad_min_silence_ms=vad_min_silence_ms
             if is_given(vad_min_silence_ms)
             else self._opts.vad_min_silence_ms,
+            vad_prefix_padding_ms=vad_prefix_padding_ms
+            if is_given(vad_prefix_padding_ms)
+            else self._opts.vad_prefix_padding_ms,
+            lid_gate_seconds=lid_gate_seconds
+            if is_given(lid_gate_seconds)
+            else self._opts.lid_gate_seconds,
+            lid_confidence_threshold=lid_confidence_threshold
+            if is_given(lid_confidence_threshold)
+            else self._opts.lid_confidence_threshold,
         )
         self._opts = opts
         for stream in self._streams:
@@ -292,9 +366,9 @@ class STTStreaming(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> StreamingSpeechStream:
+    ) -> RealtimeSpeechStream:
         conn_options = replace(conn_options, max_retry=0)
-        opts = StreamingSTTOptions(
+        opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
             stream_type=self._opts.stream_type,
@@ -308,8 +382,11 @@ class STTStreaming(stt.STT):
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
             vad_min_silence_ms=self._opts.vad_min_silence_ms,
+            vad_prefix_padding_ms=self._opts.vad_prefix_padding_ms,
+            lid_gate_seconds=self._opts.lid_gate_seconds,
+            lid_confidence_threshold=self._opts.lid_confidence_threshold,
         )
-        stream = StreamingSpeechStream(
+        stream = RealtimeSpeechStream(
             stt=self,
             opts=opts,
             conn_options=conn_options,
@@ -326,12 +403,12 @@ class STTStreaming(stt.STT):
             await self._session.close()
 
 
-class StreamingSpeechStream(stt.SpeechStream):
+class RealtimeSpeechStream(stt.SpeechStream):
     def __init__(
         self,
         *,
-        stt: STTStreaming,
-        opts: StreamingSTTOptions,
+        stt: STTRealtime,
+        opts: RealtimeSTTOptions,
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
     ) -> None:
@@ -341,6 +418,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._request_id = ""
         self._session_id = ""
+        self._resolved_config: dict[str, Any] | None = None
         self._session_ended = False
         self._utterance_idx: int | None = None
         self._utterance_in_progress = False
@@ -370,7 +448,12 @@ class StreamingSpeechStream(stt.SpeechStream):
         )
         self._logger = logger
 
-    def update_options(self, opts: StreamingSTTOptions) -> None:
+    @property
+    def resolved_config(self) -> dict[str, Any] | None:
+        """Return the configuration resolved by Sarvam for this connection."""
+        return dict(self._resolved_config) if self._resolved_config is not None else None
+
+    def update_options(self, opts: RealtimeSTTOptions) -> None:
         previous_opts = self._opts
         connection_only_options: list[str] = []
         if opts.sample_rate != previous_opts.sample_rate:
@@ -379,6 +462,18 @@ class StreamingSpeechStream(stt.SpeechStream):
         if opts.return_timestamps != previous_opts.return_timestamps:
             connection_only_options.append("return_timestamps")
             opts = replace(opts, return_timestamps=previous_opts.return_timestamps)
+        if opts.vad_prefix_padding_ms != previous_opts.vad_prefix_padding_ms:
+            connection_only_options.append("vad_prefix_padding_ms")
+            opts = replace(opts, vad_prefix_padding_ms=previous_opts.vad_prefix_padding_ms)
+        if opts.lid_gate_seconds != previous_opts.lid_gate_seconds:
+            connection_only_options.append("lid_gate_seconds")
+            opts = replace(opts, lid_gate_seconds=previous_opts.lid_gate_seconds)
+        if opts.lid_confidence_threshold != previous_opts.lid_confidence_threshold:
+            connection_only_options.append("lid_confidence_threshold")
+            opts = replace(
+                opts,
+                lid_confidence_threshold=previous_opts.lid_confidence_threshold,
+            )
         if connection_only_options:
             self._logger.warning(
                 "Sarvam realtime STT connection-only option updates only apply to new streams",
@@ -402,8 +497,8 @@ class StreamingSpeechStream(stt.SpeechStream):
 
     @staticmethod
     def _config_update_payload(
-        previous: StreamingSTTOptions,
-        current: StreamingSTTOptions,
+        previous: RealtimeSTTOptions,
+        current: RealtimeSTTOptions,
     ) -> dict[str, Any] | None:
         payload: dict[str, Any] = {"event": "config.update"}
         values = (
@@ -556,6 +651,7 @@ class StreamingSpeechStream(stt.SpeechStream):
         self._cancel_eos_fallback()
         self._request_id = ""
         self._session_id = ""
+        self._resolved_config = None
         self._session_ended = False
         self._utterance_idx = None
         self._utterance_in_progress = False
@@ -683,7 +779,7 @@ class StreamingSpeechStream(stt.SpeechStream):
 
                 self._audio_duration_collector.push(frame.duration)
                 self._audio_position += frame.duration
-                await ws.send_bytes(frame.data.tobytes())
+                await ws.send_bytes(_encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes()))
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
@@ -780,6 +876,9 @@ class StreamingSpeechStream(stt.SpeechStream):
     async def _handle_message(self, data: dict[str, Any]) -> None:
         event = data.get("event")
         self._capture_server_ids(data)
+        if event == "session.begin":
+            config = data.get("config")
+            self._resolved_config = dict(config) if isinstance(config, dict) else None
         self._log_stt_event(event, data)
         if event == "session.begin":
             return
@@ -1099,3 +1198,9 @@ class StreamingSpeechStream(stt.SpeechStream):
                 recognition_usage=stt.RecognitionUsage(audio_duration=duration),
             )
         )
+
+
+# Deprecated compatibility aliases. Prefer the endpoint-specific realtime names above.
+STTStreaming = STTRealtime
+StreamingSpeechStream = RealtimeSpeechStream
+StreamingSTTOptions = RealtimeSTTOptions
