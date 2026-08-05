@@ -505,3 +505,28 @@ async def test_refinalized_item_keeps_its_segment_on_both_channels() -> None:
     other_legacy, other_stream = await _finalize("item_b", "next")
     assert other_legacy != first_legacy
     assert other_stream != first_stream
+
+
+@pytest.mark.asyncio
+async def test_unconsumed_reservation_does_not_leak_to_the_next_item() -> None:
+    # capture_text returns early until a participant is known, so a reservation made by
+    # _capture_item can go unused. It must not survive for whatever text comes next, or
+    # a new utterance publishes into the previous one's segment and replaces it on screen
+    room = _FakeRoom()
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="user")
+
+    output._capture_item("item_a")
+    await output.capture_text("hello")
+    first = output._current_id
+    output.flush()
+    if output._flush_atask is not None:
+        await output._flush_atask
+
+    # a revision is announced but never captured (no participant yet, empty chunk, ...)
+    output._capture_item("item_a")
+    # then a different item arrives
+    output._capture_item("item_b")
+    await output.capture_text("a new utterance")
+    second = output._current_id
+
+    assert second != first, "the new utterance overwrote the previous one's segment"

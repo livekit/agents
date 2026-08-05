@@ -230,13 +230,14 @@ class _ParticipantLegacyTranscriptionOutput:
 
     def _capture_item(self, item_id: str | None) -> None:
         """Tie the text that follows to a provider item, reusing its segment on a revision."""
-        if not item_id:
-            return
+        # nothing guarantees a capture consumes the reservation - capture_text returns
+        # early until a participant and track are known - so it is re-derived every time
+        # rather than left behind for whatever text arrives next
+        reuse = item_id is not None and item_id == self._item_id and self._item_segment_id
+        self._next_segment_id = self._item_segment_id if reuse else None
 
-        if item_id == self._item_id and self._item_segment_id is not None:
-            self._next_segment_id = self._item_segment_id
-
-        self._item_id = item_id
+        if item_id:
+            self._item_id = item_id
 
     def _remember_item_segment(self) -> None:
         """Record the segment a started capture publishes under.
@@ -428,14 +429,16 @@ class _ParticipantStreamTranscriptionOutput:
         once, each time with a longer transcript. Without this the second final opens a
         new segment and the revisions stack up client-side instead of replacing the one
         already shown.
+
+        Nothing guarantees a capture consumes the reservation - capture_text returns
+        early until a participant is known - so it is re-derived every time rather than
+        left behind for whatever text arrives next.
         """
-        if not item_id:
-            return
+        reuse = item_id is not None and item_id == self._item_id and self._item_segment_id
+        self._next_segment_id = self._item_segment_id if reuse else None
 
-        if item_id == self._item_id and self._item_segment_id is not None:
-            self._next_segment_id = self._item_segment_id
-
-        self._item_id = item_id
+        if item_id:
+            self._item_id = item_id
 
     def _remember_item_segment(self) -> None:
         """Record the segment a started capture publishes under.
