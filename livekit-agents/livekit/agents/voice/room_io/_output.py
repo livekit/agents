@@ -436,7 +436,9 @@ class _ParticipantStreamTranscriptionOutput:
         return json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
     async def _create_text_writer(
-        self, attributes: dict[str, str] | None = None
+        self,
+        attributes: dict[str, str] | None = None,
+        extra: dict[str, str] | None = None,
     ) -> rtc.TextStreamWriter:
         assert self._participant_identity is not None, "participant_identity is not set"
 
@@ -447,6 +449,10 @@ class _ParticipantStreamTranscriptionOutput:
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
         attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
+        # overlaid rather than replacing, so the caller can add a key without
+        # dropping the transcription attributes the protocol requires
+        if extra:
+            attributes.update(extra)
 
         for key, val in self._additional_attributes.items():
             if key not in attributes:
@@ -487,7 +493,12 @@ class _ParticipantStreamTranscriptionOutput:
             if self._room.isconnected():
                 if self._is_delta_stream:  # reuse the existing writer
                     if self._writer is None:
-                        self._writer = await self._create_text_writer()
+                        # the leading expression is stripped before any visible text, so it is
+                        # already known here. Put it on the opening header as well as the closing
+                        # one, or a frontend can't colour the turn until the agent stops talking.
+                        self._writer = await self._create_text_writer(
+                            extra=expression_attribute(self._stripper.tags)
+                        )
 
                     await self._writer.write(payload)
                 else:  # always create a new writer
