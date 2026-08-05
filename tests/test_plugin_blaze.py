@@ -318,7 +318,6 @@ async def test_stt_discards_pending_when_duration_limit_exceeded() -> None:
 async def test_stt_pending_pcm_is_task_local() -> None:
     """Each asyncio Task keeps its own empty-segment PCM buffer (ContextVar)."""
     import asyncio
-    import contextvars
 
     stt = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
     results: dict[str, bytes] = {}
