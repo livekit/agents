@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -8,7 +9,8 @@ import openai
 import pytest
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
+from livekit.agents.stt import SpeechEventType
 from livekit.plugins.openai import stt
 
 pytestmark = pytest.mark.unit
@@ -52,11 +54,22 @@ def _offline_stt(**kwargs: Any) -> stt.STT:
     return instance
 
 
-def _audio_input(instance: stt.STT) -> dict[str, Any]:
-    payload = stt._session_update(instance._opts).model_dump(by_alias=True, exclude_unset=True)
+def _audio_input_of(payload: dict[str, Any]) -> dict[str, Any]:
     audio_input = payload["session"]["audio"]["input"]
     assert isinstance(audio_input, dict)
     return audio_input
+
+
+def _audio_input(instance: stt.STT) -> dict[str, Any]:
+    return _audio_input_of(
+        stt._session_update(instance._opts).model_dump(by_alias=True, exclude_unset=True)
+    )
+
+
+def _silence() -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1, samples_per_channel=2400
+    )
 
 
 async def _transcription_config(instance: stt.STT) -> dict[str, Any]:
@@ -189,7 +202,7 @@ async def _settle(stream: stt.SpeechStream) -> None:
 
 
 def _transcription_of(payload: dict[str, Any]) -> dict[str, Any]:
-    config = payload["session"]["audio"]["input"]["transcription"]
+    config = _audio_input_of(payload)["transcription"]
     assert isinstance(config, dict)
     return config
 
@@ -335,6 +348,34 @@ async def test_detected_keyterms_do_not_follow_a_model_downgrade() -> None:
     assert "keywords" not in config
 
 
+@pytest.mark.parametrize(
+    ("model", "realtime"),
+    [
+        ("gpt-live-transcribe", True),
+        ("gpt-realtime-whisper", True),
+        ("gpt-4o-mini-transcribe", False),
+        ("whisper-1", False),
+    ],
+)
+def test_use_realtime_defaults_to_the_only_transport_a_model_has(
+    model: str, realtime: bool
+) -> None:
+    instance = stt.STT(api_key="test-key", model=model, vad=None)
+    assert instance.capabilities.streaming is realtime
+
+    # an explicit value still wins
+    off = stt.STT(api_key="test-key", model=model, vad=None, use_realtime=False)
+    assert off.capabilities.streaming is False
+
+
+def test_a_client_commit_model_loads_the_bundled_vad() -> None:
+    # no livekit-plugins-silero dependency: the VAD ships with livekit-agents
+    instance = stt.STT(api_key="test-key", model="gpt-live-transcribe")
+    assert isinstance(instance._vad, inference.VAD)
+
+    assert stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe")._vad is None
+
+
 async def test_live_transcribe_omits_turn_detection() -> None:
     # the model rejects any turn_detection config and needs a client-side commit
     instance = stt.STT(api_key="test-key", model="gpt-live-transcribe", use_realtime=True, vad=None)
@@ -344,6 +385,80 @@ async def test_live_transcribe_omits_turn_detection() -> None:
     # every other model still gets server-side VAD
     other = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True)
     assert _audio_input(other)["turn_detection"]["type"] == "server_vad"
+
+
+class _OneShotVAD(vad.VAD):
+    """A VAD that closes one segment per stream, on the first frame it sees."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> vad.VADStream:
+        return _OneShotVADStream(self)
+
+
+class _OneShotVADStream(vad.VADStream):
+    async def _main_task(self) -> None:
+        done = False
+        # the input has to be drained until it ends, or the stream closes under its consumer
+        async for frame in self._input_ch:
+            if done or not isinstance(frame, rtc.AudioFrame):
+                continue
+            done = True
+            for type in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH):
+                self._event_ch.send_nowait(
+                    vad.VADEvent(
+                        type=type,
+                        samples_index=0,
+                        timestamp=0.0,
+                        speech_duration=0.0,
+                        silence_duration=0.0,
+                    )
+                )
+
+
+def _of_type(ws: _FakeWebSocket, type: str) -> list[dict[str, Any]]:
+    return [payload for payload in ws.sent if payload.get("type") == type]
+
+
+async def _wait_for(what: str, ready: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if ready():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def test_the_vad_stops_committing_once_the_server_endpoints() -> None:
+    # the client VAD and server-side turn detection would otherwise both close the segment
+    instance = _offline_stt(model="gpt-live-transcribe", vad=_OneShotVAD())
+    stream = instance.stream()
+    ws = await _connected(stream)
+    ends = 0
+
+    async def collect() -> None:
+        nonlocal ends
+        async for ev in stream:
+            if ev.type == SpeechEventType.END_OF_SPEECH:
+                ends += 1
+
+    collector = asyncio.create_task(collect())
+
+    stream.push_frame(_silence())
+    await _wait_for("the first commit", lambda: len(_of_type(ws, "input_audio_buffer.commit")) == 1)
+
+    instance.update_options(model="gpt-4o-mini-transcribe")
+    await _wait_for("the rebuilt connection", lambda: len(_of_type(ws, "session.update")) == 2)
+    assert "turn_detection" in _audio_input_of(_of_type(ws, "session.update")[-1])
+
+    # the rebuilt connection has its own VAD stream, so the segment closes a second time
+    stream.push_frame(_silence())
+    await _wait_for("the second segment", lambda: ends == 2)
+    await asyncio.sleep(0.05)  # a commit would follow the segment straight away
+    assert len(_of_type(ws, "input_audio_buffer.commit")) == 1
+
+    await stream.aclose()
+    await collector
 
 
 async def test_an_update_during_connection_setup_is_not_lost() -> None:
@@ -402,10 +517,7 @@ async def test_session_keyterms_reach_the_next_connection() -> None:
 
 
 async def _transcription_form(instance: stt.STT, captured: list[httpx.Request]) -> str:
-    frame = rtc.AudioFrame(
-        data=b"\x00\x00" * 2400, sample_rate=24000, num_channels=1, samples_per_channel=2400
-    )
-    event = await instance._recognize_impl(frame, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    event = await instance._recognize_impl(_silence(), conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert event.alternatives[0].text == "hello"
     return captured[0].read().decode("utf-8", errors="replace")
 

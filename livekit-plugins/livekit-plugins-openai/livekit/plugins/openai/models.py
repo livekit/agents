@@ -3,7 +3,8 @@ from typing import Literal, TypedDict
 
 from openai.types import AudioModel
 
-STTModels = AudioModel | Literal["gpt-live-transcribe"]
+# AudioModel covers the transcriptions endpoint; these two are served only over realtime
+STTModels = AudioModel | Literal["gpt-live-transcribe", "gpt-realtime-whisper"]
 TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 TTSVoices = Literal[
     "alloy",

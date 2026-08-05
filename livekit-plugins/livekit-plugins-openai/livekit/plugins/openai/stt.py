@@ -38,6 +38,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    inference,
     stt,
     utils,
     vad,
@@ -84,16 +85,21 @@ _TURN_DETECTION: TypeAdapter[RealtimeTranscriptionSessionAudioInputTurnDetection
     RealtimeTranscriptionSessionAudioInputTurnDetection
 )
 
+# these models are served only over the realtime API, and without server-side endpointing: they
+# reject any turn_detection config and emit no speech_started/stopped, so the client has to commit
+# the audio buffer to close a segment (e.g. driven by a VAD)
+_REALTIME_ONLY_MODELS = ("gpt-realtime-whisper", "gpt-live-transcribe")
+# these accept a plural `languages` list and `keywords`; earlier models take a single `language`
+# and no keywords
+_CONTEXT_HINT_MODELS = ("gpt-transcribe", "gpt-live-transcribe")
+
 
 def _requires_client_commit(model: str) -> bool:
-    # these models reject any turn_detection config and emit no speech_started/stopped;
-    # the client must commit the audio buffer to close a segment (e.g. driven by a VAD).
-    return model.startswith(("gpt-realtime-whisper", "gpt-live-transcribe"))
+    return model.startswith(_REALTIME_ONLY_MODELS)
 
 
 def _supports_context_hints(model: str) -> bool:
-    # earlier models take a single `language` and no keywords
-    return model.startswith(("gpt-transcribe", "gpt-live-transcribe"))
+    return model.startswith(_CONTEXT_HINT_MODELS)
 
 
 def _as_languages(language: str | list[str]) -> list[str]:
@@ -107,15 +113,11 @@ def _validate_context(model: str, languages: list[str], keywords: list[str]) -> 
     """Raise when keywords or several languages go to a model that takes neither."""
     if _supports_context_hints(model):
         return
+    supported = " and ".join(_CONTEXT_HINT_MODELS)
     if keywords:
-        raise ValueError(
-            f"keywords are only supported by gpt-transcribe and gpt-live-transcribe, not {model}"
-        )
+        raise ValueError(f"keywords are only supported by {supported}, not {model}")
     if len(languages) > 1:
-        raise ValueError(
-            f"{model} accepts a single language; only gpt-transcribe and "
-            "gpt-live-transcribe accept a list"
-        )
+        raise ValueError(f"{model} accepts a single language; only {supported} accept a list")
 
 
 def _transcript_language(languages: list[str]) -> LanguageCode:
@@ -191,7 +193,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
-        use_realtime: bool = False,
+        use_realtime: NotGivenOr[bool] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ):
         """
@@ -216,14 +218,19 @@ class STT(stt.STT):
             base_url: Custom base URL for OpenAI API.
             api_key: Your OpenAI API key. If not provided, will use the OPENAI_API_KEY environment variable.
             client: Optional pre-configured OpenAI AsyncClient instance.
-            use_realtime: Whether to use the realtime transcription API. (default: False)
+            use_realtime: Whether to use the realtime transcription API. Defaults to True for
+                `gpt-realtime-whisper` and `gpt-live-transcribe`, which are served only there,
+                and to False otherwise.
             vad: Optional Voice Activity Detector used to commit the audio buffer when the model
                 does not support server-side turn detection (`gpt-realtime-whisper`,
                 `gpt-live-transcribe`).
-                When not provided and the model requires it, Silero VAD is auto-loaded with default
-                settings. Pass `vad=None` to opt out of the auto-load and drive
+                When not provided and the model requires it, the bundled Silero VAD is used with
+                default settings. Pass `vad=None` to opt out and drive
                 `input_audio_buffer.commit` yourself.
         """  # noqa: E501
+
+        if not is_given(use_realtime):
+            use_realtime = _requires_client_commit(model)
 
         if use_realtime and is_given(temperature):
             logger.warning(
@@ -239,15 +246,7 @@ class STT(stt.STT):
                 )
                 turn_detection = NOT_GIVEN
             if not is_given(vad):
-                try:
-                    from livekit.plugins.silero import VAD as SileroVAD
-                except ImportError as e:
-                    raise ImportError(
-                        f"livekit-plugins-silero is required for {model} "
-                        "(no server-side endpointing). Pass `vad=None` to opt out and drive "
-                        "`input_audio_buffer.commit` manually."
-                    ) from e
-                vad = SileroVAD.load()
+                vad = inference.VAD(model="silero")
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -346,7 +345,7 @@ class STT(stt.STT):
         organization: str | None = None,
         project: str | None = None,
         base_url: str | None = None,
-        use_realtime: bool = False,
+        use_realtime: NotGivenOr[bool] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> STT:
@@ -754,7 +753,10 @@ class SpeechStream(stt.SpeechStream):
                         self._start_speaking()
                     elif ev.type == vad.VADEventType.END_OF_SPEECH:
                         self._stop_speaking()
-                        await ws.send_json({"type": "input_audio_buffer.commit"})
+                        # a model with server-side endpointing closes the segment itself, so a
+                        # commit from here would cut it a second time
+                        if _requires_client_commit(self._opts.model):
+                            await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws:
                     return
