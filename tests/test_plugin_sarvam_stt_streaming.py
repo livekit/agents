@@ -549,9 +549,8 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     assert final_event.alternatives[0].end_time == 1.75
 
     eos_event = stream._event_ch.events[2]
-    assert eos_event.alternatives[0].end_time == 1.75
-    assert eos_event.alternatives[0].metadata is not None
-    assert eos_event.alternatives[0].metadata["speech_end_wall_time"] > 0
+    assert eos_event.alternatives == []
+    assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 0
 
 
 @pytest.mark.asyncio
@@ -644,7 +643,7 @@ async def test_streaming_final_after_speech_end_includes_audio_end_time() -> Non
     eos_event = stream._event_ch.events[1]
     final_event = stream._event_ch.events[2]
     assert final_event.alternatives[0].end_time == 1.75
-    assert eos_event.alternatives[0].end_time == 1.75
+    assert eos_event.alternatives == []
     assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 0
 
 
@@ -671,7 +670,7 @@ async def test_streaming_final_transcript_waits_for_speech_end_for_end_time() ->
     eos_event = stream._event_ch.events[0]
     final_event = stream._event_ch.events[1]
     assert final_event.alternatives[0].end_time == 2.0
-    assert eos_event.alternatives[0].end_time == 2.0
+    assert eos_event.alternatives == []
 
 
 @pytest.mark.asyncio
@@ -851,8 +850,7 @@ async def test_new_speech_start_emits_pending_end_of_speech_for_previous_utteran
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
     ]
     eos_event = stream._event_ch.events[1]
-    assert eos_event.alternatives[0].end_time == 1.5
-    assert eos_event.alternatives[0].metadata["speech_end_wall_time"] > 0
+    assert eos_event.alternatives == []
     assert stream._pending_eos is False
     assert stream._eos_emitted_for_utterance is False
     assert stream._utterance_start_audio_pos == 2.0
@@ -1551,12 +1549,16 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
         stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE,
         stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
     ]
+    # A second end-of-speech only appears because the turn reset cleared
+    # _eos_emitted_for_utterance; without it _emit_end_of_speech returns early.
     first_eos, second_eos = (
         stream._event_ch.events[2],
         stream._event_ch.events[5],
     )
-    assert first_eos.alternatives[0].end_time == 0.5
-    assert second_eos.alternatives[0].end_time == 1.0
+    assert first_eos.alternatives == []
+    assert second_eos.alternatives == []
+    # The speech-end position is re-anchored to the second turn.
+    assert stream._utterance_speech_end_audio_pos == 1.0
 
 
 @pytest.mark.asyncio
@@ -1587,3 +1589,30 @@ async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None
     final_event = stream._event_ch.events[2]
     assert final_event.alternatives[0].end_time == 6.0
     assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 100.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing: str) -> None:
+    """END_OF_SPEECH must carry no alternatives.
+
+    livekit-agents treats an event without alternatives as a sentinel it holds until a
+    concrete transcript releases it (``_should_hold_stt_event``) and always flushes from
+    (``_flush_held_transcripts``). An alternative with ``start_time == 0`` would bypass
+    the hold check and be timestamp-compared like a transcript instead.
+    """
+    stream = _make_stream(endpointing=endpointing)
+    stream._audio_position = 2.0
+    stream._utterance_speech_end_audio_pos = 2.0
+    stream._utterance_speech_end_wall = stt_streaming.time.time()
+
+    stream._emit_end_of_speech()
+
+    eos_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.END_OF_SPEECH
+    ]
+    assert len(eos_events) == 1
+    assert eos_events[0].alternatives == []
+    assert eos_events[0].request_id == stream._request_id

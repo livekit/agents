@@ -132,6 +132,14 @@ SUPPORTED_LANGUAGES = {
 
 @dataclass
 class RealtimeSTTOptions:
+    """Resolved options for a single Sarvam realtime STT connection.
+
+    Values are validated against the realtime contract in ``__post_init__``, which
+    raises ``ValueError`` for anything the endpoint would reject. Some fields are
+    negotiated at connection time and cannot change on a live stream; see
+    :meth:`RealtimeSpeechStream.update_options`.
+    """
+
     language: str
     api_key: str
     stream_type: RealtimeStreamType | str = "balanced"
@@ -1197,29 +1205,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if self._eos_emitted_for_utterance:
             return
 
-        alternatives: list[stt.SpeechData] = []
-        if self._utterance_speech_end_audio_pos is not None:
-            metadata: dict[str, Any] = {}
-            if self._utterance_speech_end_wall is not None:
-                metadata["speech_end_wall_time"] = self._utterance_speech_end_wall
-            if self._pending_final_data is not None:
-                utterance_idx = self._pending_final_data.get("utterance_idx")
-                if utterance_idx is not None:
-                    metadata["utterance_idx"] = utterance_idx
-            alternatives.append(
-                stt.SpeechData(
-                    language=LanguageCode(self._opts.language),
-                    text="",
-                    end_time=self._utterance_speech_end_audio_pos,
-                    metadata=metadata or None,
-                )
-            )
-
+        # Emitted without alternatives so the agent pipeline treats it as a sentinel
+        # it can hold and release with a concrete transcript. The speech-end timing
+        # travels on the FINAL_TRANSCRIPT event instead.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._request_id,
-                alternatives=alternatives,
             )
         )
         self._pending_eos = False
