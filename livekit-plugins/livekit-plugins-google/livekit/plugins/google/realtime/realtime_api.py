@@ -1260,9 +1260,28 @@ class RealtimeSession(llm.RealtimeSession):
 
         self.emit("generation_created", generation_event)
 
+    def _fail_pending_generation(self, reason: types.TurnCompleteReason | None) -> None:
+        """Fail a generate_reply the server ended without creating a generation."""
+        fut = self._pending_generation_fut
+        if fut is None or fut.done():
+            return
+
+        detail = reason.value if reason is not None else "no reason given"
+        logger.warning("Gemini ended the turn without generating a reply: %s", detail)
+        fut.set_exception(
+            llm.RealtimeError(f"the server ended the turn without generating a reply: {detail}")
+        )
+
     def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
         current_gen = self._current_generation
         if not current_gen:
+            # a turn the server ends without generating anything (a malformed function
+            # call, a rejected response) never reaches _handle_generation_created, so a
+            # pending generate_reply would sit on its timeout with the outcome already
+            # known - fail it now with the reason the server gave
+            if server_content.turn_complete:
+                self._fail_pending_generation(server_content.turn_complete_reason)
+
             if self._rejected_tool_calls:
                 logger.debug(
                     "ignoring server content from a rejected tool call turn",
