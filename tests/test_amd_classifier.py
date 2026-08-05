@@ -818,6 +818,42 @@ class TestAMDClassifier:
         assert classifier.timer_calls == 0
         assert classifier.listening is False
 
+    async def test_setup_settles_when_track_publication_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            await asyncio.Future[None]()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(amd_detector, "_TRACK_PUBLICATION_TIMEOUT", 0.1)
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
     async def test_setup_settles_when_participant_disappears_after_track(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

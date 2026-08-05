@@ -64,6 +64,7 @@ EVALUATED_STT_MODELS: set[str] = {
 
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
+_TRACK_PUBLICATION_TIMEOUT = 5.0
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -404,12 +405,18 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         else:
             room = session._room_io.room
             try:
-                publication = await wait_for_track_publication(
-                    room=room,
-                    identity=self._participant_identity or None,
-                    kind=rtc.TrackKind.KIND_AUDIO,
-                    wait_for_subscription=True,
+                publication = await asyncio.wait_for(
+                    wait_for_track_publication(
+                        room=room,
+                        identity=self._participant_identity or None,
+                        kind=rtc.TrackKind.KIND_AUDIO,
+                        wait_for_subscription=True,
+                    ),
+                    timeout=_TRACK_PUBLICATION_TIMEOUT,
                 )
+            except asyncio.TimeoutError:
+                self._settle_participant_missing("timed out waiting for participant audio track")
+                return
             except RuntimeError as e:
                 self._settle_participant_missing(str(e))
                 return
