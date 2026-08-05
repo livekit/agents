@@ -801,7 +801,9 @@ async def test_streaming_info_logs_essential_data_without_raw_payload(
         if record.getMessage() == "Sarvam realtime STT transcript.final"
     ]
     assert len(info_records) == 1
-    assert info_records[0].text == "hello"
+    assert not hasattr(info_records[0], "text")
+    assert info_records[0].text_length == len("hello")
+    assert info_records[0].language == "en-IN"
     assert not hasattr(info_records[0], "raw_data")
 
     caplog.clear()
@@ -815,6 +817,7 @@ async def test_streaming_info_logs_essential_data_without_raw_payload(
     ]
     assert len(debug_records) == 1
     assert debug_records[0].raw_data == final_payload
+    assert debug_records[0].raw_data["text"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -891,7 +894,9 @@ async def test_streaming_usage_metrics_emit_server_authoritative_session_end() -
         for event in stream._event_ch.events
         if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
     ]
-    assert [event.recognition_usage.audio_duration for event in usage_events] == [2.25]
+    # The 1.5s already billed incrementally is topped up to the server total of 2.25s.
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.5, 0.75]
+    assert sum(event.recognition_usage.audio_duration for event in usage_events) == 2.25
     assert all(event.request_id == "sess_123" for event in usage_events)
     assert stream._session_ended is True
     assert stream._server_audio_duration_reported is True
@@ -941,7 +946,9 @@ async def test_streaming_usage_accepts_server_duration_smaller_than_local_estima
         for event in stream._event_ch.events
         if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
     ]
-    assert [event.recognition_usage.audio_duration for event in usage_events] == [2.25]
+    # 5.0s was already billed incrementally, so a smaller server total adds nothing
+    # rather than double counting or emitting a negative delta.
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [5.0]
 
 
 @pytest.mark.asyncio
@@ -1303,3 +1310,280 @@ async def test_streaming_connect_logs_handshake_failure(
     assert len(records) == 1
     assert records[0].status_code == 403
     assert "API-SUBSCRIPTION-KEY" not in records[0].url
+
+
+@pytest.mark.asyncio
+async def test_session_end_commits_final_buffered_without_speech_end() -> None:
+    stream = _make_stream()
+    stream._audio_position = 3.5
+
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 0,
+            "text": "नमस्ते आप कैसे हैं",
+            "language": "hi-IN",
+            "language_confidence": 0.99,
+        }
+    )
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+    ]
+
+    await stream._handle_message(
+        {
+            "event": "session.end",
+            "request_id": "req_123",
+            "audio_duration_s": 3.5,
+        }
+    )
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE,
+    ]
+    final_event = stream._event_ch.events[2]
+    assert final_event.alternatives[0].text == "नमस्ते आप कैसे हैं"
+    assert final_event.alternatives[0].end_time == 3.5
+    assert stream._pending_final_data is None
+
+
+@pytest.mark.asyncio
+async def test_clean_close_commits_final_buffered_without_speech_end() -> None:
+    stream = _make_stream()
+    stream._audio_position = 2.0
+    ws = SimpleNamespace(
+        receive=lambda: asyncio.sleep(
+            0,
+            result=SimpleNamespace(
+                type=stt_streaming.aiohttp.WSMsgType.CLOSE,
+                data=1000,
+                extra=None,
+            ),
+        ),
+        close_code=1000,
+    )
+
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 0,
+            "text": "hello",
+            "language": "en-IN",
+            "language_confidence": 0.99,
+        }
+    )
+
+    await stream._process_messages(ws)
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert stream._event_ch.events[2].alternatives[0].end_time == 2.0
+
+
+@pytest.mark.asyncio
+async def test_terminal_flush_is_idempotent_across_session_end_and_close() -> None:
+    stream = _make_stream()
+    stream._audio_position = 1.0
+
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 0,
+            "text": "hello",
+            "language": "en-IN",
+        }
+    )
+    await stream._handle_message({"event": "session.end", "request_id": "req_123"})
+    stream._flush_terminal_utterance()
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    eos_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.END_OF_SPEECH
+    ]
+    assert len(finals) == 1
+    assert len(eos_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_audio_duration_collector_emits_usage_incrementally() -> None:
+    stream = _make_stream()
+
+    stream._on_audio_duration_report(5.0)
+    stream._on_audio_duration_report(5.0)
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [5.0, 5.0]
+    assert stream._total_reported_audio_duration == 10.0
+    assert stream._local_audio_duration == 10.0
+
+
+@pytest.mark.asyncio
+async def test_session_end_tops_up_pending_collector_audio_to_server_total() -> None:
+    stream = _make_stream()
+    stream._audio_duration_collector.push(1.0)
+
+    await stream._handle_message(
+        {
+            "event": "session.end",
+            "request_id": "req_123",
+            "audio_duration_s": 2.5,
+        }
+    )
+
+    usage_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.recognition_usage.audio_duration for event in usage_events] == [1.0, 1.5]
+    assert stream._total_reported_audio_duration == 2.5
+
+
+@pytest.mark.asyncio
+async def test_aclose_flushes_pending_audio_duration_into_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _idle_run(self: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _idle_run)
+
+    stt_impl = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    metrics = []
+    stt_impl.on("metrics_collected", metrics.append)
+    stream = stt_impl.stream()
+    stream._request_id = "req_123"
+    stream._audio_duration_collector.push(1.75)
+
+    await stream.aclose()
+    await stt_impl.aclose()
+
+    assert [metric.audio_duration for metric in metrics] == [1.75]
+    assert metrics[0].request_id == "req_123"
+
+
+@pytest.mark.asyncio
+async def test_aclose_skips_usage_flush_when_stream_already_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _failing_run(self: object) -> None:
+        raise APIStatusError("boom", status_code=1006)
+
+    monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _failing_run)
+
+    stt_impl = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stream = stt_impl.stream()
+    stream._audio_duration_collector.push(1.0)
+
+    with pytest.raises(APIStatusError):
+        async for _ in stream:
+            pass
+
+    # The event channel closes with the failed run, so the flush must not raise.
+    await stream.aclose()
+    await stt_impl.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -> None:
+    stream = _make_stream(endpointing="manual")
+    sent: list[dict[str, object]] = []
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=lambda payload: asyncio.sleep(0, result=sent.append(json.loads(payload))),
+        send_bytes=lambda payload: asyncio.sleep(0),
+    )
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(16000),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=8000,
+    )
+
+    async def _input() -> object:
+        yield frame
+        yield stream._FlushSentinel()
+        yield frame
+        yield stream._FlushSentinel()
+
+    stream._input_ch = _input()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+
+    async def _run_turns() -> None:
+        await stream._process_audio(ws)
+
+    await _run_turns()
+
+    assert [payload["event"] for payload in sent] == [
+        "speech_start",
+        "speech_end",
+        "speech_start",
+        "speech_end",
+        "end",
+    ]
+    # The collector is flushed before the turn boundary is sent, so usage lands
+    # between the speech events of each turn.
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    first_eos, second_eos = (
+        stream._event_ch.events[2],
+        stream._event_ch.events[5],
+    )
+    assert first_eos.alternatives[0].end_time == 0.5
+    assert second_eos.alternatives[0].end_time == 1.0
+
+
+@pytest.mark.asyncio
+async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None:
+    stream = _make_stream(endpointing="manual")
+    stream._audio_position = 4.0
+    stream._utterance_speech_end_audio_pos = 1.0
+    stream._utterance_speech_end_wall = 100.0
+    stream._eos_emitted_for_utterance = True
+
+    stream._begin_manual_utterance()
+    stream._audio_position = 6.0
+    stream._end_manual_utterance()
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 1,
+            "text": "second turn",
+            "language": "en-IN",
+        }
+    )
+
+    assert [event.type for event in stream._event_ch.events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    final_event = stream._event_ch.events[2]
+    assert final_event.alternatives[0].end_time == 6.0
+    assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 100.0

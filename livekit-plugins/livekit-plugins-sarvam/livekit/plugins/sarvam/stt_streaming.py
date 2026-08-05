@@ -221,6 +221,13 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
 
 class STTRealtime(stt.STT):
+    """Speech-to-text using Sarvam's realtime WebSocket endpoint (``saaras:v3-realtime``).
+
+    This endpoint streams interim and final transcripts over a single
+    WebSocket connection and supports either server-side VAD or
+    client-driven (manual) turn boundaries.
+    """
+
     def __init__(
         self,
         *,
@@ -242,6 +249,34 @@ class STTRealtime(stt.STT):
         lid_gate_seconds: float | None = None,
         lid_confidence_threshold: float | None = None,
     ) -> None:
+        """Create a Sarvam realtime STT instance.
+
+        Args:
+            language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
+            mode: Task applied to finals: ``transcribe``, ``translate``, ``verbatim``,
+                ``translit``, or ``codemix``.
+            endpointing: ``vad`` for server-side turn detection, or ``manual`` when the
+                caller delimits turns by flushing the stream.
+            encoding: Wire encoding: ``linear16``, ``linear32``, ``mulaw``, or ``alaw``.
+            sample_rate: Audio sample rate in Hz; ``8000`` or ``16000``.
+            prompt: Optional context or terminology hint used to bias decoding.
+            return_timestamps: Whether finals should carry segment-level start and end times.
+            api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
+            base_url: WebSocket URL of the realtime endpoint.
+            http_session: Optional aiohttp session to reuse for the connection.
+            vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
+            vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
+            vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
+            vad_prefix_padding_ms: Audio retained before speech onset in ms
+                (``vad`` endpointing only).
+            lid_gate_seconds: Utterance audio required before a detected language is promoted.
+            lid_confidence_threshold: Confidence required before a detected language is promoted.
+
+        Raises:
+            ValueError: If no API key is provided or found in the environment, or if an
+                option falls outside the values the endpoint accepts.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -282,10 +317,12 @@ class STTRealtime(stt.STT):
 
     @property
     def model(self) -> str:
+        """Name of the Sarvam realtime model backing this instance."""
         return REALTIME_MODEL
 
     @property
     def provider(self) -> str:
+        """Name of the speech-to-text provider."""
         return "Sarvam"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -325,6 +362,33 @@ class STTRealtime(stt.STT):
         lid_gate_seconds: NotGivenOr[float | None] = NOT_GIVEN,
         lid_confidence_threshold: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
+        """Update options for this instance and every stream it created.
+
+        Options that Sarvam only accepts at connection time (``sample_rate``,
+        ``return_timestamps``, ``vad_prefix_padding_ms``, ``lid_gate_seconds``, and
+        ``lid_confidence_threshold``) take effect on newly created streams only.
+        The remaining options are sent to active streams as an in-band
+        ``config.update``, and the boundary-gated ones apply from the next
+        utterance boundary.
+
+        Args:
+            language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
+            mode: Task applied to finals.
+            endpointing: ``vad`` for server-side turn detection, or ``manual``.
+            sample_rate: Audio sample rate in Hz; applies to new streams only.
+            prompt: Context or terminology hint; ``None`` clears it.
+            return_timestamps: Segment-level timestamps; applies to new streams only.
+            vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
+            vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
+            vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
+            vad_prefix_padding_ms: Audio retained before speech onset; new streams only.
+            lid_gate_seconds: Language-promotion audio gate; applies to new streams only.
+            lid_confidence_threshold: Language-promotion confidence; new streams only.
+
+        Raises:
+            ValueError: If an option falls outside the values the endpoint accepts.
+        """
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
@@ -367,6 +431,16 @@ class STTRealtime(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RealtimeSpeechStream:
+        """Create a new realtime speech stream.
+
+        Args:
+            language: Overrides the instance language for this stream only.
+            conn_options: Connection options. ``max_retry`` is forced to ``0`` because this
+                endpoint bills per connection and must not silently reconnect.
+
+        Returns:
+            A stream that accepts audio frames and yields speech events.
+        """
         conn_options = replace(conn_options, max_retry=0)
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
@@ -396,6 +470,7 @@ class STTRealtime(stt.STT):
         return stream
 
     async def aclose(self) -> None:
+        """Close every stream created by this instance and any owned HTTP session."""
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
@@ -404,6 +479,14 @@ class STTRealtime(stt.STT):
 
 
 class RealtimeSpeechStream(stt.SpeechStream):
+    """A single WebSocket session against Sarvam's realtime STT endpoint.
+
+    Audio pushed into the stream is forwarded in the configured wire encoding, and
+    the events Sarvam returns are translated into LiveKit speech events. Audio
+    duration is reported incrementally while the session runs and reconciled
+    against the server's authoritative total when the session ends.
+    """
+
     def __init__(
         self,
         *,
@@ -412,6 +495,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         http_session: aiohttp.ClientSession,
     ) -> None:
+        """Create a realtime speech stream.
+
+        Args:
+            stt: The parent instance that created this stream.
+            opts: Resolved options for this connection.
+            conn_options: Connection options for this stream.
+            http_session: aiohttp session used to open the WebSocket.
+        """
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._session = http_session
@@ -454,6 +545,16 @@ class RealtimeSpeechStream(stt.SpeechStream):
         return dict(self._resolved_config) if self._resolved_config is not None else None
 
     def update_options(self, opts: RealtimeSTTOptions) -> None:
+        """Apply an option change to this live connection.
+
+        Connection-time options are retained at their current values and a warning is
+        logged, since changing them would desynchronize the already-negotiated session.
+        Every other change is queued as an in-band ``config.update`` sent before the
+        next audio frame.
+
+        Args:
+            opts: The requested options for this stream.
+        """
         previous_opts = self._opts
         connection_only_options: list[str] = []
         if opts.sample_rate != previous_opts.sample_rate:
@@ -588,8 +689,19 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._request_id = request_id
 
     async def aclose(self) -> None:
+        """Close the connection, reporting any audio duration not yet billed.
+
+        Agents normally end a stream here rather than waiting for ``session.end``, so
+        the pending duration is flushed before the base class cancels the tasks that
+        deliver usage metrics.
+        """
         try:
             self._cancel_eos_fallback()
+            if not self._event_ch.closed:
+                self._emit_local_usage_fallback()
+                # Give the metrics monitor a chance to consume the usage event before
+                # super().aclose() cancels it.
+                await asyncio.sleep(0)
             if self._ws and not self._ws.closed:
                 await self._ws.close()
         finally:
@@ -686,6 +798,29 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
+    def _begin_manual_utterance(self) -> None:
+        """Open a client-delimited turn.
+
+        Sarvam emits no ``vad.speech_start`` under manual endpointing, so the client
+        boundary is what starts an utterance. Resetting here keeps the per-utterance
+        flags and timings from leaking across turns, including after an ``endpointing``
+        switch from ``vad`` to ``manual``.
+        """
+        self._reset_utterance_state()
+        self._utterance_in_progress = True
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.START_OF_SPEECH,
+                request_id=self._request_id,
+            )
+        )
+
+    def _end_manual_utterance(self) -> None:
+        """Close a client-delimited turn and anchor its speech-end position."""
+        self._utterance_speech_end_audio_pos = self._audio_position
+        self._utterance_speech_end_wall = time.time()
+        self._emit_end_of_speech()
+
     async def _safe_send_str(
         self,
         ws: Any,
@@ -775,7 +910,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 if self._active_endpointing == "manual" and not self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_start"})
                     self._manual_speech_started = True
-                    self._utterance_in_progress = True
+                    self._begin_manual_utterance()
 
                 self._audio_duration_collector.push(frame.duration)
                 self._audio_position += frame.duration
@@ -786,6 +921,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 if self._active_endpointing == "manual" and self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_end"})
                     self._manual_speech_started = False
+                    self._end_manual_utterance()
 
         self._audio_duration_collector.flush()
         await self._safe_send_str(ws, {"event": "end"})
@@ -829,9 +965,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 close_code = ws.close_code if ws.close_code is not None else msg.data
                 close_reason = msg.extra
                 if self._session_ended and close_code in (1000, 1001, None):
+                    self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
                 if close_code in (1000, 1001, None) and not _looks_like_error_text(close_reason):
+                    self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
                 self._logger.error(
@@ -932,9 +1070,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
             "utterance_idx": data.get("utterance_idx"),
         }
         if event in {"transcript.partial", "transcript.final"}:
+            # Recognized speech is personal data, so only its length is safe for the
+            # INFO record; the text itself stays in the opt-in DEBUG raw payload.
             text = data.get("text")
             if isinstance(text, str):
-                extra["text"] = text[:200]
                 extra["text_length"] = len(text)
             extra["language"] = data.get("language") or self._opts.language
             extra["confidence"] = data.get("language_confidence", data.get("confidence"))
@@ -1026,6 +1165,27 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._emit_end_of_speech()
             self._pending_final_data = None
             self._complete_utterance()
+
+    def _flush_terminal_utterance(self) -> None:
+        """Commit a buffered final transcript when the session ends mid-utterance.
+
+        In VAD endpointing a ``transcript.final`` is held until ``vad.speech_end``
+        supplies the speech-end position. When the input audio ends mid-utterance
+        the server finalizes and closes without that event, so the speech-end
+        position is anchored to the audio consumed so far instead of dropping the
+        transcript. Safe to call more than once per session.
+        """
+        if self._pending_final_data is not None and self._utterance_speech_end_audio_pos is None:
+            self._utterance_speech_end_audio_pos = self._audio_position
+            if self._utterance_speech_end_wall is None:
+                self._utterance_speech_end_wall = time.time()
+
+        if not self._eos_emitted_for_utterance and (
+            self._pending_eos or self._pending_final_data is not None
+        ):
+            self._emit_end_of_speech()
+
+        self._try_commit_utterance()
 
     def _emit_end_of_speech(self) -> None:
         current_task = asyncio.current_task()
@@ -1129,15 +1289,20 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     def _handle_session_end(self, data: dict[str, Any]) -> None:
         self._capture_server_ids(data)
+        self._flush_terminal_utterance()
         audio_duration = data.get("audio_duration_s")
         if (
             isinstance(audio_duration, (int, float))
             and not isinstance(audio_duration, bool)
             and not self._server_audio_duration_reported
         ):
+            # Report whatever audio is still buffered locally, then top up to Sarvam's
+            # authoritative total so the session bills exactly once for it.
+            self._audio_duration_collector.flush()
             server_audio_duration = max(float(audio_duration), 0.0)
-            if server_audio_duration:
-                self._emit_usage(server_audio_duration)
+            delta = max(server_audio_duration - self._total_reported_audio_duration, 0.0)
+            if delta:
+                self._emit_usage(delta)
             self._server_audio_duration_reported = True
         else:
             self._emit_local_usage_fallback()
@@ -1181,13 +1346,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     def _on_audio_duration_report(self, duration: float) -> None:
         self._local_audio_duration += duration
+        self._emit_usage(duration)
 
     def _emit_local_usage_fallback(self) -> None:
         if self._server_audio_duration_reported:
             return
-        delta = max(self._local_audio_duration - self._total_reported_audio_duration, 0.0)
-        if delta:
-            self._emit_usage(delta)
+        self._audio_duration_collector.flush()
 
     def _emit_usage(self, duration: float) -> None:
         self._total_reported_audio_duration += duration
