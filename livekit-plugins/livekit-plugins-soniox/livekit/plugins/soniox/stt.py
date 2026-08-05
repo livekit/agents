@@ -534,9 +534,6 @@ class SpeechStream(stt.SpeechStream):
                         if token["is_final"]:
                             if is_end_token(token):
                                 send_endpoint_transcript()
-                                self._report_processed_audio_duration(
-                                    total_audio_proc_ms,
-                                )
                             else:
                                 final.update(token)
                         else:
@@ -602,7 +599,10 @@ class SpeechStream(stt.SpeechStream):
                     # 3) on error or finish, flush any remaining final tokens.
                     if content.get("finished") or has_error:
                         send_endpoint_transcript()
-                        self._report_processed_audio_duration(total_audio_proc_ms)
+
+                    # 4) report processed audio for every frame; gating on
+                    #    endpoint/finish frames dropped whatever never reached one.
+                    self._report_processed_audio_duration(total_audio_proc_ms)
 
                     if has_error:
                         err_code = content.get("error_code")
