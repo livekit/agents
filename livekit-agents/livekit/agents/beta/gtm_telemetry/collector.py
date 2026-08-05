@@ -149,9 +149,14 @@ class PostCallTelemetryCollector:
             self._session.off("close", self._on_close)
 
         if self._flush_task is not None:
-            self._flush_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._flush_task
+            if not self._flush_task.done():
+                logger.warning(
+                    "aclose() called with flush in-flight; awaiting up to 5s grace period."
+                )
+                await self.aflush(timeout=5.0)
+            else:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._flush_task
 
     def generate_report(self) -> PostCallReport:
         """Build the :class:`PostCallReport` from the collected state."""

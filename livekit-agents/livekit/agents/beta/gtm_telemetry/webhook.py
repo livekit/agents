@@ -31,8 +31,9 @@ class WebhookDispatcher:
 
         import hashlib, hmac
 
-        def verify(body: bytes, signature: str, secret: str) -> bool:
-            expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        def verify(body: bytes, signature: str, timestamp: str, secret: str) -> bool:
+            payload = f"{timestamp}.".encode() + body
+            expected = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
             return hmac.compare_digest(expected, signature)
 
     Retry policy: ``max_retries`` total attempts; 5xx responses and network
@@ -58,6 +59,10 @@ class WebhookDispatcher:
         timeout: float = 10.0,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        if url.lower().startswith("http://"):
+            logger.warning(
+                "Webhook URL uses http:// scheme. Sensitive conversation data will be transmitted in cleartext."
+            )
         self._url = url
         self._webhook_secret = webhook_secret
         self._max_retries = max_retries
@@ -74,12 +79,17 @@ class WebhookDispatcher:
             return False
 
     async def _dispatch_impl(self, report: PostCallReport) -> bool:
+        import time
+
         body = report.model_dump_json().encode()
         headers = {"Content-Type": "application/json"}
         if self._webhook_secret is not None:
+            timestamp = str(int(time.time()))
+            payload_to_sign = f"{timestamp}.".encode() + body
             headers["X-LiveKit-Signature"] = hmac.new(
-                self._webhook_secret.encode(), body, hashlib.sha256
+                self._webhook_secret.encode(), payload_to_sign, hashlib.sha256
             ).hexdigest()
+            headers["X-LiveKit-Timestamp"] = timestamp
 
         # resolved lazily here (not in __init__) so the dispatcher can be
         # constructed outside a job context; see utils/http_context.py

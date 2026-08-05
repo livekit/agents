@@ -347,7 +347,9 @@ async def test_webhook_hmac_signature() -> None:
 
     assert result is True
     body = captured["body_bytes"]
-    expected_sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    timestamp = captured["headers"]["X-LiveKit-Timestamp"]
+    payload_to_sign = f"{timestamp}.".encode() + body
+    expected_sig = hmac.new(secret.encode(), payload_to_sign, hashlib.sha256).hexdigest()
     assert captured["headers"]["X-LiveKit-Signature"] == expected_sig
 
     # verify the body round-trips
