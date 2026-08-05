@@ -370,7 +370,11 @@ class Qwen3SpeechStream(stt.SpeechStream):
                 text = " ".join(s.get("text", "") for s in segments).strip()
                 is_final = bool(event.get("is_final"))
 
-                if not speaking and (text or is_final):
+                # Only real words open a turn. An empty final (VAD closed on
+                # noise, recognizer returned nothing) would otherwise emit
+                # START/END_OF_SPEECH and, under turn_detection="stt", commit
+                # the user's turn so the agent answers silence.
+                if not speaking and text:
                     speaking = True
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)

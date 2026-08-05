@@ -543,6 +543,12 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
                         open_segment()
                     output_emitter.push(msg.data)
                     segment_bytes += len(msg.data)
+                    # Audio counts as progress. The server only sends
+                    # session.done once the whole utterance is synthesized, so
+                    # without this a turn longer than _SESSION_DONE_TIMEOUT is
+                    # aborted mid-sentence on a perfectly healthy socket — and
+                    # the framework won't retry once audio has been pushed.
+                    state.progress.set()
                     continue
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
