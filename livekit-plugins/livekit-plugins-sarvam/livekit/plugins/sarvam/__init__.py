@@ -22,14 +22,24 @@ OpenAI-compatible LLMs.
 For API access, visit https://sarvam.ai/
 """
 
+from livekit.agents import Plugin
+
 from .llm import LLM, SarvamLLMModels
+from .log import logger
 from .stt import STT
-from .stt_streaming import StreamingSpeechStream, STTStreaming
+from .stt_streaming import RealtimeSpeechStream, STTRealtime
 from .tts import TTS
 from .version import __version__
 
+# Deprecated compatibility aliases. Prefer `STTRealtime` and
+# `RealtimeSpeechStream`.
+STTStreaming = STTRealtime
+StreamingSpeechStream = RealtimeSpeechStream
+
 __all__ = [
     "STT",
+    "STTRealtime",
+    "RealtimeSpeechStream",
     "STTStreaming",
     "StreamingSpeechStream",
     "TTS",
@@ -37,11 +47,6 @@ __all__ = [
     "SarvamLLMModels",
     "__version__",
 ]
-
-
-from livekit.agents import Plugin
-
-from .log import logger
 
 
 class SarvamPlugin(Plugin):
