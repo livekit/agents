@@ -120,9 +120,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        # The spelled readback is mandatory: speaking the address as words renders
+        # homophone transcription errors (sofia/sofya) inaudible, so letter names are
+        # the only channel that can surface them to the user.
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"Repeat the email character by character: {separated_email}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
