@@ -9,7 +9,6 @@ carrying its own copy of the keyword table.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Literal
 
 from ._mood_data import MOOD_KEYWORDS
@@ -61,12 +60,7 @@ def _matches_word(text: str, keyword: str) -> bool:
     return False
 
 
-def match_mood(
-    label: str,
-    *,
-    extra_keywords: Mapping[AgentMood, Mapping[str, int]] | None = None,
-    fallback: AgentMood | None = DEFAULT_MOOD,
-) -> AgentMood | None:
+def match_mood(label: str, *, fallback: AgentMood | None = DEFAULT_MOOD) -> AgentMood | None:
     """Match a raw delivery label to a mood.
 
     Matching is keyword-based and deliberately lossy: the label space is open-ended, so an
@@ -74,8 +68,6 @@ def match_mood(
 
     Args:
         label: The raw delivery label, as the provider wrote it.
-        extra_keywords: Keywords merged over :data:`MOOD_KEYWORDS`, to teach the matcher the
-            labels your agent and voice actually produce without forking the table.
         fallback: Mood to return when nothing matches. Pass ``None`` to get ``None`` back and
             handle the miss yourself.
 
@@ -92,10 +84,7 @@ def match_mood(
     best_score = 0
 
     for mood in MOOD_PRIORITY:
-        keywords = dict(MOOD_KEYWORDS.get(mood, {}))
-        if extra_keywords and mood in extra_keywords:
-            keywords.update(extra_keywords[mood])
-
+        keywords = MOOD_KEYWORDS[mood]
         score = sum(weight for kw, weight in keywords.items() if _matches_word(text, kw))
         # strictly greater, so MOOD_PRIORITY breaks ties
         if score > best_score:

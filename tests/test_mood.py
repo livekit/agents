@@ -46,11 +46,6 @@ def test_keywords_match_at_word_start_only() -> None:
     assert match_mood("unexcited", fallback=None) is None
 
 
-def test_extra_keywords_extend_the_table() -> None:
-    assert match_mood("swashbuckling", fallback=None) is None
-    assert match_mood("swashbuckling", extra_keywords={"playful": {"swashbuckl": 2}}) == "playful"
-
-
 def test_expression_attribute_carries_the_normalized_mood() -> None:
     _, tags = split_all_markup('<expr type="expression" label="soft, with genuine care"/>hey')
     attr = expression_attribute(tags)
