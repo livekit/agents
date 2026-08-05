@@ -1466,7 +1466,10 @@ async def test_aclose_flushes_pending_audio_duration_into_metrics(
 
     monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _idle_run)
 
-    stt_impl = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stt_impl = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        http_session=object(),  # type: ignore[arg-type]
+    )
     metrics = []
     stt_impl.on("metrics_collected", metrics.append)
     stream = stt_impl.stream()
@@ -1489,7 +1492,10 @@ async def test_aclose_skips_usage_flush_when_stream_already_failed(
 
     monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _failing_run)
 
-    stt_impl = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stt_impl = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        http_session=object(),  # type: ignore[arg-type]
+    )
     stream = stt_impl.stream()
     stream._audio_duration_collector.push(1.0)
 
@@ -1616,3 +1622,97 @@ async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing:
     assert len(eos_events) == 1
     assert eos_events[0].alternatives == []
     assert eos_events[0].request_id == stream._request_id
+
+
+@pytest.mark.asyncio
+async def test_streaming_safe_send_bytes_ignores_closed_transport() -> None:
+    stream = _make_stream()
+    calls = []
+
+    closed_ws = SimpleNamespace(closed=True, send_bytes=lambda payload: calls.append(payload))
+    await stream._safe_send_bytes(closed_ws, b"\x00\x01")
+
+    assert calls == []
+
+    async def _raise_reset(payload: bytes) -> None:
+        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    closing_ws = SimpleNamespace(closed=False, send_bytes=_raise_reset)
+    await stream._safe_send_bytes(closing_ws, b"\x00\x01")
+
+
+@pytest.mark.asyncio
+async def test_process_audio_stops_pumping_after_session_end() -> None:
+    """The audio pump must end cleanly once the server has closed the session.
+
+    ``_run`` gathers the audio and message pumps, so an exception here would fail the
+    whole stream rather than letting it finish.
+    """
+    stream = _make_stream()
+    stream._session_ended = True
+    sent: list[object] = []
+
+    async def _raise_reset(payload: object) -> None:
+        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=lambda payload: asyncio.sleep(0, result=sent.append(payload)),
+        send_bytes=_raise_reset,
+    )
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(16000),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=8000,
+    )
+
+    async def _input() -> object:
+        yield frame
+        yield frame
+
+    stream._input_ch = _input()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+
+    await stream._process_audio(ws)
+
+    # No audio was written and no redundant "end" was sent for an ended session.
+    assert sent == []
+    assert stream._audio_position == 0.0
+
+
+@pytest.mark.asyncio
+async def test_process_audio_survives_reset_race_on_peer_close() -> None:
+    """A reset raised mid-send must not fail the stream.
+
+    The peer can close between the loop's closed check and the write, so the audio
+    send has to tolerate a reset the same way the JSON control sends do.
+    """
+    stream = _make_stream()
+    sent: list[str] = []
+
+    async def _raise_reset(payload: object) -> None:
+        raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=lambda payload: asyncio.sleep(0, result=sent.append(payload)),
+        send_bytes=_raise_reset,
+    )
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(16000),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=8000,
+    )
+
+    async def _input() -> object:
+        yield frame
+        yield frame
+
+    stream._input_ch = _input()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+
+    await stream._process_audio(ws)
+
+    assert [json.loads(payload)["event"] for payload in sent] == ["end"]

@@ -845,6 +845,18 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 extra={**self._build_log_context(), "payload": payload},
             )
 
+    async def _safe_send_bytes(self, ws: Any, payload: bytes) -> None:
+        if ws.closed:
+            return
+
+        try:
+            await ws.send_bytes(payload)
+        except (aiohttp.ClientConnectionResetError, ConnectionError):
+            self._logger.debug(
+                "Sarvam realtime STT WebSocket closed before audio send completed",
+                extra={**self._build_log_context(), "payload_bytes": len(payload)},
+            )
+
     async def _send_pending_config_update(self, ws: Any) -> None:
         payload = self._pending_config_update
         self._pending_config_update = None
@@ -907,6 +919,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
 
         async for data in self._input_ch:
+            # The server is done reading, so stop the pump instead of writing into a
+            # socket whose reset would fail the whole stream (max_retry is forced to 0).
+            if self._session_ended or ws.closed:
+                break
+
             await self._send_pending_config_update(ws)
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
@@ -922,7 +939,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
                 self._audio_duration_collector.push(frame.duration)
                 self._audio_position += frame.duration
-                await ws.send_bytes(_encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes()))
+                await self._safe_send_bytes(
+                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
+                )
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
@@ -932,7 +951,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._end_manual_utterance()
 
         self._audio_duration_collector.flush()
-        await self._safe_send_str(ws, {"event": "end"})
+        if not self._session_ended:
+            await self._safe_send_str(ws, {"event": "end"})
 
     @utils.log_exceptions(logger=logger)
     async def _process_messages(self, ws: aiohttp.ClientWebSocketResponse) -> None:
