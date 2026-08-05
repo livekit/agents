@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from typing import Any
 
+import aiohttp
 import httpx
 import openai
 import pytest
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
-from livekit.agents.stt import SpeechEventType
+from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
 pytestmark = pytest.mark.unit
 
 
+class _FakeMessage:
+    type = aiohttp.WSMsgType.TEXT
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.data = json.dumps(payload)
+
+
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.fail_next = False
         self.block_first: asyncio.Event | None = None
 
@@ -32,8 +42,7 @@ class _FakeWebSocket:
         self.sent.append(data)
 
     async def receive(self) -> object:
-        await asyncio.Event().wait()  # a connection that never says anything
-        raise AssertionError("unreachable")
+        return _FakeMessage(await self.incoming.get())
 
     async def close(self) -> None:
         pass
@@ -325,6 +334,23 @@ async def test_switching_to_a_client_commit_model_needs_a_vad() -> None:
     assert opted_out._opts.model == "gpt-live-transcribe"
 
 
+async def test_switching_to_a_realtime_only_model_needs_the_realtime_transport() -> None:
+    # the transcriptions endpoint does not serve these models at all, and the transport cannot
+    # change once AgentSession has wrapped a non-streaming STT in a StreamAdapter
+    instance = stt.STT(api_key="test-key", model="gpt-transcribe", vad=None)
+    assert instance.capabilities.streaming is False
+
+    for model in ("gpt-live-transcribe", "gpt-realtime-whisper"):
+        with pytest.raises(ValueError, match="served only over the realtime API"):
+            instance.update_options(model=model)
+    assert instance._opts.model == "gpt-transcribe"
+
+    # the realtime API serves every model, so that direction stays open
+    realtime = stt.STT(api_key="test-key", model="gpt-live-transcribe", vad=None)
+    realtime.update_options(model="gpt-transcribe")
+    assert realtime._opts.model == "gpt-transcribe"
+
+
 async def test_detected_keyterms_do_not_block_a_new_stream() -> None:
     instance = _offline_stt(model="gpt-live-transcribe")
     instance._update_session_keyterms(["Acme Corp"])
@@ -522,10 +548,12 @@ async def _transcription_form(instance: stt.STT, captured: list[httpx.Request]) 
     return captured[0].read().decode("utf-8", errors="replace")
 
 
-def _mock_client(captured: list[httpx.Request]) -> openai.AsyncClient:
+def _mock_client(
+    captured: list[httpx.Request], body: dict[str, Any] | None = None
+) -> openai.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(200, json={"text": "hello"})
+        return httpx.Response(200, json=body or {"text": "hello"})
 
     return openai.AsyncClient(
         api_key="test-key",
@@ -549,6 +577,59 @@ async def test_file_transcription_sends_bracketed_form_fields() -> None:
     assert 'name="languages[]"\r\n\r\nen' in body
     assert 'name="languages[]"\r\n\r\nfr' in body
     assert 'name="language"' not in body
+
+
+@pytest.mark.parametrize(
+    ("detected", "dominant"),
+    [
+        ([{"code": "fr"}], "fr"),  # what the model heard wins over the hint
+        ([], "en"),  # nothing detected reliably, so the hint stands
+        ([{"code": "en"}, {"code": "fr"}], "en"),  # code-switched: the dominant code comes first
+    ],
+)
+async def test_file_transcription_reports_the_detected_language(
+    detected: list[dict[str, str]], dominant: str
+) -> None:
+    captured: list[httpx.Request] = []
+    instance = stt.STT(
+        model="gpt-transcribe",
+        client=_mock_client(captured, {"text": "hello", "languages": detected}),
+        language="en",
+    )
+
+    event = await instance._recognize_impl(_silence(), conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    assert event.alternatives[0].language == dominant
+
+
+async def test_realtime_reports_the_detected_language() -> None:
+    # the hint is a list, so there is no single code to fall back on
+    instance = _offline_stt(model="gpt-live-transcribe", language=["en", "fr"], vad=None)
+    stream = instance.stream()
+    ws = await _connected(stream)
+    assert stream._language == ""
+
+    ws.incoming.put_nowait(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "transcript": "bonjour, hello",
+            "languages": [{"code": "fr"}, {"code": "en"}],
+        }
+    )
+
+    final: SpeechEvent | None = None
+    try:
+        async for event in stream:
+            if event.type == SpeechEventType.FINAL_TRANSCRIPT:
+                final = event
+                break
+    finally:
+        await stream.aclose()
+
+    assert final is not None
+    assert final.alternatives[0].text == "bonjour, hello"
+    assert final.alternatives[0].language == "fr"
 
 
 async def test_file_transcription_earlier_model_keeps_singular_language() -> None:

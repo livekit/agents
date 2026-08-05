@@ -48,7 +48,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from openai.types.audio import TranscriptionVerbose
+from openai.types.audio import Transcription, TranscriptionVerbose
 from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
 )
@@ -94,7 +94,7 @@ _REALTIME_ONLY_MODELS = ("gpt-realtime-whisper", "gpt-live-transcribe")
 _CONTEXT_HINT_MODELS = ("gpt-transcribe", "gpt-live-transcribe")
 
 
-def _requires_client_commit(model: str) -> bool:
+def _is_realtime_only(model: str) -> bool:
     return model.startswith(_REALTIME_ONLY_MODELS)
 
 
@@ -163,7 +163,7 @@ def _session_update(opts: _STTOptions) -> SessionUpdateEvent:
         transcription=_transcription(opts),
     )
     # leave the field unset for models that reject it; the rest get server-side VAD
-    if not _requires_client_commit(opts.model):
+    if not _is_realtime_only(opts.model):
         audio_input.turn_detection = _TURN_DETECTION.validate_python(opts.turn_detection)
 
     if opts.noise_reduction_type:
@@ -230,7 +230,7 @@ class STT(stt.STT):
         """  # noqa: E501
 
         if not is_given(use_realtime):
-            use_realtime = _requires_client_commit(model)
+            use_realtime = _is_realtime_only(model)
 
         if use_realtime and is_given(temperature):
             logger.warning(
@@ -239,7 +239,7 @@ class STT(stt.STT):
             )
             temperature = NOT_GIVEN
 
-        if use_realtime and _requires_client_commit(model):
+        if use_realtime and _is_realtime_only(model):
             if is_given(turn_detection):
                 logger.warning(
                     "turn_detection is not supported for %s; ignoring the provided value", model
@@ -476,9 +476,19 @@ class STT(stt.STT):
             languages = []
         user_keywords = list(keywords) if is_given(keywords) else self._user_keywords
         _validate_context(resolved_model, languages, user_keywords)
+
+        # the transport is fixed for the life of the instance: AgentSession wraps a non-streaming
+        # STT in a StreamAdapter once, so `streaming` cannot flip under a running pipeline. the
+        # other direction needs no guard, since the realtime API serves every model.
+        if not self.capabilities.streaming and _is_realtime_only(resolved_model):
+            raise ValueError(
+                f"{resolved_model} is served only over the realtime API, and this STT was "
+                "created for the transcriptions endpoint; pass `use_realtime=True` to the "
+                "constructor to reach it"
+            )
         if (
-            _requires_client_commit(resolved_model)
-            and not _requires_client_commit(self._opts.model)
+            _is_realtime_only(resolved_model)
+            and not _is_realtime_only(self._opts.model)
             and self._vad is None
             and not self._vad_opted_out
         ):
@@ -608,9 +618,13 @@ class STT(stt.STT):
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
+            # what the model detected beats the hint that was sent, the first code being the
+            # dominant one; an empty list means nothing was detected reliably, so the hint stands
             sd = stt.SpeechData(text=resp.text, language=_transcript_language(self._opts.languages))
             if isinstance(resp, TranscriptionVerbose) and resp.language:
                 sd.language = LanguageCode(resp.language)
+            elif isinstance(resp, Transcription) and resp.languages:
+                sd.language = LanguageCode(resp.languages[0].code)
 
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -755,7 +769,7 @@ class SpeechStream(stt.SpeechStream):
                         self._stop_speaking()
                         # a model with server-side endpointing closes the segment itself, so a
                         # commit from here would cut it a second time
-                        if _requires_client_commit(self._opts.model):
+                        if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws:
@@ -838,6 +852,12 @@ class SpeechStream(stt.SpeechStream):
                         current_text = ""
                         transcript = data.get("transcript", "")
                         item_id = data.get("item_id", "")
+                        # what the model detected beats the hint that was sent
+                        detected = [
+                            LanguageCode(lang["code"])
+                            for lang in data.get("languages") or []
+                            if lang.get("code")
+                        ]
 
                         if transcript:
                             self._event_ch.send_nowait(
@@ -847,7 +867,7 @@ class SpeechStream(stt.SpeechStream):
                                     alternatives=[
                                         stt.SpeechData(
                                             text=transcript,
-                                            language=self._language,
+                                            language=detected[0] if detected else self._language,
                                         )
                                     ],
                                 )
