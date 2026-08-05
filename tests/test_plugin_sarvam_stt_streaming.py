@@ -52,15 +52,12 @@ def _make_stream(
     stream._build_log_context = stt_streaming.RealtimeSpeechStream._build_log_context.__get__(
         stream, stt_streaming.RealtimeSpeechStream
     )
-    stream._pending_eos = False
-    stream._pending_eos_time = None
     stream._pending_final_data = None
     stream._utterance_start_audio_pos = 0.0
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
-    stream._eos_fallback_task = None
     stream._manual_speech_started = False
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
@@ -362,16 +359,8 @@ def test_simulated_streaming_allows_auto_language_and_mode() -> None:
 
 
 def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
-    class _ReconnectEvent:
-        def __init__(self) -> None:
-            self.set_called = False
-
-        def set(self) -> None:
-            self.set_called = True
-
     stream = _make_stream()
     stream._ws = None
-    stream._reconnect_event = _ReconnectEvent()
     updated_options = stt_streaming.RealtimeSTTOptions(
         language="en-IN",
         api_key="sk_test",
@@ -392,7 +381,6 @@ def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
         "prompt": "LiveKit",
         "threshold": 0.6,
     }
-    assert stream._reconnect_event.set_called is False
 
 
 def test_active_stream_keeps_connection_only_options_on_update(
@@ -400,8 +388,6 @@ def test_active_stream_keeps_connection_only_options_on_update(
 ) -> None:
     stream = _make_stream()
     stream._pending_config_update = None
-    stream._reconnect_event = SimpleNamespace(set_called=False)
-    stream._reconnect_event.set = lambda: setattr(stream._reconnect_event, "set_called", True)
     updated_options = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
         api_key="sk_test",
@@ -419,7 +405,6 @@ def test_active_stream_keeps_connection_only_options_on_update(
         "event": "config.update",
         "prompt": "LiveKit",
     }
-    assert stream._reconnect_event.set_called is False
     assert "only apply to new streams" in caplog.text
 
 
@@ -820,17 +805,18 @@ async def test_streaming_info_logs_essential_data_without_raw_payload(
 
 
 @pytest.mark.asyncio
-async def test_streaming_emits_pending_end_of_speech_when_final_never_arrives() -> None:
+async def test_streaming_emits_end_of_speech_when_final_never_arrives() -> None:
+    """Speech end is reported immediately, without waiting on a final transcript."""
     stream = _make_stream()
 
     await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
     await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
-    await stream._emit_pending_eos_after_timeout(0)
 
     assert [event.type for event in stream._event_ch.events] == [
         stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
         stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
     ]
+    assert stream._eos_emitted_for_utterance is True
 
 
 @pytest.mark.asyncio
@@ -851,7 +837,6 @@ async def test_new_speech_start_emits_pending_end_of_speech_for_previous_utteran
     ]
     eos_event = stream._event_ch.events[1]
     assert eos_event.alternatives == []
-    assert stream._pending_eos is False
     assert stream._eos_emitted_for_utterance is False
     assert stream._utterance_start_audio_pos == 2.0
 
@@ -1070,121 +1055,6 @@ async def test_streaming_error_logs_include_raw_sarvam_payload(
     assert error_records[0].request_id == "req_123"
     assert error_records[0].error_code == "invalid_subscription_key"
     assert error_records[0].raw_message == raw_error
-
-
-def test_reset_connection_state_clears_session_and_utterance_fields() -> None:
-    class _FakeFallbackTask:
-        def __init__(self) -> None:
-            self.cancelled = False
-
-        def done(self) -> bool:
-            return False
-
-        def cancel(self) -> None:
-            self.cancelled = True
-
-    stream = _make_stream()
-    stream._request_id = "req_old"
-    stream._session_id = "sess_old"
-    stream._session_ended = True
-    stream._utterance_idx = 7
-    stream._manual_speech_started = True
-    stream._pending_eos = True
-    stream._pending_eos_time = 1.0
-    stream._pending_final_data = {"text": "hello"}
-    stream._utterance_start_audio_pos = 3.0
-    stream._utterance_speech_end_audio_pos = 4.0
-    stream._utterance_speech_end_wall = 5.0
-    stream._final_received_for_utterance = True
-    stream._eos_emitted_for_utterance = True
-    stream._local_audio_duration = 10.0
-    stream._total_reported_audio_duration = 50.0
-    stream._server_audio_duration_reported = True
-    fallback_task = _FakeFallbackTask()
-    stream._eos_fallback_task = fallback_task
-
-    stream._reset_connection_state()
-
-    assert fallback_task.cancelled is True
-
-    assert stream._request_id == ""
-    assert stream._session_id == ""
-    assert stream._session_ended is False
-    assert stream._utterance_idx is None
-    assert stream._manual_speech_started is False
-    assert stream._pending_eos is False
-    assert stream._pending_eos_time is None
-    assert stream._pending_final_data is None
-    assert stream._utterance_start_audio_pos == 0.0
-    assert stream._utterance_speech_end_audio_pos is None
-    assert stream._utterance_speech_end_wall is None
-    assert stream._final_received_for_utterance is False
-    assert stream._eos_emitted_for_utterance is False
-    assert stream._local_audio_duration == 0.0
-    assert stream._total_reported_audio_duration == 0.0
-    assert stream._server_audio_duration_reported is False
-    assert stream._eos_fallback_task is None
-
-
-@pytest.mark.asyncio
-async def test_session_end_delta_after_connection_reset() -> None:
-    stream = _make_stream()
-    stream._total_reported_audio_duration = 50.0
-
-    stream._reset_connection_state()
-
-    await stream._handle_message(
-        {
-            "event": "session.end",
-            "session_id": "sess_new",
-            "audio_duration_s": 12.0,
-        }
-    )
-
-    usage_events = [
-        event
-        for event in stream._event_ch.events
-        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
-    ]
-    assert len(usage_events) == 1
-    assert usage_events[0].recognition_usage.audio_duration == 12.0
-
-
-@pytest.mark.asyncio
-async def test_collector_flush_before_reset_emits_pending_usage() -> None:
-    stream = _make_stream()
-    stream._audio_duration_collector.push(2.5)
-
-    stream._reset_connection_state()
-
-    usage_events = [
-        event
-        for event in stream._event_ch.events
-        if event.type == stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
-    ]
-    assert len(usage_events) == 1
-    assert usage_events[0].recognition_usage.audio_duration == 2.5
-    assert stream._total_reported_audio_duration == 0.0
-
-
-@pytest.mark.asyncio
-async def test_reset_connection_state_allows_new_request_id_capture() -> None:
-    stream = _make_stream()
-    stream._request_id = "req_old"
-    stream._session_id = "sess_old"
-
-    stream._reset_connection_state()
-
-    await stream._handle_message(
-        {
-            "event": "session.begin",
-            "session_id": "sess_new",
-            "request_id": "req_new",
-        }
-    )
-
-    assert stream._request_id == "req_new"
-    assert stream._session_id == "sess_new"
 
 
 @pytest.mark.asyncio

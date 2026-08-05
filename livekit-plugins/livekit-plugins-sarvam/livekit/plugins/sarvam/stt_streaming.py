@@ -67,7 +67,6 @@ SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 # not a send cadence, and the contract sets no client chunk size. Matches the
 # non-realtime Sarvam websocket plugin so audio reaches server VAD promptly.
 AUDIO_CHUNK_MS = 50
-EOS_FALLBACK_TIMEOUT = 2.0
 
 
 def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
@@ -528,18 +527,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._active_endpointing = opts.endpointing
         self._pending_endpointing: RealtimeEndpointing | str | None = None
         self._endpointing_update_acknowledged = False
-        self._reconnect_event = asyncio.Event()
         self._pending_config_update: dict[str, Any] | None = None
         self._manual_speech_started = False
-        self._pending_eos = False
-        self._pending_eos_time: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._utterance_start_audio_pos = 0.0
         self._utterance_speech_end_audio_pos: float | None = None
         self._utterance_speech_end_wall: float | None = None
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
-        self._eos_fallback_task: asyncio.Task[None] | None = None
         self._stream_started_at = time.time()
         self._audio_position = 0.0
         self._local_audio_duration = 0.0
@@ -708,7 +703,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         deliver usage metrics.
         """
         try:
-            self._cancel_eos_fallback()
             if not self._event_ch.closed:
                 self._emit_local_usage_fallback()
                 # Give the metrics monitor a chance to consume the usage event before
@@ -721,88 +715,38 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await super().aclose()
 
     async def _run(self) -> None:
+        # A single connection attempt: this endpoint bills per connection, so the
+        # stream never reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
-        while True:
+        try:
+            ws = await self._connect_ws()
+            self._ws = ws
+            tasks = [
+                asyncio.create_task(self._process_audio(ws)),
+                asyncio.create_task(self._process_messages(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                tasks = [
-                    asyncio.create_task(self._process_audio(ws)),
-                    asyncio.create_task(self._process_messages(ws)),
-                ]
-                reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                tasks_group = asyncio.gather(*tasks)
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task is not reconnect_task:
-                            task.result()
-
-                    if reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
-                    self._reset_connection_state()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
-            except asyncio.TimeoutError as e:
-                raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
-            except aiohttp.ClientResponseError as e:
-                raise APIStatusError(
-                    message=e.message,
-                    status_code=e.status,
-                    request_id=self._request_id or None,
-                    body=e.message,
-                ) from e
-            except aiohttp.ClientConnectorError as e:
-                raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
-                self._ws = None
-
-    def _cancel_eos_fallback(self) -> None:
-        if self._eos_fallback_task and not self._eos_fallback_task.done():
-            self._eos_fallback_task.cancel()
-        self._eos_fallback_task = None
-
-    def _reset_connection_state(self) -> None:
-        self._cancel_eos_fallback()
-        self._request_id = ""
-        self._session_id = ""
-        self._resolved_config = None
-        self._session_ended = False
-        self._utterance_idx = None
-        self._utterance_in_progress = False
-        self._active_endpointing = self._opts.endpointing
-        self._pending_endpointing = None
-        self._endpointing_update_acknowledged = False
-        self._pending_config_update = None
-        self._manual_speech_started = False
-        self._pending_eos = False
-        self._pending_eos_time = None
-        self._pending_final_data = None
-        self._utterance_start_audio_pos = 0.0
-        self._utterance_speech_end_audio_pos = None
-        self._utterance_speech_end_wall = None
-        self._final_received_for_utterance = False
-        self._eos_emitted_for_utterance = False
-        self._audio_duration_collector.flush()
-        self._emit_local_usage_fallback()
-        self._local_audio_duration = 0.0
-        self._total_reported_audio_duration = 0.0
-        self._server_audio_duration_reported = False
+                await utils.aio.gracefully_cancel(*tasks)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=self._request_id or None,
+                body=e.message,
+            ) from e
+        except aiohttp.ClientConnectorError as e:
+            raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
+        finally:
+            if ws is not None:
+                await ws.close()
+            self._ws = None
 
     def _reset_utterance_state(self) -> None:
-        self._cancel_eos_fallback()
         self._utterance_idx = None
-        self._pending_eos = False
-        self._pending_eos_time = None
         self._pending_final_data = None
         self._utterance_start_audio_pos = self._audio_position
         self._utterance_speech_end_audio_pos = None
@@ -1052,7 +996,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if event == "session.begin":
             return
         elif event == "vad.speech_start":
-            self._emit_pending_eos_before_new_speech()
             self._reset_utterance_state()
             self._utterance_in_progress = True
             utterance_idx = data.get("utterance_idx")
@@ -1142,10 +1085,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         text = data.get("text")
         return isinstance(text, str) and bool(text)
 
-    def _emit_pending_eos_before_new_speech(self) -> None:
-        if self._pending_eos and not self._eos_emitted_for_utterance:
-            self._emit_end_of_speech()
-
     def _handle_speech_end(self) -> None:
         self._utterance_speech_end_audio_pos = self._audio_position
         self._utterance_speech_end_wall = time.time()
@@ -1157,23 +1096,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if self._eos_emitted_for_utterance:
             return
 
-        self._pending_eos = True
-        self._pending_eos_time = self._utterance_speech_end_wall
         self._emit_end_of_speech()
         if self._final_received_for_utterance:
             self._try_commit_utterance()
-
-    async def _emit_pending_eos_after_timeout(
-        self,
-        timeout: float = EOS_FALLBACK_TIMEOUT,
-    ) -> None:
-        try:
-            if timeout > 0:
-                await asyncio.sleep(timeout)
-            if self._pending_eos and not self._eos_emitted_for_utterance:
-                self._emit_end_of_speech()
-        except asyncio.CancelledError:
-            raise
 
     def _try_commit_utterance(self) -> None:
         if self._pending_final_data is None or self._utterance_speech_end_audio_pos is None:
@@ -1211,20 +1136,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
             if self._utterance_speech_end_wall is None:
                 self._utterance_speech_end_wall = time.time()
 
-        if not self._eos_emitted_for_utterance and (
-            self._pending_eos or self._pending_final_data is not None
-        ):
+        if not self._eos_emitted_for_utterance and self._pending_final_data is not None:
             self._emit_end_of_speech()
 
         self._try_commit_utterance()
 
     def _emit_end_of_speech(self) -> None:
-        current_task = asyncio.current_task()
-        fallback_task = self._eos_fallback_task
-        self._eos_fallback_task = None
-        if fallback_task and fallback_task is not current_task and not fallback_task.done():
-            fallback_task.cancel()
-
         if self._eos_emitted_for_utterance:
             return
 
@@ -1237,8 +1154,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 request_id=self._request_id,
             )
         )
-        self._pending_eos = False
-        self._pending_eos_time = None
         self._eos_emitted_for_utterance = True
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict[str, Any]) -> bool:
