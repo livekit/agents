@@ -20,6 +20,7 @@ from ..llm import (
     find_function_tools,
 )
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.duplex_adapter import _DuplexRealtimeSession
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -645,6 +646,23 @@ class Agent:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
+
+    @property
+    def duplex_session(self) -> llm.DuplexSession:
+        """
+        Retrieve the duplex session of the current agent, for provider-specific APIs.
+
+        A duplex model is driven through an adapter that presents it as a realtime session; this
+        returns the plugin's own session, where a provider puts what the abstraction does not carry.
+
+        Raises:
+            RuntimeError: If the agent is not running, or is not running on a duplex model
+        """
+        rt_session = self._get_activity_or_raise().realtime_llm_session
+        if not isinstance(rt_session, _DuplexRealtimeSession):
+            raise RuntimeError("no duplex session, this agent is not running a DuplexModel")
+
+        return rt_session.duplex_session
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:

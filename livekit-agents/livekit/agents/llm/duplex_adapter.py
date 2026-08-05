@@ -510,16 +510,16 @@ class _DuplexRealtimeSession(RealtimeSession):
             logger.exception("failed to configure the duplex session")
 
     async def update_instructions(self, instructions: str) -> None:
-        await self._duplex.update_instructions(instructions)
+        await self._duplex._update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        await self._duplex.update_chat_ctx(chat_ctx)
+        await self._duplex._update_chat_ctx(chat_ctx)
 
     async def update_tools(self, tools: list[Tool]) -> None:
-        await self._duplex.update_tools(tools)
+        await self._duplex._update_tools(tools)
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
-        self._duplex.update_options(tool_choice=tool_choice)
+        self._duplex._update_options(tool_choice=tool_choice)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._duplex.push_audio(frame)
@@ -536,7 +536,7 @@ class _DuplexRealtimeSession(RealtimeSession):
     ) -> asyncio.Future[GenerationCreatedEvent]:
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.Future()
         try:
-            self._duplex.generate_reply(
+            self._duplex._generate_reply(
                 instructions=instructions, tool_choice=tool_choice, tools=tools
             )
         except RealtimeError as e:

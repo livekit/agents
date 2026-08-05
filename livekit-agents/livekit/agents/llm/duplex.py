@@ -172,25 +172,33 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     def tools(self) -> ToolContext: ...
 
     @abstractmethod
-    async def update_instructions(self, instructions: str) -> None: ...
-
-    @abstractmethod
-    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None: ...
-
-    @abstractmethod
-    async def update_tools(self, tools: list[Tool]) -> None: ...
-
-    @abstractmethod
-    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...
-
-    @abstractmethod
     def push_audio(self, frame: rtc.AudioFrame) -> None: ...
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Feed a video frame to the model; ignored by models without video input."""
         pass
 
-    def generate_reply(
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+    # underscored until the shape settles, so they stay free to change: this is the framework's
+    # contract with the plugin, and apps use a plugin's own methods via Agent.duplex_session
+
+    @abstractmethod
+    async def _update_instructions(self, instructions: str) -> None: ...
+
+    @abstractmethod
+    async def _update_chat_ctx(self, chat_ctx: ChatContext) -> None: ...
+
+    @abstractmethod
+    async def _update_tools(self, tools: list[Tool]) -> None: ...
+
+    @abstractmethod
+    def _update_options(
+        self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
+    ) -> None: ...
+
+    def _generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -199,9 +207,6 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     ) -> asyncio.Future[object]:
         """Ask the model to speak now, where the protocol allows it."""
         raise RealtimeError(f"{type(self).__name__} decides for itself when to speak")
-
-    @abstractmethod
-    async def aclose(self) -> None: ...
 
     async def _update_session(
         self,
@@ -215,13 +220,13 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         A model whose configuration is immutable once started should compose it here.
         """
         if is_given(instructions):
-            await self.update_instructions(instructions)
+            await self._update_instructions(instructions)
 
         if is_given(chat_ctx):
-            await self.update_chat_ctx(chat_ctx)
+            await self._update_chat_ctx(chat_ctx)
 
         if is_given(tools):
-            await self.update_tools(tools)
+            await self._update_tools(tools)
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""

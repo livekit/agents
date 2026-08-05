@@ -93,16 +93,18 @@ class _FakeDuplexSession(llm.DuplexSession):
     def tools(self) -> llm.ToolContext:
         return self._tools
 
-    async def update_instructions(self, instructions: str) -> None:
+    async def _update_instructions(self, instructions: str) -> None:
         pass
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+    async def _update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         self._chat_ctx = chat_ctx
 
-    async def update_tools(self, tools: list[llm.Tool]) -> None:
+    async def _update_tools(self, tools: list[llm.Tool]) -> None:
         pass
 
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
+    def _update_options(
+        self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
+    ) -> None:
         pass
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
@@ -112,7 +114,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         if not self.audio_ch.closed:
             self.audio_ch.close()
 
-    def generate_reply(
+    def _generate_reply(
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -120,7 +122,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[object]:
         if not self.capabilities.manual_response_creation:
-            return super().generate_reply(
+            return super()._generate_reply(
                 instructions=instructions, tool_choice=tool_choice, tools=tools
             )
         self.replies_requested.append(instructions)
@@ -823,3 +825,26 @@ async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
 
     agent = Agent(instructions="", llm=model)
     assert isinstance(agent.llm, llm.DuplexRealtimeAdapter)
+
+
+async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
+    """Provider-specific APIs live on the plugin's session, so apps must not stop at the adapter."""
+    from livekit.agents import Agent, AgentSession
+
+    model = _FakeDuplexModel()
+    agent = Agent(instructions="")
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        await session.start(agent)
+        assert agent.duplex_session is model.session_obj
+
+
+async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_realtime import FakeRealtimeModel
+
+    agent = Agent(instructions="")
+    async with AgentSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
+        await session.start(agent)
+        with pytest.raises(RuntimeError, match="not running a DuplexModel"):
+            _ = agent.duplex_session
