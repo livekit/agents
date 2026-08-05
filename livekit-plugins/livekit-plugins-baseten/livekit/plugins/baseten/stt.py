@@ -267,7 +267,7 @@ class STT(stt.STT):
             self._opts.encoding = encoding
 
         self._session = http_session
-        self._streams = weakref.WeakSet[SpeechStream]()
+        self._streams = weakref.WeakSet[stt.SpeechStream]()
 
     @property
     def model(self) -> str:
@@ -352,6 +352,10 @@ class STT(stt.STT):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
         for stream in self._streams:
+            # Only the Whisper stream carries these knobs; a qwen3-asr stream
+            # cannot be in here, since that path returns above.
+            if not isinstance(stream, SpeechStream):
+                continue
             stream.update_options(
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
