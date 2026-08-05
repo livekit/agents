@@ -336,7 +336,17 @@ class STT(stt.STT):
                 language=language,
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+                vad_speech_pad_ms=vad_speech_pad_ms,
             )
+            # These are Whisper-only; say so rather than dropping them quietly.
+            for name, value in (
+                ("language_options", language_options),
+                ("buffer_size_seconds", buffer_size_seconds),
+            ):
+                if is_given(value):
+                    logger.warning(
+                        "%s does not apply to model=%r and was ignored", name, self._model_name
+                    )
             return
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold

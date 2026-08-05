@@ -189,6 +189,7 @@ class _Qwen3Backend:
         language: NotGivenOr[str] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         partial_transcript_interval_s: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """Applies to streams opened after this call; the handshake is per-socket."""
@@ -198,6 +199,8 @@ class _Qwen3Backend:
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
             self._opts.vad_min_silence_duration_ms = vad_min_silence_duration_ms
+        if is_given(vad_speech_pad_ms):
+            self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(partial_transcript_interval_s):
             self._opts.partial_transcript_interval_s = partial_transcript_interval_s
 
