@@ -20,8 +20,6 @@ from livekit.agents import Agent, AgentServer, AgentSession, JobContext, RunCont
 from livekit.agents.beta.gtm_telemetry import (
     PostCallTelemetryCollector,
     WebhookDispatcher,
-    to_hubspot_engagement,
-    to_salesforce_task,
 )
 from livekit.agents.llm import function_tool
 
@@ -65,10 +63,11 @@ async def on_session_end(ctx: JobContext) -> None:
         await collector.aflush()
         report = collector.generate_report()
         logger.info("Generated PostCallReport with %d turns", len(report.turns))
-        # Log complete payload details at debug level to avoid leaking PII in default info logs
-        logger.debug("PostCallReport detail:\n%s", report.model_dump_json(indent=2))
-        logger.debug("Salesforce Task payload: %s", to_salesforce_task(report))
-        logger.debug("HubSpot Engagement payload: %s", to_hubspot_engagement(report))
+
+        # NOTE: To prevent PII/transcript leakage into application log aggregation
+        # systems, avoid logging the full report or adapter payloads in production.
+        # If you need to inspect payloads during local development, uncomment below:
+        # print(report.model_dump_json(indent=2))
     finally:
         await collector.aclose()
 
