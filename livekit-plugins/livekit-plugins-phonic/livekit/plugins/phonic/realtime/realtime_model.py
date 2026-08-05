@@ -54,6 +54,7 @@ CONVERSATION_HISTORY_PREFIX = (
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
+TOOL_CALL_OUTPUT_MAX_CHARS_FOR_HISTORY = 16_000
 
 
 class PhonicToolConfig(TypedDict, total=False):
@@ -406,6 +407,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._ready_to_start = asyncio.Event()
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
+        # Tool outputs observed during the session, keyed by call id. livekit core commits realtime
+        # function_call items to the agent chat context but not their function_call_output, so on a
+        # mid-session reset the outputs would be lost; we re-inject them in _build_turn_history.
+        self._observed_tool_outputs: dict[str, llm.FunctionCallOutput] = {}
         self._tool_definitions: list[dict] = []
         self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
@@ -477,6 +482,7 @@ class RealtimeSession(llm.RealtimeSession):
                 and item.call_id in self._pending_tool_call_ids
             ):
                 self._pending_tool_call_ids.remove(item.call_id)
+                self._observed_tool_outputs[item.call_id] = item
                 logger.info(f"Sending tool call output for {item.name} (call_id: {item.call_id})")
                 if self._socket:
                     await self._socket.send_tool_call_output(
@@ -639,14 +645,24 @@ class RealtimeSession(llm.RealtimeSession):
         return tools_payload
 
     def _build_turn_history(self, chat_ctx: llm.ChatContext) -> str:
-        messages = [
-            item
-            for item in chat_ctx.items
-            if isinstance(item, llm.ChatMessage)
-            and item.raw_text_content
-            and item.raw_text_content.strip()
-        ]
-        return "\n".join(f"{m.role}: {m.raw_text_content}" for m in messages)
+        present_output_call_ids = {
+            item.call_id for item in chat_ctx.items if isinstance(item, llm.FunctionCallOutput)
+        }
+        lines: list[str] = []
+        for item in chat_ctx.items:
+            text = _chat_item_to_text(item)
+            if text:
+                lines.append(text)
+            # Re-inject the tool output right after its call: livekit core doesn't commit realtime
+            # function_call_output to the agent chat context, so it's absent from the reset history
+            # unless we add back the output we observed. Skip if the ctx already carries it.
+            if isinstance(item, llm.FunctionCall) and item.call_id not in present_output_call_ids:
+                output = self._observed_tool_outputs.get(item.call_id)
+                if output is not None:
+                    output_text = _chat_item_to_text(output)
+                    if output_text:
+                        lines.append(output_text)
+        return "\n".join(lines)
 
     def _build_config_options(
         self, *, system_prompt: str, tools_payload: list[dict | str]
@@ -1210,3 +1226,18 @@ class RealtimeSession(llm.RealtimeSession):
                 recoverable=recoverable,
             ),
         )
+
+
+def _chat_item_to_text(item: llm.ChatItem) -> str | None:
+    if isinstance(item, llm.ChatMessage):
+        text = item.raw_text_content
+        if not text or not text.strip():
+            return None
+        return f"<{item.role}>{text}</{item.role}>"
+    if isinstance(item, llm.FunctionCall):
+        return f'<tool_call name="{item.name}">{item.arguments}</tool_call>'
+    if isinstance(item, llm.FunctionCallOutput):
+        tag = "tool_error" if item.is_error else "tool_output"
+        output = str(item.output)[:TOOL_CALL_OUTPUT_MAX_CHARS_FOR_HISTORY]
+        return f'<{tag} name="{item.name}">{output}</{tag}>'
+    return None
