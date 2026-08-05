@@ -35,6 +35,8 @@ from livekit.agents.beta.gtm_telemetry import (
 from livekit.agents.llm.chat_context import ChatMessage, FunctionCall, FunctionCallOutput
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
 from livekit.agents.voice.events import (
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -690,27 +692,75 @@ async def test_batch_backfill_sets_status_for_pending_records() -> None:
 
 
 async def test_restarting_collector_after_aclose_works() -> None:
-    """Ensure that calling aclose() resets started_at so that attach() can be called again."""
+    """Ensure aclose() resets started_at AND all accumulated state so a
+    re-attached collector does not mix in the previous call's data."""
     session = AgentSession()
     collector = PostCallTelemetryCollector(session)
     collector.attach()
     assert collector._started_at is not None
-
+    # First call: record a turn, a tool, and simulate a close event.
+    collector._on_conversation_item_added(
+        ConversationItemAddedEvent(
+            item=ChatMessage(role="user", content=["first call"], created_at=1.0)
+        )
+    )
+    collector._on_tool_execution_updated(
+        ToolExecutionUpdatedEvent(
+            update=ToolCallStarted(
+                function_call=FunctionCall(
+                    call_id="old", name="lookup", arguments="{}", created_at=1.0
+                )
+            ),
+            created_at=1.0,
+        )
+    )
+    collector._on_close(CloseEvent(reason=CloseReason.USER_INITIATED, created_at=2.0))
     await collector.aclose()
     assert collector._started_at is None
-
-    # Re-attach and ensure it starts correctly and registers handlers
+    # Re-attach: the previous call's state must be gone.
     collector.attach()
     assert collector._started_at is not None
-
     try:
-        # Check that events are captured after re-attaching
         item = ChatMessage(role="user", content=["Hello again"], created_at=10.0)
         collector._on_conversation_item_added(
             ConversationItemAddedEvent(item=item, created_at=10.0)
         )
         report = collector.generate_report()
+        # only the second call's turn is present
         assert len(report.turns) == 1
         assert report.turns[0].text == "Hello again"
+        # the old tool did not leak in
+        assert len(report.tool_invocations) == 0
+        # stale close event cleared -> no negative duration from old created_at
+        assert report.close_reason is None
+        assert report.metrics.total_duration_seconds >= 0
+    finally:
+        await collector.aclose()
+
+
+async def test_batch_only_none_output_not_reported_as_done() -> None:
+    """A batch-only call whose output is None (e.g. StopResponse / invalid
+    output) must NOT be recorded as a successful 'done' call."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    try:
+        fc = FunctionCall(call_id="c9", name="stop_tool", arguments="{}", created_at=5.0)
+        collector._on_function_tools_executed(
+            FunctionToolsExecutedEvent(
+                function_calls=[fc],
+                function_call_outputs=[None],
+            )
+        )
+        report = collector.generate_report()
+        assert len(report.tool_invocations) == 1
+        rec = report.tool_invocations[0]
+        assert rec.status == "running"
+        assert rec.result is None
+        assert rec.error is None
+        assert rec.duration_ms is None
+        # not counted as a success, not counted as a failure
+        assert report.metrics.total_tool_calls == 1
+        assert report.metrics.failed_tool_calls == 0
     finally:
         await collector.aclose()

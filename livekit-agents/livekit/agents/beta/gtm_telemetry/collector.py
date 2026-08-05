@@ -160,6 +160,13 @@ class PostCallTelemetryCollector:
 
         self._started_at = None
         self._flush_task = None
+        self._turns = []
+        self._pending_tools = {}
+        self._completed_tools = {}
+        self._llm_ttfts = []
+        self._stt_audio_s = None
+        self._tts_audio_s = None
+        self._close_event = None
 
     def generate_report(self) -> PostCallReport:
         """Build the :class:`PostCallReport` from the collected state."""
@@ -310,13 +317,14 @@ class PostCallTelemetryCollector:
     ) -> ToolInvocationRecord:
         result: str | None = None
         error: str | None = None
-        status: str = "done"
+        status: str = "running"
         if out is not None:
             if out.is_error:
                 error = out.output
                 status = "error"
             else:
                 result = out.output
+                status = "done"
         return ToolInvocationRecord(
             tool_name=fc.name,
             call_id=fc.call_id,
