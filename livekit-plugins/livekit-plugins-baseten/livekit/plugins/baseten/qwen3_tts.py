@@ -12,24 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TTS for Baseten's Qwen3-TTS deployments.
+"""Qwen3-TTS protocol support for `TTS` (``model="qwen3-tts"``).
 
-This is a separate class from `TTS` because the two speak different wire
-protocols. `TTS` targets the Orpheus truss (hence its `tara` default voice);
 Qwen3-TTS is: session.config -> input.text* -> input.done (a flush, not a
-close) -> audio.start / PCM / audio.done / session.done.
+close) -> audio.start / PCM / audio.done / session.done. That is a different
+protocol from the Orpheus truss `TTS` also serves, so it gets its own backend
+and stream implementation here; `TTS` picks between them.
 
 Voices are clones, not presets: the Base checkpoint ships no built-in speakers.
 Register one first (see `register_voice`), or pass ref_audio/ref_text to clone
-inline. Note the server keeps uploaded voices on the container's local disk, so
-a runtime-registered voice is scoped to one replica and lost on restart — bake
-it into the truss via REQUIRED_VOICES for anything beyond single-replica tests.
-
-    session = AgentSession(tts=Qwen3TTS(
-        model_endpoint="wss://model-XXXXXXX.api.baseten.co/environments/production/websocket",
-        api_key=os.environ["BASETEN_API_KEY"],
-        voice="my_registered_voice",
-    ))
+inline. The server keeps uploaded voices on the container's local disk, so a
+runtime-registered voice is scoped to one replica and lost on restart — bake it
+into the truss via REQUIRED_VOICES for anything beyond single-replica tests.
 """
 
 from __future__ import annotations
@@ -40,7 +34,6 @@ import contextlib
 import json
 import os
 import time
-import weakref
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -51,11 +44,10 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    tts,
+    tts as tts_module,
     utils,
 )
 from livekit.agents.types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
     TimedString,
@@ -116,13 +108,13 @@ class _TurnState:
         return self.sender_finished.is_set() and self.flushes_done >= self.flushes_sent
 
 
-class Qwen3TTS(tts.TTS):
-    """Streaming TTS for a Baseten-hosted Qwen3-TTS deployment.
+class _Qwen3Backend:
+    """Connection state for a Qwen3-TTS deployment, owned by `TTS`.
 
-    Not interchangeable with `TTS`, which targets the Orpheus truss and speaks a
-    different protocol. Keeps one WebSocket warm across turns, since the session
-    config is sticky and re-dialing would add a connect plus a config round trip
-    to every agent response.
+    Not a `tts.TTS` itself — `TTS` selects this when ``model="qwen3-tts"`` and
+    keeps the public surface. Holds one warm WebSocket across turns, since the
+    session config is sticky and re-dialing would add a connect plus a config
+    round trip to every agent response.
     """
 
     def __init__(
@@ -200,16 +192,9 @@ class Qwen3TTS(tts.TTS):
             logger.warning("progressive PCM requires speed=1.0; overriding %s", speed)
             speed = 1.0
 
-        super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=word_timestamps),
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-        )
-
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._session = http_session
-        self._streams = weakref.WeakSet["Qwen3SynthesizeStream"]()
         self._opts = _TTSOptions(
             voice=voice,
             task_type=task_type,
@@ -231,14 +216,6 @@ class Qwen3TTS(tts.TTS):
         self._keepalive_task: asyncio.Task[None] | None = None
         self._closing = False
 
-    @property
-    def model(self) -> str:
-        return f"qwen3-tts-{self._opts.task_type.lower()}"
-
-    @property
-    def provider(self) -> str:
-        return "Baseten"
-
     def update_options(
         self,
         *,
@@ -257,26 +234,8 @@ class Qwen3TTS(tts.TTS):
         if is_given(max_new_tokens):
             self._opts.max_new_tokens = max_new_tokens
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> Qwen3SynthesizeStream:
-        stream = Qwen3SynthesizeStream(tts=self, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
-
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.ChunkedStream:
-        # The framework helper disables retries on the inner stream (this class
-        # already retries) and forwards timed transcripts; hand-rolling it did
-        # neither.
-        return self._synthesize_with_stream(text, conn_options=conn_options)
-
     async def aclose(self) -> None:
         self._closing = True
-        for stream in list(self._streams):
-            await stream.aclose()
-        self._streams.clear()
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -467,15 +426,21 @@ class Qwen3TTS(tts.TTS):
             await ws.close()
 
 
-class Qwen3SynthesizeStream(tts.SynthesizeStream):
+class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
     """One agent turn: text in over the input channel, PCM out via the emitter."""
 
-    def __init__(self, *, tts: Qwen3TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: tts_module.TTS,
+        backend: _Qwen3Backend,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: Qwen3TTS = tts
-        self._opts = replace(tts._opts)
+        self._backend = backend
+        self._opts = replace(backend._opts)
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+    async def _run(self, output_emitter: tts_module.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
@@ -487,7 +452,7 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
 
         try:
             ws, applied_config = await asyncio.wait_for(
-                self._tts._acquire(), timeout=self._conn_options.timeout
+                self._backend._acquire(), timeout=self._conn_options.timeout
             )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -498,7 +463,7 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
 
-        config = self._tts._build_session_config()
+        config = self._backend._build_session_config()
         state = _TurnState()
         discard = True
 
@@ -627,7 +592,7 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await self._tts._release(ws, config, discard=discard)
+            await self._backend._release(ws, config, discard=discard)
 
     async def _drain(self, recv_task: asyncio.Task[None], state: _TurnState) -> None:
         """Unblock a receiver parked on ws.receive() with nothing left to read.
@@ -660,7 +625,7 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
 
     def _emit_timestamps(
         self,
-        output_emitter: tts.AudioEmitter,
+        output_emitter: tts_module.AudioEmitter,
         timestamp_info: dict[str, Any] | None,
         offset: float,
     ) -> None:

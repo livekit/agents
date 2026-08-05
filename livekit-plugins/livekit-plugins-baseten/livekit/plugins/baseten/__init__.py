@@ -12,9 +12,8 @@
 
 from .llm import LLM
 from .log import logger
-from .models import LLMModels
-from .qwen3_stt import Qwen3SpeechStream, Qwen3STT
-from .qwen3_tts import Qwen3SynthesizeStream, Qwen3TTS, list_voices, register_voice
+from .models import LLMModels, STTModels, TTSModels
+from .qwen3_tts import list_voices, register_voice
 from .stt import STT, SpeechStream
 from .tts import TTS, SynthesizeStream
 from .version import __version__
@@ -26,13 +25,11 @@ __all__ = [
     "logger",
     "TTS",
     "SynthesizeStream",
-    "Qwen3TTS",
-    "Qwen3SynthesizeStream",
-    "Qwen3STT",
-    "Qwen3SpeechStream",
     "register_voice",
     "list_voices",
     "LLMModels",
+    "STTModels",
+    "TTSModels",
     "__version__",
 ]
 

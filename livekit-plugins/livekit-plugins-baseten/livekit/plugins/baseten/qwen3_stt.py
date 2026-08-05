@@ -12,24 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""STT for Baseten's Qwen3-ASR streaming deployments.
+"""Qwen3-ASR protocol support for `STT` (``model="qwen3-asr"``).
 
-This is a separate class from `STT` because the two speak different wire
-protocols. `STT` targets the streaming-Whisper truss: it sends raw binary PCM
-and reads `message_type`/`transcript`. Qwen3-ASR takes base64 audio in
-OpenAI-realtime frames and replies with `type: "transcription"` /
-`segments[].text`.
+Qwen3-ASR takes base64 audio in OpenAI-realtime frames and replies with
+`type: "transcription"` / `segments[].text`, where the streaming-Whisper truss
+`STT` also serves sends raw binary PCM and reads `message_type`/`transcript`.
+Different protocol, so it gets its own backend and stream implementation here;
+`STT` picks between them.
 
 Protocol: a handshake frame, then
 `{"type": "input_audio_buffer.append", "audio": <base64 PCM16 16kHz mono>}`,
 ended by `{"type": "input_audio_buffer.commit"}`. The server runs Silero VAD, so
 turns also end on their own; each turn emits revisable partials
 (`is_final: false`, replace-style) then one final.
-
-    session = AgentSession(stt=Qwen3STT(
-        model_endpoint="wss://model-XXXXXXX.api.baseten.co/environments/production/websocket",
-        api_key=os.environ["BASETEN_API_KEY"],
-    ))
 
 Word timestamps need `STREAM_ALIGNER=mms` + `STREAM_ALIGNER_DEVICE=cuda` set on
 the deployment; without them the server ignores the request.
@@ -41,7 +36,6 @@ import asyncio
 import base64
 import json
 import os
-import weakref
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -54,7 +48,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
-    stt,
+    stt as stt_module,
     utils,
 )
 from livekit.agents.language import LanguageCode
@@ -110,12 +104,11 @@ class _STTOptions:
         }
 
 
-class Qwen3STT(stt.STT):
-    """Streaming STT for a Baseten-hosted Qwen3-ASR deployment.
+class _Qwen3Backend:
+    """Connection settings for a Qwen3-ASR deployment, owned by `STT`.
 
-    Not interchangeable with `STT`, which targets the streaming-Whisper truss and
-    speaks a different protocol. The server runs Silero VAD, so turns end on
-    their own; an explicit flush commits the buffered audio early.
+    Not an `stt.STT` itself — `STT` selects this when ``model="qwen3-asr"`` and
+    keeps the public surface.
     """
 
     def __init__(
@@ -163,14 +156,6 @@ class Qwen3STT(stt.STT):
         Raises:
             ValueError: If no API key or endpoint can be resolved.
         """
-        super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=interim_results,
-                aligned_transcript="word" if word_timestamps else False,
-                offline_recognize=True,
-            )
-        )
         api_key = api_key or os.environ.get("BASETEN_API_KEY")
         if not api_key:
             raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
@@ -182,7 +167,6 @@ class Qwen3STT(stt.STT):
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._session = http_session
-        self._streams = weakref.WeakSet["Qwen3SpeechStream"]()
         self._opts = _STTOptions(
             audio_language=language,
             enable_partial_transcripts=interim_results,
@@ -193,14 +177,6 @@ class Qwen3STT(stt.STT):
             vad_speech_pad_ms=vad_speech_pad_ms,
             word_timestamps=word_timestamps,
         )
-
-    @property
-    def model(self) -> str:
-        return "qwen3-asr-1.7b-streaming"
-
-    @property
-    def provider(self) -> str:
-        return "Baseten"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -225,28 +201,29 @@ class Qwen3STT(stt.STT):
         if is_given(partial_transcript_interval_s):
             self._opts.partial_transcript_interval_s = partial_transcript_interval_s
 
-    def stream(
+    def make_stream(
         self,
+        owner: stt_module.STT,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> Qwen3SpeechStream:
+        """Build a recognition stream owned by the public `STT`."""
         opts = replace(self._opts)
         if is_given(language):
             opts.audio_language = language
-        stream = Qwen3SpeechStream(stt=self, opts=opts, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
+        return Qwen3SpeechStream(stt=owner, backend=self, opts=opts, conn_options=conn_options)
 
-    async def _recognize_impl(
+    async def recognize_via_stream(
         self,
+        owner: stt_module.STT,
         buffer: AudioBuffer,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions,
-    ) -> stt.SpeechEvent:
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt_module.SpeechEvent:
         """One-shot recognition, run over the same streaming session."""
-        stream = self.stream(language=language, conn_options=conn_options)
+        stream = self.make_stream(owner, language=language, conn_options=conn_options)
         stream.push_frame(rtc.combine_audio_frames(buffer))
         stream.end_input()
 
@@ -254,36 +231,41 @@ class Qwen3STT(stt.STT):
         code = ""
         try:
             async for ev in stream:
-                if ev.type is stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
+                if ev.type is stt_module.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
                     texts.append(ev.alternatives[0].text)
                     code = ev.alternatives[0].language or code
         finally:
             await stream.aclose()
 
-        return stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+        return stt_module.SpeechEvent(
+            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
-                stt.SpeechData(language=LanguageCode(code), text=" ".join(texts).strip())
+                stt_module.SpeechData(language=LanguageCode(code), text=" ".join(texts).strip())
             ],
         )
 
 
-class Qwen3SpeechStream(stt.SpeechStream):
+class Qwen3SpeechStream(stt_module.SpeechStream):
     """A single recognition session: audio frames in, speech events out."""
 
     def __init__(
-        self, *, stt: Qwen3STT, opts: _STTOptions, conn_options: APIConnectOptions
+        self,
+        *,
+        stt: stt_module.STT,
+        backend: _Qwen3Backend,
+        opts: _STTOptions,
+        conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
-        self._stt_impl = stt
+        self._backend = backend
         self._opts = opts
 
     async def _run(self) -> None:
         try:
             ws = await asyncio.wait_for(
-                self._stt_impl._ensure_session().ws_connect(
-                    self._stt_impl._model_endpoint,
-                    headers={"Authorization": f"Api-Key {self._stt_impl._api_key}"},
+                self._backend._ensure_session().ws_connect(
+                    self._backend._model_endpoint,
+                    headers={"Authorization": f"Api-Key {self._backend._api_key}"},
                 ),
                 timeout=self._conn_options.timeout,
             )
@@ -377,15 +359,15 @@ class Qwen3SpeechStream(stt.SpeechStream):
                 if not speaking and text:
                     speaking = True
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                        stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
                     )
 
                 if text:
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(
-                            type=stt.SpeechEventType.FINAL_TRANSCRIPT
+                        stt_module.SpeechEvent(
+                            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
                             if is_final
-                            else stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[self._speech_data(event, segments, text)],
                         )
                     )
@@ -393,7 +375,7 @@ class Qwen3SpeechStream(stt.SpeechStream):
                 if is_final:
                     if speaking:
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                            stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                         )
                         speaking = False
                     # Only the commit-triggered final ends the session; VAD
@@ -418,7 +400,7 @@ class Qwen3SpeechStream(stt.SpeechStream):
 
     def _speech_data(
         self, event: dict[str, Any], segments: list[dict[str, Any]], text: str
-    ) -> stt.SpeechData:
+    ) -> stt_module.SpeechData:
         words = None
         if self._opts.word_timestamps:
             words = [
@@ -433,7 +415,7 @@ class Qwen3SpeechStream(stt.SpeechStream):
                 for w in (s.get("word_timestamps") or [])
             ] or None
 
-        return stt.SpeechData(
+        return stt_module.SpeechData(
             language=_language_code(event.get("language_code")),
             text=text,
             # Server times are socket-relative; the framework grows
