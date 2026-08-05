@@ -67,6 +67,7 @@ stt = baseten.STT(
 | `model_id` | — | Baseten truss model ID; auto-constructs the endpoint URL |
 | `chain_id` | — | Baseten chain ID; auto-constructs the endpoint URL |
 | `language` | `"en"` | BCP-47 language code (use `"auto"` for auto-detection) |
+| `language_options` | `[]` | Restrict auto-detection to these codes, e.g. `["en", "de"]`. More reliable than `"auto"` on short telephony utterances. Requires Whisper runtime v0.5.0+ |
 | `encoding` | `"pcm_s16le"` | Audio encoding (`pcm_s16le` or `pcm_mulaw`) |
 | `sample_rate` | `16000` | Audio sample rate in Hz |
 | `enable_partial_transcripts` | `True` | Emit interim transcripts while the speaker is talking |

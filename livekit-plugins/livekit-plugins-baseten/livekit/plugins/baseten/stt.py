@@ -22,8 +22,8 @@ import json
 import os
 import ssl
 import weakref
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import aiohttp
 import numpy as np
@@ -61,6 +61,7 @@ class STTOptions:
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
     language: LanguageCode = LanguageCode("en")
+    language_options: list[LanguageCode] = field(default_factory=list)
 
     # Streaming params – controls how transcripts are delivered
     enable_partial_transcripts: bool = True
@@ -91,6 +92,7 @@ class STT(stt.STT):
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
         buffer_size_seconds: float = 0.032,
         language: str = "en",
+        language_options: list[str] | None = None,
         enable_partial_transcripts: bool = True,
         partial_transcript_interval_s: float = 1.0,
         final_transcript_max_duration_s: int = 30,
@@ -132,6 +134,13 @@ class STT(stt.STT):
             buffer_size_seconds: Audio buffer size in seconds.
             language: BCP-47 language code (default ``en``).  Use ``auto`` for
                 automatic language detection.
+            language_options: Restrict automatic detection to this set of
+                language codes, e.g. ``["en", "de"]``.  Detection across all
+                supported languages is unreliable on the one- to two-second
+                utterances typical of telephony, so scoping it to the languages
+                an agent actually supports is usually more accurate than
+                ``auto``.  Requires Baseten Whisper runtime v0.5.0 or newer;
+                empty (the default) leaves detection unrestricted.
             enable_partial_transcripts: Emit interim transcripts while the speaker
                 is still talking.  Defaults to ``True``.
             partial_transcript_interval_s: Interval (seconds) between partial
@@ -189,6 +198,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
             language=LanguageCode(language),
+            language_options=[LanguageCode(lang) for lang in language_options or []],
             enable_partial_transcripts=enable_partial_transcripts,
             partial_transcript_interval_s=partial_transcript_interval_s,
             final_transcript_max_duration_s=final_transcript_max_duration_s,
@@ -252,6 +262,7 @@ class STT(stt.STT):
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        language_options: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(vad_threshold):
@@ -262,6 +273,8 @@ class STT(stt.STT):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(language_options):
+            self._opts.language_options = [LanguageCode(lang) for lang in language_options]
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -271,6 +284,7 @@ class STT(stt.STT):
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
                 vad_speech_pad_ms=vad_speech_pad_ms,
                 language=language,
+                language_options=language_options,
                 buffer_size_seconds=buffer_size_seconds,
             )
 
@@ -310,6 +324,7 @@ class SpeechStream(stt.SpeechStream):
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        language_options: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(vad_threshold):
@@ -320,6 +335,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(language_options):
+            self._opts.language_options = [LanguageCode(lang) for lang in language_options]
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -534,7 +551,7 @@ class SpeechStream(stt.SpeechStream):
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
-        metadata = {
+        metadata: dict[str, dict[str, Any]] = {
             "whisper_params": {
                 "audio_language": self._opts.language,
                 "show_word_timestamps": self._opts.show_word_timestamps,
@@ -552,6 +569,13 @@ class SpeechStream(stt.SpeechStream):
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
         }
+
+        if self._opts.language_options:
+            # Omitted unless set: older Whisper runtimes (< v0.5.0) reject
+            # unknown whisper_params fields.
+            metadata["whisper_params"]["language_options"] = [
+                str(lang) for lang in self._opts.language_options
+            ]
 
         await ws.send_str(json.dumps(metadata))
         return ws
