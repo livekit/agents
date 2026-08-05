@@ -158,6 +158,9 @@ class PostCallTelemetryCollector:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._flush_task
 
+        self._started_at = None
+        self._flush_task = None
+
     def generate_report(self) -> PostCallReport:
         """Build the :class:`PostCallReport` from the collected state."""
         if self._started_at is None:
@@ -269,8 +272,11 @@ class PostCallTelemetryCollector:
                 # never overwrite the diagnostic text with the redacted one.
                 if out is not None and not out.is_error and rec.result is None:
                     rec.result = out.output
-                if out is not None and out.is_error and rec.error is None:
-                    rec.error = out.output
+                if out is not None and out.is_error:
+                    if rec.error is None:
+                        rec.error = out.output
+                    if rec.status == "running":
+                        rec.status = "error"
             else:
                 # never reached the executor (unknown tool, malformed arguments,
                 # rejected duplicate) — no lifecycle events, record untimed

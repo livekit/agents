@@ -652,3 +652,65 @@ async def test_concurrent_tool_calls_same_timestamp() -> None:
         assert rec_b.arguments == {"y": 2}
     finally:
         await collector.aclose()
+
+
+async def test_batch_backfill_sets_status_for_pending_records() -> None:
+    """If a tool is running and the batch output reports an error before the end event,
+
+    ensure the status gets set to "error" so it is correctly tallied as failed.
+    """
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+
+    try:
+        fc = FunctionCall(call_id="deferred_fail", name="tool_abc", arguments="{}", created_at=10.0)
+        collector._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=fc), created_at=10.0)
+        )
+
+        # Batch execution reports an error, session closes without a ToolCallEnded event
+        out = FunctionCallOutput(
+            call_id="deferred_fail", output="something went wrong", is_error=True
+        )
+        collector._on_function_tools_executed(
+            FunctionToolsExecutedEvent(
+                function_calls=[fc],
+                function_call_outputs=[out],
+            )
+        )
+
+        report = collector.generate_report()
+        rec = next(r for r in report.tool_invocations if r.call_id == "deferred_fail")
+        assert rec.status == "error"
+        assert rec.error == "something went wrong"
+        assert report.metrics.failed_tool_calls == 1
+    finally:
+        await collector.aclose()
+
+
+async def test_restarting_collector_after_aclose_works() -> None:
+    """Ensure that calling aclose() resets started_at so that attach() can be called again."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    assert collector._started_at is not None
+
+    await collector.aclose()
+    assert collector._started_at is None
+
+    # Re-attach and ensure it starts correctly and registers handlers
+    collector.attach()
+    assert collector._started_at is not None
+
+    try:
+        # Check that events are captured after re-attaching
+        item = ChatMessage(role="user", content=["Hello again"], created_at=10.0)
+        collector._on_conversation_item_added(
+            ConversationItemAddedEvent(item=item, created_at=10.0)
+        )
+        report = collector.generate_report()
+        assert len(report.turns) == 1
+        assert report.turns[0].text == "Hello again"
+    finally:
+        await collector.aclose()
