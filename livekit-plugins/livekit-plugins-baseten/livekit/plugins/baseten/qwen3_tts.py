@@ -387,41 +387,44 @@ class Qwen3TTS(tts.TTS):
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def _keepalive_loop(self) -> None:
-        """An empty input.done answers session.done and resets the idle timer.
+        """Keep the parked socket off the server's idle timeout.
 
-        A protocol ping would not: it proves the socket is alive, not the
-        session.
+        An empty ``input.done`` answers ``session.done`` with zero sentences.
+        Unlike a protocol ping that proves the *session* is alive, not merely
+        the TCP connection.
+
+        The loop only ever exits on shutdown. It deliberately does not return
+        when it finds nothing parked or when a flush fails: it releases
+        ``_warm_lock`` for the round trip, so a turn can park a fresh socket at
+        any point, and ``_release`` cannot schedule a keepalive for it while
+        this task is still running (not ``done()``). Returning early would
+        leave that socket to idle out.
         """
         while not self._closing:
             await asyncio.sleep(_KEEPALIVE_INTERVAL)
 
-            # Take the socket *out* of the slot before flushing. The lock is on
-            # the hot path for every turn, so holding it across the round trip
-            # would stall a reply that starts mid-keepalive by up to
-            # _KEEPALIVE_TIMEOUT. Removing it also keeps the invariant that a
-            # turn and the keepalive never touch the same socket: a turn
-            # arriving now finds an empty slot and dials its own.
             async with self._warm_lock:
                 warm = self._warm
-                if warm is None:
-                    return  # a turn took it; _release restarts us
+                if warm is None or not warm.config:
+                    continue  # nothing parked, or no session on it yet
                 if warm.ws.closed:
                     self._warm = None
-                    return
-                if not warm.config:
                     continue
+                # Take it out for the round trip so a turn starting now dials
+                # its own socket instead of blocking on the lock.
                 self._warm = None
 
-            # While the flush is in flight this local is the only reference to
-            # the socket, so aclose() cancelling us here would leak it.
             try:
                 alive = await self._empty_flush(warm.ws)
             except asyncio.CancelledError:
+                # This local is the only reference while the flush is in
+                # flight, so aclose() cancelling here would leak it.
                 await self._shutdown_ws(warm.ws, notify=False)
                 raise
+
             if not alive:
                 await self._shutdown_ws(warm.ws, notify=False)
-                return
+                continue
 
             warm.last_activity = time.monotonic()
             async with self._warm_lock:
@@ -429,11 +432,8 @@ class Qwen3TTS(tts.TTS):
                 if not surplus:
                     self._warm = warm
             if surplus:
-                # A turn started during the flush and parked its own socket on
-                # the way out, so ours is redundant. Drop it but keep looping:
-                # _release could not have scheduled a keepalive for that socket
-                # (this task was still running, so not `done()`), and returning
-                # here would leave it to idle out on the server.
+                # A turn parked its own socket while we were flushing; ours is
+                # redundant.
                 await self._shutdown_ws(warm.ws, notify=True)
 
     async def _empty_flush(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
