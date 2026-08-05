@@ -428,3 +428,48 @@ async def test_audio_output_playback_started_fires_once_across_pause_resume() ->
     assert len(started) == 1
 
     await utils.aio.cancel_and_wait(forward_task)
+
+
+@pytest.mark.asyncio
+async def test_refinalized_item_keeps_its_transcript_segment() -> None:
+    # a realtime provider can finalize the same input-audio item repeatedly, each time
+    # with a longer transcript. The chat context upserts those onto one message, so the
+    # rendered transcript has to reuse the segment too - otherwise the revisions stack
+    # up client-side as N segments, each containing its predecessors (#6710)
+    room = _FakeRoom()
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="user")
+
+    async def _finalize(item_id: str, transcript: str) -> str:
+        output._capture_item(item_id)
+        await output.capture_text(transcript)
+        segment_id = output._current_id
+        output.flush()
+        if output._flush_atask is not None:
+            await output._flush_atask
+        return segment_id
+
+    first = await _finalize("item_a", "hello")
+    revised = await _finalize("item_a", "hello there, how are you")
+
+    assert revised == first, "a revision of the same item must land in its own segment"
+
+    other = await _finalize("item_b", "different item")
+    assert other != first, "a new item must get a new segment"
+
+
+@pytest.mark.asyncio
+async def test_transcript_segments_are_unique_without_item_ids() -> None:
+    # STT paths don't carry an item id; each final has to open its own segment
+    room = _FakeRoom()
+    output = _ParticipantStreamTranscriptionOutput(room=room, participant="user")
+
+    segments = []
+    for transcript in ("first utterance", "second utterance"):
+        output._capture_item(None)
+        await output.capture_text(transcript)
+        segments.append(output._current_id)
+        output.flush()
+        if output._flush_atask is not None:
+            await output._flush_atask
+
+    assert segments[0] != segments[1]

@@ -220,8 +220,23 @@ class _ParticipantLegacyTranscriptionOutput:
         self._flush_task: asyncio.Task[None] | None = None
         self._closed = False
 
+        # see _ParticipantStreamTranscriptionOutput._capture_item
+        self._item_id: str | None = None
+        self._item_segment_id: str | None = None
+        self._next_segment_id: str | None = None
+
         self._reset_state()
         self.set_participant(participant)
+
+    def _capture_item(self, item_id: str | None) -> None:
+        """Tie the text that follows to a provider item, reusing its segment on a revision."""
+        if not item_id:
+            return
+
+        if item_id == self._item_id and self._item_segment_id is not None:
+            self._next_segment_id = self._item_segment_id
+
+        self._item_id = item_id
 
     def set_participant(
         self,
@@ -253,7 +268,10 @@ class _ParticipantLegacyTranscriptionOutput:
         self._reset_state()
 
     def _reset_state(self) -> None:
-        self._current_id = utils.shortuuid("SG_")
+        self._current_id = self._next_segment_id or utils.shortuuid("SG_")
+        self._next_segment_id = None
+        if self._item_id is not None:
+            self._item_segment_id = self._current_id
         self._capturing = False
         self._pushed_text = ""
 
@@ -386,8 +404,30 @@ class _ParticipantStreamTranscriptionOutput:
         self._flush_atask: asyncio.Task[None] | None = None
         self._closed = False
 
+        # a provider item can be finalized more than once; the segment it was
+        # published under is reused so the revision lands in place
+        self._item_id: str | None = None
+        self._item_segment_id: str | None = None
+        self._next_segment_id: str | None = None
+
         self._reset_state()
         self.set_participant(participant)
+
+    def _capture_item(self, item_id: str | None) -> None:
+        """Tie the text that follows to a provider item.
+
+        A realtime provider may finalize the same input-audio transcription more than
+        once, each time with a longer transcript. Without this the second final opens a
+        new segment and the revisions stack up client-side instead of replacing the one
+        already shown.
+        """
+        if not item_id:
+            return
+
+        if item_id == self._item_id and self._item_segment_id is not None:
+            self._next_segment_id = self._item_segment_id
+
+        self._item_id = item_id
 
     def set_participant(
         self,
@@ -409,7 +449,10 @@ class _ParticipantStreamTranscriptionOutput:
         self._reset_state()
 
     def _reset_state(self) -> None:
-        self._current_id = utils.shortuuid("SG_")
+        self._current_id = self._next_segment_id or utils.shortuuid("SG_")
+        self._next_segment_id = None
+        if self._item_id is not None:
+            self._item_segment_id = self._current_id
         self._capturing = False
         self._latest_text = ""
         # per-segment markup stripping: delta streams strip incrementally (buffering a tag
@@ -618,6 +661,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
             source.set_participant(participant)
+
+    def _capture_item(self, item_id: str | None) -> None:
+        for source in self.__outputs:
+            source._capture_item(item_id)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])

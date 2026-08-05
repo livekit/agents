@@ -366,6 +366,9 @@ class RoomIO:
             if self._user_tr_output is None:
                 continue
 
+            # the chat context upserts revisions of an item onto one message; the
+            # rendered transcript has to follow, or the two views diverge
+            self._user_tr_output._capture_item(ev.item_id)
             await self._user_tr_output.capture_text(ev.transcript)
             if ev.is_final:
                 self._user_tr_output.flush()
