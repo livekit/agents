@@ -135,11 +135,6 @@ class _STTOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
 
 
-def _iso_codes(languages: list[str]) -> list[str]:
-    """Deduplicated ISO-639-1 codes; the API rejects regional tags such as en-US."""
-    return list(dict.fromkeys(LanguageCode(code).language for code in languages))
-
-
 def _transcription(opts: _STTOptions) -> AudioTranscription:
     """The transcription config: `languages` and `keywords`, or a single `language`."""
     transcription = AudioTranscription(model=opts.model)
@@ -151,9 +146,11 @@ def _transcription(opts: _STTOptions) -> AudioTranscription:
         transcription.keywords = opts.keywords
         # `languages` rejects both an empty array and null, so it can only be replaced
         if opts.languages:
-            transcription.languages = _iso_codes(opts.languages)
+            transcription.languages = list(
+                dict.fromkeys(LanguageCode(lang).language for lang in opts.languages)
+            )
     elif opts.languages:
-        transcription.language = _iso_codes(opts.languages)[0]
+        transcription.language = LanguageCode(opts.languages[0]).language
     return transcription
 
 
@@ -290,7 +287,7 @@ class STT(stt.STT):
 
         self._vad = vad if is_given(vad) else None
         # an explicit `vad=None` means the caller commits the audio buffer itself
-        self._vad_opted_out = is_given(vad) and vad is None
+        self._vad_opted_out = vad is None
 
         if is_given(api_key) and not api_key:
             raise ValueError(
