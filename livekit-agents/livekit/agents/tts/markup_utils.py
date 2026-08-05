@@ -15,6 +15,37 @@ def convert_expression_tags(text: str) -> str:
 
 _VALUE_ATTR_RE = re.compile(r'\b[\w-]+\s*=\s*"([^"]*)"')
 
+# horizontal whitespace immediately before a tag. Every removal pattern captures it as
+# ``pre`` so :func:`dedup_removal_space` can decide whether to keep it; newlines are
+# excluded so paragraph breaks are never touched.
+LEADING_WS = r"(?P<pre>[^\S\r\n]*)"
+
+
+def dedup_removal_space(m: re.Match[str], kept: str) -> str:
+    """Replacement text for a stripped tag, minus the space its removal would double.
+
+    A tag between two spaces (``"Hi. <sound value=\"x\"/> There"``) leaves both behind
+    once it goes, so punctuation ends up followed by two spaces. When nothing of the tag
+    survives and whitespace follows the match, the whitespace captured *before* it (the
+    ``pre`` group) is dropped so a single separator remains — matching what
+    ``_provider_format.drop_bracket_cues`` already does for bracket cues.
+
+    Whitespace before a tag at the very end of *text* is kept: it may be the separator
+    for words still streaming in, and the sinks dedup that seam themselves.
+
+    Args:
+        m: A match whose pattern captured the leading whitespace as ``pre``.
+        kept: The text that survives the removal (a wrapping tag's inner text or the
+            native tag it lowers to), or ``""`` when the tag vanishes entirely.
+    """
+    pre = m.group("pre")
+    if kept:
+        return pre + kept
+    if not pre:
+        return ""
+    nxt = m.string[m.end() : m.end() + 1]
+    return "" if nxt.isspace() else pre
+
 
 def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tuple[str, str]]]:
     """Strip XML markup tags and collect the stripped tags in a single pass.
@@ -46,11 +77,14 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
 
     tag_pattern = "|".join(re.escape(tag) for tag in xml_tags)
     pattern = re.compile(
+        # leading space is part of the match so removing a tag can't double the separator
+        LEADING_WS + "(?:"
         # <tag .../> or <tag ...> optionally followed by inner</tag>
         rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*/?\s*>"
         rf"(?:(?P<inner>.*?)</(?P=tag)\s*>)?"
         # lone closing tag: </tag>
-        rf"|</(?:{tag_pattern})\s*>",
+        rf"|</(?:{tag_pattern})\s*>"
+        ")",
         re.DOTALL,
     )
     tags: list[tuple[str, str]] = []
@@ -67,9 +101,9 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
                 value = attr_match.group(1) if attr_match else ""
             tags.append((tag, value))
             # wrapping tags keep their inner content; self-closing/lone tags vanish
-            return inner if inner is not None else ""
+            return dedup_removal_space(m, inner or "")
 
-        return ""  # lone closing tag
+        return dedup_removal_space(m, "")  # lone closing tag
 
     # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
     # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
