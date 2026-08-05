@@ -16,6 +16,9 @@ value is a JSON object ``{"value": ...}`` carrying the segment's leading express
 ``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
 ``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
 gain fields later without breaking parsers.
+
+The attribute rides the opening stream header; a mid-turn expression change opens a new
+wire segment whose header carries the new expression.
 """
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 """

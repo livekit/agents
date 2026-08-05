@@ -66,14 +66,15 @@ def _strip(text: str, tags: list[str]) -> str:
 
 class TestExtractAndStrip:
     def test_self_closing(self) -> None:
-        assert _strip('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
+        # a tag with nothing before it takes its trailing space with it (vanish_trail)
+        assert _strip('<emotion value="happy"/> Hello!', ["emotion"]) == "Hello!"
 
     def test_wrapping_preserves_content(self) -> None:
         assert _strip("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
 
     def test_preserves_unrelated_tags(self) -> None:
         text = '<emotion value="happy"/> <custom>keep</custom>'
-        assert _strip(text, ["emotion"]) == " <custom>keep</custom>"
+        assert _strip(text, ["emotion"]) == "<custom>keep</custom>"
 
     def test_empty_tags_list(self) -> None:
         text = '<emotion value="happy"/> Hi'
@@ -82,7 +83,7 @@ class TestExtractAndStrip:
     def test_square_brackets_are_never_markup(self) -> None:
         # only XML is markup here — bracket spans reach transcripts as prose/markdown
         text = 'Press [Enter] <emotion value="happy"/> to open [the docs](https://lk.io)'
-        assert _strip(text, ["emotion"]) == "Press [Enter]  to open [the docs](https://lk.io)"
+        assert _strip(text, ["emotion"]) == "Press [Enter] to open [the docs](https://lk.io)"
 
     def test_reports_stripped_tags(self) -> None:
         clean, tags = extract_and_strip(

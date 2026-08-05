@@ -19,6 +19,7 @@ from livekit.agents.tts._provider_format import (
     llm_instructions,
     normalize_markup,
     split_all_markup,
+    strip_all_markup,
     strip_expr_markup,
 )
 
@@ -155,7 +156,7 @@ def test_convert_stray_expr_never_reaches_tts() -> None:
 
 def test_split_all_markup_strips_expr() -> None:
     clean, tags = split_all_markup(JOKE)
-    assert clean.strip() == "Why did the burger go to the gym?  Because it wanted better buns!"
+    assert clean.strip() == "Why did the burger go to the gym? Because it wanted better buns!"
     assert tags == [
         {"type": "expression", "value": "say playfully"},
         {"type": "break", "value": "500ms"},
@@ -193,12 +194,36 @@ def test_split_all_markup_keeps_square_brackets() -> None:
     assert tags == [{"type": "sound", "value": "sigh"}]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        # a trailing "<" whose letters prefix a real tag name ("break", "sound", "spell")
+        "the <emotion I felt was strong",
+        "I scored 12 points, he scored 9 <b",
+        "compare a<b",
+        "temperature dropped to 5<s",
+    ],
+)
+def test_strip_all_markup_keeps_open_tail_on_complete_text(text: str) -> None:
+    # complete text is never truncated: the final transcript and the stored chat history
+    # both go through strip_all_markup, so a tag-shaped "<" must survive verbatim
+    assert strip_all_markup(text) == text
+
+
+def test_strip_all_markup_drops_open_tail_only_when_asked() -> None:
+    # prefix/streaming callers slice at arbitrary offsets and opt in explicitly
+    assert strip_all_markup("compare a<b", drop_open_tail=True) == "compare a"
+    assert strip_all_markup("the <emotion I felt was strong", drop_open_tail=True) == "the "
+    # a "<" that cannot grow into a tag is left alone either way
+    assert strip_all_markup("3 < 5 is true", drop_open_tail=True) == "3 < 5 is true"
+
+
 def test_expr_regex_does_not_match_native_expression_tag() -> None:
     # "<expr" is a prefix of "<expression" — the word boundary in the expr regexes
     # must keep the native Inworld tag on the generic strip path with its own type
     text = '<expression value="speak calmly"/> Hi <expr type="break" label="1s"/> there.'
     clean, tags = split_all_markup(text)
-    assert clean == " Hi  there."
+    assert clean == "Hi there."
     assert {"type": "expression", "value": "speak calmly"} in tags
     assert {"type": "break", "value": "1s"} in tags
     # conversion must also leave the native tag for the provider pipeline, not eat it
@@ -217,9 +242,112 @@ def test_transcript_stripper_streaming_chunks() -> None:
     ]:
         out += stripper.push(chunk)
     out += stripper.flush()
-    assert out == " Hello world!"
+    assert out == "Hello world!"
     assert stripper.tags[0] == {"type": "expression", "value": "say playfully"}
     assert {"type": "prosody", "value": "whisper"} in stripper.tags
+
+
+def test_transcript_stripper_no_leftover_spaces() -> None:
+    # the room output splits expr markers into their own chunks, so the space that
+    # separated a marker from the text arrives in the NEXT chunk — it must not
+    # surface as a leading or doubled space in the transcript
+    stripper = TranscriptMarkupStripper()
+    out = ""
+    for chunk in ['<expr type="expression" label="warm"/>', " What dates were you looking at?"]:
+        out += stripper.push(chunk)
+    assert out == "What dates were you looking at?"
+
+    stripper = TranscriptMarkupStripper()
+    out = ""
+    for chunk in ["All checked! ", '<expr type="sound" label="laugh"/>', " What dates?"]:
+        out += stripper.push(chunk)
+    assert out == "All checked! What dates?"
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        # a delta stream splitting at a newline must keep the paragraph break
+        (["Line one.\n", "\nLine two."], "Line one.\n\nLine two."),
+        (["Hello ", "\n\n", "World"], "Hello \n\nWorld"),
+        # indentation after a newline is content, not a stripped tag's separator
+        (["def f():\n", "    return 1"], "def f():\n    return 1"),
+        (["- item one\n", "  - nested"], "- item one\n  - nested"),
+        # a newline right after a stripped marker survives too
+        (['<expr type="expression" label="warm"/>', "\nNext line"], "\nNext line"),
+    ],
+)
+def test_transcript_stripper_preserves_newlines_and_indentation(
+    chunks: list[str], expected: str
+) -> None:
+    # the stripper runs on every delta transcript, not just expressive ones: only the
+    # horizontal separator a stripped tag leaves behind may be swallowed
+    stripper = TranscriptMarkupStripper()
+    out = "".join(stripper.push(c) for c in chunks) + stripper.flush()
+    assert out == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # back-to-back markers must collapse to ONE separator, not leave a doubled space
+        (
+            'All done! <expr type="expression" label="warm"/>'
+            '<expr type="sound" label="laugh"/> Next up.',
+            "All done! Next up.",
+        ),
+        (
+            '<expr type="expression" label="a"/><expr type="sound" label="b"/> Hello there.',
+            "Hello there.",
+        ),
+        ('Hi <emotion value="a"/><sound value="b"/> there.', "Hi there."),
+    ],
+)
+def test_split_all_markup_stacked_markers_single_separator(text: str, expected: str) -> None:
+    assert split_all_markup(text)[0] == expected
+
+
+STREAM_CORPUS = [
+    # a tag glued to the preceding word: its trailing space is the word separator
+    'Ready.<sound value="laugh"/> Go',
+    'Wait<break time="500ms"/> for it',
+    'Hi<expression value="happy"/> there',
+    'All done! <expr type="expression" label="warm"/><expr type="sound" label="laugh"/> Next.',
+    '<expr type="expression" label="warm"/> What dates were you looking at?',
+    'She said <expr type="prosody" label="whisper">keep it secret</expr> — code A7X9.',
+    "Line one.\nLine two.",
+    'a <emotion value="x"/> b',
+    'a.<emotion value="x"/> b',
+]
+
+
+@pytest.mark.parametrize("text", STREAM_CORPUS)
+def test_transcript_stripper_matches_whole_text_at_every_split(text: str) -> None:
+    # a tag opening the buffer used to look line-leading and swallow the separator
+    # ("Ready.Go"); streaming must match whole-text stripping wherever the text is cut
+    whole = split_all_markup(text)[0]
+    for i in range(1, len(text)):
+        stripper = TranscriptMarkupStripper()
+        got = stripper.push(text[:i]) + stripper.push(text[i:]) + stripper.flush()
+        assert got == whole, f"split at {i} gave {got!r}, whole-text gives {whole!r}"
+
+
+def test_transcript_stripper_releases_text_before_a_straddling_marker() -> None:
+    # the room output rotates segments on an expression marker, so text spoken before it
+    # must already be emitted or it lands under the new segment id
+    stripper = TranscriptMarkupStripper()
+    emissions = [
+        stripper.push(c) for c in ["Great ", "<expr", ' type="expression" label="sad"/> job']
+    ]
+    assert "".join(emissions[:2]) == "Great "  # released before the marker completed
+    assert emissions[2] == "job"  # only this belongs to the rotated segment
+    assert stripper.tags == [{"type": "expression", "value": "sad"}]
+
+
+def test_transcript_stripper_does_not_stall_text_before_an_open_tag() -> None:
+    # only the partial tag is held, not the words in front of it
+    stripper = TranscriptMarkupStripper()
+    assert stripper.push("the <emotion") == "the "
 
 
 def test_expression_attribute_from_expr() -> None:
@@ -315,7 +443,8 @@ MIXED = (
     '<expr type="prosody" label="whisper">keep it secret</expr>'
 )
 MIXED_CLEAN = (
-    " Press [Enter] to see <b>bold</b>, "
+    # the leading marker takes its trailing space with it (vanish_trail)
+    "Press [Enter] to see <b>bold</b>, "
     'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
     "keep it secret"
 )
