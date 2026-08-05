@@ -117,3 +117,32 @@ async def test_speech_window_gap_must_not_resume_a_held_reply(
 
     assert events == []
     assert activity._paused_speech is not None
+
+
+async def test_pending_transcript_deferral_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the pending transcript never materializes (e.g. the STT stream died),
+    the deferral gives up after ``_PENDING_TRANSCRIPT_MAX_DEFERRAL`` and the
+    plain timeout behavior rules — the pause must not be held forever."""
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+    from livekit.agents.voice import agent_activity as aa_mod
+
+    monkeypatch.setattr(aa_mod, "_PENDING_TRANSCRIPT_MAX_DEFERRAL", 0.4)
+
+    session = _session()
+    activity, handle = _activity_with_pending_reply(session, interim_words="thirteen one")
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    t0 = time.time()
+    activity.on_start_of_speech(None, speech_start_time=t0)
+    activity.on_end_of_speech(None)  # interims stay pending forever: no final ever arrives
+
+    await asyncio.sleep(0.8)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    assert events[0][1] - t0 == pytest.approx(0.4, abs=0.2)
