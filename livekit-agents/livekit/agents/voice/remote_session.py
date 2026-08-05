@@ -256,6 +256,8 @@ _METRICS_FIELDS = (
     "llm_node_ttft",
     "tts_node_ttfb",
     "e2e_latency",
+    "llm_node_tps",
+    "llm_node_ttfs",
 )
 
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
