@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,11 +38,19 @@ def __getattr__(name: str) -> typing.Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-from .stt import STT, SpeechStream  # noqa: E402
+from .stt import STT, EndpointingConfig, SpeechStream  # noqa: E402
 from .tts import TTS, SynthesizeStream  # noqa: E402
 from .version import __version__  # noqa: E402
 
-__all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "realtime", "__version__"]
+__all__ = [
+    "STT",
+    "EndpointingConfig",
+    "SpeechStream",
+    "TTS",
+    "SynthesizeStream",
+    "realtime",
+    "__version__",
+]
 
 
 from livekit.agents import Plugin  # noqa: E402
