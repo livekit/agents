@@ -5,8 +5,8 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -29,8 +29,8 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
-    from ._provider_format import ExpressiveTag
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
@@ -57,6 +57,14 @@ class TTSCapabilities:
     """Whether this TTS supports aligned transcripts with word timestamps"""
 
 
+@dataclass
+class MarkupInfo:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
+
+
 class TTSError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["tts_error"] = "tts_error"
@@ -77,8 +85,11 @@ class TTS(
     class Markup:
         """Declares TTS markup capabilities for the expressive pipeline.
 
-        Plugins override this inner class to declare what markup tags the TTS supports
-        and how to convert marked-up text back to plain text.
+        Plugins override this inner class to declare which markup dialect the TTS speaks:
+        what the LLM is taught to write, and how those markers are normalized and lowered
+        to the provider's native syntax before synthesis. Stripping markup back out is not
+        here — the transcript sinks do it provider-agnostically (see
+        ``_provider_format.split_all_markup``).
         """
 
         def __init__(self, tts: TTS) -> None:
@@ -88,78 +99,32 @@ class TTS(
             """Key into the shared ``_provider_format`` markup tables, or "" for none.
 
             Plugins override this to opt into markup support; the default ("") means
-            no markup instructions, stripping, normalization, or conversion are applied.
-            The other markup methods delegate through this key, so a plugin only needs
-            to override ``_provider_key``.
+            no markup instructions, normalization, or conversion are applied. The other
+            markup methods delegate through this key, so a plugin only needs to override
+            ``_provider_key``.
             """
             return ""
 
-        def llm_instructions(self) -> str | None:
+        @property
+        def info(self) -> MarkupInfo:
+            """The queryable markup matrix for this voice."""
+            from ._provider_format import supported_nonverbals
+
+            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
+
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
             """Return instructions for the LLM describing available markup tags.
 
-            The framework injects this into the LLM system prompt when
-            ``expressive=True``.  Returns ``None`` if this TTS has no markup support.
+            The framework injects this into the LLM system prompt when expressive mode
+            is active. Returns ``None`` if this TTS has no markup support. When
+            *speech_steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
             """
             from ._provider_format import llm_instructions
 
-            return llm_instructions(self._provider_key())
-
-        def _split(self, text: str) -> tuple[str, list[ExpressiveTag]]:
-            """Strip markup and collect the stripped tags in one pass."""
-            from ._provider_format import split_markup
-
-            return split_markup(self._provider_key(), text)
-
-        def to_text(self, text: str) -> str:
-            """Strip TTS-specific markup from *text*, returning plain text.
-
-            Used for transcripts streamed to the user and for chat history storage.
-            The TTS itself receives the original marked-up text.
-            """
-            return self._split(text)[0]
-
-        async def to_text_stream(
-            self, text_stream: AsyncIterable[str], *, tags_out: list[ExpressiveTag] | None = None
-        ) -> AsyncGenerator[str, None]:
-            """Strip TTS markup from a stream of text chunks.
-
-            Buffers partial XML tags across chunks so that each buffer is stripped as a
-            whole. When ``tags_out`` is given, the stripped tags are appended to it (in
-            document order) as a byproduct of the same pass — no second scan.
-            """
-            buf = ""
-            async for chunk in text_stream:
-                buf += chunk
-                # hold the buffer only for a *tag-shaped* trailing "<" (a partial tag
-                # arriving across chunks); a bare "<" as in "3 < 5" is plain text and
-                # must not stall the transcript until the next ">" or flush
-                last_open = buf.rfind("<")
-                if last_open > buf.rfind(">"):
-                    nxt = buf[last_open + 1 : last_open + 2]
-                    if not nxt or nxt == "/" or nxt.isalpha():
-                        continue
-                stripped, tags = self._split(buf)
-                buf = ""
-                if tags_out is not None:
-                    tags_out.extend(tags)
-                if stripped:
-                    yield stripped
-
-            if buf:
-                stripped, tags = self._split(buf)
-                if tags_out is not None:
-                    tags_out.extend(tags)
-                if stripped:
-                    yield stripped
-
-        def extract_tags(self, text: str) -> list[ExpressiveTag]:
-            """Extract the markup tags that :meth:`to_text` would strip, in order.
-
-            Lets the framework surface stripped expressive tags (e.g. as transcription
-            attributes for the frontend) instead of discarding them. Returns ``[]`` when
-            the provider declares no markup.
-            """
-            return self._split(text)[1]
+            return llm_instructions(self._provider_key(), speech_steering)
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""

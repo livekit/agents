@@ -225,24 +225,23 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
     async def _update_card_number_impl(self, context: RunContext, card_number: str) -> str | None:
         card_number = "".join([d for d in card_number if d.isdigit()])
         if len(card_number) < 13 or len(card_number) > 19:
-            self.session.generate_reply(
-                instructions="The length of the card number is invalid, ask the user to repeat their card number."
+            return (
+                "The length of the card number is invalid, "
+                "ask the user to repeat their card number."
             )
-            return None
         else:
             self._card_number = card_number
 
             if not self._confirmation_required(context):
                 if not self.validate_card_number(self._card_number):
-                    self.session.generate_reply(
-                        instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
+                    return (
+                        "The card number is not valid, "
+                        "ask the user if they made a mistake or to provide another card."
                     )
-                else:
-                    issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
-                    if not self.done():
-                        self.complete(
-                            GetCardNumberResult(issuer=issuer, card_number=self._card_number)
-                        )
+
+                issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
+                if not self.done():
+                    self.complete(GetCardNumberResult(issuer=issuer, card_number=self._card_number))
                 return None
 
             confirm_tool = self._build_confirm_tool(card_number=card_number)
@@ -257,7 +256,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
 
     def _build_confirm_tool(self, *, card_number: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_card_number(repeated_card_number: str) -> None:
+        async def confirm_card_number(repeated_card_number: str) -> str | None:
             """Call after the user repeats their card number for confirmation.
 
             Args:
@@ -265,19 +264,18 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
             """
             repeated_card_number = "".join([d for d in repeated_card_number if d.isdigit()])
             if repeated_card_number != card_number:
-                self.session.generate_reply(
-                    instructions="The repeated card number does not match, ask the user to try again."
-                )
-                return
+                return "The repeated card number does not match, ask the user to try again."
 
             if not self.validate_card_number(card_number):
-                self.session.generate_reply(
-                    instructions="The card number is not valid, ask the user if they made a mistake or to provide another card."
+                return (
+                    "The card number is not valid, "
+                    "ask the user if they made a mistake or to provide another card."
                 )
-            else:
-                issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
-                if not self.done():
-                    self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
+
+            issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
+            if not self.done():
+                self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
+            return None
 
         return confirm_card_number
 
@@ -379,10 +377,10 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
     ) -> str | None:
         stripped = security_code.strip()
         if not stripped.isdigit() or not (3 <= len(stripped) <= 4):
-            self.session.generate_reply(
-                instructions="The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
+            return (
+                "The security code's length is invalid, "
+                "ask the user to repeat or to provide a new card and start over."
             )
-            return None
         else:
             self._security_code = stripped
 
@@ -404,20 +402,18 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
 
     def _build_confirm_tool(self, *, security_code: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_security_code(repeated_security_code: str) -> None:
+        async def confirm_security_code(repeated_security_code: str) -> str | None:
             """Call after the user repeats their security code for confirmation.
 
             Args:
                 repeated_security_code (str): The security code repeated by the user
             """
             if repeated_security_code.strip() != security_code:
-                self.session.generate_reply(
-                    instructions="The repeated security code does not match, ask the user to try again."
-                )
-                return
+                return "The repeated security code does not match, ask the user to try again."
 
             if not self.done():
                 self.complete(GetSecurityCodeResult(security_code=security_code))
+            return None
 
         return confirm_security_code
 
@@ -504,20 +500,14 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         self, context: RunContext, expiration_month: int, expiration_year: int
     ) -> str | None:
         if not (1 <= expiration_month <= 12):
-            self.session.generate_reply(
-                instructions="The expiration month is invalid, ask the user to repeat the expiration month."
-            )
-            return None
+            return "The expiration month is invalid, ask the user to repeat the expiration month."
         elif not (0 <= expiration_year <= 99):
-            self.session.generate_reply(
-                instructions="The expiration year is invalid, ask the user to repeat the expiration year."
-            )
-            return None
+            return "The expiration year is invalid, ask the user to repeat the expiration year."
         elif self._is_expired(expiration_month, expiration_year):
-            self.session.generate_reply(
-                instructions="The expiration date is in the past, the card is expired. Ask the user to provide another card."
+            return (
+                "The expiration date is in the past, the card is expired. "
+                "Ask the user to provide another card."
             )
-            return None
         else:
             self._expiration_date = f"{expiration_month:02d}/{expiration_year:02d}"
 
@@ -548,7 +538,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
         async def confirm_expiration_date(
             repeated_expiration_month: int,
             repeated_expiration_year: int,
-        ) -> None:
+        ) -> str | None:
             """Call after the user repeats their expiration date for confirmation.
 
             Args:
@@ -559,13 +549,11 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
                 repeated_expiration_month != expiration_month
                 or repeated_expiration_year != expiration_year
             ):
-                self.session.generate_reply(
-                    instructions="The repeated expiration date does not match, ask the user to try again."
-                )
-                return
+                return "The repeated expiration date does not match, ask the user to try again."
 
             if not self.done():
                 self.complete(GetExpirationDateResult(date=expiration_date))
+            return None
 
         return confirm_expiration_date
 

@@ -287,18 +287,24 @@ class LLMStream(llm.LLMStream):
                 logger.warning(f"aws bedrock llm: unknown chunk type: {chunk}")
 
         elif "metadata" in chunk:
-            metadata = chunk["metadata"]
+            usage = chunk["metadata"]["usage"]
+            # Bedrock reports inputTokens net of the cache and puts the cached tokens in
+            # their own fields, so they have to be added back for prompt_tokens to mean what
+            # CompletionUsage says it means ("includes cached tokens"). This mirrors what the
+            # anthropic plugin already does for the same models served directly.
+            cache_read_tokens = usage.get("cacheReadInputTokens") or 0
+            cache_creation_tokens = usage.get("cacheWriteInputTokens") or 0
+            prompt_tokens = usage["inputTokens"] + cache_read_tokens + cache_creation_tokens
+            completion_tokens = usage["outputTokens"]
             return llm.ChatChunk(
                 id=request_id,
                 usage=llm.CompletionUsage(
-                    completion_tokens=metadata["usage"]["outputTokens"],
-                    prompt_tokens=metadata["usage"]["inputTokens"],
-                    total_tokens=metadata["usage"]["totalTokens"],
-                    prompt_cached_tokens=(
-                        metadata["usage"]["cacheReadInputTokens"]
-                        if "cacheReadInputTokens" in metadata["usage"]
-                        else 0
-                    ),
+                    completion_tokens=completion_tokens,
+                    prompt_tokens=prompt_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                    prompt_cached_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    cache_read_tokens=cache_read_tokens,
                 ),
             )
         elif "contentBlockStop" in chunk:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 from google.genai import types
@@ -16,15 +18,24 @@ pytestmark = pytest.mark.unit
 _PCM_FRAME = b"\x00\x01" * 240
 
 
-async def _make_session(monkeypatch: pytest.MonkeyPatch) -> RealtimeSession:
-    """A session whose background connect loop is stopped before it hits the network."""
+@asynccontextmanager
+async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[RealtimeSession]:
+    """A session whose background connect loop is stopped before it hits the network.
+
+    Closed on exit so the genai http clients are released here instead of by
+    ``AsyncClient.__del__``, which schedules ``aclose()`` on whatever event loop
+    is running when the collector happens to reach them.
+    """
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     session = RealtimeModel().session()
     # cancel the connect loop before the event loop ever schedules it, so no
     # websocket connection is attempted
     session._msg_ch.close()
     await utils.aio.cancel_and_wait(session._main_atask)
-    return session
+    try:
+        yield session
+    finally:
+        await session.aclose()
 
 
 def _audio_content(**kwargs: object) -> types.LiveServerContent:
@@ -47,31 +58,31 @@ async def test_output_streams_close_on_generation_complete(
     generation_complete, while the generation stays open until turn_complete for input
     transcription and metrics.
     """
-    session = await _make_session(monkeypatch)
-    session._start_new_generation()
-    gen = session._current_generation
-    assert gen is not None
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
 
-    session._handle_server_content(
-        _audio_content(
-            output_transcription=types.Transcription(text="hello"),
-            generation_complete=True,
+        session._handle_server_content(
+            _audio_content(
+                output_transcription=types.Transcription(text="hello"),
+                generation_complete=True,
+            )
         )
-    )
 
-    # audio and text were consumed and both segments ended immediately
-    assert gen._first_token_timestamp is not None
-    assert gen.output_text == "hello"
-    assert gen.audio_ch.closed
-    assert gen.text_ch.closed
-    # but the generation is still open for trailing input transcription until turn_complete
-    assert not gen._done
-    assert not gen.message_ch.closed
+        # audio and text were consumed and both segments ended immediately
+        assert gen._first_token_timestamp is not None
+        assert gen.output_text == "hello"
+        assert gen.audio_ch.closed
+        assert gen.text_ch.closed
+        # but the generation is still open for trailing input transcription until turn_complete
+        assert not gen._done
+        assert not gen.message_ch.closed
 
-    session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
 
-    assert gen._done
-    assert gen.message_ch.closed
+        assert gen._done
+        assert gen.message_ch.closed
 
 
 async def test_late_content_after_generation_complete_is_dropped(
@@ -79,24 +90,48 @@ async def test_late_content_after_generation_complete_is_dropped(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Stray audio/text after generation_complete is dropped (not pushed to a closed stream)."""
-    session = await _make_session(monkeypatch)
-    session._start_new_generation()
-    gen = session._current_generation
-    assert gen is not None
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
 
-    session._handle_server_content(_audio_content(generation_complete=True))
-    assert gen.audio_ch.closed and gen.text_ch.closed
+        session._handle_server_content(_audio_content(generation_complete=True))
+        assert gen.audio_ch.closed and gen.text_ch.closed
 
-    with caplog.at_level(logging.WARNING):
-        # must not raise ChanClosed, must not append to the transcript, and must warn
-        session._handle_server_content(
-            _audio_content(output_transcription=types.Transcription(text="late"))
-        )
+        with caplog.at_level(logging.WARNING):
+            # must not raise ChanClosed, must not append to the transcript, and must warn
+            session._handle_server_content(
+                _audio_content(output_transcription=types.Transcription(text="late"))
+            )
 
-    assert gen.audio_ch.closed and gen.text_ch.closed
-    assert gen.output_text == ""
-    assert not gen._done
-    assert any("after generation completed" in r.message for r in caplog.records)
+        assert gen.audio_ch.closed and gen.text_ch.closed
+        assert gen.output_text == ""
+        assert not gen._done
+        assert any("after generation completed" in r.message for r in caplog.records)
+
+
+async def test_session_close_releases_the_genai_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aclose() must release the genai http clients.
+
+    Otherwise they live until the collector runs ``AsyncClient.__del__``, which
+    does ``asyncio.get_running_loop().create_task(self.aclose())`` - creating
+    pending tasks on whatever event loop is running at that moment.
+    """
+    closed = False
+
+    async with _make_session(monkeypatch) as session:
+        real_aclose = session._client.aio.aclose
+
+        async def _spy() -> None:
+            nonlocal closed
+            closed = True
+            await real_aclose()
+
+        monkeypatch.setattr(session._client.aio, "aclose", _spy)
+
+    assert closed
 
 
 def _tool_call(call_id: str = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
@@ -109,21 +144,26 @@ def _tool_output(call_id: str = "fc_1", name: str = "lookup") -> llm.FunctionCal
     return llm.FunctionCallOutput(call_id=call_id, name=name, output="42", is_error=False)
 
 
+@asynccontextmanager
 async def _make_connected_session(
     monkeypatch: pytest.MonkeyPatch, *, non_blocking_tools: bool = False
-) -> RealtimeSession:
+) -> AsyncIterator[RealtimeSession]:
     """A session that believes it is connected, so update_chat_ctx actually emits.
 
     The placeholder is never called: the send task is not running, so client events just
     queue up in `_msg_ch` for the test to inspect. `_make_session` closes that channel to
     stop the connect loop, so it is replaced with an open one first.
     """
-    session = await _make_session(monkeypatch)
-    if non_blocking_tools:
-        session._opts.tool_behavior = types.Behavior.NON_BLOCKING
-    session._msg_ch = utils.aio.Chan[ClientEvents]()
-    session._active_session = object()  # type: ignore[assignment]
-    return session
+    async with _make_session(monkeypatch) as session:
+        if non_blocking_tools:
+            session._opts.tool_behavior = types.Behavior.NON_BLOCKING
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = object()  # type: ignore[assignment]
+        try:
+            yield session
+        finally:
+            # the placeholder has no close(), drop it before aclose() reaches for one
+            session._active_session = None
 
 
 async def _drain_sent(session: RealtimeSession) -> list[object]:
@@ -143,24 +183,26 @@ async def test_tool_response_sent_after_client_interruption(
     generation (issue #6569). SILENT records the result without prompting speech the user never
     asked for.
     """
-    session = await _make_connected_session(monkeypatch, non_blocking_tools=True)
-    session._start_new_generation()
-    session._handle_tool_calls(_tool_call())
+    async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
 
-    # the user was interrupted locally; Gemini was never told
-    session.interrupt()
-    await _drain_sent(session)
+        # the user was interrupted locally; Gemini was never told
+        session.interrupt()
+        await _drain_sent(session)
 
-    chat_ctx = session.chat_ctx.copy()
-    chat_ctx.items.append(_tool_output())
-    await session.update_chat_ctx(chat_ctx)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
 
-    sent = await _drain_sent(session)
-    responses = [m for m in sent if isinstance(m, types.LiveClientToolResponse)]
-    assert len(responses) == 1, f"expected the tool response to be sent, got {sent}"
-    assert responses[0].function_responses is not None
-    assert responses[0].function_responses[0].id == "fc_1"
-    assert responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
+        sent = await _drain_sent(session)
+        responses = [m for m in sent if isinstance(m, types.LiveClientToolResponse)]
+        assert len(responses) == 1, f"expected the tool response to be sent, got {sent}"
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].id == "fc_1"
+        assert (
+            responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
+        )
 
 
 async def test_tool_response_sent_after_server_interruption(
@@ -171,41 +213,41 @@ async def test_tool_response_sent_after_server_interruption(
     It costs nothing — the API can use it on the next turn — and withholding it would leave the
     local context claiming a result the server never saw.
     """
-    session = await _make_connected_session(monkeypatch)
-    session._start_new_generation()
-    session._handle_tool_calls(_tool_call())
-    session._handle_server_content(types.LiveServerContent(interrupted=True))
-    await _drain_sent(session)
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        session._handle_server_content(types.LiveServerContent(interrupted=True))
+        await _drain_sent(session)
 
-    chat_ctx = session.chat_ctx.copy()
-    chat_ctx.items.append(_tool_output())
-    await session.update_chat_ctx(chat_ctx)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
 
-    responses = [
-        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
-    ]
-    assert len(responses) == 1
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
 
 
 async def test_tool_response_uses_configured_scheduling_when_not_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The normal path keeps the configured scheduling; SILENT is only for interrupted turns."""
-    session = await _make_connected_session(monkeypatch)
-    session._start_new_generation()
-    session._handle_tool_calls(_tool_call())
-    await _drain_sent(session)
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
 
-    chat_ctx = session.chat_ctx.copy()
-    chat_ctx.items.append(_tool_output())
-    await session.update_chat_ctx(chat_ctx)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
 
-    responses = [
-        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
-    ]
-    assert len(responses) == 1
-    assert responses[0].function_responses is not None
-    assert responses[0].function_responses[0].scheduling is None
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].scheduling is None
 
 
 async def test_interrupted_tool_response_keeps_default_scheduling_for_blocking_tools(
@@ -215,22 +257,22 @@ async def test_interrupted_tool_response_keeps_default_scheduling_for_blocking_t
 
     The response is still sent — unblocking the turn matters more than the reply it prompts.
     """
-    session = await _make_connected_session(monkeypatch)
-    session._start_new_generation()
-    session._handle_tool_calls(_tool_call())
-    session.interrupt()
-    await _drain_sent(session)
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        session.interrupt()
+        await _drain_sent(session)
 
-    chat_ctx = session.chat_ctx.copy()
-    chat_ctx.items.append(_tool_output())
-    await session.update_chat_ctx(chat_ctx)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
 
-    responses = [
-        m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
-    ]
-    assert len(responses) == 1
-    assert responses[0].function_responses is not None
-    assert responses[0].function_responses[0].scheduling is None
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].scheduling is None
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
