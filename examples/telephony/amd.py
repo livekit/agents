@@ -57,7 +57,6 @@ async def entrypoint(ctx: JobContext):
             )
         )
 
-    # Register before dialing so failed calls also delete the room.
     ctx.add_shutdown_callback(hangup)
 
     phone_number = os.getenv("SIP_PHONE_NUMBER")

@@ -428,8 +428,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher gone start listening so the no-speech timer settles faster
-                self._start_listening()
+                self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
