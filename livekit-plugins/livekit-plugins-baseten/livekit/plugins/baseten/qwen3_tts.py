@@ -690,7 +690,13 @@ async def _control(model_endpoint: str, api_key: str | None, message: dict) -> d
             max_msg_size=_WS_MAX_MSG_SIZE,
         ) as ws:
             await ws.send_str(json.dumps(message))
-            response: dict[str, Any] = json.loads((await ws.receive()).data)
+            msg = await ws.receive()
+            if msg.type is not aiohttp.WSMsgType.TEXT:
+                # .data is None on CLOSED, the close code on CLOSE, an exception
+                # on ERROR — json.loads would raise a bare TypeError and hide
+                # what actually went wrong.
+                raise RuntimeError(f"unexpected reply to {message.get('type')!r}: {msg.type.name}")
+            response: dict[str, Any] = json.loads(msg.data)
             return response
 
 
