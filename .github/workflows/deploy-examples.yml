@@ -78,9 +78,12 @@ jobs:
           # Build the agent against the code at the ref we're deploying,
           # not the latest release on PyPI. Without this, a branch deploy
           # would silently run against the published livekit-agents instead
-          # of the branch's own SDK changes. Mirror the checkout ref above,
-          # using ref_name so it's a plain branch/tag git can resolve.
-          DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
+          # of the branch's own SDK changes.
+          #
+          # Defaults to the commit sha, not the branch name: the ref lands in
+          # the uv git source, so a branch name keeps the same `uv sync` layer
+          # cache key across pushes and the deploy quietly reships stale code.
+          DEPLOY_REF: ${{ inputs.ref || github.sha }}
         run: |
           python3 .github/pin_example_to_ref.py \
             "examples/${{ matrix.example }}" --ref "$DEPLOY_REF"
