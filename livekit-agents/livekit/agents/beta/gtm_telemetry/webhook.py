@@ -61,7 +61,8 @@ class WebhookDispatcher:
     ) -> None:
         if url.lower().startswith("http://"):
             logger.warning(
-                "Webhook URL uses http:// scheme. Sensitive conversation data will be transmitted in cleartext."
+                "Webhook URL uses http:// scheme. Sensitive conversation data "
+                "will be transmitted in cleartext."
             )
         self._url = url
         self._webhook_secret = webhook_secret
