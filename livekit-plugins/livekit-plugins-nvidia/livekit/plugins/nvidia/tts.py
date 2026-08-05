@@ -3,7 +3,6 @@
 
 import asyncio
 import inspect
-import logging
 import os
 import queue
 import threading
@@ -31,9 +30,6 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from . import auth
-
-logger = logging.getLogger(__name__)
-
 
 InferenceMode = Literal["online", "offline"]
 
@@ -241,8 +237,7 @@ class ChunkedStream(tts.ChunkedStream):
                 for response in self._tts._synthesize(self._input_text, self._opts):
                     event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
             except Exception as e:
-                error = _to_tts_api_error(e, operation="NVIDIA Speech TTS request")
-                logger.exception("Error in NVIDIA chunked synthesis thread")
+                error = e
             finally:
                 event_loop.call_soon_threadsafe(_complete_future, done_fut, error)
 
@@ -309,8 +304,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
 
             except Exception as e:
-                error = _to_tts_api_error(e, operation="NVIDIA Speech TTS request")
-                logger.exception("Error in NVIDIA streaming synthesis thread")
+                error = e
             finally:
                 event_loop.call_soon_threadsafe(_complete_future, done_fut, error)
 
