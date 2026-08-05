@@ -135,20 +135,25 @@ class _STTOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
 
 
+def _iso_codes(languages: list[str]) -> list[str]:
+    """Deduplicated ISO-639-1 codes; the API rejects regional tags such as en-US."""
+    return list(dict.fromkeys(LanguageCode(code).language for code in languages))
+
+
 def _transcription(opts: _STTOptions) -> AudioTranscription:
     """The transcription config: `languages` and `keywords`, or a single `language`."""
     transcription = AudioTranscription(model=opts.model)
-    if is_given(opts.prompt) and opts.prompt:
+    # a field left out of a session.update keeps its previous value, so anything that can
+    # be cleared is always sent
+    if is_given(opts.prompt):
         transcription.prompt = opts.prompt
-    if opts.keywords:
+    if _supports_context_hints(opts.model):
         transcription.keywords = opts.keywords
-    if opts.languages:
-        # both fields want ISO-639-1; the API rejects regional tags such as en-US
-        codes = list(dict.fromkeys(LanguageCode(code).language for code in opts.languages))
-        if _supports_context_hints(opts.model):
-            transcription.languages = codes
-        else:
-            transcription.language = codes[0]
+        # `languages` rejects both an empty array and null, so it can only be replaced
+        if opts.languages:
+            transcription.languages = _iso_codes(opts.languages)
+    elif opts.languages:
+        transcription.language = _iso_codes(opts.languages)[0]
     return transcription
 
 
@@ -284,6 +289,8 @@ class STT(stt.STT):
         self._session_keyterms: list[str] = []
 
         self._vad = vad if is_given(vad) else None
+        # an explicit `vad=None` means the caller commits the audio buffer itself
+        self._vad_opted_out = is_given(vad) and vad is None
 
         if is_given(api_key) and not api_key:
             raise ValueError(
@@ -473,10 +480,22 @@ class STT(stt.STT):
             languages = []
         user_keywords = list(keywords) if is_given(keywords) else self._user_keywords
         _validate_context(resolved_model, languages, user_keywords)
+        if (
+            _requires_client_commit(resolved_model)
+            and not _requires_client_commit(self._opts.model)
+            and self._vad is None
+            and not self._vad_opted_out
+        ):
+            raise ValueError(
+                f"{resolved_model} has no server-side endpointing, so it needs a `vad` to "
+                "commit the audio buffer; pass one to the constructor, or pass `vad=None` "
+                "to drive `input_audio_buffer.commit` yourself"
+            )
 
-        # gateways route on the ?model= in the upgrade URL, so only a model change
-        # can't be expressed as a session.update
+        # a reconnect is the only way to apply these: gateways route on the ?model= in the
+        # upgrade URL, and `languages` cannot be cleared on an open session
         model_changed = resolved_model != self._opts.model
+        languages_cleared = bool(self._opts.languages) and not languages
         self._opts.model = resolved_model
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
@@ -505,7 +524,7 @@ class STT(stt.STT):
                 self._opts.temperature = temperature
 
         for stream in self._streams:
-            if model_changed:
+            if model_changed or languages_cleared:
                 stream.reconnect()
             else:
                 stream.apply_options()
@@ -885,9 +904,15 @@ class SpeechStream(stt.SpeechStream):
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
                 # a pooled connection may have been configured for older options
-                await ws.send_json(
-                    _session_update(self._opts).model_dump(by_alias=True, exclude_unset=True)
-                )
+                try:
+                    await ws.send_json(
+                        _session_update(self._opts).model_dump(by_alias=True, exclude_unset=True)
+                    )
+                except (aiohttp.ClientError, ConnectionError) as e:
+                    # a pooled socket can die while idle; keep that retryable
+                    raise APIConnectionError(
+                        "OpenAI Realtime STT connection closed unexpectedly"
+                    ) from e
                 vad_stream = self._vad.stream() if self._vad is not None else None
                 # option updates are sent on whichever connection is live
                 self._ws = ws

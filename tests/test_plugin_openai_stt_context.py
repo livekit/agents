@@ -261,6 +261,49 @@ async def test_a_new_model_reconnects() -> None:
     await stream.aclose()
 
 
+async def test_cleared_keywords_and_prompt_are_sent_as_empty() -> None:
+    # an omitted field keeps its previous value, so clearing has to be explicit
+    instance = _offline_stt(model="gpt-live-transcribe", keywords=["AC-42"], prompt="a call")
+    stream = instance.stream()
+    ws = await _connected(stream)
+
+    instance.update_options(keywords=[], prompt="")
+    await _settle(stream)
+
+    assert _sent_transcription(ws)["keywords"] == []
+    assert _sent_transcription(ws)["prompt"] == ""
+
+    await stream.aclose()
+
+
+async def test_clearing_the_language_reconnects() -> None:
+    # the API rejects both an empty array and null for `languages`
+    instance = _offline_stt(model="gpt-live-transcribe", language=["en", "fr"])
+    stream = instance.stream()
+    await _connected(stream)
+
+    instance.update_options(detect_language=True)
+
+    assert instance._opts.languages == []
+    assert stream._reconnect_event.is_set()
+
+    await stream.aclose()
+
+
+async def test_switching_to_a_client_commit_model_needs_a_vad() -> None:
+    instance = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True)
+
+    with pytest.raises(ValueError, match="no server-side endpointing"):
+        instance.update_options(model="gpt-live-transcribe")
+
+    # an explicit vad=None means the caller commits the buffer itself
+    opted_out = stt.STT(
+        api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True, vad=None
+    )
+    opted_out.update_options(model="gpt-live-transcribe")
+    assert opted_out._opts.model == "gpt-live-transcribe"
+
+
 async def test_detected_keyterms_do_not_block_a_new_stream() -> None:
     instance = _offline_stt(model="gpt-live-transcribe")
     instance._update_session_keyterms(["Acme Corp"])
@@ -304,7 +347,7 @@ async def test_a_reused_connection_is_reconfigured() -> None:
 
     # the change lands while nothing is streaming, so no live socket receives it
     instance.update_options(keywords=["Acme Corp"])
-    assert "keywords" not in _sent_transcription(ws)
+    assert _sent_transcription(ws)["keywords"] == []  # the idle socket has not seen it
 
     second = instance.stream()
     await _connected(second)
