@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 _EXPRESSION_RE = re.compile(r'<expression\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</expression>)')
 _SOUND_RE = re.compile(r'<sound\s+value="([^"]*)"(?:\s*/>|>(?:.*?)</sound>)')
@@ -14,6 +15,27 @@ def convert_expression_tags(text: str) -> str:
 
 
 _VALUE_ATTR_RE = re.compile(r'\b[\w-]+\s*=\s*"([^"]*)"')
+
+
+@lru_cache(maxsize=32)
+def _compile_markup(xml_tags: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """Compile the strip and delimiter patterns for a tag set, once per set.
+
+    ``markup`` matches a whole tag (with its inner content, for a wrapping pair);
+    ``delimiters`` matches tag delimiters individually, so a single pass over a tag's
+    inner content reduces it to text without needing the fixed-point loop.
+    """
+    tag_pattern = "|".join(re.escape(tag) for tag in xml_tags)
+    markup = re.compile(
+        # <tag .../> or <tag ...> optionally followed by inner</tag>
+        rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*/?\s*>"
+        rf"(?:(?P<inner>.*?)</(?P=tag)\s*>)?"
+        # lone closing tag: </tag>
+        rf"|</(?:{tag_pattern})\s*>",
+        re.DOTALL,
+    )
+    delimiters = re.compile(rf"<(?:{tag_pattern})\b[^>]*>|</(?:{tag_pattern})\s*>")
+    return markup, delimiters
 
 
 def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tuple[str, str]]]:
@@ -44,15 +66,7 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     if not xml_tags:
         return text, []
 
-    tag_pattern = "|".join(re.escape(tag) for tag in xml_tags)
-    pattern = re.compile(
-        # <tag .../> or <tag ...> optionally followed by inner</tag>
-        rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*/?\s*>"
-        rf"(?:(?P<inner>.*?)</(?P=tag)\s*>)?"
-        # lone closing tag: </tag>
-        rf"|</(?:{tag_pattern})\s*>",
-        re.DOTALL,
-    )
+    pattern, delimiters = _compile_markup(tuple(xml_tags))
     tags: list[tuple[str, str]] = []
 
     def _repl(m: re.Match[str]) -> str:
@@ -60,8 +74,19 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
         tag = groups.get("tag")
         if tag is not None:
             inner = groups.get("inner")
-            if inner is not None and inner.strip():
-                value = inner.strip()
+            # a wrapping tag's value is its inner *text*, so nested markup is stripped out
+            # of it -- those inner tags are recorded on their own by the later pass that
+            # sweeps the raw inner content returned below. deleting delimiters is enough
+            # here and keeps this linear: recursing would rescan each nesting level again.
+            if not inner:
+                inner_text = ""
+            elif "<" in inner or ">" in inner:
+                inner_text = delimiters.sub("", inner).strip()
+            else:
+                # the common case: plain inner text needs no scan at all
+                inner_text = inner.strip()
+            if inner_text:
+                value = inner_text
             else:
                 attr_match = _VALUE_ATTR_RE.search(groups.get("attrs") or "")
                 value = attr_match.group(1) if attr_match else ""

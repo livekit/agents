@@ -91,6 +91,38 @@ class TestExtractAndStrip:
         assert clean == "hi A7"
         assert tags == [("emotion", "happy"), ("spell", "A7")]
 
+    def test_nested_tag_value_is_inner_text_not_inner_markup(self) -> None:
+        # a wrapping tag's value is documented as its inner *text*; an outer tag must not
+        # carry the nested tags' delimiters, since the value is surfaced to the frontend
+        clean, tags = extract_and_strip(
+            "<excited><loud>no way</loud></excited>", xml_tags=["excited", "loud"]
+        )
+        assert clean == "no way"
+        assert tags == [("excited", "no way"), ("loud", "no way")]
+
+    def test_deep_nesting_records_inner_text_at_every_level(self) -> None:
+        # every level's value is the inner *text*, not the markup below it: before the
+        # delimiter pass an outer tag recorded the whole nested chain verbatim
+        # (t0 -> "<t1><t2>...x...</t2></t1>")
+        tags = [f"t{i}" for i in range(20)]
+        text = "".join(f"<{t}>" for t in tags) + "x" + "".join(f"</{t}>" for t in reversed(tags))
+
+        clean, found = extract_and_strip(text, xml_tags=tags)
+
+        assert clean == "x"
+        assert [tag for tag, _ in found] == tags
+        assert all(value == "x" for _, value in found)
+
+    def test_nested_value_falls_back_to_attribute_when_inner_is_markup_only(self) -> None:
+        # stripping the nested markup empties the inner text, so the attribute is used
+        # rather than recording the raw delimiters
+        clean, tags = extract_and_strip(
+            '<excited value="wow"><break time="500ms"/></excited>',
+            xml_tags=["excited", "break"],
+        )
+        assert clean == ""
+        assert tags == [("excited", "wow"), ("break", "500ms")]
+
 
 # ===========================================================================
 # xAI dialect (mixed inline [..] + wrapping <..>)
@@ -195,10 +227,12 @@ class TestXaiDialect:
         # combining emotion + prosody means nesting; the transcript must come out clean
         # (no leaked inner markup) — this is what the fixed-point strip guarantees
         raw = '<excited><loud><higher-pitch>no way</higher-pitch></loud></excited> <sound value="laugh"/> okay'
-        clean, _ = pf.split_all_markup(raw)
+        clean, tags = pf.split_all_markup(raw)
         assert "<" not in clean and ">" not in clean and "[" not in clean
         assert clean.strip() == "no way  okay".replace("  ", " ") or "no way" in clean
         assert "no way" in clean and "okay" in clean
+        # the tags surfaced to the frontend must be just as clean as the transcript
+        assert all("<" not in tag["value"] and ">" not in tag["value"] for tag in tags)
 
     def test_convert_inline_sounds_and_pauses_to_brackets(self) -> None:
         from livekit.agents.tts import _provider_format as pf
