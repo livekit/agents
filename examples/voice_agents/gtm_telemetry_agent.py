@@ -64,9 +64,11 @@ async def on_session_end(ctx: JobContext) -> None:
     try:
         await collector.aflush()
         report = collector.generate_report()
-        logger.info("PostCallReport:\n%s", report.model_dump_json(indent=2))
-        logger.info("Salesforce Task payload: %s", to_salesforce_task(report))
-        logger.info("HubSpot Engagement payload: %s", to_hubspot_engagement(report))
+        logger.info("Generated PostCallReport with %d turns", len(report.turns))
+        # Log complete payload details at debug level to avoid leaking PII in default info logs
+        logger.debug("PostCallReport detail:\n%s", report.model_dump_json(indent=2))
+        logger.debug("Salesforce Task payload: %s", to_salesforce_task(report))
+        logger.debug("HubSpot Engagement payload: %s", to_hubspot_engagement(report))
     finally:
         await collector.aclose()
 
