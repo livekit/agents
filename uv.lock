@@ -3177,6 +3177,7 @@ requires-dist = [
 name = "livekit-plugins-nvidia"
 source = { editable = "livekit-plugins/livekit-plugins-nvidia" }
 dependencies = [
+    { name = "grpcio" },
     { name = "livekit-agents" },
     { name = "nvidia-riva-client" },
 ]
@@ -3189,9 +3190,10 @@ personaplex = [
 
 [package.metadata]
 requires-dist = [
+    { name = "grpcio", specifier = ">=1.51.1" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "livekit-agents", extras = ["codecs"], marker = "extra == 'personaplex'", editable = "livekit-agents" },
-    { name = "nvidia-riva-client" },
+    { name = "nvidia-riva-client", specifier = ">=2.16,<2.27" },
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
 provides-extras = ["personaplex"]
