@@ -97,6 +97,7 @@ class _BaseStreamingTurnDetectorStream:
         opts: TurnDetectorOptions,
         transport: _StreamingTurnDetectionTransport,
         model: TurnDetectorModels = "turn-detector-v1-mini",
+        local_fallback: bool = True,
     ) -> None:
         self._detector = detector
         self._opts = opts
@@ -104,7 +105,9 @@ class _BaseStreamingTurnDetectorStream:
         self._transport.attach(self)
 
         self._model: TurnDetectorModels = model
+        self._local_fallback = local_fallback
         self._is_fallback = False
+        self._degraded = False
         self._warned_cloud_failure = False
         self._warned_local_failure = False
         self._transport_task: asyncio.Task[None] | None = None
@@ -143,6 +146,13 @@ class _BaseStreamingTurnDetectorStream:
         return self._is_fallback
 
     @property
+    def is_degraded(self) -> bool:
+        """True once the cloud transport is gone with no local model to take
+        over (``local_fallback=False``). Predictions resolve to the positive
+        default from here on, so turns commit on the endpointing delay."""
+        return self._degraded
+
+    @property
     def prediction_timeout(self) -> float:
         return DEFAULT_PREDICTION_TIMEOUT
 
@@ -161,7 +171,7 @@ class _BaseStreamingTurnDetectorStream:
 
     def predict(self) -> asyncio.Future[TurnDetectionEvent]:
         """Start a new inference request and return its future."""
-        if self._audio_ch.closed:
+        if self._audio_ch.closed or self._degraded:
             fut: asyncio.Future[TurnDetectionEvent] = asyncio.get_running_loop().create_future()
             fut.set_result(self._default_event(1.0))
             return fut
@@ -320,7 +330,9 @@ class _BaseStreamingTurnDetectorStream:
         """Run the active transport, retrying on cloud failure by swapping in
         a local transport in-place. ``turn-detector-v1-mini`` just runs the
         transport once and surfaces failures to the caller via
-        ``_resolve_prediction`` (default 1.0)."""
+        ``_resolve_prediction`` (default 1.0). With ``local_fallback=False``
+        there is nothing to swap in, so a dead cloud transport is terminal and
+        the stream degrades to the positive default instead."""
         while True:
             task = asyncio.create_task(self._transport.run())
             self._transport_task = task
@@ -339,12 +351,32 @@ class _BaseStreamingTurnDetectorStream:
                 raise
             except Exception as e:  # noqa: BLE001 — any cloud error degrades to local
                 if self._model == "turn-detector-v1":
-                    self._fall_back_to_local(reason=e)
-                    continue
+                    if self._fall_back_to_local(reason=e):
+                        continue
+                    # nothing replaced the transport, so re-running it would
+                    # spin: give up and answer every later turn from the default
+                    self._degraded = True
+                    return
                 self._on_local_failure(reason=e)
                 return
 
-    def _fall_back_to_local(self, *, reason: BaseException) -> None:
+    def _fall_back_to_local(self, *, reason: BaseException) -> bool:
+        """Swap the cloud transport for the local mini model.
+
+        Returns False when ``local_fallback=False`` disabled the swap, leaving
+        the stream on its (possibly dead) cloud transport.
+        """
+        if not self._local_fallback:
+            if not self._warned_cloud_failure:
+                logger.warning(
+                    "cloud turn detector failed (%s); local fallback is disabled, so turns "
+                    "commit on the endpointing delay until the gateway recovers",
+                    reason,
+                )
+                self._warned_cloud_failure = True
+            self._emit_default_for_inflight()
+            return False
+
         # Lazy import: transports.py imports this module for the Protocol and
         # constants, so importing it at module load would cycle.
         from .transports import _LocalTransport
@@ -376,6 +408,7 @@ class _BaseStreamingTurnDetectorStream:
         if task is not None and not task.done():
             self._fallback_requested = True
             task.cancel()
+        return True
 
     def _on_local_failure(self, *, reason: BaseException) -> None:
         if not self._warned_local_failure:

@@ -41,9 +41,20 @@ class TurnDetector(_BaseStreamingTurnDetector):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
+        local_fallback: bool = True,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Args:
+            local_fallback: When True (the default), a ``v1`` detector degrades to
+                the local ``v1-mini`` model if the gateway becomes unreachable or a
+                prediction times out. Pass False to keep the detector cloud-only:
+                the mini model's weights (~108MB, resident for the life of the
+                process) are then never loaded, and while the gateway is
+                unavailable turns commit on the endpointing delay instead. Only
+                applies to ``v1`` — ``v1-mini`` is already the local model.
+        """
         auto = not is_given(version)
         resolved_version: TurnDetectorVersions = (
             version
@@ -107,7 +118,16 @@ class TurnDetector(_BaseStreamingTurnDetector):
 
         self._model: TurnDetectorModels = resolved_model
         self._cloud_opts = cloud_opts
+        self._local_fallback = local_fallback
         self._http_session = http_session
+
+        if not local_fallback and resolved_model == "turn-detector-v1-mini":
+            # the caller asked not to load the local model, and this detector is
+            # the local model — say so rather than silently ignoring the flag
+            logger.warning(
+                "local_fallback=False has no effect on the %s model, which runs locally by design",
+                resolved_model,
+            )
 
         self._warn_threshold_override()
 
@@ -172,4 +192,5 @@ class TurnDetector(_BaseStreamingTurnDetector):
             opts=self._opts,
             transport=transport,
             model=self._model,
+            local_fallback=self._local_fallback,
         )
