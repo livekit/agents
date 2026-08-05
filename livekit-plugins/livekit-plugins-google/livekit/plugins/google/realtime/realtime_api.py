@@ -672,8 +672,7 @@ class RealtimeSession(llm.RealtimeSession):
         if append_ctx.items:
             scheduling = self._opts.tool_response_scheduling
             if (
-                not self._opts.vertexai  # scheduling is not supported by vertex
-                and self._playout_interrupted
+                self._playout_interrupted
                 # only honoured on NON_BLOCKING declarations
                 and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             ):
