@@ -18,11 +18,15 @@ class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
         self.fail_next = False
+        self.block_first: asyncio.Event | None = None
 
     async def send_json(self, data: dict[str, Any]) -> None:
         if self.fail_next:
             self.fail_next = False
             raise ConnectionResetError("socket went away")
+        if self.block_first is not None:
+            blocked, self.block_first = self.block_first, None
+            await blocked.wait()
         self.sent.append(data)
 
     async def receive(self) -> object:
@@ -184,10 +188,14 @@ async def _settle(stream: stt.SpeechStream) -> None:
         await asyncio.wait([stream._update_task])
 
 
-def _sent_transcription(ws: _FakeWebSocket) -> dict[str, Any]:
-    config = ws.sent[-1]["session"]["audio"]["input"]["transcription"]
+def _transcription_of(payload: dict[str, Any]) -> dict[str, Any]:
+    config = payload["session"]["audio"]["input"]["transcription"]
     assert isinstance(config, dict)
     return config
+
+
+def _sent_transcription(ws: _FakeWebSocket) -> dict[str, Any]:
+    return _transcription_of(ws.sent[-1])
 
 
 async def test_session_keyterms_merge_behind_user_keywords() -> None:
@@ -336,6 +344,33 @@ async def test_live_transcribe_omits_turn_detection() -> None:
     # every other model still gets server-side VAD
     other = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True)
     assert _audio_input(other)["turn_detection"]["type"] == "server_vad"
+
+
+async def test_an_update_during_connection_setup_is_not_lost() -> None:
+    instance = _offline_stt(model="gpt-live-transcribe")
+    session = _FakeSession()
+    instance._session = session  # type: ignore[assignment]
+    release = asyncio.Event()
+    session.ws.block_first = release  # hold the stream inside its setup send
+
+    stream = instance.stream()
+    ws = session.ws
+    for _ in range(200):  # wait until the stream is suspended inside that send
+        if ws.block_first is None:
+            break
+        await asyncio.sleep(0.005)
+    else:
+        raise AssertionError("the setup send never started")
+    assert ws.sent == []
+
+    instance.update_options(keywords=["Acme Corp"])
+    release.set()
+    await _settle(stream)
+
+    # the change is applied after the setup config rather than dropped or overtaken by it
+    assert [_transcription_of(p).get("keywords") for p in ws.sent] == [[], ["Acme Corp"]]
+
+    await stream.aclose()
 
 
 async def test_a_reused_connection_is_reconfigured() -> None:

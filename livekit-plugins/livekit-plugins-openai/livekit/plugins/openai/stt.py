@@ -647,6 +647,8 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._update_task: asyncio.Task[None] | None = None
+        # serializes the config a connection is set up with against any later change to it
+        self._config_lock = asyncio.Lock()
         self._vad = vad_instance
         self._speaking = False
 
@@ -664,11 +666,13 @@ class SpeechStream(stt.SpeechStream):
             with contextlib.suppress(Exception):
                 await old_task
 
-        if self._ws is None:
+        ws = self._ws
+        if ws is None:
             return  # the next connection is configured when the stream acquires it
 
         try:
-            await self._ws.send_json(event.model_dump(by_alias=True, exclude_unset=True))
+            async with self._config_lock:
+                await ws.send_json(event.model_dump(by_alias=True, exclude_unset=True))
         except Exception:
             # a dropped update is not worth failing the stream over
             logger.warning("failed to update the transcription session", exc_info=True)
@@ -900,19 +904,24 @@ class SpeechStream(stt.SpeechStream):
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
-                # a pooled connection may have been configured for older options
+                # published before the config is sent, so a change made during the send is
+                # applied after it rather than dropped as having no live connection
+                self._ws = ws
+                # a pooled connection may have been configured for older options. the lock is
+                # taken before the first await, so no queued update can overtake this one.
                 try:
-                    await ws.send_json(
-                        _session_update(self._opts).model_dump(by_alias=True, exclude_unset=True)
-                    )
+                    async with self._config_lock:
+                        await ws.send_json(
+                            _session_update(self._opts).model_dump(
+                                by_alias=True, exclude_unset=True
+                            )
+                        )
                 except (aiohttp.ClientError, ConnectionError) as e:
                     # a pooled socket can die while idle; keep that retryable
                     raise APIConnectionError(
                         "OpenAI Realtime STT connection closed unexpectedly"
                     ) from e
                 vad_stream = self._vad.stream() if self._vad is not None else None
-                # option updates are sent on whichever connection is live
-                self._ws = ws
                 tasks = [
                     asyncio.create_task(send_task(ws, vad_stream)),
                     asyncio.create_task(recv_task(ws)),
