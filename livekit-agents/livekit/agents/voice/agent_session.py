@@ -285,6 +285,7 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    transcription_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -386,6 +387,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -466,6 +468,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
+            transcription_timeout (float, optional): If set, emit a
+                ``user_transcription_timeout`` event when VAD detects user speech
+                during the user's turn but no non-empty final transcript arrives
+                within this amount of time after the speech ends. This can happen
+                because STT failed or because audio was intentionally withheld from
+                STT, such as during AEC warmup or uninterruptible agent speech. Use
+                it to prompt the user to repeat themselves. A non-empty final transcript
+                satisfies the timeout for the current turn even if adaptive interruption
+                detection later discards it as part of a backchannel. Requires both VAD
+                and STT. Disabled by default.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -546,6 +558,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            transcription_timeout=transcription_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -666,6 +679,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
+        # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
+        self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -1591,21 +1606,44 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 continue
 
     @asynccontextmanager
-    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+    async def _wait_for_idle_and_hold(
+        self, *, run_state: RunResult | None = None
+    ) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit.
+
+        ``run_state`` is the run that owns the turn of the caller. That run is guarded for
+        the whole scope, since reaching idle is itself what completes the run: without the
+        guard, whatever the scope does next lands after ``run()`` returned and goes
+        unrecorded. A caller whose turn already ended guards nothing, so background work
+        cannot hold a later run open.
+        """
         from .agent_activity import _IdleHoldContextVar
 
-        activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
-        token = _IdleHoldContextVar.set(True)
+        # registered before the wait below, which is what lets the run complete
+        guard: asyncio.Future[None] | None = None
+        if run_state is not None and run_state is self._global_run_state and not run_state.done():
+            guard = asyncio.get_running_loop().create_future()
+            run_state._watch_handle(guard)
+            self._foreground_guards.add(guard)
+
         try:
-            yield activity
+            activity = await self.wait_for_idle()
+            self._idle_holds += 1
+            self._idle_released.clear()
+            token = _IdleHoldContextVar.set(True)
+            try:
+                yield activity
+            finally:
+                _IdleHoldContextVar.reset(token)
+                self._idle_holds -= 1
+                if self._idle_holds == 0:
+                    self._idle_released.set()
         finally:
-            _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            if guard is not None:
+                self._foreground_guards.discard(guard)
+                # the run re-checks from the done callback; releasing here rather than on
+                # the way out of the inner block covers a floor that never arrives
+                guard.set_result(None)
 
     async def _update_activity(
         self,

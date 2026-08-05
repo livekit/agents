@@ -256,6 +256,22 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    llm_node_tps: float
+    """LLM output tokens per second for this turn, measured at the `llm_node` over the
+    streaming window (first to last text chunk). Absent for a reply that arrived in a
+    single chunk, which has no measurable rate
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttfs: float
+    """Time from LLM generation start until the first sentence reached the TTS provider, as
+    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
+    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
+
+    Assistant `ChatMessage` only
+    """
+
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 

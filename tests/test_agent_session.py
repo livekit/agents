@@ -272,6 +272,37 @@ async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
     check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
 
 
+async def test_llm_node_ttfs_anchors_on_synthesis_start() -> None:
+    # ttfs is the LLM->TTS handoff: inference start until the first sentence reached the
+    # provider. The fake TTS only synthesizes once its input is flushed (~2.0s in, when the
+    # LLM stream ends), so ttfs must be ~2.0 and ttfb ~0.2 -- together they decompose the
+    # gap between the first token and the first audio.
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=2.0)
+    actions.add_tts(1.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant_messages = [
+        ev.item
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    metrics = assistant_messages[0].metrics
+    assert "llm_node_ttfs" in metrics
+    check_timestamp(metrics["llm_node_ttfs"], 2.0, speed_factor=speed)
+    check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+
+
 async def test_tool_call() -> None:
     speed = 1
     actions = FakeActions()
@@ -1560,6 +1591,171 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
     finally:
+        await _close_test_session(session)
+
+
+async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._interruption_enabled = True
+    recognition._agent_speaking = True
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert list(recognition._transcript_buffer) == [event]
+        assert hooks.final_transcripts == []
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    event = SpeechEvent(
+        type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        alternatives=[SpeechData(text="preflight transcript", language=LanguageCode(""))],
+    )
+
+    try:
+        await recognition._on_stt_event(event)
+
+        assert not timeout_handle.cancelled()
+        assert recognition._turn_transcript_received is False
+    finally:
+        timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = True
+    event_loop = asyncio.get_running_loop()
+
+    try:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=1.0,
+                silence_duration=0.5,
+                inference_duration=0.25,
+            )
+        )
+
+        timeout_handle = recognition._transcription_timeout_handle
+        assert timeout_handle is not None
+        assert timeout_handle.when() - event_loop.time() == pytest.approx(1.25)
+    finally:
+        recognition._stt_pipeline = None
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
+async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 2.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    recognition._stt_pipeline = MagicMock()
+    recognition._vad_speech_started = False
+
+    try:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=1.0,
+                silence_duration=0.5,
+            )
+        )
+
+        assert recognition._transcription_timeout_handle is None
+    finally:
+        recognition._stt_pipeline = None
+        await recognition._aclose()
+        await _close_test_session(session)
+
+
+async def test_clear_user_turn_resets_transcription_timeout() -> None:
+    session = create_session(FakeActions(), extra_kwargs={"transcription_timeout": 1.0})
+    recognition = AudioRecognition(
+        session,
+        hooks=_TestRecognitionHooks(),
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="vad",
+    )
+    timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
+    recognition._transcription_timeout_handle = timeout_handle
+    recognition._turn_speech_duration = 2.0
+    recognition._turn_transcript_received = True
+    recognition._user_turn_start = time.time()
+
+    try:
+        recognition._clear_user_turn()
+
+        assert timeout_handle.cancelled()
+        assert recognition._transcription_timeout_handle is None
+        assert recognition._turn_speech_duration == 0.0
+        assert recognition._turn_transcript_received is False
+        assert recognition._user_turn_start is None
+
+        recognition._arm_transcription_timeout(1.0, delay=0.0)
+        assert recognition._transcription_timeout_handle is not None
+    finally:
+        await recognition._aclose()
         await _close_test_session(session)
 
 
