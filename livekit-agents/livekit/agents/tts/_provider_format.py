@@ -21,6 +21,7 @@ import re
 from typing import TYPE_CHECKING, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
+from ._mood import match_mood
 from .markup_utils import convert_expression_tags, extract_and_strip
 
 
@@ -929,15 +930,16 @@ def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     """Build the ``lk.expression`` transcription attribute from stripped markup tags.
 
     Surfaces a segment's leading delivery/emotion (``expression`` for Inworld/xAI,
-    ``emotion`` for Cartesia) as ``{"value": ...}`` so the frontend can react to it.
-    Returns ``None`` when no such tag was present.
+    ``emotion`` for Cartesia) as ``{"value": ..., "mood": ...}`` so the frontend can react to
+    it. ``value`` is the provider's own words; ``mood`` normalizes them to one of
+    a fixed set of moods, so a client can drive UI off an enum without reimplementing the
+    matching. Returns ``None`` when no such tag was present.
     """
     expression = next((t["value"] for t in tags if t["type"] in ("expression", "emotion")), None)
     if expression is None:
         return None
-    return {
-        ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps({"value": expression}, separators=(",", ":"))
-    }
+    payload = {"value": expression, "mood": match_mood(expression)}
+    return {ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps(payload, separators=(",", ":"))}
 
 
 class TranscriptMarkupStripper:
