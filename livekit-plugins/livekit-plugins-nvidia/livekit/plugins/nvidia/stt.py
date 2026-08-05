@@ -115,13 +115,6 @@ class STT(stt.STT):
             ),
         )
 
-        if enable_diarization and "sortformer" not in model:
-            logger.warning(
-                "Speaker diarization is enabled but model '%s' may not support it. "
-                "Diarization requires a Sortformer-based model.",
-                model,
-            )
-
         if is_given(api_key):
             self.nvidia_api_key = api_key
         else:
@@ -132,14 +125,6 @@ class STT(stt.STT):
                     "set NVIDIA_API_KEY environment variable or disable SSL and use a locally "
                     "hosted NVIDIA Speech service."
                 )
-
-        logger.info("Initializing NVIDIA STT with model: %s, server: %s", model, server)
-        logger.debug(
-            "Function ID: %s, LanguageCode: %s, Sample rate: %s",
-            function_id,
-            language_code,
-            sample_rate,
-        )
 
         self._opts = STTOptions(
             model=model,
@@ -490,7 +475,6 @@ class SpeechStream(stt.SpeechStream):
 
         except Exception as e:
             error = e
-            logger.exception("Error in NVIDIA recognition thread")
         finally:
             event_loop.call_soon_threadsafe(self._complete_done_future, attempt.done_fut, error)
 
@@ -523,62 +507,58 @@ class SpeechStream(stt.SpeechStream):
 
     def _handle_response(self, response: Any, *, event_loop: asyncio.AbstractEventLoop) -> bool:
         final_transcript_emitted = False
-        try:
-            if not hasattr(response, "results") or not response.results:
-                return False
+        if not hasattr(response, "results") or not response.results:
+            return False
 
-            self._request_id = f"nvidia-{id(response)}"
+        self._request_id = f"nvidia-{id(response)}"
 
-            for result in response.results:
-                if not hasattr(result, "alternatives") or not result.alternatives:
-                    continue
+        for result in response.results:
+            if not hasattr(result, "alternatives") or not result.alternatives:
+                continue
 
-                alternative = result.alternatives[0]
-                transcript = getattr(alternative, "transcript", "")
-                is_final = getattr(result, "is_final", False)
+            alternative = result.alternatives[0]
+            transcript = getattr(alternative, "transcript", "")
+            is_final = getattr(result, "is_final", False)
 
-                if not transcript.strip():
-                    continue
+            if not transcript.strip():
+                continue
 
-                if not self._speaking:
-                    self._speaking = True
-                    event_loop.call_soon_threadsafe(
-                        self._event_ch.send_nowait,
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
-                    )
-
-                speech_data = _convert_to_speech_data(
-                    alternative,
-                    language=LanguageCode(self._language),
-                    start_time_offset=self.start_time_offset,
-                    enable_diarization=self._stt._opts.enable_diarization,
-                    is_final=is_final,
-                )
-
-                event_type = (
-                    stt.SpeechEventType.FINAL_TRANSCRIPT
-                    if is_final
-                    else stt.SpeechEventType.INTERIM_TRANSCRIPT
-                )
+            if not self._speaking:
+                self._speaking = True
                 event_loop.call_soon_threadsafe(
                     self._event_ch.send_nowait,
-                    stt.SpeechEvent(
-                        type=event_type,
-                        request_id=self._request_id,
-                        alternatives=[speech_data],
-                    ),
+                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
                 )
 
-                if is_final and self._speaking:
-                    final_transcript_emitted = True
-                    self._speaking = False
-                    event_loop.call_soon_threadsafe(
-                        self._event_ch.send_nowait,
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
-                    )
+            speech_data = _convert_to_speech_data(
+                alternative,
+                language=LanguageCode(self._language),
+                start_time_offset=self.start_time_offset,
+                enable_diarization=self._stt._opts.enable_diarization,
+                is_final=is_final,
+            )
 
-        except Exception:
-            logger.exception("Error handling response")
+            event_type = (
+                stt.SpeechEventType.FINAL_TRANSCRIPT
+                if is_final
+                else stt.SpeechEventType.INTERIM_TRANSCRIPT
+            )
+            event_loop.call_soon_threadsafe(
+                self._event_ch.send_nowait,
+                stt.SpeechEvent(
+                    type=event_type,
+                    request_id=self._request_id,
+                    alternatives=[speech_data],
+                ),
+            )
+
+            if is_final and self._speaking:
+                final_transcript_emitted = True
+                self._speaking = False
+                event_loop.call_soon_threadsafe(
+                    self._event_ch.send_nowait,
+                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+                )
 
         return final_transcript_emitted
 
@@ -766,41 +746,12 @@ def _convert_to_speech_data(
     enable_diarization: bool,
     is_final: bool,
 ) -> stt.SpeechData:
-    transcript = getattr(alternative, "transcript", "")
-    confidence = getattr(alternative, "confidence", 0.0)
-    words = list(getattr(alternative, "words", []) or [])
-
-    start_time = 0.0
-    end_time = 0.0
-    speaker_id: str | None = None
-    timed_words: list[TimedString] | None = None
-
-    if words:
-        start_time = _time_offset_seconds(getattr(words[0], "start_time", 0)) + start_time_offset
-        end_time = _time_offset_seconds(getattr(words[-1], "end_time", 0)) + start_time_offset
-        timed_words = [
-            TimedString(
-                text=getattr(word, "word", ""),
-                start_time=_time_offset_seconds(getattr(word, "start_time", 0)) + start_time_offset,
-                end_time=_time_offset_seconds(getattr(word, "end_time", 0)) + start_time_offset,
-            )
-            for word in words
-        ]
-
-        if enable_diarization and is_final:
-            speaker_tags = [getattr(word, "speaker_tag", 0) for word in words]
-            if speaker_tags:
-                speaker = Counter(speaker_tags).most_common(1)[0][0]
-                speaker_id = f"S{speaker}"
-
-    return stt.SpeechData(
+    return _combine_result_alternatives(
+        [alternative],
         language=language,
-        start_time=start_time,
-        end_time=end_time,
-        confidence=confidence,
-        text=transcript,
-        speaker_id=speaker_id,
-        words=timed_words,
+        start_time_offset=start_time_offset,
+        enable_diarization=enable_diarization,
+        is_final=is_final,
     )
 
 

@@ -526,6 +526,16 @@ async def test_stt_stream_emits_transcript_events_from_nvidia_speech_response(
     assert stream._event_ch.recv_nowait().type == nvidia_stt.stt.SpeechEventType.END_OF_SPEECH
 
 
+def test_stt_response_parsing_errors_are_not_suppressed() -> None:
+    stream = object.__new__(nvidia_stt.SpeechStream)
+    response = SimpleNamespace(
+        results=[SimpleNamespace(alternatives=[SimpleNamespace(transcript=None)])]
+    )
+
+    with pytest.raises(AttributeError):
+        stream._handle_response(response, event_loop=MagicMock())
+
+
 def test_tts_passes_locked_nvidia_speech_synthesize_online_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
