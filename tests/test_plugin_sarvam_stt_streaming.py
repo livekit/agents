@@ -84,6 +84,8 @@ def test_realtime_stt_exports_and_legacy_aliases() -> None:
     assert sarvam.RealtimeSpeechStream is stt_streaming.RealtimeSpeechStream
     assert sarvam.STTStreaming is sarvam.STTRealtime
     assert sarvam.StreamingSpeechStream is sarvam.RealtimeSpeechStream
+    assert "STTStreaming" in sarvam.__all__
+    assert "StreamingSpeechStream" in sarvam.__all__
     assert stt_streaming.StreamingSTTOptions is stt_streaming.RealtimeSTTOptions
 
 

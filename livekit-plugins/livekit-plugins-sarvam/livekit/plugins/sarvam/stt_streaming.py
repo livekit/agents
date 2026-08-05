@@ -99,7 +99,7 @@ def _encode_alaw(samples: np.ndarray) -> bytes:
     mantissa = (magnitude >> (exponent + 3)) & 0x0F
     encoded = np.where(magnitude < 256, magnitude >> 4, (exponent << 4) | mantissa)
     xor_mask = np.where(samples >= 0, 0xD5, 0x55)
-    return cast(bytes, (encoded ^ xor_mask).astype(np.uint8).tobytes())
+    return bytes((encoded ^ xor_mask).astype(np.uint8).tobytes())
 
 
 SUPPORTED_LANGUAGES = {
