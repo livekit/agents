@@ -38,24 +38,9 @@ tts = nvidia.TTS(
 )
 ```
 
-STT defaults to `inference_mode="auto"` for backward compatibility. Set it to
-`"streaming"` or `"offline"` when the deployed model supports only one API so
-LiveKit receives exact capabilities. For offline TTS models, set the TTS
-`inference_mode="offline"`; streaming TTS models use the default `"online"` mode.
+STT defaults to `inference_mode="auto"`; use `"streaming"` or `"offline"` to
+match the deployed model. TTS defaults to `"online"`; use `"offline"` for batch
+models.
 
 For local NVIDIA Speech deployments, pass the local `server` and set
 `use_ssl=False` when TLS is not enabled.
-
-The STT and TTS constructors keep common voice-agent options flat.
-Provider-specific endpointing is grouped under `EndpointingConfig`, and
-lower-level provider settings can be passed through the `options` escape hatch.
-
-The plugin supports `nvidia-riva-client` versions from 2.16 through 2.26.x.
-Zero-shot prompt and quality arguments are translated to the names used by the
-installed client, while unsupported options fail before a synthesis request is sent.
-
-LiveKit `SynthesizeStream` instances represent one text segment. Create a new stream
-after calling `flush()` instead of pushing another segment into the same stream.
-
-The experimental PersonaPlex realtime model is audio-in/audio-out only. Manual
-`generate_reply()` calls are not supported yet.
