@@ -37,7 +37,7 @@ from ..voice.events import RunContext
 from .async_toolset import AsyncToolset
 from .tool_context import (
     DuplicateMode,
-    DuplicatePolicy,
+    DuplicateScope,
     RawFunctionTool,
     ToolError,
     ToolFlag,
@@ -57,11 +57,11 @@ class MCPToolOptions(TypedDict, total=False):
     flags: ToolFlag
     """Flags passed to the @function_tool decorator, e.g. ToolFlag.CANCELLABLE."""
 
-    on_duplicate: DuplicateMode | DuplicatePolicy
-    """Behavior when a tool is called multiple times in the same context.
+    on_duplicate: DuplicateMode
+    """Behavior when a tool is called multiple times in the same context."""
 
-    Pass a :class:`DuplicatePolicy` to also control what counts as a duplicate,
-    e.g. ``DuplicatePolicy("reject", scope="name_and_args")``."""
+    duplicate_scope: DuplicateScope
+    """What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too."""
 
     report_progress: bool
     """Whether to forward the tool's progress notifications to ctx.update()."""
@@ -71,6 +71,7 @@ class MCPToolOptions(TypedDict, total=False):
 _DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
     "flags": ToolFlag.NONE,
     "on_duplicate": "allow",
+    "duplicate_scope": "name",
     "report_progress": False,
 }
 
@@ -288,6 +289,7 @@ class MCPServer(ABC):
             raw_schema=raw_schema,
             flags=options["flags"],
             on_duplicate=options["on_duplicate"],
+            duplicate_scope=options["duplicate_scope"],
         )
 
     async def aclose(self) -> None:

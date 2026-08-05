@@ -158,39 +158,26 @@ class ToolFlag(Flag):
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
 
 DuplicateScope = Literal["name", "name_and_args"]
-"""What counts as a duplicate of an in-flight call.
+"""What counts as a duplicate of an in-flight call, i.e. what ``on_duplicate`` acts on.
 
 ``"name"``           any in-flight call of the same tool (default).
 ``"name_and_args"``  same tool *and* same arguments, so concurrent calls of one
-                     tool with different arguments are not duplicates.
+                     tool with different arguments are not duplicates::
+
+                         @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+                         async def check_order(ctx: RunContext, order_id: str) -> str: ...
+
+                     Arguments are compared *after* validation, so a parameter the
+                     LLM omitted on one call and passed explicitly on the next still
+                     reads as the same call, and ``1`` matches ``1.0`` for a ``float``
+                     parameter. Raw function tools (including MCP tools) have no
+                     per-parameter schema, so their arguments are compared as sent.
+
+                     Comparison fails open — an unrepresentable argument or a
+                     validation error leaves the call treated as sent rather than
+                     blocking it — so don't rely on this as an exactly-once
+                     guarantee; put that in the tool body.
 """
-
-
-@dataclass(frozen=True)
-class DuplicatePolicy:
-    """Duplicate handling for a tool: what to do, and what counts as a duplicate.
-
-    Passed as ``@function_tool(on_duplicate=...)`` in place of a bare
-    ``DuplicateMode`` when the default ``scope="name"`` isn't what you want::
-
-        @function_tool(on_duplicate=DuplicatePolicy("reject", scope="name_and_args"))
-        async def check_order(ctx: RunContext, order_id: str) -> str: ...
-
-    ``scope="name_and_args"`` compares canonicalized arguments, which is
-    best-effort: ``1`` and ``1.0`` don't match, and an explicitly-passed default
-    doesn't match an omitted one. It fails open (treats the call as unique), so
-    don't rely on it as an exactly-once guarantee — put that in the tool body.
-    """
-
-    mode: DuplicateMode = "allow"
-    scope: DuplicateScope = "name"
-
-
-def as_duplicate_policy(on_duplicate: DuplicateMode | DuplicatePolicy) -> DuplicatePolicy:
-    """Normalize the ``on_duplicate`` union to a ``DuplicatePolicy``."""
-    if isinstance(on_duplicate, DuplicatePolicy):
-        return on_duplicate
-    return DuplicatePolicy(mode=on_duplicate)
 
 
 @dataclass
@@ -198,7 +185,8 @@ class FunctionToolInfo:
     name: str
     description: str | None
     flags: ToolFlag
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow"
+    on_duplicate: DuplicateMode = "allow"
+    duplicate_scope: DuplicateScope = "name"
 
 
 class RawFunctionDescription(TypedDict):
@@ -222,7 +210,8 @@ class RawFunctionToolInfo:
     name: str
     raw_schema: dict[str, Any]
     flags: ToolFlag
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow"
+    on_duplicate: DuplicateMode = "allow"
+    duplicate_scope: DuplicateScope = "name"
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
@@ -300,7 +289,8 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow",
+    on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -310,7 +300,8 @@ def function_tool(
     *,
     raw_schema: RawFunctionDescription | dict[str, Any],
     flags: ToolFlag = ToolFlag.NONE,
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow",
+    on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -321,7 +312,8 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow",
+    on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -332,7 +324,8 @@ def function_tool(
     name: str | None = None,
     description: str | None = None,
     flags: ToolFlag = ToolFlag.NONE,
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow",
+    on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -343,16 +336,13 @@ def function_tool(
     description: str | None = None,
     raw_schema: RawFunctionDescription | dict[str, Any] | None = None,
     flags: ToolFlag = ToolFlag.NONE,
-    on_duplicate: DuplicateMode | DuplicatePolicy = "allow",
+    on_duplicate: DuplicateMode = "allow",
+    duplicate_scope: DuplicateScope = "name",
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
     | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
-    # `on_duplicate` is stored raw on the info so `info.on_duplicate == "reject"`
-    # keeps working; only the mode is needed here, to decide schema injection.
-    duplicate_mode = as_duplicate_policy(on_duplicate).mode
-
     def deco_raw(
         func: Callable[_P, _R],
     ) -> RawFunctionTool[_P, _R]:
@@ -366,7 +356,7 @@ def function_tool(
             raise ValueError("raw function description must contain a parameters key")
 
         schema = {**raw_schema}
-        if duplicate_mode == "confirm":
+        if on_duplicate == "confirm":
             schema["parameters"] = _inject_confirm_duplicate(schema["parameters"])
 
         info = RawFunctionToolInfo(
@@ -374,6 +364,7 @@ def function_tool(
             raw_schema=schema,
             flags=flags,
             on_duplicate=on_duplicate,
+            duplicate_scope=duplicate_scope,
         )
         return RawFunctionTool(func, info)
 
@@ -381,7 +372,7 @@ def function_tool(
         from docstring_parser import parse_from_object
 
         wrapped: Callable[..., Any] = func
-        if duplicate_mode == "confirm":
+        if on_duplicate == "confirm":
             wrapped = _wrap_with_confirm_duplicate(func)
 
         docstring = parse_from_object(func)
@@ -390,6 +381,7 @@ def function_tool(
             description=description or docstring.description,
             flags=flags,
             on_duplicate=on_duplicate,
+            duplicate_scope=duplicate_scope,
         )
         return FunctionTool(wrapped, info)
 

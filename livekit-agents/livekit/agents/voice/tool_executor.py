@@ -22,10 +22,9 @@ from ..llm.tool_context import (
     ToolError,
     ToolFlag,
     Toolset,
-    as_duplicate_policy,
     function_tool,
 )
-from ..llm.utils import prepare_function_arguments
+from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
@@ -212,13 +211,34 @@ def _canonical_args(raw_arguments: dict[str, Any]) -> str:
 
 
 def _duplicate_key(
-    *, fnc_name: str, scope: DuplicateScope, raw_arguments: dict[str, Any]
+    *,
+    fnc: FunctionTool | RawFunctionTool,
+    fnc_name: str,
+    scope: DuplicateScope,
+    raw_arguments: dict[str, Any],
 ) -> tuple[str, str | None]:
     """The identity a call is deduplicated on. Always name-scoped, so two tools
-    can never collide; under ``"name"`` equality reduces to name equality."""
-    if scope == "name_and_args":
-        return (fnc_name, _canonical_args(raw_arguments))
-    return (fnc_name, None)
+    can never collide; under ``"name"`` equality reduces to name equality.
+
+    ``"name_and_args"`` compares *validated* arguments, so an optional parameter the
+    LLM omitted on one call and passed explicitly on the next still reads as the same
+    call (see :func:`validated_arguments`).
+    """
+    if scope != "name_and_args":
+        return (fnc_name, None)
+
+    try:
+        arguments = validated_arguments(fnc, raw_arguments)
+    except Exception:
+        # invalid arguments are the call's own problem — it raises ToolError once it
+        # runs. Fall back to what was sent so it still dedups against an identical call
+        # rather than failing the guard here.
+        arguments = raw_arguments
+
+    # the confirm flag is harness state, not an argument: a confirming re-call has to
+    # key identically to the call it confirms
+    arguments = {k: v for k, v in arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
+    return (fnc_name, _canonical_args(arguments))
 
 
 @dataclass
@@ -289,8 +309,7 @@ class _ToolExecutor:
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
         info = tool.info
-        duplicate_policy = as_duplicate_policy(info.on_duplicate)
-        on_duplicate: DuplicateMode = duplicate_policy.mode
+        on_duplicate: DuplicateMode = info.on_duplicate
         allow_cancellation: bool = ToolFlag.CANCELLABLE in info.flags
 
         confirm_duplicate: bool | None = None
@@ -301,7 +320,10 @@ class _ToolExecutor:
         # argument, and a confirming re-call must key identically to the call it
         # confirms — otherwise `confirm` + `name_and_args` would never match.
         dup_key = _duplicate_key(
-            fnc_name=fnc_name, scope=duplicate_policy.scope, raw_arguments=raw_arguments
+            fnc=tool,
+            fnc_name=fnc_name,
+            scope=info.duplicate_scope,
+            raw_arguments=raw_arguments,
         )
 
         duplicate_result = await self._check_duplicate(

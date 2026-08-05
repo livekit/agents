@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
-    DuplicatePolicy,
     ProviderTool,
     Tool,
     ToolContext,
@@ -1408,12 +1407,30 @@ class TestHasCancellableTool:
         assert has_cancellable_tool([mock_tool_1, ts]) is True
 
 
-def _key(name: str, args: dict[str, Any] | None = None) -> tuple[str, str | None]:
+@function_tool(
+    raw_schema={
+        "name": "_key_probe",
+        "description": "Argument sink for key-derivation tests.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+)
+async def _key_probe(raw_arguments: dict[str, object]) -> str:
+    return ""
+
+
+def _key(
+    name: str, args: dict[str, Any] | None = None, *, fnc: Any = _key_probe
+) -> tuple[str, str | None]:
     """Derive a duplicate key the same way the executor does, so these tests can't
-    drift from production canonicalization. ``args=None`` → name-scoped key."""
+    drift from production canonicalization. ``args=None`` → name-scoped key.
+
+    Defaults to a raw tool, whose arguments are keyed as sent; pass ``fnc`` to key
+    against a typed tool's validated arguments.
+    """
     from livekit.agents.voice.tool_executor import _duplicate_key
 
     return _duplicate_key(
+        fnc=fnc,
         fnc_name=name,
         scope="name_and_args" if args is not None else "name",
         raw_arguments=args or {},
@@ -1599,6 +1616,38 @@ class TestCheckDuplicate:
     def test_args_scope_never_collides_across_tools(self):
         assert _key("tool_x", {"order_id": "5"}) != _key("tool_y", {"order_id": "5"})
 
+    def test_args_scope_keys_on_validated_arguments(self):
+        """Arguments are compared post-validation, so how the LLM spelled an optional
+        parameter doesn't split one call into two. Keying on the raw arguments made
+        every pair below distinct."""
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def check_order(order_id: str, qty: float = 1.0, locale: str | None = None) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+                qty: how many
+                locale: optional locale
+            """
+            return "done"
+
+        def key(args: dict[str, Any]) -> tuple[str, str | None]:
+            return _key("check_order", args, fnc=check_order)
+
+        # an omitted optional parameter carries its default, so these are one call
+        assert key({"order_id": "5"}) == key({"order_id": "5", "locale": None})
+        assert key({"order_id": "5"}) == key({"order_id": "5", "qty": 1.0})
+        # ...as are equal numbers spelled differently for a float parameter
+        assert key({"order_id": "5", "qty": 1}) == key({"order_id": "5", "qty": 1.0})
+        # genuinely different arguments stay distinct
+        assert key({"order_id": "5"}) != key({"order_id": "6"})
+        # invalid arguments fail open here rather than raising — the call itself is what
+        # reports the error to the LLM
+        assert key({"order_id": "5", "qty": "nope"})[1] is not None
+        # raw tools have no per-parameter schema, so their arguments are keyed as sent
+        assert _key("raw", {"order_id": "5"}) != _key("raw", {"order_id": "5", "qty": 1})
+
     @pytest.mark.asyncio
     async def test_args_scope_replace_cancels_only_matching_call(self):
         from livekit.agents.voice.tool_executor import _ToolExecutor
@@ -1680,7 +1729,7 @@ class TestDuplicateScopeThroughExecute:
 
         gate = _asyncio.Event()
 
-        @function_tool(on_duplicate=DuplicatePolicy("confirm", scope="name_and_args"))
+        @function_tool(on_duplicate="confirm", duplicate_scope="name_and_args")
         async def check_order(order_id: str) -> str:
             """Check an order.
 
@@ -1726,7 +1775,7 @@ class TestDuplicateScopeThroughExecute:
 
         gate = _asyncio.Event()
 
-        @function_tool(on_duplicate=DuplicatePolicy("reject", scope="name_and_args"))
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
         async def check_order(order_id: str) -> str:
             """Check an order.
 

@@ -703,6 +703,35 @@ def prepare_function_arguments(
         raise
 
 
+def validated_arguments(
+    fnc: FunctionTool | RawFunctionTool, args_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """A tool call's arguments after schema validation, keyed by parameter name.
+
+    Every declared parameter is present — an omitted one carries its default — and
+    values are coerced to their annotated types, so ``{"order_id": "5"}`` and
+    ``{"order_id": "5", "locale": None}`` produce the same mapping, as do ``1`` and
+    ``1.0`` for a ``float`` parameter. That makes this the form to compare two calls
+    on (see ``DuplicateScope``), not the raw arguments the LLM emitted.
+
+    Raises the same validation errors as calling the tool would. Raw function tools
+    have no per-parameter schema, so their arguments are returned exactly as sent.
+    """
+    if isinstance(fnc, RawFunctionTool):
+        return args_dict
+
+    model_type = function_arguments_to_pydantic_model(fnc)
+
+    # Strict LLM schemas represent defaulted fields as nullable (see
+    # _ensure_strict_json_schema): null means "use the default". Resolve
+    # the sentinel, including in nested models, before validation.
+    schema = model_type.model_json_schema()
+    args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
+
+    model = model_type.model_validate(args_dict)  # can raise ValidationError
+    return _shallow_model_dump(model)
+
+
 def _prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
@@ -713,16 +742,7 @@ def _prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(fnc, FunctionTool):
-        model_type = function_arguments_to_pydantic_model(fnc)
-
-        # Strict LLM schemas represent defaulted fields as nullable (see
-        # _ensure_strict_json_schema): null means "use the default". Resolve
-        # the sentinel, including in nested models, before validation.
-        schema = model_type.model_json_schema()
-        args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
-
-        model = model_type.model_validate(args_dict)  # can raise ValidationError
-        raw_fields = _shallow_model_dump(model)
+        raw_fields = validated_arguments(fnc, args_dict)
     elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
