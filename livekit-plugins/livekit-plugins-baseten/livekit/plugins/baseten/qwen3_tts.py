@@ -267,7 +267,10 @@ class Qwen3TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        return Qwen3ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        # The framework helper disables retries on the inner stream (this class
+        # already retries) and forwards timed transcripts; hand-rolling it did
+        # neither.
+        return self._synthesize_with_stream(text, conn_options=conn_options)
 
     async def aclose(self) -> None:
         self._closing = True
@@ -409,7 +412,14 @@ class Qwen3TTS(tts.TTS):
                     continue
                 self._warm = None
 
-            if not await self._empty_flush(warm.ws):
+            # While the flush is in flight this local is the only reference to
+            # the socket, so aclose() cancelling us here would leak it.
+            try:
+                alive = await self._empty_flush(warm.ws)
+            except asyncio.CancelledError:
+                await self._shutdown_ws(warm.ws, notify=False)
+                raise
+            if not alive:
                 await self._shutdown_ws(warm.ws, notify=False)
                 return
 
@@ -667,31 +677,6 @@ class Qwen3SynthesizeStream(tts.SynthesizeStream):
         ]
         if timed:
             output_emitter.push_timed_transcript(timed)
-
-
-class Qwen3ChunkedStream(tts.ChunkedStream):
-    """One-shot synthesis over the same streaming session."""
-
-    def __init__(self, *, tts: Qwen3TTS, input_text: str, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: Qwen3TTS = tts
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        stream = self._tts.stream(conn_options=self._conn_options)
-        stream.push_text(self._input_text)
-        stream.end_input()
-        output_emitter.initialize(
-            request_id=utils.shortuuid(),
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-        )
-        try:
-            async for ev in stream:
-                output_emitter.push(ev.frame.data.tobytes())
-            output_emitter.flush()
-        finally:
-            await stream.aclose()
 
 
 async def _control(model_endpoint: str, api_key: str | None, message: dict) -> dict:
