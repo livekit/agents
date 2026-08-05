@@ -64,6 +64,7 @@ EVALUATED_STT_MODELS: set[str] = {
 
 _SIP_CALL_STATUS_ATTR = "sip.callStatus"
 _SIP_CALL_STATUS_ACTIVE = "active"
+_TRACK_PUBLICATION_TIMEOUT = 5.0
 
 
 class DetectionOptions(TypedDict, total=False):
@@ -101,10 +102,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
     - ``uncertain``: the transcript is ambiguous and could not be classified.
 
-    AMD should be started before the SIP participant is created so no audio
-    is missed. The overall detection-timeout budget starts when the
-    participant's audio track is subscribed (so AMD cannot hang if the call
-    never connects).
+    Start AMD before creating the SIP participant so no audio is missed. Its
+    detection timeout begins only after listening starts; SIP settings bound
+    the pre-answer phase. If the call ends before audio arrives, AMD settles
+    immediately with an ``uncertain`` verdict (``reason="participant_missing"``).
 
     For SIP participants, the no-speech timer and
     audio/transcript processing are deferred until ``sip.callStatus ==
@@ -114,8 +115,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     The recommended pattern is the async context manager::
 
         async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
-            await ctx.api.sip.create_sip_participant(...)
-            await ctx.wait_for_participant(identity=participant_identity)
+            await ctx.api.sip.create_sip_participant(...)  # wait_until_answered=True
             result = await detector.execute()
 
     Args:
@@ -132,8 +132,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         ivr_detection: If ``True`` (default), automatically start IVR
             navigation when a ``machine-ivr`` result is returned.
         participant_identity: If set, AMD listens only to this participant's
-            audio track. If omitted, the first remote audio track wins and
-            the publisher is resolved from the track sid.
+            audio track, and settles immediately if that participant
+            disconnects before publishing audio. If omitted, the first remote
+            audio track wins and the publisher is resolved from the track sid.
         stt: STT used for transcript generation. Accepts an :class:`STT`
             instance or an inference model string (e.g.
             ``"cartesia/ink-whisper"``). When omitted, AMD auto-selects:
@@ -400,26 +401,27 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             logger.warning(
                 "session room_io unavailable, starting amd timers immediately as fallback"
             )
-            if self._classifier:
-                self._classifier.start_detection_timer()
-                self._classifier.start_listening()
+            self._start_listening()
         else:
-            # Start the outer budget before waiting for a publication, so AMD
-            # can settle even if the participant never publishes audio.
-            if self._classifier:
-                self._classifier.start_detection_timer()
             room = session._room_io.room
-            publication = await wait_for_track_publication(
-                room=room,
-                identity=self._participant_identity or None,
-                kind=rtc.TrackKind.KIND_AUDIO,
-                wait_for_subscription=True,
-            )
+            try:
+                publication = await asyncio.wait_for(
+                    wait_for_track_publication(
+                        room=room,
+                        identity=self._participant_identity or None,
+                        kind=rtc.TrackKind.KIND_AUDIO,
+                        wait_for_subscription=True,
+                    ),
+                    timeout=_TRACK_PUBLICATION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                self._settle_participant_missing("timed out waiting for participant audio track")
+                return
+            except RuntimeError as e:
+                self._settle_participant_missing(str(e))
+                return
             if self._closed or not self._classifier:
                 return
-            # Reset the budget at track-up so normal AMD timing runs from the
-            # subscribed publication, matching the active audio source.
-            self._classifier.start_detection_timer()
 
             if self._participant_identity:
                 publisher = room.remote_participants.get(self._participant_identity)
@@ -433,8 +435,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     None,
                 )
             if publisher is None:
-                # publisher gone start listening so the no-speech timer settles faster
-                self._start_listening()
+                self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
             if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -452,8 +453,18 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     def _start_listening(self) -> None:
         if self._closed or not self._classifier:
             return
+        self._classifier.start_detection_timer()
         self._classifier.start_listening()
-        logger.debug("call has been answered, AMD starts listening")
+        logger.debug("AMD starts listening")
+
+    def _settle_participant_missing(self, error: str) -> None:
+        if self._closed or not self._classifier:
+            return
+        logger.debug(
+            "AMD: call ended before detection could run, settling",
+            extra={"error": error},
+        )
+        self._classifier.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
 
     async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
         try:
@@ -464,10 +475,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 value=_SIP_CALL_STATUS_ACTIVE,
             )
         except RuntimeError as e:
-            # SIP participant disconnected before going active, default to detection timeout
-            logger.debug(
-                "AMD: SIP answer wait failed; starting to listen", extra={"reason": str(e)}
-            )
+            self._settle_participant_missing(str(e))
+            return
 
         if not self._closed:
             self._start_listening()
