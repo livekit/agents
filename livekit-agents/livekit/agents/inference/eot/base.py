@@ -147,9 +147,7 @@ class _BaseStreamingTurnDetectorStream:
 
     @property
     def is_degraded(self) -> bool:
-        """True once the cloud transport is gone with no local model to take
-        over (``local_fallback=False``). Predictions resolve to the positive
-        default from here on, so turns commit on the endpointing delay."""
+        """True once the cloud transport is gone with no local model to replace it."""
         return self._degraded
 
     @property
@@ -171,7 +169,7 @@ class _BaseStreamingTurnDetectorStream:
 
     def predict(self) -> asyncio.Future[TurnDetectionEvent]:
         """Start a new inference request and return its future."""
-        if self._audio_ch.closed or self._degraded:
+        if self._audio_ch.closed:
             fut: asyncio.Future[TurnDetectionEvent] = asyncio.get_running_loop().create_future()
             fut.set_result(self._default_event(1.0))
             return fut
@@ -195,7 +193,7 @@ class _BaseStreamingTurnDetectorStream:
 
         # trigger fallback immediately
         if timed_out and self._model == "turn-detector-v1":
-            self._fall_back_to_local(reason=APITimeoutError("eot prediction timed out"))
+            self._fallback_to_local(reason=APITimeoutError("eot prediction timed out"))
 
     def flush(self, reason: str | None = None) -> None:
         # Idempotent: a second call sends another sentinel that transports
@@ -331,8 +329,7 @@ class _BaseStreamingTurnDetectorStream:
         a local transport in-place. ``turn-detector-v1-mini`` just runs the
         transport once and surfaces failures to the caller via
         ``_resolve_prediction`` (default 1.0). With ``local_fallback=False``
-        there is nothing to swap in, so a dead cloud transport is terminal and
-        the stream degrades to the positive default instead."""
+        there is nothing to swap in, so a dead cloud transport is terminal."""
         while True:
             task = asyncio.create_task(self._transport.run())
             self._transport_task = task
@@ -340,7 +337,7 @@ class _BaseStreamingTurnDetectorStream:
                 await task
                 return
             except asyncio.CancelledError:
-                # _fall_back_to_local sets _fallback_requested before cancelling
+                # _fallback_to_local sets _fallback_requested before cancelling
                 # this child task; any other cancellation (e.g. aclose cancelling
                 # the parent) leaves the flag unset and propagates.
                 if self._fallback_requested:
@@ -351,16 +348,28 @@ class _BaseStreamingTurnDetectorStream:
                 raise
             except Exception as e:  # noqa: BLE001 — any cloud error degrades to local
                 if self._model == "turn-detector-v1":
-                    if self._fall_back_to_local(reason=e):
+                    if self._fallback_to_local(reason=e):
                         continue
-                    # nothing replaced the transport, so re-running it would
-                    # spin: give up and answer every later turn from the default
-                    self._degraded = True
+                    self._degrade()
                     return
                 self._on_local_failure(reason=e)
                 return
 
-    def _fall_back_to_local(self, *, reason: BaseException) -> bool:
+    def _degrade(self) -> None:
+        """Give up on detection for the rest of the stream.
+
+        Re-running the dead transport would spin, and no other transport is
+        coming, so nothing will drain ``_audio_ch`` or answer a prediction
+        again. Closing it makes ``push_audio`` and ``flush`` no-ops and lets
+        ``predict`` resolve to the positive default, so turns commit on the
+        endpointing delay instead of buffering audio nobody reads.
+        """
+        self._degraded = True
+        while not self._audio_ch.empty():  # close() alone would retain the backlog
+            self._audio_ch.recv_nowait()
+        self._audio_ch.close()
+
+    def _fallback_to_local(self, *, reason: BaseException) -> bool:
         """Swap the cloud transport for the local mini model.
 
         Returns False when ``local_fallback=False`` disabled the swap, leaving

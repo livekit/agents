@@ -47,13 +47,12 @@ class TurnDetector(_BaseStreamingTurnDetector):
     ) -> None:
         """
         Args:
-            local_fallback: When True (the default), a ``v1`` detector degrades to
-                the local ``v1-mini`` model if the gateway becomes unreachable or a
-                prediction times out. Pass False to keep the detector cloud-only:
-                the mini model's weights (~108MB, resident for the life of the
-                process) are then never loaded, and while the gateway is
-                unavailable turns commit on the endpointing delay instead. Only
-                applies to ``v1`` — ``v1-mini`` is already the local model.
+            local_fallback: When True (the default), a ``v1`` detector degrades to the
+                local ``v1-mini`` model if the gateway becomes unreachable or a
+                prediction times out. Pass False to keep it cloud-only: the mini
+                model's weights (~108MB, resident for the life of the process) are
+                then never loaded, and turns commit on the endpointing delay while the
+                gateway is unavailable. Only applies to ``v1``.
         """
         auto = not is_given(version)
         resolved_version: TurnDetectorVersions = (
@@ -122,8 +121,6 @@ class TurnDetector(_BaseStreamingTurnDetector):
         self._http_session = http_session
 
         if not local_fallback and resolved_model == "turn-detector-v1-mini":
-            # the caller asked not to load the local model, and this detector is
-            # the local model — say so rather than silently ignoring the flag
             logger.warning(
                 "local_fallback=False has no effect on the %s model, which runs locally by design",
                 resolved_model,
