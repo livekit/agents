@@ -358,6 +358,9 @@ class _BaseStreamingTurnDetectorStream:
 
     def _degrade(self) -> None:
         """Give up on detection: no transport is left to drain audio or predict."""
+        # distinct from the warning below, which the retryable path also emits:
+        # this one is terminal, a recovered gateway won't be picked back up
+        logger.warning("turn detection is off for the rest of this stream")
         self._degraded = True
         while not self._audio_ch.empty():  # close() alone would retain the backlog
             self._audio_ch.recv_nowait()
@@ -369,7 +372,7 @@ class _BaseStreamingTurnDetectorStream:
             if not self._warned_cloud_failure:
                 logger.warning(
                     "cloud turn detector failed (%s); local fallback is disabled, so turns "
-                    "commit on the endpointing delay until the gateway recovers",
+                    "commit on the endpointing delay",
                     reason,
                 )
                 self._warned_cloud_failure = True
