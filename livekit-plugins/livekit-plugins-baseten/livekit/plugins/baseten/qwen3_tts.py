@@ -430,9 +430,11 @@ class Qwen3TTS(tts.TTS):
                     self._warm = warm
             if surplus:
                 # A turn started during the flush and parked its own socket on
-                # the way out, so ours is now redundant.
+                # the way out, so ours is redundant. Drop it but keep looping:
+                # _release could not have scheduled a keepalive for that socket
+                # (this task was still running, so not `done()`), and returning
+                # here would leave it to idle out on the server.
                 await self._shutdown_ws(warm.ws, notify=True)
-                return
 
     async def _empty_flush(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         try:
