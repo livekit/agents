@@ -1564,7 +1564,7 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
     assert first_eos.alternatives == []
     assert second_eos.alternatives == []
     # The speech-end position is re-anchored to the second turn.
-    assert stream._utterance_speech_end_audio_pos == 1.0
+    assert stream._utterance_speech_end_audio_pos == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -1716,3 +1716,45 @@ async def test_process_audio_survives_reset_race_on_peer_close() -> None:
     await stream._process_audio(ws)
 
     assert [json.loads(payload)["event"] for payload in sent] == ["end"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_type", ["fast", "balanced"])
+async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
+    stream_type: str,
+) -> None:
+    """Audio must reach the server in small frames.
+
+    ``stream_type`` is the server's flush profile, not a client send cadence, so
+    buffering 500-1000 ms locally would delay server VAD boundaries and partials by
+    that much.
+    """
+    stream = _make_stream()
+    stream._opts = stt_streaming.replace(stream._opts, stream_type=stream_type)
+    sent: list[bytes] = []
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=lambda payload: asyncio.sleep(0),
+        send_bytes=lambda payload: asyncio.sleep(0, result=sent.append(payload)),
+    )
+    # One second of 16 kHz mono audio.
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(32000),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=16000,
+    )
+
+    async def _input() -> object:
+        yield frame
+
+    stream._input_ch = _input()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+
+    await stream._process_audio(ws)
+
+    expected_bytes = int(16000 * stt_streaming.AUDIO_CHUNK_MS / 1000) * 2
+    assert stt_streaming.AUDIO_CHUNK_MS <= 100
+    assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
+    assert {len(payload) for payload in sent} == {expected_bytes}

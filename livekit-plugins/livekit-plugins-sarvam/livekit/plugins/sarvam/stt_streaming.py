@@ -62,7 +62,11 @@ SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
 SUPPORTED_ENCODINGS = {"linear16", "linear32", "mulaw", "alaw"}
 SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
-STREAM_TYPE_CHUNK_MS = {"fast": 500, "balanced": 1000, "simulated": 1000}
+# How much audio the client buffers before writing a frame. `stream_type` is a
+# server-side latency profile (how often the server flushes to produce a partial),
+# not a send cadence, and the contract sets no client chunk size. Matches the
+# non-realtime Sarvam websocket plugin so audio reaches server VAD promptly.
+AUDIO_CHUNK_MS = 50
 EOS_FALLBACK_TIMEOUT = 2.0
 
 
@@ -910,8 +914,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        cap_ms = STREAM_TYPE_CHUNK_MS[self._opts.stream_type]
-        samples_per_channel = max(int(self._opts.sample_rate * cap_ms / 1000), 1)
+        samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=1,
