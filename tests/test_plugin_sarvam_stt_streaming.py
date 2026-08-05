@@ -13,7 +13,7 @@ from livekit.agents import APIStatusError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.plugin("sarvam")
 
 
 class _FakeEventChannel:
