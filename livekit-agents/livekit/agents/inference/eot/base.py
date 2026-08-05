@@ -351,16 +351,18 @@ class _BaseStreamingTurnDetectorStream:
                 if self._model == "turn-detector-v1":
                     if self._fallback_to_local(reason=e):
                         continue
-                    self._degrade()
+                    self._degrade(reason=e)
                     return
                 self._on_local_failure(reason=e)
                 return
 
-    def _degrade(self) -> None:
+    def _degrade(self, *, reason: BaseException) -> None:
         """Give up on detection: no transport is left to drain audio or predict."""
-        # distinct from the warning below, which the retryable path also emits:
-        # this one is terminal, a recovered gateway won't be picked back up
-        logger.warning("turn detection is off for the rest of this stream")
+        logger.warning(
+            "cloud turn detector failed (%s); local fallback is disabled, so turn detection "
+            "is off for the rest of this stream and turns commit on the endpointing delay",
+            reason,
+        )
         self._degraded = True
         while not self._audio_ch.empty():  # close() alone would retain the backlog
             self._audio_ch.recv_nowait()
@@ -369,13 +371,8 @@ class _BaseStreamingTurnDetectorStream:
     def _fallback_to_local(self, *, reason: BaseException) -> bool:
         """Swap the cloud transport for the local mini model, False if disabled."""
         if not self._local_fallback:
-            if not self._warned_cloud_failure:
-                logger.warning(
-                    "cloud turn detector failed (%s); local fallback is disabled, so turns "
-                    "commit on the endpointing delay",
-                    reason,
-                )
-                self._warned_cloud_failure = True
+            # a timeout leaves the transport mounted to retry, and AudioRecognition
+            # already logs it; only the terminal case in _degrade is worth a warning
             self._emit_default_for_inflight()
             return False
 
