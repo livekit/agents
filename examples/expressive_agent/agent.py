@@ -52,9 +52,12 @@ async def expressive_agent(ctx: JobContext) -> None:
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS(config.voice.model, voice=config.voice.voice),
-        turn_handling=TurnHandlingOptions(turn_detection=inference.TurnDetector()),
+        turn_handling=TurnHandlingOptions(
+            turn_detection=inference.TurnDetector(version="v1"),
+            interruption={"mode": "adaptive"},
+            preemptive_generation={"enabled": True},
+        ),
         expressive=config.expressive,
-        preemptive_generation=True,
     )
 
     await session.start(agent=Friend(), room=ctx.room)
