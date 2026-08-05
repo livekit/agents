@@ -3,7 +3,7 @@
 # (close-race regressions), the two scenarios where the audit nudge fired, the
 # historically flaky quality scenarios, and the VIP flowers DB-diff case. Same date
 # assumptions as scenarios.yaml (seed pinned to 2026-06-08 under `lk agent simulate`).
-name: LiveKit Hotel — remote front office — smoke (goodbye-path weighted)
+name: LiveKit Hotel — remote front office
 scenarios:
 - label: Rate and meal-plan comparison
   instructions: |
