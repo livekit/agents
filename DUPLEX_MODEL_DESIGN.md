@@ -467,7 +467,7 @@ only if the telemetry noise justifies it.
 
 ## GPT-Live plugin
 
-`livekit-plugins-openai/.../realtime/live_realtime_model.py` reshapes onto `DuplexSession`. The
+`livekit-plugins-openai/.../realtime/gpt_live_model.py` reshapes onto `DuplexSession`. The
 protocol handling — `session.update` composition, both delegation modes, `input_audio.append`,
 usage deltas, reconnect — carries over from the experiment branch unchanged.
 

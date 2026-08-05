@@ -1,4 +1,4 @@
-from .live_realtime_model import GPTLiveModel, GPTLiveSession
+from .gpt_live_model import GPTLiveModel, GPTLiveSession
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
