@@ -3,7 +3,7 @@ from typing import Literal, TypedDict
 
 from openai.types import AudioModel
 
-STTModels = AudioModel
+STTModels = AudioModel | Literal["gpt-live-transcribe"]
 TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 TTSVoices = Literal[
     "alloy",
