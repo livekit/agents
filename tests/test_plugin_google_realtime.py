@@ -184,3 +184,45 @@ async def test_content_without_turn_complete_leaves_the_caller_waiting(
 
         assert not fut.done()
         fut.cancel()
+
+
+async def test_abort_after_an_earlier_reply_still_fails_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # _current_generation is never cleared, so from the second turn on the "no
+    # generation" branch is unreachable - the abort has to be caught on turn_complete
+    # itself or the fix only ever works for the first reply of a call
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._current_generation is not None
+
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                turn_complete=True,
+                turn_complete_reason=types.TurnCompleteReason.MALFORMED_FUNCTION_CALL,
+            )
+        )
+
+        assert fut.done(), "an abort mid-conversation still stranded the caller"
+        with pytest.raises(llm.RealtimeError, match="MALFORMED_FUNCTION_CALL"):
+            fut.result()
+
+
+async def test_tool_rejection_drain_leaves_the_reply_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a rejected tool call turn also ends with turn_complete, but the model answers
+    # afterwards and the pending request is deliberately bound to that reply
+    async with _make_session(monkeypatch) as session:
+        session._rejected_tool_calls = 1
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert not fut.done(), "failed a reply that was still coming"
+        fut.cancel()

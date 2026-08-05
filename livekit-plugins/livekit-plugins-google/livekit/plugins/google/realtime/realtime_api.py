@@ -1273,15 +1273,16 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
+        if server_content.turn_complete and not self._rejected_tool_calls:
+            # the pending future is cleared the moment a generation is created for it, so
+            # one still parked here means the server ended the turn without generating
+            # anything (a malformed function call, a rejected response). Without this it
+            # sits on its 5s timeout for an outcome already known. A tool-rejection drain
+            # also ends with turn_complete, but its reply is still coming - left alone.
+            self._fail_pending_generation(server_content.turn_complete_reason)
+
         current_gen = self._current_generation
         if not current_gen:
-            # a turn the server ends without generating anything (a malformed function
-            # call, a rejected response) never reaches _handle_generation_created, so a
-            # pending generate_reply would sit on its timeout with the outcome already
-            # known - fail it now with the reason the server gave
-            if server_content.turn_complete:
-                self._fail_pending_generation(server_content.turn_complete_reason)
-
             if self._rejected_tool_calls:
                 logger.debug(
                     "ignoring server content from a rejected tool call turn",
