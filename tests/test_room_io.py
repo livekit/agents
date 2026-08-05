@@ -473,3 +473,35 @@ async def test_transcript_segments_are_unique_without_item_ids() -> None:
             await output._flush_atask
 
     assert segments[0] != segments[1]
+
+
+@pytest.mark.asyncio
+async def test_refinalized_item_keeps_its_segment_on_both_channels() -> None:
+    # the legacy output resets after flushing too, so the item's segment has to be
+    # recorded when a capture starts rather than on every reset - otherwise the legacy
+    # channel keeps stacking revisions while the stream channel replaces them
+    room = _FakeRoom()
+    output = _ParticipantTranscriptionOutput(room=room, is_delta_stream=False, participant="user")
+    legacy_output, stream_output = output._ParticipantTranscriptionOutput__outputs
+    legacy_output._track_id = "TR_fake"
+
+    async def _finalize(item_id: str, transcript: str) -> tuple[str, str]:
+        output._capture_item(item_id)
+        await output.capture_text(transcript)
+        ids = (legacy_output._current_id, stream_output._current_id)
+        output.flush()
+        if legacy_output._flush_task is not None:
+            await legacy_output._flush_task
+        if stream_output._flush_atask is not None:
+            await stream_output._flush_atask
+        return ids
+
+    first_legacy, first_stream = await _finalize("item_a", "hello")
+    revised_legacy, revised_stream = await _finalize("item_a", "hello there")
+
+    assert revised_legacy == first_legacy, "the legacy channel stacked the revision"
+    assert revised_stream == first_stream, "the stream channel stacked the revision"
+
+    other_legacy, other_stream = await _finalize("item_b", "next")
+    assert other_legacy != first_legacy
+    assert other_stream != first_stream

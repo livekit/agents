@@ -238,6 +238,15 @@ class _ParticipantLegacyTranscriptionOutput:
 
         self._item_id = item_id
 
+    def _remember_item_segment(self) -> None:
+        """Record the segment a started capture publishes under.
+
+        Done here rather than in ``_reset_state``: the legacy output also resets after
+        flushing, which would leave the item pointing at a segment never published.
+        """
+        if self._item_id is not None:
+            self._item_segment_id = self._current_id
+
     def set_participant(
         self,
         participant: rtc.Participant | str | None,
@@ -270,8 +279,6 @@ class _ParticipantLegacyTranscriptionOutput:
     def _reset_state(self) -> None:
         self._current_id = self._next_segment_id or utils.shortuuid("SG_")
         self._next_segment_id = None
-        if self._item_id is not None:
-            self._item_segment_id = self._current_id
         self._capturing = False
         self._pushed_text = ""
 
@@ -286,6 +293,7 @@ class _ParticipantLegacyTranscriptionOutput:
         if not self._capturing:
             self._reset_state()
             self._capturing = True
+            self._remember_item_segment()
 
         if self._is_delta_stream:
             self._pushed_text += text
@@ -429,6 +437,15 @@ class _ParticipantStreamTranscriptionOutput:
 
         self._item_id = item_id
 
+    def _remember_item_segment(self) -> None:
+        """Record the segment a started capture publishes under.
+
+        Done here rather than in ``_reset_state``: the legacy output also resets after
+        flushing, which would leave the item pointing at a segment never published.
+        """
+        if self._item_id is not None:
+            self._item_segment_id = self._current_id
+
     def set_participant(
         self,
         participant: rtc.Participant | str | None,
@@ -451,8 +468,6 @@ class _ParticipantStreamTranscriptionOutput:
     def _reset_state(self) -> None:
         self._current_id = self._next_segment_id or utils.shortuuid("SG_")
         self._next_segment_id = None
-        if self._item_id is not None:
-            self._item_segment_id = self._current_id
         self._capturing = False
         self._latest_text = ""
         # per-segment markup stripping: delta streams strip incrementally (buffering a tag
@@ -512,6 +527,7 @@ class _ParticipantStreamTranscriptionOutput:
         if not self._capturing:
             self._reset_state()
             self._capturing = True
+            self._remember_item_segment()
 
         # the raw text (expressive markup intact) arrives here; publish only the visible
         # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
