@@ -3905,7 +3905,7 @@ class AgentActivity(RecognitionHooks):
                         and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                         and (timed_texts := await tts_gen_data.timed_texts_fut)
                     ):
-                        tr_text_input = timed_texts
+                        tr_text_input = _aligned_transcript_or_text(timed_texts, tr_text_input)
                         read_transcript_from_tts = True
 
                     tasks.append(tts_task)
