@@ -1,7 +1,8 @@
 # Resemble plugin for LiveKit Agents
 
 Support for [Resemble AI](https://www.resemble.ai/) voice synthesis, real-time
-deepfake detection, and fraud/scam-intent scoring in LiveKit Agents.
+deepfake detection, fraud/scam-intent scoring, and speaker verification in
+LiveKit Agents.
 
 See [https://docs.livekit.io/agents/integrations/tts/resemble/](https://docs.livekit.io/agents/integrations/tts/resemble/) for more information.
 
@@ -153,6 +154,58 @@ await signal.create_custom_category(
 
 Signal uses the same bearer authorization style as the rest of this plugin. If you need to
 override it, pass the full `Bearer ...` value as `api_key`.
+
+### Speaker verification
+
+Use Resemble Identity to verify a caller against the account's enrolled voiceprints.
+It completes the security trio: Detect answers "is this media synthetic?", Signal
+answers "does this content match a fraud/scam pattern?", and Identity answers
+"is this the enrolled speaker?".
+
+Identity's `/search` endpoint fetches audio from a URL rather than accepting an
+upload, so raw-bytes searches need an `audio_host` hook that makes the clip publicly
+reachable (an S3 presigned URL, a public bucket, or an app endpoint):
+
+```python
+from livekit.plugins import resemble
+
+
+async def host_audio(audio: bytes, filename: str) -> str:
+    key = f"identity/{filename}"
+    await s3.put_object(Bucket="clips", Key=key, Body=audio)
+    return f"https://clips.example.com/{key}"
+
+
+identity = resemble.ResembleIdentity(audio_host=host_audio, threshold=70)
+
+result = await identity.search(turn_wav_bytes, filename="turn-7.wav")
+if result.matched:
+    print(f"verified as {result.name} ({result.score:.0f})")
+```
+
+Clips that are already hosted can be searched directly — no hook required:
+
+```python
+result = await identity.search_url("https://clips.example.com/identity/turn-7.wav")
+```
+
+Each result exposes a stable app payload:
+
+```python
+{
+    "matched": True,
+    "name": "Harold",
+    "score": 91.4,
+    "threshold": 70.0,
+    "matches": [
+        {"uuid": "...", "name": "Harold", "score": 91.4},
+        {"uuid": "...", "name": "Alex", "score": 40.0},
+    ],
+}
+```
+
+Apps without hosting infrastructure can simply skip Identity — Detect and Signal
+work from raw bytes and keep running without it.
 
 ### Detection options
 

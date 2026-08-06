@@ -27,6 +27,14 @@ from .detect import (
     ResembleDetect,
     RestDetectTransport,
 )
+from .identity import (
+    AudioHost,
+    IdentityMatch,
+    IdentityResult,
+    IdentityTransport,
+    ResembleIdentity,
+    RestIdentityTransport,
+)
 from .models import TTSModels
 from .signal import (
     ResembleSignal,
@@ -62,6 +70,12 @@ __all__ = [
     "SignalAction",
     "SignalTransport",
     "RestSignalTransport",
+    "ResembleIdentity",
+    "IdentityResult",
+    "IdentityMatch",
+    "IdentityTransport",
+    "RestIdentityTransport",
+    "AudioHost",
     "__version__",
 ]
 
