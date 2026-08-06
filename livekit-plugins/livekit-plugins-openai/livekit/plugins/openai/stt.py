@@ -108,6 +108,13 @@ def _as_languages(language: str | list[str]) -> list[str]:
     return [code for code in language if code]
 
 
+def _as_turn_detection(
+    turn_detection: SessionTurnDetection,
+) -> RealtimeTranscriptionSessionAudioInputTurnDetection:
+    """Validate a turn-detection dict, filling in the `type` the union is tagged on."""
+    return _TURN_DETECTION.validate_python({"type": "server_vad", **turn_detection})
+
+
 def _validate_context(model: str, languages: list[str], keywords: list[str]) -> None:
     """Raise when keywords or several languages go to a model that takes neither."""
     if _supports_context_hints(model):
@@ -129,7 +136,7 @@ class _STTOptions:
     model: STTModels | str
     languages: list[str]
     detect_language: bool
-    turn_detection: SessionTurnDetection
+    turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
     keywords: list[str] = field(default_factory=list)
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
@@ -163,7 +170,7 @@ def _session_update(opts: _STTOptions) -> SessionUpdateEvent:
     )
     # leave the field unset for models that reject it; the rest get server-side VAD
     if not _is_realtime_only(opts.model):
-        audio_input.turn_detection = _TURN_DETECTION.validate_python(opts.turn_detection)
+        audio_input.turn_detection = opts.turn_detection
 
     if opts.noise_reduction_type:
         audio_input.noise_reduction = NoiseReduction(type=opts.noise_reduction_type)
@@ -275,7 +282,7 @@ class STT(stt.STT):
             model=model,
             prompt=prompt,
             keywords=resolved_keywords,
-            turn_detection=turn_detection,
+            turn_detection=_as_turn_detection(turn_detection),
             temperature=temperature,
         )
         if is_given(noise_reduction_type):
@@ -434,9 +441,6 @@ class STT(stt.STT):
         if is_given(language):
             opts.languages = _as_languages(language)
             _validate_context(opts.model, opts.languages, opts.keywords)
-            if opts.languages != self._opts.languages:
-                # the pool would otherwise hand this stream a socket carrying another language
-                self._pool.invalidate()
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -513,7 +517,7 @@ class STT(stt.STT):
                 )
 
         languages_changed = languages != self._opts.languages
-        needs_reconnect = resolved_model != self._opts.model or languages_changed
+        model_changed = resolved_model != self._opts.model
         # a stream keeps a language of its own unless this call names or moves the language
         languages_given = is_given(language) or languages_changed
         self._opts.model = resolved_model
@@ -533,7 +537,7 @@ class STT(stt.STT):
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
-            self._opts.turn_detection = turn_detection
+            self._opts.turn_detection = _as_turn_detection(turn_detection)
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
         if is_given(temperature):
@@ -545,12 +549,13 @@ class STT(stt.STT):
             else:
                 self._opts.temperature = temperature
 
-        if needs_reconnect:
-            # the streams do this too, but `_streams` is empty between two speech sessions
-            self._pool.invalidate()
-
         for stream in self._streams:
             stream.update_options(language=languages if languages_given else NOT_GIVEN)
+
+        if model_changed:
+            # every stream has dropped its own socket by now, so this reaches the idle ones the
+            # pool holds between two speech sessions
+            self._pool.invalidate()
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if not self.capabilities.keyterms:
@@ -690,13 +695,17 @@ class SpeechStream(stt.SpeechStream):
         if is_given(language):
             opts.languages = _as_languages(language)
             _validate_context(opts.model, opts.languages, opts.keywords)
-        # a language cannot be cleared on an open session, nor can a pooled socket carrying
-        # another one be reused; gateways route on the ?model= in the URL
-        rebuild = opts.model != self._opts.model or opts.languages != self._opts.languages
+        # a session.update can set a language but never clear one, and gateways route on the
+        # ?model= in the URL
+        cleared_language = bool(self._opts.languages) and not opts.languages
+        rebuild = opts.model != self._opts.model or cleared_language
         self._opts = opts
         self._language = _transcript_language(opts.languages)
         if rebuild:
-            self._pool.invalidate()
+            # only this stream's own socket: invalidating the pool would close the ones the
+            # other streams are still reading from
+            if self._ws is not None:
+                self._pool.remove(self._ws)
             self._reconnect_event.set()
         else:
             self._update_task = asyncio.create_task(
@@ -947,6 +956,11 @@ class SpeechStream(stt.SpeechStream):
             # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+                if self._pool.last_connection_reused and not self._opts.languages:
+                    # detecting the language needs a session that was never given one, and a
+                    # pooled socket carries whatever the stream before it set
+                    self._pool.remove(ws)
+                    continue
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )

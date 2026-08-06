@@ -31,6 +31,7 @@ class _FakeWebSocket:
         self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.fail_next = False
         self.block_first: asyncio.Event | None = None
+        self.closed = False
 
     async def send_json(self, data: dict[str, Any]) -> None:
         if self.fail_next:
@@ -45,7 +46,7 @@ class _FakeWebSocket:
         return _FakeMessage(await self.incoming.get())
 
     async def close(self) -> None:
-        pass
+        self.closed = True
 
 
 class _FakeSession:
@@ -283,10 +284,12 @@ async def test_options_apply_without_a_reconnect() -> None:
 
     assert not stream._reconnect_event.is_set()
 
-    # a language is the exception: it always rebuilds
+    # a language reaches the open connection too, and the transcripts follow it
     instance.update_options(language="fr")
+    await _settle(stream)
     assert stream._language == "fr"
-    assert stream._reconnect_event.is_set()
+    assert _sent_transcription(ws)["languages"] == ["fr"]
+    assert not stream._reconnect_event.is_set()
 
     await stream.aclose()
 
@@ -447,6 +450,27 @@ async def test_live_transcribe_omits_turn_detection() -> None:
     # every other model still gets server-side VAD
     other = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe", use_realtime=True)
     assert _audio_input(other)["turn_detection"]["type"] == "server_vad"
+
+
+async def test_turn_detection_without_a_type_is_still_sent() -> None:
+    # SessionTurnDetection leaves every key optional, so a caller can tune one setting alone
+    instance = stt.STT(
+        api_key="test-key",
+        model="gpt-4o-mini-transcribe",
+        use_realtime=True,
+        turn_detection={"silence_duration_ms": 800},
+    )
+
+    assert _audio_input(instance)["turn_detection"] == {
+        "type": "server_vad",
+        "silence_duration_ms": 800,
+    }
+
+    instance.update_options(turn_detection={"type": "semantic_vad", "eagerness": "low"})
+    assert _audio_input(instance)["turn_detection"] == {
+        "type": "semantic_vad",
+        "eagerness": "low",
+    }
 
 
 class _OneShotVAD(vad.VAD):
@@ -617,13 +641,17 @@ async def test_a_stream_with_its_own_language_takes_its_own_connection() -> None
 async def test_a_stream_language_stays_out_of_the_streams_already_open() -> None:
     instance = _offline_stt(model="gpt-live-transcribe", language="en")
     open_stream = instance.stream()
-    await _connected(open_stream)
+    ws = await _connected(open_stream)
 
     later = instance.stream(language="fr")
+    await _connected(later)
 
     assert open_stream._opts.languages == ["en"]
     assert open_stream._language == "en"
     assert later._opts.languages == ["fr"]
+    # the new stream sets its language with a session.update, so the connection the open one
+    # is reading from stays up
+    assert not ws.closed
 
     await open_stream.aclose()
     await later.aclose()
@@ -632,13 +660,14 @@ async def test_a_stream_language_stays_out_of_the_streams_already_open() -> None
 async def test_a_stream_switches_its_own_language() -> None:
     instance = _offline_stt(model="gpt-live-transcribe", language="en")
     stream = instance.stream()
-    await _connected(stream)
+    ws = await _connected(stream)
     other = instance.stream()
 
     stream.update_options(language="fr")
+    await _settle(stream)
 
-    # the stream rebuilds on its own language, and nothing else moves
-    assert stream._reconnect_event.is_set()
+    # the stream carries its own language over its own connection, and nothing else moves
+    assert _sent_transcription(ws)["languages"] == ["fr"]
     assert stream._language == "fr"
     assert other._opts.languages == ["en"]
     assert instance._opts.languages == ["en"]
