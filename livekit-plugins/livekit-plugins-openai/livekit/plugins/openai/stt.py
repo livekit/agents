@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import json
 import os
 import time
@@ -316,6 +317,11 @@ class STT(stt.STT):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
+        # the languages each pooled connection carries, so a stream that wants none does not
+        # take one it cannot clear them on
+        self._configured_languages: weakref.WeakKeyDictionary[
+            aiohttp.ClientWebSocketResponse, list[str]
+        ] = weakref.WeakKeyDictionary()
 
     @property
     def model(self) -> str:
@@ -429,13 +435,17 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        opts = dataclasses.replace(self._opts)
         if is_given(language):
-            # the options are shared, so this takes the path any other change takes
-            self.update_options(language=language)
+            opts.languages = _as_languages(language)
+            _validate_context(opts.model, opts.languages, opts.keywords)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
+            configured_languages=self._configured_languages,
             conn_options=conn_options,
+            opts=opts,
+            pinned_languages=is_given(language),
             vad_instance=self._vad,
         )
         self._streams.add(stream)
@@ -502,6 +512,7 @@ class STT(stt.STT):
         needs_reconnect = resolved_model != self._opts.model or (
             bool(self._opts.languages) and not languages
         )
+        languages_given = is_given(language) or is_given(detect_language)
         self._opts.model = resolved_model
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
@@ -535,10 +546,7 @@ class STT(stt.STT):
             self._pool.invalidate()
 
         for stream in self._streams:
-            if needs_reconnect:
-                stream.reconnect()
-            else:
-                stream.apply_options()
+            stream._adopt(self._opts, languages_given=languages_given)
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if not self.capabilities.keyterms:
@@ -549,7 +557,7 @@ class STT(stt.STT):
         self._session_keyterms = list(keyterms)
         self._opts.keywords = list(dict.fromkeys([*self._user_keywords, *keyterms]))
         for stream in self._streams:
-            stream.apply_options()
+            stream._adopt(self._opts, languages_given=False)
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         query_params: dict[str, str] = {
@@ -573,7 +581,9 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        self._configured_languages[ws] = []  # nothing is set on it yet
+        return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -653,14 +663,20 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        configured_languages: weakref.WeakKeyDictionary[aiohttp.ClientWebSocketResponse, list[str]],
+        opts: _STTOptions,
+        pinned_languages: bool = False,
         vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
-        # the STT mutates these in place; every acquired connection is configured from them
-        self._opts = stt._opts
-        self._language = _transcript_language(stt._opts.languages)
+        self._configured_languages = configured_languages
+        # this stream's own options; the STT pushes its changes in through _adopt
+        self._opts = opts
+        # a language given to stream() survives an STT change that does not name one
+        self._pinned_languages = pinned_languages
+        self._language = _transcript_language(opts.languages)
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -669,6 +685,23 @@ class SpeechStream(stt.SpeechStream):
         self._config_lock = asyncio.Lock()
         self._vad = vad_instance
         self._speaking = False
+
+    def _adopt(self, opts: _STTOptions, *, languages_given: bool) -> None:
+        """Take the STT's options, keeping a language this stream was opened with."""
+        keep = self._pinned_languages and not languages_given
+        self._pinned_languages = keep
+        languages = self._opts.languages if keep else opts.languages
+        # gateways route on the ?model= in the upgrade URL, and `languages` cannot be cleared
+        # on an open session, so neither survives a session.update
+        needs_reconnect = opts.model != self._opts.model or (
+            bool(self._opts.languages) and not languages
+        )
+        self._opts = dataclasses.replace(opts, languages=languages)
+        self._language = _transcript_language(languages)
+        if needs_reconnect:
+            self._reconnect_event.set()
+        else:
+            self.apply_options()
 
     def apply_options(self) -> None:
         """Apply an option change on the open connection instead of reconnecting."""
@@ -694,11 +727,6 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             # a dropped update is not worth failing the stream over
             logger.warning("failed to update the transcription session", exc_info=True)
-
-    def reconnect(self) -> None:
-        """Rebuild the connection so it carries the current options. The STT drops the pool."""
-        self._language = _transcript_language(self._opts.languages)
-        self._reconnect_event.set()
 
     async def aclose(self) -> None:
         if self._update_task is not None:
@@ -930,6 +958,11 @@ class SpeechStream(stt.SpeechStream):
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
+                if not self._opts.languages and self._configured_languages.get(ws):
+                    # this stream wants detection, and `languages` cannot be cleared on a
+                    # session another stream set them on; take a connection of our own
+                    self._pool.remove(ws)
+                    continue
                 # published before the config is sent, so a change made during the send is
                 # applied after it rather than dropped as having no live connection
                 self._ws = ws
@@ -942,6 +975,7 @@ class SpeechStream(stt.SpeechStream):
                                 by_alias=True, exclude_unset=True
                             )
                         )
+                    self._configured_languages[ws] = list(self._opts.languages)
                 except (aiohttp.ClientError, ConnectionError) as e:
                     # the retry gets its own connection; no update should reach this one
                     self._ws = None
