@@ -501,6 +501,82 @@ def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "final_payload",
+    [
+        None,
+        {"event": "transcript.final", "utterance_idx": 0, "text": ""},
+        {"event": "transcript.final", "utterance_idx": 0, "text": "   "},
+    ],
+    ids=["no_final", "empty_final", "whitespace_final"],
+)
+async def test_speech_end_promotes_pending_endpointing_without_a_valid_final(
+    final_payload: dict[str, object] | None,
+) -> None:
+    """A turn with no usable final must still count as an utterance boundary.
+
+    Otherwise `_utterance_in_progress` stays set, `_apply_pending_endpointing` refuses
+    to promote, and the stream is stranded in ``vad`` while the server has already
+    acknowledged the switch to ``manual`` and stopped sending ``vad.*`` events.
+    """
+    stream = _make_stream()
+    stream.update_options(endpointing="manual")
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message({"event": "config.updated", "applied": ["endpointing"]})
+
+    assert stream._utterance_in_progress is True
+    assert stream._active_endpointing == "vad"
+
+    if final_payload is not None:
+        await stream._handle_message(final_payload)
+    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+
+    assert stream._utterance_in_progress is False
+    assert stream._active_endpointing == "manual"
+    assert stream._pending_endpointing is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+@pytest.mark.parametrize("text", ["", "   ", "\n\t"])
+async def test_blank_final_transcript_is_not_emitted(endpointing: str, text: str) -> None:
+    """A blank final has no words, so committing it would trigger a reply on nothing."""
+    stream = _make_stream(endpointing=endpointing)
+    stream._audio_position = 1.0
+
+    await stream._handle_message({"event": "transcript.final", "utterance_idx": 0, "text": text})
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == []
+    assert stream._pending_final_data is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_speech_end_still_completes_the_utterance() -> None:
+    stream = _make_stream()
+    stream.update_options(endpointing="manual")
+    await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
+    await stream._handle_message({"event": "config.updated", "applied": ["endpointing"]})
+    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+    # A duplicate speech end takes the already-emitted branch; it must not reopen or
+    # strand the utterance.
+    stream._utterance_in_progress = True
+    await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
+
+    assert stream._utterance_in_progress is False
+    eos_events = [
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.END_OF_SPEECH
+    ]
+    assert len(eos_events) == 1
+
+
+@pytest.mark.asyncio
 async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> None:
     stream = _make_stream()
     stream._audio_position = 1.25

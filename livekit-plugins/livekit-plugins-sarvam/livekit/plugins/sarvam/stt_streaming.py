@@ -1165,7 +1165,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     def _is_valid_transcript(self, data: dict[str, Any]) -> bool:
         text = data.get("text")
-        return isinstance(text, str) and bool(text)
+        # Whitespace carries no content, and emitting it would commit a user turn
+        # with no words.
+        return isinstance(text, str) and bool(text.strip())
 
     def _handle_speech_end(self) -> None:
         self._utterance_speech_end_audio_pos = self._audio_position
@@ -1173,14 +1175,16 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         if self._active_endpointing != "vad":
             self._emit_end_of_speech()
-            return
+        elif not self._eos_emitted_for_utterance:
+            self._emit_end_of_speech()
+            if self._final_received_for_utterance:
+                self._try_commit_utterance()
 
-        if self._eos_emitted_for_utterance:
-            return
-
-        self._emit_end_of_speech()
-        if self._final_received_for_utterance:
-            self._try_commit_utterance()
+        # The server's speech end is the utterance boundary, so the turn is over even
+        # when the final is empty or never arrives. Completing unconditionally is what
+        # lets a boundary-gated endpointing change promote; leaving the utterance open
+        # would strand the stream in the old mode with the server in the new one.
+        self._complete_utterance()
 
     def _try_commit_utterance(self) -> None:
         if self._pending_final_data is None or self._utterance_speech_end_audio_pos is None:
@@ -1240,7 +1244,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict[str, Any]) -> bool:
         text = data.get("text")
-        if not isinstance(text, str) or not text:
+        if not isinstance(text, str) or not text.strip():
             return False
 
         language = data.get("language") or self._opts.language
