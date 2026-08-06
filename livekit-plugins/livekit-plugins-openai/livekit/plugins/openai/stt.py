@@ -484,25 +484,20 @@ class STT(stt.STT):
             for stream in self._streams:
                 _validate_context(resolved_model, stream._opts.languages, user_keywords)
 
-        # the transport is fixed at construction: AgentSession wraps a non-streaming STT once.
-        # the realtime API serves every model, so only this direction can break
-        if not self.capabilities.streaming and _is_realtime_only(resolved_model):
-            raise ValueError(
-                f"{resolved_model} is served only over the realtime API, and this STT was "
-                "created for the transcriptions endpoint; pass `use_realtime=True` to the "
-                "constructor to reach it"
-            )
-        if (
-            _is_realtime_only(resolved_model)
-            and not _is_realtime_only(self._opts.model)
-            and self._vad is None
-            and not self._vad_opted_out
-        ):
-            raise ValueError(
-                f"{resolved_model} has no server-side endpointing, so it needs a `vad` to "
-                "commit the audio buffer; pass one to the constructor, or pass `vad=None` "
-                "to drive `input_audio_buffer.commit` yourself"
-            )
+        # the transport is fixed at construction: AgentSession wraps a non-streaming STT once
+        if is_given(model) and _is_realtime_only(model):
+            if not self.capabilities.streaming:
+                raise ValueError(
+                    f"{resolved_model} is served only over the realtime API, and this STT was "
+                    "created for the transcriptions endpoint; pass `use_realtime=True` to the "
+                    "constructor to reach it"
+                )
+            if self._vad is None and not self._vad_opted_out:
+                raise ValueError(
+                    f"{resolved_model} has no server-side endpointing, so it needs a `vad` to "
+                    "commit the audio buffer; pass one to the constructor, or pass `vad=None` "
+                    "to drive `input_audio_buffer.commit` yourself"
+                )
 
         needs_reconnect = resolved_model != self._opts.model or languages != self._opts.languages
         languages_given = is_given(language) or is_given(detect_language)

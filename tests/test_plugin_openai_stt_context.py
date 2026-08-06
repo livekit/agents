@@ -352,6 +352,11 @@ async def test_switching_to_a_realtime_only_model_needs_the_realtime_transport()
     realtime.update_options(model="gpt-transcribe")
     assert realtime._opts.model == "gpt-transcribe"
 
+    # an explicit use_realtime=False keeps that pairing, and it stays usable
+    pinned = stt.STT(api_key="test-key", model="gpt-live-transcribe", use_realtime=False, vad=None)
+    pinned.update_options(prompt="a support call")
+    assert pinned._opts.prompt == "a support call"
+
 
 async def test_detected_keyterms_do_not_block_a_new_stream() -> None:
     instance = _offline_stt(model="gpt-live-transcribe")
