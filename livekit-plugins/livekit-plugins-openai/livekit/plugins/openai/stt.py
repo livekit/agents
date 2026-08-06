@@ -430,9 +430,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         if is_given(language):
-            languages = _as_languages(language)
-            _validate_context(self._opts.model, languages, self._opts.keywords)
-            self._opts.languages = languages
+            # the options are shared, so this takes the path any other change takes
+            self.update_options(language=language)
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -944,6 +943,8 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
                 except (aiohttp.ClientError, ConnectionError) as e:
+                    # the retry gets its own connection; no update should reach this one
+                    self._ws = None
                     # a pooled socket can die while idle; keep that retryable
                     raise APIConnectionError(
                         "OpenAI Realtime STT connection closed unexpectedly"

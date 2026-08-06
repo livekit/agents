@@ -563,6 +563,38 @@ async def test_a_rebuild_drops_the_idle_pooled_connection(
     await stream.aclose()
 
 
+async def test_a_stream_asking_to_detect_the_language_drops_the_pooled_connection() -> None:
+    # stream(language=...) is the same option change, so it needs the same rebuild
+    instance = _offline_stt(model="gpt-live-transcribe", language="en")
+    session = _FakeSession()
+    instance._session = session  # type: ignore[assignment]
+    instance._pool.put(await instance._pool.get(timeout=5))
+
+    stream = instance.stream(language=[])
+
+    assert instance._opts.languages == []
+    await _connected(stream)
+    assert session.connects == 2
+
+    await stream.aclose()
+
+
+async def test_a_stream_language_reaches_the_streams_already_open() -> None:
+    # the options are shared, so an open stream must hear about the change too
+    instance = _offline_stt(model="gpt-live-transcribe", language="en")
+    open_stream = instance.stream()
+    ws = await _connected(open_stream)
+
+    later = instance.stream(language="fr")
+    await _settle(open_stream)
+
+    assert _sent_transcription(ws)["languages"] == ["fr"]
+    assert open_stream._language == "fr"
+
+    await open_stream.aclose()
+    await later.aclose()
+
+
 async def test_session_keyterms_reach_the_next_connection() -> None:
     instance = stt.STT(api_key="test-key", model="gpt-live-transcribe")
     instance._update_session_keyterms(["Acme Corp"])
