@@ -49,7 +49,7 @@ async def expressive_agent(ctx: JobContext) -> None:
     )
 
     session = AgentSession(
-        stt=inference.STT("deepgram/nova-3", language="en"),
+        stt=inference.STT("assemblyai/universal-3-5-pro", language="en"),
         llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS(config.voice.model, voice=config.voice.voice),
         turn_handling=TurnHandlingOptions(
