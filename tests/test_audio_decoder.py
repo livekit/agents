@@ -1,15 +1,21 @@
+import asyncio
+import contextlib
 import io
+import logging
 import os
 import struct
 import threading
 import time
+from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import pytest
 
+from livekit import rtc
 from livekit.agents import inference
 from livekit.agents.stt import SpeechEventType
+from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
 from livekit.agents.utils.misc import is_cloud
 
@@ -483,3 +489,50 @@ async def test_wav_multi_chunk_with_resampling():
     expected = samples_per_chunk * num_chunks * out_rate // src_rate
     assert abs(total_samples - expected) <= out_rate // 50  # within 20ms tolerance
     await decoder.aclose()
+
+
+def _decode_errors(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "error decoding" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_aclose_while_probing_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
+    """Closing a decoder mid-probe is intentional and must not be reported as a decode failure."""
+    with open(TEST_AUDIO_FILEPATH, "rb") as f:
+        head = f.read(16)  # far less than av.open needs to probe the container
+
+    decoder = AudioStreamDecoder()
+    decoder.push(head)
+    await asyncio.sleep(0.05)  # the decode thread is now blocked reading inside av.open
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+        await decoder.aclose()
+        await asyncio.sleep(0.05)
+
+    assert _decode_errors(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_stop_before_first_frame_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
+    """The BackgroundAudioPlayer stop() path: aborting playback is not a decode failure.
+
+    A stop that lands before the first frame catches the decode thread while it still probes
+    the container, which is the window every report in the wild falls into.
+    """
+
+    async def drain(gen: AsyncGenerator[rtc.AudioFrame, None]) -> None:
+        async for _ in gen:
+            pass
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+        for i in range(120):
+            gen = audio_frames_from_file(TEST_AUDIO_FILEPATH)
+            task = asyncio.create_task(drain(gen))
+            await asyncio.sleep((i % 20) * 0.0001)  # sweep the probe window
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await gen.aclose()  # what PlayHandle.stop() ultimately triggers
+        await asyncio.sleep(0.05)
+
+    assert _decode_errors(caplog) == []
