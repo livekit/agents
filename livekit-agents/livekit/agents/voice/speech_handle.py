@@ -144,7 +144,9 @@ class SpeechHandle:
 
         Awaiting a SpeechHandle never raises; call this method after the handle
         is done to check whether the generation failed (e.g. ``llm.RealtimeError``
-        when a realtime reply timed out).
+        when the realtime session closed, or an ``APIError`` with ``retryable=True``
+        when a realtime reply was discarded on reconnect — a transient case where
+        re-prompting is sensible).
 
         Raises:
             asyncio.InvalidStateError: If the speech is not done yet.

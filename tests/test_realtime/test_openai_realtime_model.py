@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import cast
@@ -9,7 +10,7 @@ from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetectio
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
-from livekit.agents._exceptions import APIError
+from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime.realtime_model import (
@@ -253,3 +254,39 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     )
     RealtimeSession._handle_response_done_but_not_complete(session, event)
     assert captured["recoverable"] is True
+
+
+# --------------------------------------------------------------------------- #
+# pending generate_reply futures: on a transient reconnect the plugin discards
+# them with a retryable APIConnectionError so the drop lands on the SpeechHandle
+# and the app can decide to re-prompt (isinstance(exc, APIError) and exc.retryable)
+# --------------------------------------------------------------------------- #
+
+
+async def test_fail_pending_response_futures_sets_error_and_clears() -> None:
+    pending = asyncio.get_event_loop().create_future()
+    already_done = asyncio.get_event_loop().create_future()
+    already_done.set_result(cast(llm.GenerationCreatedEvent, object()))
+
+    session = cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _response_created_futures={"pending": pending, "done": already_done},
+        ),
+    )
+    error = APIConnectionError(message="pending response discarded due to session reconnection")
+    RealtimeSession._fail_pending_response_futures(session, error)
+
+    # pending future carries the error; already-done future is left untouched
+    assert pending.exception() is error
+    assert already_done.exception() is None
+    # dict is cleared so a subsequent reconnect starts fresh
+    assert session._response_created_futures == {}
+
+
+def test_reconnect_discard_error_is_retryable_api_error() -> None:
+    # the discard on reconnect must satisfy the documented app contract:
+    # isinstance(exc, APIError) and exc.retryable  ->  safe to re-prompt
+    error = APIConnectionError(message="pending response discarded due to session reconnection")
+    assert isinstance(error, APIError)
+    assert error.retryable is True
