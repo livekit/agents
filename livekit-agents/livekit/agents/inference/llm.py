@@ -28,7 +28,6 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import (
-    HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
     get_default_inference_url,
@@ -439,11 +438,9 @@ class LLMStream(llm.LLMStream):
                 self._extra_kwargs.pop("tool_choice", None)
 
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
-            extra_headers.update(get_inference_headers())
+            extra_headers.update(get_inference_headers(inference_class=self._inference_class))
             if self._provider:
                 extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
-            if self._inference_class:
-                extra_headers[HEADER_INFERENCE_PRIORITY] = self._inference_class
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),

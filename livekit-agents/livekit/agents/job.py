@@ -94,6 +94,21 @@ def get_job_context(*, required: bool = True) -> JobContext | None:
 get_current_job_context = get_job_context
 
 
+def current_simulation() -> SimulationContext | None:
+    """The :class:`SimulationContext` of the job running on this task, or ``None``.
+
+    ``None`` covers everything that is not a simulation: a production job, and code
+    running outside a job context at all (console mode, tests). Unlike
+    :meth:`JobContext.simulation_context` this does not need the job context in hand,
+    so it can be called from deep inside the stack.
+    """
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return None
+
+    return ctx.simulation_context()
+
+
 @unique
 class JobExecutorType(Enum):
     PROCESS = "process"
@@ -488,6 +503,30 @@ class JobContext:
 
         self._simulation_ctx = SimulationContext(dispatch, self)
         return self._simulation_ctx
+
+    @property
+    def inference_headers(self) -> dict[str, str]:
+        """Extra headers this job puts on every LiveKit Inference request it makes.
+
+        Merged last by ``inference.get_inference_headers``, so what the job asserts
+        about itself outranks what an individual model was configured with. Empty for
+        an ordinary job.
+        """
+        from .inference._utils import HEADER_INFERENCE_PRIORITY, INFERENCE_CLASS_LOW
+        from .simulation import SimulationMode
+
+        headers: dict[str, str] = {}
+
+        # A text simulation is batch load: a run fans out many jobs at once and nobody
+        # is waiting on the answers, so it must not compete with live traffic for
+        # gateway capacity, and it must not be able to ask for priority either. Audio
+        # simulations are excluded: they run in real time against the audio pipeline,
+        # so their latency has to stay representative of production.
+        sim = self.simulation_context()
+        if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
+            headers[HEADER_INFERENCE_PRIORITY] = INFERENCE_CLASS_LOW
+
+        return headers
 
     @property
     def local_participant_identity(self) -> str:
