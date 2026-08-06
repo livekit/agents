@@ -145,6 +145,35 @@ async def test_detect_language_omits_the_language_hint() -> None:
     assert "language" not in config
 
 
+async def test_detect_language_falls_back_to_the_last_language(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # detection is the absence of a language, so turning it off has to name one again
+    instance = stt.STT(api_key="test-key", model="gpt-live-transcribe", language="en")
+    instance.update_options(language="de")
+
+    instance.update_options(detect_language=True)
+    assert instance._opts.languages == []
+    assert not caplog.records  # asking for detection says everything it needs to
+
+    # turning it off names none, so it falls back to the last one asked for and says so
+    instance.update_options(detect_language=False)
+    assert instance._opts.languages == ["de"]
+    assert "falling back to ['de']" in caplog.text
+
+    # naming one alongside it leaves nothing to guess
+    caplog.clear()
+    instance.update_options(detect_language=True)
+    instance.update_options(detect_language=False, language="es")
+    assert instance._opts.languages == ["es"]
+    assert not caplog.records
+
+    # and turning it off when it was never on changes nothing
+    instance.update_options(detect_language=False)
+    assert instance._opts.languages == ["es"]
+    assert not caplog.records
+
+
 async def test_single_language_list_works_on_every_model() -> None:
     instance = stt.STT(api_key="test-key", model="whisper-1", language=["fr"])
 
@@ -637,6 +666,10 @@ async def test_an_stt_language_change_overrides_a_stream_of_its_own() -> None:
     instance.update_options(language="de")
     assert pinned._opts.languages == ["de"]
     assert plain._opts.languages == ["de"]
+
+    # so does asking for detection
+    instance.update_options(language=[])
+    assert pinned._opts.languages == []
 
     await pinned.aclose()
     await plain.aclose()

@@ -255,7 +255,9 @@ class STT(stt.STT):
                 keyterms=_supports_context_hints(model),
             )
         )
-        languages = [] if detect_language else _as_languages(language)
+        # the last language asked for, kept while detection is on so it can be restored
+        self._specified_languages = _as_languages(language)
+        languages = [] if detect_language else self._specified_languages
         resolved_keywords = list(keywords) if is_given(keywords) else []
         _validate_context(model, languages, resolved_keywords)
 
@@ -463,8 +465,9 @@ class STT(stt.STT):
 
         Args:
             language: The language to transcribe in, or a list for gpt-transcribe and
-                gpt-live-transcribe.
-            detect_language: Whether to automatically detect the language.
+                gpt-live-transcribe. An empty list detects the language.
+            detect_language: Whether to detect the language. Turning it off falls back to the
+                last language asked for.
             model: The model to use for transcription.
             prompt: Optional free-form description of the audio.
             keywords: Literal terms to expect. Only for gpt-transcribe and gpt-live-transcribe.
@@ -474,9 +477,19 @@ class STT(stt.STT):
         """  # noqa: E501
         # resolve first: an unsupported combination must raise before anything is applied
         resolved_model = model if is_given(model) else self._opts.model
-        languages = _as_languages(language) if is_given(language) else self._opts.languages
-        if is_given(detect_language) and detect_language:
+        if is_given(language):
+            languages = _as_languages(language)
+        elif detect_language:
             languages = []
+        elif detect_language is False and not self._opts.languages:
+            logger.warning(
+                "detect_language=False names no language, falling back to %s; "
+                "pass `language` to transcribe in another",
+                self._specified_languages,
+            )
+            languages = self._specified_languages
+        else:
+            languages = self._opts.languages
         user_keywords = list(keywords) if is_given(keywords) else self._user_keywords
         _validate_context(resolved_model, languages, user_keywords)
         if not is_given(language):
@@ -499,11 +512,15 @@ class STT(stt.STT):
                     "to drive `input_audio_buffer.commit` yourself"
                 )
 
-        needs_reconnect = resolved_model != self._opts.model or languages != self._opts.languages
-        languages_given = is_given(language) or is_given(detect_language)
+        languages_changed = languages != self._opts.languages
+        needs_reconnect = resolved_model != self._opts.model or languages_changed
+        # a stream keeps a language of its own unless this call names or moves the language
+        languages_given = is_given(language) or languages_changed
         self._opts.model = resolved_model
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
+        if languages:
+            self._specified_languages = languages
         self._user_keywords = user_keywords
         # detected keyterms must not survive a switch to a model that rejects keywords
         self._opts.keywords = (
