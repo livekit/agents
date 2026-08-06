@@ -406,3 +406,78 @@ async def test_recovery_is_not_suppressed_across_paths() -> None:
     assert stream_task.done()
 
     fake1.gate.set()
+
+
+async def test_tts_recover_on_streamed_path() -> None:
+    # a provider marked unavailable is skipped on later streamed requests, so
+    # nothing has awaited by the time recovery is considered and the probe used
+    # to be dropped for want of text - leaving the process pinned to its
+    # fallback for good after one transient outage (#6678)
+    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=1.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async def _drive() -> None:
+        async with fallback_adapter.stream() as stream:
+            stream.push_text("hello test")
+            stream.end_input()
+            async for _ in stream:
+                pass
+
+    # first request: fake1 fails and is marked unavailable
+    await _drive()
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    fake1.update_options(fake_exception=None, fake_audio_duration=1.0)
+
+    # second request: fake1 is skipped, and must still be probed
+    await _drive()
+
+    assert (
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 5.0)
+    ).available, "fake1 should have recovered on the streamed path"
+
+    await fallback_adapter.aclose()
+
+
+async def test_no_recovery_probe_after_close() -> None:
+    # aclose() cancels the recovery slots once; a stream still in flight runs
+    # its finally afterwards, and a probe started there would have nothing left
+    # to cancel it - a live synthesis against a provider that was just closed
+    fake1 = FakeTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeTTS(fake_audio_duration=1.0)
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    # first request: fake1 fails and is marked unavailable
+    async with fallback_adapter.stream() as stream:
+        stream.push_text("hello test")
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    # second request left mid-flight: _pushed_tokens is populated and fake1 has
+    # been skipped, so its probe is pending when the adapter closes
+    fake1.update_options(fake_timeout=30.0, fake_exception=None)
+    stream = fallback_adapter.stream()
+    stream.push_text("hello test")  # deliberately no end_input()
+
+    drain = asyncio.create_task(_drain_stream(stream))
+    await asyncio.sleep(0.5)
+
+    await fallback_adapter.aclose()
+    await utils.aio.cancel_and_wait(drain)
+    await stream.aclose()
+
+    for tts_status in fallback_adapter._status:
+        for task in (tts_status.recovering_synthesize_task, tts_status.recovering_stream_task):
+            assert task is None or task.done(), "a recovery probe outlived aclose()"
+
+
+async def _drain_stream(stream: SynthesizeStream) -> None:
+    with contextlib.suppress(Exception):
+        async for _ in stream:
+            pass
