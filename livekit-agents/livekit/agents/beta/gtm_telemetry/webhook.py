@@ -1,6 +1,6 @@
 """Resilient webhook dispatcher for post-call reports.
 
-Signs the exact request body bytes with HMAC-SHA256 and retries transient
+Signs ``f"{timestamp}.".encode() + body`` with HMAC-SHA256 and retries transient
 failures with exponential backoff. Failures are swallowed and logged — a
 telemetry failure must never propagate into the agent session.
 """
@@ -22,8 +22,9 @@ class WebhookDispatcher:
     """POST a :class:`PostCallReport` to a webhook URL with signing and retries.
 
     Signature scheme: when ``webhook_secret`` is set, the request carries an
-    ``X-LiveKit-Signature`` header containing the HMAC-SHA256 hex digest of the
-    exact JSON body bytes. Note this is a convention specific to this
+    ``X-LiveKit-Signature`` header containing the HMAC-SHA256 hex digest of
+    ``f"{timestamp}.".encode() + body``, where ``timestamp`` is the value of the
+    ``X-LiveKit-Timestamp`` header. Note this is a convention specific to this
     dispatcher — livekit-server's own webhooks use a JWT ``Authorization``
     header instead — so receivers must implement this verification:
 
