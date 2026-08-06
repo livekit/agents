@@ -3377,15 +3377,9 @@ class AgentActivity(RecognitionHooks):
         assistant_metrics: llm.MetricsReport = {}
 
         if self.llm:
-            assistant_metrics["llm_metadata"] = {
-                "model_name": self.llm.model,
-                "model_provider": self.llm.provider,
-            }
+            assistant_metrics["llm_metadata"] = self.llm.metrics_metadata
         if self.tts:
-            assistant_metrics["tts_metadata"] = {
-                "model_name": self.tts.model,
-                "model_provider": self.tts.provider,
-            }
+            assistant_metrics["tts_metadata"] = self.tts.metrics_metadata
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
@@ -4454,10 +4448,7 @@ class AgentActivity(RecognitionHooks):
     def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
         metrics_report: llm.MetricsReport = {}
         if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
+            metrics_report["stt_metadata"] = self.stt.metrics_metadata
         if info.metrics.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.metrics.started_speaking_at
 

@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from .chat_context import ChatContext
+from .chat_context import ChatContext, MetricsMetadata
 from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
@@ -125,13 +125,16 @@ class RealtimeModelFallbackAdapter(
 
     @property
     def model(self) -> str:
-        """The model name of the instance currently serving sessions (the primary until a swap)."""
-        return self._active_instance.model
+        return "RealtimeModelFallbackAdapter"
 
     @property
     def provider(self) -> str:
-        """The provider of the instance currently serving sessions (the primary until a swap)."""
-        return self._active_instance.provider
+        return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the model currently serving sessions (the primary until a swap)."""
+        return self._active_instance.metrics_metadata
 
     def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
         sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)

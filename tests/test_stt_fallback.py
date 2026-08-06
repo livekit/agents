@@ -85,14 +85,18 @@ async def test_reports_active_instance_model_and_provider() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     # before any traffic, the primary is reported
-    assert fallback_adapter.model == "primary-model"
-    assert fallback_adapter.provider == "primary"
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
 
     await fallback_adapter.recognize([])
 
     # the fallback served the request, so metrics must be labeled with it
-    assert fallback_adapter.model == "fallback-model"
-    assert fallback_adapter.provider == "fallback"
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
@@ -102,14 +106,18 @@ async def test_reports_active_instance_model_and_provider() -> None:
         await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 1.0)
     ).available, "fake1 should have recovered"
 
-    assert fallback_adapter.model == "fallback-model"
-    assert fallback_adapter.provider == "fallback"
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
 
     # once the recovered primary serves real traffic again, the label follows
     await fallback_adapter.recognize([])
 
-    assert fallback_adapter.model == "primary-model"
-    assert fallback_adapter.provider == "primary"
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
 
     await fallback_adapter.aclose()
 
@@ -130,8 +138,10 @@ async def test_stream_reports_active_instance_model_and_provider() -> None:
         async for _ in stream:
             pass
 
-    assert fallback_adapter.model == "fallback-model"
-    assert fallback_adapter.provider == "fallback"
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
 
     await fallback_adapter.aclose()
 

@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Literal
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from .chat_context import ChatContext
+from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
 
@@ -85,13 +85,16 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        """The model of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.model
+        return "FallbackAdapter"
 
     @property
     def provider(self) -> str:
-        """The provider of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.provider
+        return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def chat(
         self,

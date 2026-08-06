@@ -5,7 +5,7 @@ import dataclasses
 import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from livekit import rtc
 
@@ -23,6 +23,9 @@ from .tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
+
+if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -110,13 +113,16 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        """The model of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.model
+        return "FallbackAdapter"
 
     @property
     def provider(self) -> str:
-        """The provider of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.provider
+        return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS

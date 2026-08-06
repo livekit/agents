@@ -103,8 +103,10 @@ async def test_reports_active_instance_model_and_provider() -> None:
     fallback_adapter = FallbackAdapter([primary, fallback])
     try:
         # before any traffic, the primary is reported
-        assert fallback_adapter.model == "primary-model"
-        assert fallback_adapter.provider == "primary"
+        assert fallback_adapter.metrics_metadata == {
+            "model_name": "primary-model",
+            "model_provider": "primary",
+        }
 
         chat_ctx = ChatContext.empty()
         chat_ctx.add_message(role="user", content="hello")
@@ -113,8 +115,12 @@ async def test_reports_active_instance_model_and_provider() -> None:
                 pass
 
         # the fallback served the request, so metrics must be labeled with it
-        assert fallback_adapter.model == "fallback-model"
-        assert fallback_adapter.provider == "fallback"
+        assert fallback_adapter.metrics_metadata == {
+            "model_name": "fallback-model",
+            "model_provider": "fallback",
+        }
+        # the adapter keeps its own stable identity for spans, logs, and error events
+        assert fallback_adapter.model == "FallbackAdapter"
     finally:
         await fallback_adapter.aclose()
 

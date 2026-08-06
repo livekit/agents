@@ -29,6 +29,7 @@ from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 
@@ -189,6 +190,11 @@ class STT(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this STT instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
 
     @property
     def capabilities(self) -> STTCapabilities:

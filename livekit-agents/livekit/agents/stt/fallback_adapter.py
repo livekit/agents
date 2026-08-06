@@ -20,6 +20,7 @@ from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
@@ -115,13 +116,16 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        """The model of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.model
+        return "FallbackAdapter"
 
     @property
     def provider(self) -> str:
-        """The provider of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
-        return self._active_instance.provider
+        return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally

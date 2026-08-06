@@ -66,16 +66,22 @@ async def test_reports_active_model_and_provider() -> None:
     adapter = RealtimeModelFallbackAdapter([primary, backup])
 
     # before any swap, the primary is reported
-    assert adapter.model == "primary-model"
-    assert adapter.provider == "primary"
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
 
     session = adapter.session()
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
 
     # the backup now serves the session, so metrics must be labeled with it
-    assert adapter.model == "backup-model"
-    assert adapter.provider == "backup"
+    assert adapter.metrics_metadata == {
+        "model_name": "backup-model",
+        "model_provider": "backup",
+    }
+    # the adapter keeps its own stable identity for spans, logs, and error events
+    assert adapter.model == "RealtimeModelFallbackAdapter"
 
 
 async def test_new_session_resets_active_model_to_primary() -> None:
@@ -86,14 +92,16 @@ async def test_new_session_resets_active_model_to_primary() -> None:
     session = adapter.session()
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
-    assert adapter.model == "backup-model"
+    assert adapter.metrics_metadata["model_name"] == "backup-model"
 
     # a fresh session (e.g. a new agent activity) always starts on the primary,
     # so the label must follow it instead of sticking to the old failover target
     adapter.session()
 
-    assert adapter.model == "primary-model"
-    assert adapter.provider == "primary"
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
 
 
 def test_requires_at_least_one_model() -> None:
