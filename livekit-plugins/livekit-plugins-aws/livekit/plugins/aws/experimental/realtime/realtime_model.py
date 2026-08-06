@@ -2211,11 +2211,9 @@ class RealtimeSession(  # noqa: F811
         try:
             # Send event sequence: contentStart → textInput → contentEnd
             await self._send_raw_event(event)
-            await asyncio.sleep(0.01)
             await self._send_raw_event(
                 self._event_builder.create_text_content_event(content_name, text)
             )
-            await asyncio.sleep(0.01)
             await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
         finally:
             self._text_block_gate.set()  # Resume audio frame transmission
