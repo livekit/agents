@@ -500,8 +500,9 @@ class STT(stt.STT):
 
         # a reconnect is the only way to apply these: gateways route on the ?model= in the
         # upgrade URL, and `languages` cannot be cleared on an open session
-        model_changed = resolved_model != self._opts.model
-        languages_cleared = bool(self._opts.languages) and not languages
+        needs_reconnect = resolved_model != self._opts.model or (
+            bool(self._opts.languages) and not languages
+        )
         self._opts.model = resolved_model
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
@@ -529,8 +530,13 @@ class STT(stt.STT):
             else:
                 self._opts.temperature = temperature
 
+        if needs_reconnect:
+            # the pool keeps idle sockets for reuse, and `_streams` may be empty between two
+            # speech sessions, so the drop happens here rather than per stream
+            self._pool.invalidate()
+
         for stream in self._streams:
-            if model_changed or languages_cleared:
+            if needs_reconnect:
                 stream.reconnect()
             else:
                 stream.apply_options()
@@ -691,9 +697,8 @@ class SpeechStream(stt.SpeechStream):
             logger.warning("failed to update the transcription session", exc_info=True)
 
     def reconnect(self) -> None:
-        """Drop the connection so the next one is built with the current options."""
+        """Rebuild the connection so it carries the current options. The STT drops the pool."""
         self._language = _transcript_language(self._opts.languages)
-        self._pool.invalidate()
         self._reconnect_event.set()
 
     async def aclose(self) -> None:

@@ -51,8 +51,10 @@ class _FakeWebSocket:
 class _FakeSession:
     def __init__(self) -> None:
         self.ws = _FakeWebSocket()
+        self.connects = 0
 
     async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:
+        self.connects += 1
         return self.ws
 
 
@@ -531,6 +533,34 @@ async def test_a_reused_connection_is_reconfigured() -> None:
     assert _sent_transcription(ws)["keywords"] == ["Acme Corp"]
 
     await second.aclose()
+
+
+@pytest.mark.parametrize(
+    ("change", "connects"),
+    [
+        # gateways route on the ?model= in the upgrade URL, so a reused socket keeps the old one
+        ({"model": "gpt-4o-mini-transcribe"}, 2),
+        ({"detect_language": True}, 2),  # `languages` cannot be cleared on an open session
+        ({"keywords": ["Acme Corp"]}, 1),  # a session.update on acquire carries this one
+    ],
+)
+async def test_a_rebuild_drops_the_idle_pooled_connection(
+    change: dict[str, Any], connects: int
+) -> None:
+    instance = _offline_stt(model="gpt-live-transcribe")
+    session = _FakeSession()
+    instance._session = session  # type: ignore[assignment]
+    # a socket the pool holds with no stream attached, as between two speech sessions
+    instance._pool.put(await instance._pool.get(timeout=5))
+    assert not instance._streams
+
+    instance.update_options(**change)
+
+    stream = instance.stream()
+    await _connected(stream)
+    assert session.connects == connects
+
+    await stream.aclose()
 
 
 async def test_session_keyterms_reach_the_next_connection() -> None:
