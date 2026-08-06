@@ -2222,6 +2222,7 @@ class RealtimeSession(  # noqa: F811
                 await self._send_raw_event(
                     self._event_builder.create_content_end_event(content_name)
                 )
+                content_started = False
             except (asyncio.CancelledError, Exception):
                 if content_started:
                     # Best-effort: close the text block so the server doesn't
