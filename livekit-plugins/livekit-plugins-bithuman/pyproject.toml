@@ -19,10 +19,21 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["livekit-agents>=1.6.5", "bithuman>=0.5.25,<3"]
+# bithuman 2.x builds only for Python 3.11 through 3.13, so the marker keeps
+# 3.10 and 3.14 from resolving it at all rather than backtracking onto 2.3.10,
+# which ships cp310 and cp314 wheels and declares no upper bound. The floor
+# stays wide so platforms 2.x dropped (Windows, x86_64 macOS, macOS < 14) can
+# still resolve the 1.x line, which satisfies everything avatar.py calls.
+dependencies = [
+    "livekit-agents>=1.6.8",
+    "bithuman>=0.5.25,<3; python_version >= '3.11' and python_version < '3.14'",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

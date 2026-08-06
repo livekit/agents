@@ -13,7 +13,7 @@ from livekit.agents import inference
 
 session = AgentSession(
     stt=inference.STT("deepgram/nova-3"),
-    llm=inference.LLM("openai/gpt-4.1-mini"),
+    llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
     tts=inference.TTS("cartesia/sonic-3"),
 )
 ```
@@ -21,6 +21,12 @@ session = AgentSession(
 **Note:** Realtime models (e.g., `openai.realtime.RealtimeModel`) are not supported by LiveKit Inference and must use the plugin directly. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
 
 ## 📁 Example Categories
+
+### 🏠 [Homepage](./homepage/)
+
+A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
+knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
+streaming TTS filters, and a split unit/eval test suite.
 
 ### 🎙️ [Voice Agents](./voice_agents/)
 
@@ -89,6 +95,20 @@ uv run examples/voice_agents/basic_agent.py console
 ```
 
 Your agent is now running in the console.
+
+### Taking an example with you
+
+Each example directory stands on its own: copy it anywhere, and
+
+```bash
+uv sync
+uv run agent.py console
+```
+
+installs from PyPI without the rest of the repo. `lk agent deploy .` works the
+same way, off the `Dockerfile` in the directory. Inside this repo the same
+directories are uv workspace members, so they run against your local SDK
+changes instead.
 
 For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
 

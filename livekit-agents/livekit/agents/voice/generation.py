@@ -16,6 +16,7 @@ from .. import llm, utils
 from ..llm import (
     ChatChunk,
     ChatContext,
+    CompletionUsage,
     StopResponse,
     ToolContext,
     ToolError,
@@ -57,7 +58,9 @@ class _LLMGenerationData:
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    started_at: float | None = None
     ttft: float | None = None
+    tps: float | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -101,6 +104,29 @@ def _inject_running_tool_calls(
                 ),
             ]
         )
+
+
+def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
+    """Remove expressive TTS markup from past assistant messages, in place.
+
+    Called when a turn runs with expressive off (toggled off via
+    ``session.update_options``, an agent-level override, or a handoff to a TTS
+    without a markup dialect): tags left in history would few-shot the LLM into
+    emitting markup that nothing downstream converts or strips, so an unsupported
+    tag would reach the TTS as literal text and be spoken. Mutates the stored
+    history: once a turn runs with expressive off, prior turns' markup is gone
+    even if expressive is re-enabled later (the re-injected instructions carry
+    the style examples instead).
+    """
+    from ..tts._provider_format import strip_all_markup
+
+    for item in chat_ctx.items:
+        if item.type != "message" or item.role != "assistant":
+            continue
+        # markup is XML-only here: strip_all_markup leaves square-bracket spans alone
+        if not any(isinstance(c, str) and "<" in c for c in item.content):
+            continue
+        item.content = [strip_all_markup(c) if isinstance(c, str) else c for c in item.content]
 
 
 def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
@@ -159,6 +185,7 @@ async def _llm_inference_task(
     provider: str | None = None,
 ) -> bool:
     start_time = time.perf_counter()
+    data.started_at = start_time
     current_span = trace.get_current_span()
     data.started_fut.set_result(None)
 
@@ -206,6 +233,9 @@ async def _llm_inference_task(
         return False
 
     # forward llm stream to output channels
+    usage: CompletionUsage | None = None
+    first_content_at: float | None = None
+    last_content_at = 0.0
     try:
         async for chunk in llm_node:
             if data.ttft is None:
@@ -218,6 +248,8 @@ async def _llm_inference_task(
                 content = chunk
 
             elif isinstance(chunk, ChatChunk):
+                if chunk.usage is not None:
+                    usage = chunk.usage
                 if not chunk.delta:
                     continue
 
@@ -259,11 +291,22 @@ async def _llm_inference_task(
 
             # route text content to output channels
             if content:
+                now = time.perf_counter()
+                if first_content_at is None:
+                    first_content_at = now
+                last_content_at = now
                 data.generated_text += content
                 text_ch.send_nowait(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
+
+    if (
+        usage is not None
+        and first_content_at is not None
+        and (streaming_window := last_content_at - first_content_at) > 0
+    ):
+        data.tps = usage.completion_tokens / streaming_window
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -282,6 +325,17 @@ class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
     timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
     ttfb: float | None = None
+    # perf_counter when the first text of this segment reached the TTS provider, as stamped
+    # by the TTS stream itself; None when a custom tts_node publishes no stamp
+    synthesis_started_at: float | None = None
+
+
+def _time_to_first_sentence(
+    llm_data: _LLMGenerationData, tts_data: _TTSGenerationData | None
+) -> float | None:
+    if llm_data.started_at is None or tts_data is None or tts_data.synthesis_started_at is None:
+        return None
+    return tts_data.synthesis_started_at - llm_data.started_at
 
 
 def perform_tts_inference(
@@ -361,10 +415,12 @@ async def _tts_inference_task(
                 # the framework TTS streams attach the time the text was first sent to the
                 # provider; without it (custom tts_node), fall back to the arrival of the
                 # first input token, which also counts any text buffering (e.g. sentence
-                # tokenization) as TTFB
-                anchor: float | None = audio_frame.userdata.get(
-                    USERDATA_TTS_STARTED_TIME, start_time
+                # tokenization) as TTFB. ttfs takes no such fallback and stays unreported.
+                anchor = data.synthesis_started_at = audio_frame.userdata.get(
+                    USERDATA_TTS_STARTED_TIME
                 )
+                if anchor is None:
+                    anchor = start_time
                 if anchor is not None:
                     data.ttfb = time.perf_counter() - anchor
                     current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
@@ -1016,6 +1072,42 @@ def remove_instructions(chat_ctx: ChatContext) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
     while True:
         if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+            chat_ctx.items.remove(msg)
+        else:
+            break
+
+
+EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change
+"""
+The ID of the expressive TTS markup-guide message in the chat context.
+"""
+
+
+def update_expressive_instructions(chat_ctx: ChatContext, *, text: str) -> None:
+    """Insert or replace the expressive markup-guide system message.
+
+    Keyed by :data:`EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID` so per-turn re-injection
+    replaces the previous guide instead of accumulating one copy per turn, and a
+    turn that runs with expressive off can remove it again
+    (:func:`remove_expressive_instructions`).
+    """
+    idx = chat_ctx.index_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
+        )
+    else:
+        chat_ctx.add_message(role="system", content=text, id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+
+
+def remove_expressive_instructions(chat_ctx: ChatContext) -> None:
+    """Remove the expressive markup-guide message added by
+    :func:`update_expressive_instructions`, if present."""
+    while True:
+        if msg := chat_ctx.get_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID):
             chat_ctx.items.remove(msg)
         else:
             break

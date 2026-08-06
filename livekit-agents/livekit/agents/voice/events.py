@@ -65,6 +65,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # the run this call belongs to; background work that outlives it must not hold a
+        # later run open
+        self._run_state = session._global_run_state
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -159,7 +163,7 @@ class RunContext(Generic[Userdata_T]):
         plays before the floor is held — keeps chat order matching code order.
         """
         await self._drain_pending_reply()
-        async with self._session._wait_for_idle_and_hold() as activity:
+        async with self._session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
     async def update(
@@ -295,6 +299,7 @@ EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
+    "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
@@ -334,6 +339,15 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class UserTranscriptionTimeoutEvent(BaseModel):
+    type: Literal["user_transcription_timeout"] = "user_transcription_timeout"
+    speech_duration: float
+    """Total VAD-detected speech (s) in the turn that produced no transcript."""
+    vad_speech_started_at: float
+    """When VAD first detected speech for this (untranscribed) turn."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -580,6 +594,7 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
+    | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent

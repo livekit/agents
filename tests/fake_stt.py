@@ -35,6 +35,7 @@ class FakeUserSpeech(BaseModel):
     interim_interval: float | None = None
     """If set, stream growing interim transcripts every ``interim_interval`` seconds
     while the user is speaking (like providers that emit continuous partial results)."""
+    final: bool = True
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
         obj = copy.deepcopy(self)
@@ -248,6 +249,8 @@ class FakeRecognizeStream(RecognizeStream):
             final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
             if curr_time() < final_transcript_time:
                 await asyncio.sleep(final_transcript_time - curr_time())
+            if not fake_speech.final:
+                continue
             self.send_fake_transcript(fake_speech.transcript, is_final=True)
 
         with contextlib.suppress(asyncio.InvalidStateError):

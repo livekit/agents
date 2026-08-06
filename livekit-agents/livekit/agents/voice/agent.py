@@ -260,6 +260,46 @@ class Agent:
             chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
         )
 
+    def update_options(
+        self,
+        *,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+    ) -> None:
+        """Swap the STT, VAD, LLM, or TTS on this agent. Only the models passed are changed.
+
+        Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
+        Strings resolve to inference models like the constructor. Pass ``None`` to disable a
+        model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
+        the swap applies to the live pipeline.
+
+        Raises:
+            RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
+                running; use ``AgentSession.update_agent`` instead.
+        """
+        if isinstance(stt, str):
+            stt = inference.STT.from_model_string(stt)
+        if isinstance(llm, str):
+            llm = inference.LLM.from_model_string(llm)
+        if isinstance(tts, str):
+            tts = inference.TTS.from_model_string(tts)
+
+        if self._activity is None:
+            # not running: replace stored config, applied on the next start
+            if is_given(stt):
+                self._stt = stt
+            if is_given(vad):
+                self._vad = vad
+            if is_given(llm):
+                self._llm = llm
+            if is_given(tts):
+                self._tts = tts
+            return
+
+        self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the VoiceAgent
@@ -920,7 +960,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         self.__inactive_ev.clear()
-        suspended_handles: list[SpeechHandle | asyncio.Task[Any]] = []
+        suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
         pending_on_enter_task: asyncio.Task[None] | None = None
         try:
             # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
@@ -951,13 +991,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
             # now unwatch the parent speech handle and blocked tasks that belong to the
             # old activity — they can't complete while this AgentTask is running, and
-            # keeping them watched would block RunResult from completing.
+            # keeping them watched would block RunResult from completing. A foreground
+            # hold waiting on this task is in the same position, so its guard suspends too.
             if run_state and not run_state.done():
                 if speech_handle and run_state._unwatch_handle(speech_handle):
                     suspended_handles.append(speech_handle)
-                for task in blocked_tasks:
-                    if run_state._unwatch_handle(task):
-                        suspended_handles.append(task)
+                for blocked in [*blocked_tasks, *session._foreground_guards]:
+                    if run_state._unwatch_handle(blocked):
+                        suspended_handles.append(blocked)
                 if suspended_handles:
                     run_state._mark_done_if_needed(None)
         except Exception:

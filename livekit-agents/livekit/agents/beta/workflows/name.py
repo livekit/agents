@@ -285,17 +285,19 @@ class GetNameTask(AgentTask[GetNameResult]):
         self, *, first_name: str, middle_name: str, last_name: str
     ) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_name() -> None:
+        async def confirm_name() -> str | None:
             """Call after the user confirms the name is correct."""
             if (
                 first_name != self._first_name
                 or middle_name != self._middle_name
                 or last_name != self._last_name
             ):
-                self.session.generate_reply(
-                    instructions="The name has changed since confirmation was requested, ask the user to confirm the updated name."
+                # stale closure: update_name ran again after this confirm tool
+                # was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The name has changed since confirmation was requested, "
+                    "ask the user to confirm the updated name."
                 )
-                return
 
             if not self.done():
                 self.complete(
@@ -305,6 +307,7 @@ class GetNameTask(AgentTask[GetNameResult]):
                         last_name=self._last_name if self._collect_last_name else None,
                     )
                 )
+            return None
 
         return confirm_name
 

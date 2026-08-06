@@ -37,6 +37,7 @@ from ..metrics import (
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
+    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -255,6 +256,8 @@ _METRICS_FIELDS = (
     "llm_node_ttft",
     "tts_node_ttfb",
     "e2e_latency",
+    "llm_node_tps",
+    "llm_node_ttfs",
 )
 
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
@@ -329,6 +332,7 @@ def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
         return agent_pb.ChatContext.ChatItem(
             function_call_output=agent_pb.FunctionCallOutput(
                 call_id=item.call_id,
+                name=item.name,
                 output=item.output,
                 is_error=item.is_error,
             )
@@ -359,6 +363,7 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
         "interruption": str(dict(opts.interruption)),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
+        "transcription_timeout": str(opts.transcription_timeout),
         "preemptive_generation": str(dict(opts.preemptive_generation)),
         "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
         "use_tts_aligned_transcript": str(opts.use_tts_aligned_transcript),
@@ -394,6 +399,7 @@ class SessionHost:
             session.on("tool_execution_updated", self._on_tool_execution_updated)
             session.on("session_usage_updated", self._on_session_usage_updated)
             session.on("overlapping_speech", self._on_overlapping_speech)
+            session.on("agent_false_interruption", self._on_agent_false_interruption)
             session.on("error", self._on_error)
             session.on("debug_message", self._on_debug_message)
 
@@ -419,6 +425,7 @@ class SessionHost:
             self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
+            self._session.off("agent_false_interruption", self._on_agent_false_interruption)
             self._session.off("error", self._on_error)
             self._session.off("debug_message", self._on_debug_message)
 
@@ -521,6 +528,7 @@ class SessionHost:
         pb_outputs = [
             agent_pb.FunctionCallOutput(
                 call_id=fco.call_id,
+                name=fco.name,
                 output=fco.output,
                 is_error=fco.is_error,
             )
@@ -602,6 +610,16 @@ class SessionHost:
             pb.overlap_started_at.CopyFrom(overlap_started_at)
 
         self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
+
+    def _on_agent_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                agent_false_interruption=agent_pb.AgentSessionEvent.AgentFalseInterruption(
+                    resumed=event.resumed,
+                )
+            ),
+            created_at=event.created_at,
+        )
 
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
         speech_duration = Duration()
@@ -1009,6 +1027,7 @@ RemoteSessionEventTypes = Literal[
     "function_tools_executed",
     "tool_execution_updated",
     "session_usage_updated",
+    "agent_false_interruption",
     "error",
 ]
 
@@ -1127,6 +1146,14 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         resp = await self._send_request(req)
         return resp.get_agent_info
+
+    async def get_framework_info(self) -> agent_pb.SessionResponse.GetFrameworkInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_framework_info=agent_pb.SessionRequest.GetFrameworkInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_framework_info
 
     async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
         req = agent_pb.SessionRequest(
