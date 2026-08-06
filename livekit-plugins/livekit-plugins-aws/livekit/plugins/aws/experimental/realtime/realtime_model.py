@@ -2219,7 +2219,6 @@ class RealtimeSession(  # noqa: F811
                 await self._send_raw_event(
                     self._event_builder.create_text_content_event(content_name, text)
                 )
-                content_started = False
                 await self._send_raw_event(
                     self._event_builder.create_content_end_event(content_name)
                 )
