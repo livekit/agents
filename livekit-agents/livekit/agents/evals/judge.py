@@ -13,7 +13,7 @@ Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
 
 
-def judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
+def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
     """Extra ``chat()`` kwargs for a judgment call.
 
     Judging is batch load: an eval suite fans out many judgments at once, they run
@@ -150,7 +150,7 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
         tool_choice="required",
         conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
-        **judge_chat_kwargs(llm),
+        **_judge_chat_kwargs(llm),
     ).collect()
 
     if not response.tool_calls:
