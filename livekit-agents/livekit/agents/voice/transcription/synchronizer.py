@@ -300,8 +300,11 @@ class _SegmentSynchronizerImpl:
         # pace against the visible text only so expressive tags don't inflate the speed
         clean_pushed_text = strip_all_markup(self._text_data.pushed_text)
         pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
-        # hyphens per second
-        if self._audio_data.pushed_duration > 0:
+        # hyphens per second. A segment whose visible text has no syllables at all
+        # (markup-only, punctuation, emoji) would estimate a speed of 0 and every
+        # pacing division in _main_task would raise ZeroDivisionError — keep the
+        # default estimate instead.
+        if pushed_hyphens > 0 and self._audio_data.pushed_duration > 0:
             self._speed = pushed_hyphens / self._audio_data.pushed_duration
 
         # hyphens per speaking unit
