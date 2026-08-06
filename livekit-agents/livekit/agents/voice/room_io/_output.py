@@ -69,6 +69,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
+        # set only when _forward_audio is neither holding nor submitting a frame
+        self._forwarding_idle = asyncio.Event()
+        self._forwarding_idle.set()
         # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
 
@@ -148,13 +151,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
 
         async def _wait_buffered_audio() -> None:
-            while not self._audio_buf.empty():
-                if not self._playback_enabled.is_set():
-                    await self._playback_enabled.wait()
-
-                await self._audio_source.wait_for_playout()
-                # avoid deadlock when clear_buffer called before capture_frame
+            while True:
+                await self._playback_enabled.wait()
+                await self._forwarding_idle.wait()
+                # The forwarder may have acquired another frame before this task resumes.
+                if self._forwarding_idle.is_set() and self._audio_buf.empty():
+                    break
                 await asyncio.sleep(0)
+
+            await self._audio_source.wait_for_playout()
 
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         await asyncio.wait(
@@ -188,26 +193,30 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
-            if not self._playback_enabled.is_set():
-                self._source_discarded_duration += self._audio_source.queued_duration
-                self._audio_source.clear_queue()
-                await self._playback_enabled.wait()
-                # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
-                # discarded mid-stream audio instead of only correcting playback duration.
-                # TODO(long): ignore frames from previous syllable
+            self._forwarding_idle.clear()
+            try:
+                if not self._playback_enabled.is_set():
+                    self._source_discarded_duration += self._audio_source.queued_duration
+                    self._audio_source.clear_queue()
+                    await self._playback_enabled.wait()
+                    # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
+                    # discarded mid-stream audio instead of only correcting playback duration.
+                    # TODO(long): ignore frames from previous syllable
 
-            if self._interrupted_event.is_set() or self._pushed_duration == 0:
-                if self._interrupted_event.is_set() and self._flush_task:
-                    await self._flush_task
+                if self._interrupted_event.is_set() or self._pushed_duration == 0:
+                    if self._interrupted_event.is_set() and self._flush_task:
+                        await self._flush_task
 
-                # ignore frames if interrupted
-                continue
+                    # ignore frames if interrupted
+                    continue
 
-            if not self._first_frame_event.is_set():
-                self._first_frame_event.set()
-                self.on_playback_started(created_at=time.time())
-            self._source_pushed_duration += frame.duration
-            await self._audio_source.capture_frame(frame)
+                if not self._first_frame_event.is_set():
+                    self._first_frame_event.set()
+                    self.on_playback_started(created_at=time.time())
+                self._source_pushed_duration += frame.duration
+                await self._audio_source.capture_frame(frame)
+            finally:
+                self._forwarding_idle.set()
 
 
 class _ParticipantLegacyTranscriptionOutput:
