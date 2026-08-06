@@ -197,27 +197,35 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    frames.append(data)
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        frames.append(data)
 
-                for frame in frames:
-                    if isinstance(frame, self._FlushSentinel):
-                        await ws.send_str("finalize")
-                    else:
-                        self._speech_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        if isinstance(frame, self._FlushSentinel):
+                            await ws.send_str("finalize")
+                        else:
+                            self._speech_duration += frame.duration
+                            await ws.send_bytes(frame.data.tobytes())
 
-            for frame in audio_bstream.flush():
-                self._speech_duration += frame.duration
-                await ws.send_bytes(frame.data.tobytes())
+                for frame in audio_bstream.flush():
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws = True
-            await ws.send_str("close")
+                closing_ws = True
+                await ws.send_str("close")
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError(
+                    message="Cartesia STT connection closed unexpectedly",
+                    retryable=True,
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

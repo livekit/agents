@@ -11,7 +11,7 @@ from typing import Any, Literal, TypedDict, overload
 import aiohttp
 from typing_extensions import NotRequired
 
-from .. import tokenize, tts, utils
+from .. import tts, utils
 from .._exceptions import (
     APIConnectionError,
     APIError,
@@ -21,7 +21,14 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..tts._provider_format import drop_bracket_cues
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
 from ._utils import create_access_token, get_default_inference_url, get_inference_headers
 
@@ -67,9 +74,21 @@ InworldModels = Literal[
     "inworld/inworld-tts-1",
 ]
 XaiModels = Literal["xai/tts-1",]
+FishAudioModels = Literal[
+    "fishaudio",
+    "fishaudio/s2.1-pro",
+    "fishaudio/s2.1-pro-free",
+    "fishaudio/s2-pro",
+]
 
 TTSModels = (
-    CartesiaModels | DeepgramModels | ElevenlabsModels | RimeModels | InworldModels | XaiModels
+    CartesiaModels
+    | DeepgramModels
+    | ElevenlabsModels
+    | RimeModels
+    | InworldModels
+    | XaiModels
+    | FishAudioModels
 )
 
 
@@ -190,6 +209,25 @@ class InworldOptions(TypedDict, total=False):
 
 class XaiOptions(TypedDict, total=False):
     bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
+    speed: float  # speaking-rate multiplier, default 1.0
+    optimize_streaming_latency: Literal[0, 1, 2]  # latency optimization level, default 0
+
+
+class FishAudioOptions(TypedDict, total=False):
+    """See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live"""
+
+    speed: float  # prosody speaking-rate multiplier, 1.0 is natural
+    volume: float  # prosody loudness adjustment in dB, 0 is natural
+    normalize_loudness: bool  # consistent output loudness; S2-Pro family only
+    temperature: float  # range 0-1, higher is more varied/expressive
+    top_p: float  # nucleus sampling probability mass, range 0-1
+    normalize: bool  # normalize numbers/dates/abbreviations before synthesis
+    latency: Literal["normal", "balanced", "low"]  # streaming latency mode
+    chunk_length: int  # characters buffered before auto-synthesis, range 100-300
+    max_new_tokens: int  # max audio tokens per text chunk, default 1024
+    min_chunk_length: int  # min characters before splitting a new chunk, range 0-100
+    condition_on_previous_chunks: bool  # use prior audio as context for consistency
+    early_stop_threshold: float  # early-stopping threshold for batching, range 0-1
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -331,6 +369,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: FishAudioModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[FishAudioOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -367,6 +424,7 @@ class TTS(tts.TTS):
             | RimeOptions
             | InworldOptions
             | XaiOptions
+            | FishAudioOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -455,6 +513,23 @@ class TTS(tts.TTS):
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
+    class Markup(tts.TTS.Markup):
+        def __init__(self, gateway_tts: TTS) -> None:
+            super().__init__(gateway_tts)
+            self._gateway_tts = gateway_tts
+
+        def _provider_key(self) -> str:
+            model = self._gateway_tts._opts.model
+            provider = model.split("/")[0]
+            if provider == "inworld" and "tts-2" in model:
+                return "inworld"
+            elif provider == "inworld":
+                return ""  # older inworld models don't support markup
+            return provider
+
+        # llm_instructions / normalize / convert are inherited from the base Markup,
+        # keyed on _provider_key() above.
+
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
         """Create a TTS instance from a model string
@@ -530,7 +605,8 @@ class TTS(tts.TTS):
             }
 
         try:
-            await ws.send_str(json.dumps(params))
+            payload = json.dumps(params)
+            await ws.send_str(payload)
         except Exception as e:
             await ws.close()
             raise APIConnectionError(
@@ -607,6 +683,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
         self._opts = replace(tts._opts)
+        # Snapshot whether expressive is active now, while the framework holds it
+        # fixed for this synthesis (set synchronously before stream()). Reading it
+        # lazily in _run would race with the next turn/session mutating the shared
+        # TTS instance.
+        self._expressive = tts._expressive
+        # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
+        # of an unclosed span here between messages
+        self._held_tokens: list[TimedString] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -618,7 +702,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        sent_tokenizer_stream = tokenize.basic.SentenceTokenizer().stream()
+        # chunking defaults (cap + expressive batch size) live in _provider_format
+        from ..tts._provider_format import sentence_tokenizer
+
+        provider = self._opts.model.split("/")[0]
+        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
@@ -626,7 +714,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(data)
+                sent_tokenizer_stream.push_text(self._tts.markup.normalize(data))
 
             sent_tokenizer_stream.end_input()
 
@@ -635,7 +723,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt["type"] = "input_transcript"
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
-                token_pkt["transcript"] = ev.token + " "
+                # re-normalize at sentence level: tags split across input chunks
+                # aren't caught by the per-chunk normalize in _input_task
+                converted = self._tts.markup.convert(self._tts.markup.normalize(ev.token))
+                token_pkt["transcript"] = converted + " "
                 generation_config: dict[str, Any] = {}
                 if self._opts.voice:
                     generation_config["voice"] = self._opts.voice
@@ -646,13 +737,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["generation_config"] = generation_config
                 token_pkt["extra"] = self._opts.extra_kwargs if self._opts.extra_kwargs else {}
                 self._mark_started()
-                await ws.send_str(json.dumps(token_pkt))
+                payload = json.dumps(token_pkt)
+                await ws.send_str(payload)
                 input_sent_event.set()
 
             end_pkt = {
                 "type": "session.flush",
             }
-            await ws.send_str(json.dumps(end_pkt))
+            flush_payload = json.dumps(end_pkt)
+            await ws.send_str(flush_payload)
             # needed in case empty input is sent
             input_sent_event.set()
 
@@ -687,27 +780,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "output_alignment":
-                    from ..voice.io import TimedString
-
+                    aligned: list[TimedString] = []
                     if words := data.get("words"):
-                        for word_info in words:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    word_info["word"],
-                                    start_time=word_info["start"],
-                                    end_time=word_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(w["word"], start_time=w["start"], end_time=w["end"])
+                            for w in words
+                        ]
                     elif chars := data.get("chars"):
-                        for char_info in chars:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    char_info["char"],
-                                    start_time=char_info["start"],
-                                    end_time=char_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(c["char"], start_time=c["start"], end_time=c["end"])
+                            for c in chars
+                        ]
+                    if aligned:
+                        # the provider aligned the *converted* text, so under expressive it
+                        # carries native cues that were never spoken
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues(aligned, self._held_tokens)
+                            if self._expressive
+                            else aligned
+                        )
                 elif data.get("type") == "done":
+                    if self._held_tokens:  # release an unclosed span, cue unresolved
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues([], self._held_tokens, final=True)
+                        )
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":

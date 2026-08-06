@@ -64,6 +64,7 @@ class SpeechHandle:
 
         self._done_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
+        self._error: BaseException | None = None
 
     @staticmethod
     def create(
@@ -137,6 +138,24 @@ class SpeechHandle:
 
     def done(self) -> bool:
         return self._done_fut.done()
+
+    def exception(self) -> BaseException | None:
+        """Return the error that caused this speech to fail, if any.
+
+        Awaiting a SpeechHandle never raises; call this method after the handle
+        is done to check whether the generation failed (e.g. ``llm.RealtimeError``
+        when a realtime reply timed out).
+
+        Raises:
+            asyncio.InvalidStateError: If the speech is not done yet.
+
+        Returns:
+            BaseException | None: The error the generation failed with, or None.
+        """
+        if not self._done_fut.done():
+            raise asyncio.InvalidStateError("SpeechHandle is not done yet")
+
+        return self._error
 
     def interrupt(self, *, force: bool = False) -> SpeechHandle:
         """Interrupt the current speech generation.
@@ -274,11 +293,12 @@ class SpeechHandle:
             self._generations[-1].set_result(None)
 
     def _mark_done(self, error: BaseException | None = None) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
+        # the error is kept out of _done_fut so awaiting the handle never raises
+        # (most handles are never awaited); it is exposed via exception() instead
+        if not self._done_fut.done():
             if error is not None:
-                self._done_fut.set_exception(error)
-            else:
-                self._done_fut.set_result(None)
+                self._error = error
+            self._done_fut.set_result(None)
 
         if self._generations:
             self._mark_generation_done()

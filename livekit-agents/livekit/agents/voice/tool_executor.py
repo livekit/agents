@@ -4,7 +4,7 @@ import asyncio
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypedDict
 
@@ -25,7 +25,13 @@ from ..llm.tool_context import (
 from ..llm.utils import prepare_function_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from .events import RunContext
+from .events import (
+    RunContext,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
+)
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -39,12 +45,14 @@ The task is still running, so DON'T make up or give information not included in 
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
-If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
-or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only run duplicate or cancel the existing one when user explicitly requests it."""
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
@@ -281,6 +289,8 @@ class _ToolExecutor:
         first_update_fut = asyncio.Future[Any]()
         run_ctx._attach_executor(self, first_update_fut)
 
+        # run the tool and return its raw output (or the caught exception); _on_done
+        # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
@@ -296,7 +306,7 @@ class _ToolExecutor:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
                 if not first_update_fut.done():
                     first_update_fut.set_result(None)
-                return
+                raise  # _on_done emits the cancelled terminal
             except Exception as e:
                 output = e
 
@@ -306,24 +316,10 @@ class _ToolExecutor:
                     first_update_fut.set_exception(output)
                 else:
                     first_update_fut.set_result(output)
-                return
-
-            if isinstance(output, BaseException):
-                if isinstance(output, ToolError):
-                    logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
-                    )
-                elif not isinstance(output, StopResponse):
-                    logger.error(
-                        "exception occurred while executing tool",
-                        extra={"function": fnc_name, "call_id": call_id},
-                        exc_info=output,
-                    )
+                return output
 
             if output is None or isinstance(output, StopResponse):
-                return
+                return output
 
             # the first update has already been returned to dispatch, so an Agent
             # return now has no surface to carry an agent_task back
@@ -335,12 +331,27 @@ class _ToolExecutor:
                     "agent handoff after a progress update is not supported",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
-                return
+                raise RuntimeError("agent handoff after a progress update is not supported")
+
+            if isinstance(output, BaseException):
+                if isinstance(output, ToolError):
+                    logger.warning(
+                        "ToolError while executing tool: %s",
+                        output.message,
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+                else:
+                    logger.error(
+                        "exception occurred while executing tool",
+                        extra={"function": fnc_name, "call_id": call_id},
+                        exc_info=output,
+                    )
 
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
         from .agent import _pass_through_activity_task_info
@@ -358,12 +369,50 @@ class _ToolExecutor:
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
-        def _on_done(_: asyncio.Task[Any]) -> None:
+        session.emit(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
+        )
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
+
+            # how the task ended: a returned value, a raised exception, or cancellation
+            try:
+                output = task.result()
+            except BaseException as e:
+                output = e
+
+            if not first_update_fut.done():
+                first_update_fut.set_result(None)  # cancelled before the first update
+
+            # one terminal entry per call; deferred entries use the _final id
+            from .agent import Agent
+
+            status: Literal["done", "error", "cancelled"]
+            message: str | None
+            if task.cancelled() or isinstance(output, asyncio.CancelledError):
+                status, message = "cancelled", None
+            elif isinstance(output, BaseException) and not isinstance(output, StopResponse):
+                status, message = "error", str(output)
+            elif output is None or isinstance(output, (StopResponse, Agent)):
+                status, message = "done", None
+            else:
+                status, message = "done", str(output)
+
+            entry_id = call_id + "_final" if run_ctx._updates else call_id
+            session.emit(
+                "tool_execution_updated",
+                ToolExecutionUpdatedEvent(
+                    update=ToolCallEnded(
+                        id=entry_id, call_id=call_id, message=message, status=status
+                    )
+                ),
+            )
 
         exe_task.add_done_callback(_on_done)
 
@@ -497,6 +546,14 @@ class _ToolExecutor:
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
+        session.emit(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=call_ids, status="scheduled", speech_id=speech.id
+                )
+            ),
+        )
         logger.debug(
             "generate async tool reply",
             extra={
@@ -511,12 +568,30 @@ class _ToolExecutor:
         )
 
         def _on_speech_done(speech: SpeechHandle) -> None:
+            reply_status: Literal["completed", "interrupted", "skipped"]
+            if speech.interrupted:
+                reply_status = "interrupted"
+            elif not speech.chat_items:
+                # the LLM judged the content already covered and produced no output
+                reply_status = "skipped"
+            else:
+                reply_status = "completed"
+
             if not speech.chat_items:
                 logger.debug(
                     "async tool reply was done without outputs",
                     extra={"speech_id": speech.id, "interrupted": speech.interrupted},
                 )
                 # TODO(long): reschedule interrupted replies?
+
+            session.emit(
+                "tool_execution_updated",
+                ToolExecutionUpdatedEvent(
+                    update=ToolReplyUpdated(
+                        update_ids=call_ids, status=reply_status, speech_id=speech.id
+                    )
+                ),
+            )
 
         speech.add_done_callback(_on_speech_done)
 

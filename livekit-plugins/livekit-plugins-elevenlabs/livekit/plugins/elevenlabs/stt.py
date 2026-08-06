@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import weakref
 from dataclasses import dataclass
@@ -40,12 +41,31 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector
+from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
 from .models import STTRealtimeSampleRates
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
+
+def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
+    """Aggregate ElevenLabs per-word logprobs into a [0, 1] transcription confidence.
+
+    Scribe returns a natural-log probability (``logprob``) per token; we average the
+    spoken-word logprobs and exponentiate to a probability (the geometric mean of the
+    token probabilities). Returns ``0.0`` when no per-word logprobs are available.
+    """
+    if not words:
+        return 0.0
+    logprobs = [
+        w["logprob"]
+        for w in words
+        if w.get("type") == "word" and isinstance(w.get("logprob"), (int, float))
+    ]
+    if not logprobs:
+        return 0.0
+    return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
 
 
 class VADOptions(TypedDict, total=False):
@@ -75,6 +95,8 @@ class STTOptions:
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
+    enable_logging: bool
+    previous_text: str | None
 
 
 class STT(stt.STT):
@@ -90,9 +112,12 @@ class STT(stt.STT):
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
-        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
+        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,  # Deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        enable_logging: bool = True,
+        previous_text: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -108,8 +133,9 @@ class STT(stt.STT):
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            model_id (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
+            model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
+            model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
                 Each keyterm can contain at most 5 words and must be less than 50 characters.
                 Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
@@ -117,25 +143,45 @@ class STT(stt.STT):
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
+            enable_logging (bool): Enable logging of the request. When set to false, zero retention
+                mode will be used. Defaults to True.
+            previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
+                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
-        if is_given(use_realtime):
-            if is_given(model_id):
+        if is_given(model_id):
+            if is_given(model):
                 logger.warning(
-                    "both `use_realtime` and `model_id` parameters are provided. `use_realtime` will be ignored."
+                    "both `model` and `model_id` parameters are provided. `model_id` will be ignored."
+                )
+            else:
+                logger.warning("`model_id` parameter is deprecated, use `model` instead.")
+                model = model_id
+
+        if is_given(use_realtime):
+            if is_given(model):
+                logger.warning(
+                    "both `use_realtime` and `model` parameters are provided. `use_realtime` will be ignored."
                 )
             else:
                 logger.warning(
                     "`use_realtime` parameter is deprecated. "
-                    "Specify a realtime model_id to enable streaming. "
-                    "Defaulting model_id to one based on use_realtime parameter. "
+                    "Specify a realtime model to enable streaming. "
+                    "Defaulting model to one based on use_realtime parameter. "
                 )
-                model_id = "scribe_v2_realtime" if use_realtime else "scribe_v1"
-        model_id = model_id if is_given(model_id) else "scribe_v1"
-        use_realtime = model_id == "scribe_v2_realtime"
+                model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
+        model = model if is_given(model) else "scribe_v1"
+        use_realtime = model == "scribe_v2_realtime"
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
+
+        resolved_previous_text = previous_text if is_given(previous_text) else None
+        if not use_realtime and resolved_previous_text is not None:
+            logger.warning(
+                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+            )
+            resolved_previous_text = None
 
         super().__init__(
             capabilities=STTCapabilities(
@@ -160,9 +206,11 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             server_vad=server_vad,
             include_timestamps=include_timestamps,
-            model_id=model_id,
+            model_id=model,
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
+            enable_logging=enable_logging,
+            previous_text=resolved_previous_text,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -206,7 +254,7 @@ class STT(stt.STT):
 
         try:
             async with self._ensure_session().post(
-                f"{self._opts.base_url}/speech-to-text",
+                _synthesize_url(self._opts),
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
             ) as response:
@@ -215,7 +263,7 @@ class STT(stt.STT):
                     raise APIStatusError(
                         message=response_json.get("detail", "Unknown ElevenLabs error"),
                         status_code=response.status,
-                        request_id=None,
+                        request_id=trace_id_from_headers(response.headers),
                         body=response_json,
                     )
                 extracted_text = response_json.get("text")
@@ -234,7 +282,7 @@ class STT(stt.STT):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
         except Exception as e:
@@ -268,6 +316,7 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    confidence=_speech_confidence(words),
                     words=[
                         TimedString(
                             text=word.get("text", ""),
@@ -405,34 +454,49 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                # Write audio bytes to buffer and get 50ms frames
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    # Write audio bytes to buffer and get 50ms frames
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": audio_b64,
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                            }
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": audio_b64,
+                                    "commit": False,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
                         )
-                    )
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": "",
+                                    "commit": True,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
+                        )
                         has_ended = False
 
-            closing_ws = True
+                closing_ws = True
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -469,6 +533,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                if self._opts.previous_text:
+                    # Must be the first input_audio_chunk on the connection.
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                                "previous_text": self._opts.previous_text,
+                            }
+                        )
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -506,6 +583,7 @@ class SpeechStream(stt.SpeechStream):
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
             f"commit_strategy={commit_strategy}",
+            f"enable_logging={str(self._opts.enable_logging).lower()}",
         ]
 
         if not self._language:
@@ -546,6 +624,12 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=trace_id_from_headers(e.headers),
+            ) from e
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("Failed to connect to ElevenLabs") from e
 
@@ -568,6 +652,7 @@ class SpeechStream(stt.SpeechStream):
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
+            confidence=_speech_confidence(words),
         )
         if words:
             speech_data.words = [
@@ -663,3 +748,9 @@ class SpeechStream(stt.SpeechStream):
             pass
         else:
             logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+
+
+def _synthesize_url(opts: STTOptions) -> str:
+    base_url = opts.base_url
+    url = f"{base_url}/speech-to-text?enable_logging={str(opts.enable_logging).lower()}"
+    return url

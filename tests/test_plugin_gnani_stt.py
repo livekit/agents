@@ -68,11 +68,20 @@ def test_stt_accepts_8k_sample_rate():
 
 
 def test_stt_rejects_invalid_sample_rate():
-    """STT rejects sample rates other than 8000 or 16000."""
+    """STT rejects sample rates outside STREAM_SUPPORTED_SAMPLE_RATES."""
     from livekit.plugins.gnani import STT
 
     with pytest.raises(ValueError, match="sample_rate"):
-        STT(api_key="test-key", sample_rate=44100)
+        STT(api_key="test-key", sample_rate=12345)
+
+
+def test_stt_accepts_44k_and_48k_sample_rates():
+    """STT accepts 44100 and 48000 Hz sample rates."""
+    from livekit.plugins.gnani import STT
+
+    for rate in (44100, 48000):
+        stt = STT(api_key="test-key", sample_rate=rate)
+        assert stt._opts.sample_rate == rate
 
 
 def test_stt_capabilities():
@@ -116,34 +125,13 @@ def test_stt_custom_base_url():
     assert stt._opts.base_url == "https://custom.api.com"
 
 
-def test_stt_organization_and_user_id():
-    """STT accepts organization_id and user_id."""
+def test_stt_only_api_key_auth():
+    """STT options only contain api_key for authentication (no organization_id or user_id)."""
     from livekit.plugins.gnani import STT
 
-    stt = STT(
-        api_key="test-key",
-        organization_id="org-123",
-        user_id="user-456",
-    )
-    assert stt._opts.organization_id == "org-123"
-    assert stt._opts.user_id == "user-456"
-
-
-def test_stt_org_from_env():
-    """STT reads organization_id and user_id from environment."""
-    from livekit.plugins.gnani import STT
-
-    with patch.dict(
-        "os.environ",
-        {
-            "GNANI_API_KEY": "key",
-            "GNANI_ORGANIZATION_ID": "env-org",
-            "GNANI_USER_ID": "env-user",
-        },
-    ):
-        stt = STT()
-        assert stt._opts.organization_id == "env-org"
-        assert stt._opts.user_id == "env-user"
+    stt = STT(api_key="test-key")
+    assert not hasattr(stt._opts, "organization_id")
+    assert not hasattr(stt._opts, "user_id")
 
 
 def test_speech_stream_ws_url_https():
@@ -198,3 +186,94 @@ def test_speech_stream_ws_url_http():
         )
 
     assert stream._build_ws_url() == "ws://localhost:8080/stt/v3/stream"
+
+
+def test_stt_default_format():
+    """STT defaults to 'verbatim' format."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.format == "verbatim"
+
+
+def test_stt_transcribe_format():
+    """STT accepts 'transcribe' format for ITN."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", format="transcribe")
+    assert stt._opts.format == "transcribe"
+
+
+def test_stt_default_preferred_language():
+    """STT defaults preferred_language to None."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.preferred_language is None
+
+
+def test_stt_custom_preferred_language():
+    """STT accepts custom preferred_language."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", preferred_language="hi-IN")
+    assert stt._opts.preferred_language == "hi-IN"
+
+
+def test_stt_default_itn_native_numerals():
+    """STT defaults itn_native_numerals to False."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.itn_native_numerals is False
+
+
+def test_stt_itn_native_numerals_enabled():
+    """STT accepts itn_native_numerals=True."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", format="transcribe", itn_native_numerals=True)
+    assert stt._opts.itn_native_numerals is True
+
+
+def test_stt_deprecated_kwargs_warning(caplog):
+    """STT warns about deprecated kwargs without raising."""
+    import logging
+
+    from livekit.plugins.gnani import STT
+
+    with caplog.at_level(logging.WARNING):
+        stt = STT(api_key="test-key", organization_id="old", user_id="old")
+    assert "deprecated" in caplog.text.lower()
+    assert stt._opts.api_key == "test-key"
+
+
+def test_stt_stream_returns_speech_stream():
+    """STT.stream() returns a SpeechStream instance."""
+    from livekit.plugins.gnani import STT
+    from livekit.plugins.gnani.stt import SpeechStream
+
+    stt = STT(api_key="test-key")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+    assert isinstance(stream, SpeechStream)
+
+
+def test_stt_stream_inherits_language():
+    """STT.stream() uses the configured language."""
+    from livekit.plugins.gnani import STT
+
+    stt = STT(api_key="test-key", language="hi-IN")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+    assert stream._opts.language == "hi-IN"

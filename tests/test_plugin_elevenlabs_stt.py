@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+import dataclasses
+import json
+import time
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any, cast
 
-from livekit.agents import stt
+import pytest
+from multidict import CIMultiDict
+
+from livekit import rtc
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
 pytestmark = pytest.mark.plugin("elevenlabs")
 
@@ -32,6 +43,8 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
         no_verbatim=False,
+        enable_logging=True,
+        previous_text=None,
     )
     stream._language = None
     stream._event_ch = _EventSink()
@@ -84,7 +97,7 @@ def test_manual_commit_still_waits_for_empty_commit() -> None:
 
 
 def _stt(**kwargs: object) -> elevenlabs_stt.STT:
-    return elevenlabs_stt.STT(api_key="test-key", model_id="scribe_v2_realtime", **kwargs)
+    return elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
 
 
 def test_no_verbatim_defaults_to_false() -> None:
@@ -123,3 +136,190 @@ def test_update_options_forwards_no_verbatim_to_active_streams() -> None:
     instance._streams.add(fake)
     instance.update_options(no_verbatim=True)
     assert captured.get("no_verbatim") is True
+
+
+def test_enable_logging_defaults_to_true() -> None:
+    assert _stt()._opts.enable_logging is True
+
+
+def test_enable_logging_can_be_disabled() -> None:
+    assert _stt(enable_logging=False)._opts.enable_logging is False
+
+
+def test_previous_text_is_kept_for_realtime_model() -> None:
+    assert _stt(previous_text="prior context")._opts.previous_text == "prior context"
+
+
+def test_previous_text_is_ignored_for_non_realtime_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key",
+            model="scribe_v2",
+            previous_text="prior context",
+        )
+
+    assert instance._opts.previous_text is None
+    assert any("previous_text" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(("enable_logging", "expected"), [(True, "true"), (False, "false")])
+async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected: str) -> None:
+    # enable_logging is a WebSocket query param. Verify it is forwarded to the
+    # realtime connect URL with the expected lowercase boolean string.
+    stream = _new_stream()
+    stream._opts.enable_logging = enable_logging
+
+    class _ConnOptions:
+        timeout = 5.0
+
+    stream._conn_options = _ConnOptions()
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **kwargs: object) -> object:
+            captured["url"] = url
+            return object()
+
+    stream._session = _FakeSession()
+
+    await stream._connect_ws()
+
+    assert f"enable_logging={expected}" in captured["url"]
+
+
+class _FakeWS:
+    """Records outgoing messages. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive(self) -> Any:
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def _live_stream(ws: _FakeWS) -> elevenlabs_stt.SpeechStream:
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    opts = dataclasses.replace(instance._opts, sample_rate=16000)
+    stream = elevenlabs_stt.SpeechStream(
+        stt=instance,
+        opts=opts,
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        language=None,
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+    )
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect  # type: ignore[method-assign]
+    return stream
+
+
+def _frame(ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * samples,
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_flush_commits_the_turn_when_no_audio_is_left_to_send() -> None:
+    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # The commit must still go out: Scribe v2 does not finalize a turn without one, and
+    # gating it on the per-frame loop dropped it here (roughly 1 flush in 5).
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: len(ws.sent) == 1)
+
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert ws.sent[-1]["audio_base_64"] == ""
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_commits_after_the_buffered_audio() -> None:
+    # a partial chunk is still pending: it has to reach the server before the commit,
+    # otherwise the tail of the turn is transcribed against the next one
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(30))
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        assert [msg["commit"] for msg in ws.sent] == [False, True]
+        assert ws.sent[0]["audio_base_64"] != ""
+    finally:
+        await stream.aclose()
+
+
+def test_trace_id_from_headers() -> None:
+    # header lookup is case-insensitive, and an absent header returns None
+    assert trace_id_from_headers(CIMultiDict({"X-Trace-Id": "trace-1"})) == "trace-1"
+    assert trace_id_from_headers(CIMultiDict()) is None
+    assert trace_id_from_headers(None) is None
+
+
+def test_speech_confidence_from_word_logprobs() -> None:
+    # confident transcription: word logprobs near 0 -> confidence near 1 (spacing tokens ignored)
+    words = [
+        {"type": "word", "logprob": -0.01},
+        {"type": "spacing", "logprob": -2.0},
+        {"type": "word", "logprob": -0.05},
+    ]
+    assert 0.9 < elevenlabs_stt._speech_confidence(words) <= 1.0
+
+
+def test_speech_confidence_flags_low_quality_transcription() -> None:
+    # uncertain transcription (very negative logprobs) -> low confidence
+    words = [{"type": "word", "logprob": -2.5}, {"type": "word", "logprob": -3.0}]
+    assert elevenlabs_stt._speech_confidence(words) < 0.2
+
+
+def test_speech_confidence_defaults_to_zero_without_logprobs() -> None:
+    # no words, or words without logprobs (e.g. non-timestamped commit) -> default 0.0
+    assert elevenlabs_stt._speech_confidence(None) == 0.0
+    assert elevenlabs_stt._speech_confidence([{"text": "hi", "start": 0.1, "end": 0.4}]) == 0.0
+
+
+def test_committed_transcript_sets_confidence() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    stream._process_stream_event(
+        {
+            "message_type": "committed_transcript",
+            "text": "hello",
+            "words": [
+                {"text": "hello", "start": 0.1, "end": 0.4, "type": "word", "logprob": -0.02}
+            ],
+        }
+    )
+
+    final = stream._event_ch.events[1]
+    assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert final.alternatives[0].confidence > 0.9

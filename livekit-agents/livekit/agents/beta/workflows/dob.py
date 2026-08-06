@@ -94,7 +94,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     modality_specific=_AUDIO_SPECIFIC,
                     time_instructions=time_instructions,
                     confirmation_instructions=(
@@ -151,6 +151,14 @@ class GetDOBTask(AgentTask[GetDOBResult]):
     async def _update_dob_impl(
         self, year: int, month: int, day: int, ctx: RunContext
     ) -> str | None:
+        # Normalize two-digit years to the intended century, matching what the
+        # prompt already asks the model to do ("90" -> 1990, "05" -> 2005). A
+        # literal two-digit year is otherwise a valid date (e.g. 90 -> year 90 AD)
+        # that passes the future-date check and silently corrupts the result.
+        if 0 <= year < 100:
+            current_yy = date.today().year % 100
+            year += 2000 if year <= current_yy else 1900
+
         try:
             dob = date(year, month, day)
         except ValueError as e:
@@ -254,19 +262,18 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         captured_time = self._current_time
 
         @function_tool()
-        async def confirm_dob() -> None:
+        async def confirm_dob() -> str | None:
             """Call after the user confirms the date of birth is correct."""
             if captured_dob != self._current_dob or captured_time != self._current_time:
-                self.session.generate_reply(
-                    instructions="The date of birth has changed since confirmation was requested, ask the user to confirm the updated date."
+                # stale closure: update_dob/update_time ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The date of birth has changed since confirmation was requested, "
+                    "ask the user to confirm the updated date."
                 )
-                return
 
             if self._current_dob is None:
-                self.session.generate_reply(
-                    instructions="No date of birth was provided yet, ask the user to provide it."
-                )
-                return
+                return "No date of birth was provided yet, ask the user to provide it."
 
             if not self.done():
                 self.complete(
@@ -275,6 +282,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
                         time_of_birth=self._current_time,
                     )
                 )
+            return None
 
         return confirm_dob
 

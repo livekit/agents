@@ -34,6 +34,24 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
+# Every session event the host forwards to a remote consumer. Asserting the set
+# rather than its size says which events are forwarded, and pairs register with
+# aclose: an `on` added without its `off` leaks a handler across reconnects and
+# only shows up as a mismatch between these two.
+FORWARDED_EVENTS = {
+    "agent_false_interruption",
+    "agent_state_changed",
+    "conversation_item_added",
+    "debug_message",
+    "error",
+    "function_tools_executed",
+    "overlapping_speech",
+    "session_usage_updated",
+    "tool_execution_updated",
+    "user_input_transcribed",
+    "user_state_changed",
+}
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------
@@ -158,6 +176,14 @@ class TestMetricsToProto:
         pb = _metrics_to_proto(metrics)
         assert pb.transcription_delay == pytest.approx(0.42)
 
+    def test_llm_node_throughput_fields(self) -> None:
+        # guards the dict-key -> proto-field mapping: a mismatch (e.g. "tps" vs
+        # "llm_node_tps") raises at MetricsReport(**kwargs) instead of silently dropping.
+        metrics = {"llm_node_tps": 12.5, "llm_node_ttfs": 0.6}
+        pb = _metrics_to_proto(metrics)
+        assert pb.llm_node_tps == pytest.approx(12.5)
+        assert pb.llm_node_ttfs == pytest.approx(0.6)
+
 
 class TestSessionUsageToProto:
     def test_llm_usage(self) -> None:
@@ -278,7 +304,8 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 9
+        subscribed = {call.args[0] for call in mock_session.on.call_args_list}
+        assert subscribed == FORWARDED_EVENTS
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -322,6 +349,75 @@ class TestSessionHostEvents:
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
+        from livekit.agents.llm import FunctionCall
+        from livekit.agents.voice.events import (
+            ToolCallEnded,
+            ToolCallStarted,
+            ToolCallUpdated,
+            ToolExecutionUpdatedEvent,
+            ToolReplyUpdated,
+        )
+
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallStarted(
+                    function_call=FunctionCall(call_id="c1", name="my_tool", arguments="{}")
+                )
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(id="c1_update_1", call_id="c1", message="working")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="c1_final", call_id="c1", message="result", status="done")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=["c1_update_1", "c1_final"],
+                    status="completed",
+                    speech_id="speech_1",
+                )
+            )
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 4
+        started = transport.sent[0].event.tool_execution_updated
+        assert started.WhichOneof("update") == "started"
+        assert started.started.function_call.call_id == "c1"
+        assert started.started.function_call.name == "my_tool"
+
+        call_updated = transport.sent[1].event.tool_execution_updated
+        assert call_updated.WhichOneof("update") == "call_updated"
+        assert call_updated.call_updated.id == "c1_update_1"
+        assert call_updated.call_updated.call_id == "c1"
+        assert call_updated.call_updated.message == "working"
+
+        ended = transport.sent[2].event.tool_execution_updated
+        assert ended.WhichOneof("update") == "ended"
+        assert ended.ended.id == "c1_final"
+        assert ended.ended.call_id == "c1"
+        assert ended.ended.message == "result"
+        assert ended.ended.status == agent_pb.TC_DONE
+
+        reply_updated = transport.sent[3].event.tool_execution_updated
+        assert reply_updated.WhichOneof("update") == "reply_updated"
+        assert list(reply_updated.reply_updated.update_ids) == ["c1_update_1", "c1_final"]
+        assert reply_updated.reply_updated.status == agent_pb.TR_COMPLETED
+        assert reply_updated.reply_updated.speech_id == "speech_1"
 
         await host.aclose()
 
@@ -591,4 +687,5 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 9
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS

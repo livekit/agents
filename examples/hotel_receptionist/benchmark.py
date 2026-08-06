@@ -28,6 +28,21 @@ TRANSACTIONAL_TABLES: tuple[str, ...] = (
     "restaurant_reservations",
     "hotel_followups",
     "hotel_disputes",
+    "group_inquiries",
+    "guest_messages",
+    "wakeup_calls",
+    "tour_bookings",
+    "spa_bookings",
+    "business_center_bookings",
+    "florist_orders",
+    "emails_sent",
+    "transfer_calls",
+    "waitlist",
+    "do_not_disturb",
+    "flight_reconfirmations",
+    "airport_cars",
+    "emergency_dispatches",
+    "walk_arrangements",
 )
 
 # The only columns excluded from comparison, by reason:
@@ -38,10 +53,6 @@ DENY_COLUMNS = frozenset(
         "code",
         "case_number",
         "booking_code",
-        # booking math: tool-computed by compute_invoice from type + dates +
-        # extras, which are all already compared — so asserting it would grade the
-        # mock's arithmetic, not the agent. (It also varies with which room of a
-        # type book_room picks, since seed rates differ within a type.)
         "total",
         "subtotal",
         "taxes",
@@ -51,12 +62,17 @@ DENY_COLUMNS = frozenset(
         "caller_note",
         "notes",
         "late_arrival_note",
+        "message",
+        "situation",
     }
 )
 
 # Resolve FK surrogate -> stable attribute (correlated subquery, single table).
 FK_RESOLVE: dict[tuple[str, str], str] = {
-    ("hotel_bookings", "room_id"): "(SELECT type FROM hotel_rooms WHERE id = room_id) AS room_type",
+    (
+        "hotel_bookings",
+        "room_id",
+    ): "(SELECT type || '/' || room_view FROM hotel_rooms WHERE id = room_id) AS room_type_view",
     (
         "restaurant_reservations",
         "table_id",

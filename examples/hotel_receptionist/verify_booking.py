@@ -15,9 +15,11 @@ The caller wants to look up an existing reservation - verify them first.
 
 Default path: ask for last name plus confirmation code (codes look like HTL-XXXX). Read the code back letter by letter to confirm before looking up the booking.
 
-Fallback if they don't have the code: ask for last name plus the last four digits of the card on file, then look up the booking by card. Never accept just one of the two.
+Fallback if they don't have the code: ask for last name plus the last four digits of the card on file, then look up the booking by card. Never accept just one of the two. Those are the ONLY two paths - email is not a verification field; never ask for it here.
 
 If the caller already gave their last name or code earlier in the call, use it - don't make them repeat.
+
+If no booking turns up and the caller wants to do something else instead (make a NEW booking, leave it, anything beyond verifying), call give_up right away - the tools for their request live outside this step, and the conversation continues there. Your only tools here are the two lookups and give_up: a call to anything else returns an error and does NOTHING - never tell the caller something was booked, recorded, or arranged after an error.
 """
 
 
@@ -27,9 +29,18 @@ class VerifyBookingResult:
 
 
 class VerifyBookingTask(AgentTask[VerifyBookingResult]):
-    def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
+    def __init__(
+        self,
+        db: HotelDB,
+        *,
+        allow_cancelled: bool = False,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+    ) -> None:
         self._db = db
         self._attempts = 0
+        # Reinstating a cancelled booking is the one flow that must verify against a
+        # cancelled record; every other flow only accepts a confirmed booking.
+        self._allow_cancelled = allow_cancelled
         super().__init__(
             instructions=f"{COMMON_INSTRUCTIONS}\n\n{_VERIFY_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
@@ -70,16 +81,27 @@ class VerifyBookingTask(AgentTask[VerifyBookingResult]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def give_up(self, reason: str) -> None:
-        """Abandon verification after repeated failures.
+        """End the verification step: after repeated failures, OR the moment the caller pivots to something verification isn't needed for (a new booking, a general question, giving up on the lookup). The right tools for their request become available again once this returns.
 
         Args:
-            reason: short explanation
+            reason: short explanation (e.g. "no booking found - caller wants a new booking instead")
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't verify the booking: {reason}"))
+            self.complete(
+                ToolError(
+                    f"couldn't verify the booking: {reason} | verification is closed - your full "
+                    "toolset is back: continue with what the caller actually wants (a new booking "
+                    "-> start_room_booking; a followup -> record_followup). Nothing was booked or "
+                    "recorded during verification - don't claim otherwise."
+                )
+            )
 
     def _handle(self, booking: RoomBooking | None, kind: str) -> str | None:
-        if booking is not None and booking.status == "confirmed":
+        accept = booking is not None and (
+            booking.status == "confirmed"
+            or (self._allow_cancelled and booking.status == "cancelled")
+        )
+        if accept:
             if not self.done():
                 self.complete(VerifyBookingResult(booking=booking))
             return None

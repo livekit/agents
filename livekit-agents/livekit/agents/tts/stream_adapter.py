@@ -128,6 +128,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                 if not (text := ev.token.strip()):
                     continue
 
+                self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(
                     text, conn_options=self._wrapped_tts_conn_options
                 ) as tts_stream:

@@ -108,6 +108,19 @@ class FallbackAdapter(
             extra_kwargs=extra_kwargs,
         )
 
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm the primary LLM.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if self._llm_instances:
+            self._llm_instances[0].prewarm(loop=loop)
+
     async def aclose(self) -> None:
         for llm_instance in self._llm_instances:
             llm_instance.off("metrics_collected", self._on_metrics_collected)

@@ -100,6 +100,47 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
+| `websocket_timeout_sec` | `int` | Seconds of inactivity before the Phonic websocket is closed |
+| `intelligence_level` | `"standard"` \| `"high"` | LLM intelligence level |
+| `is_welcome_message_interruptible` | `bool` | When False, the welcome message cannot be interrupted |
+| `vad_prebuffer_duration_ms` | `int` | Voice-activity-detection prebuffer duration (ms) |
+| `vad_min_speech_duration_ms` | `int` | Minimum speech duration for VAD (ms) |
+| `vad_min_silence_duration_ms` | `int` | Minimum silence duration for VAD (ms) |
+| `vad_threshold` | `float` | Voice-activity-detection threshold |
+| `enable_assistant_backchannel` | `bool` | When True, the assistant backchannels (e.g. "mm-hmm") while the user speaks |
+| `assistant_backchannel_aggressiveness` | `float` | How aggressively the assistant backchannels (needs `enable_assistant_backchannel`) |
+| `pronunciation_dictionary` | `list[PronunciationEntry]` | `{ word, pronunciation }` entries; words must be unique |
+| `template_variables` | `dict[str, str]` | Variables substituted into the system prompt and welcome message |
+| `enable_redaction` | `bool` | Redact PII/PHI from transcripts and bleep it from audio after the conversation |
+| `mcp_servers` | `list[str]` | Names of pre-configured MCP servers to make available (must be unique) |
+| `observability_integrations` | `list["braintrust"]` | Observability integrations to forward traces to |
+| `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
+| `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
+| `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
+
+### Per-tool configuration
+
+`configs_for_tools` takes one entry per tool you want to customize. Each entry is keyed by the tool `name`; every other field is optional and falls back to the plugin default when omitted. Tools with no entry keep the defaults.
+
+```python
+RealtimeModel(
+    configs_for_tools=[
+        {"name": "transfer_call", "forbid_speech_after_tool_call": True},
+        {"name": "submit_form", "forbid_tool_call_after_speech": True},
+    ],
+)
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Tool this config applies to (required) |
+| `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
+| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
+| `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
+
+The plugin always sends tool calls with `wait_for_speech_before_tool_call` on and `allow_tool_chaining` off; these are not configurable per tool.
+
+> **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
 
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 

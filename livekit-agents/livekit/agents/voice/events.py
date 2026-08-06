@@ -65,6 +65,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # the run this call belongs to; background work that outlives it must not hold a
+        # later run open
+        self._run_state = session._global_run_state
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -159,7 +163,7 @@ class RunContext(Generic[Userdata_T]):
         plays before the floor is held — keeps chat order matching code order.
         """
         await self._drain_pending_reply()
-        async with self._session._wait_for_idle_and_hold() as activity:
+        async with self._session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
     async def update(
@@ -185,6 +189,9 @@ class RunContext(Generic[Userdata_T]):
         # pending filler doesn't race the real update to the speech queue
         for s in self._filler_schedulers:
             s.reset_dwell()
+
+        # events carry the raw message, before the LLM-facing template wraps it
+        raw_message = message if isinstance(message, str) else str(message)
 
         if isinstance(message, str):
             if template is None:
@@ -213,7 +220,18 @@ class RunContext(Generic[Userdata_T]):
         self._updates.append(pair)
 
         if self._executor is None:
-            return  # standalone — nothing else to do
+            return  # standalone — no executor, so no tool lifecycle to report
+
+        self._session.emit(
+            "tool_execution_updated",
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(
+                    id=pair[0].call_id,
+                    call_id=self.function_call.call_id,
+                    message=raw_message,
+                )
+            ),
+        )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
@@ -281,6 +299,7 @@ EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
+    "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
@@ -288,6 +307,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
+    "tool_execution_updated",
     "error",
     "close",
     "debug_message",
@@ -315,6 +335,8 @@ class UserInputTranscribedEvent(BaseModel):
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
     transcript: str
     is_final: bool
+    item_id: str | None = None
+    """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
     item_id: str | None = None
@@ -324,6 +346,15 @@ class UserInputTranscribedEvent(BaseModel):
     interim transcripts and react exactly once per utterance using the
     provider-agnostic event surface. ``None`` on STT paths where no upstream
     item id exists. See https://github.com/livekit/agents/issues/6109."""
+    created_at: float = Field(default_factory=time.time)
+
+
+class UserTranscriptionTimeoutEvent(BaseModel):
+    type: Literal["user_transcription_timeout"] = "user_transcription_timeout"
+    speech_duration: float
+    """Total VAD-detected speech (s) in the turn that produced no transcript."""
+    vad_speech_started_at: float
+    """When VAD first detected speech for this (untranscribed) turn."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -460,6 +491,60 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class ToolCallStarted(BaseModel):
+    """A function tool call was dispatched."""
+
+    type: Literal["tool_call_started"] = "tool_call_started"
+    function_call: FunctionCall
+
+
+class ToolCallUpdated(BaseModel):
+    """A progress update emitted via ``ctx.update()`` while a tool call runs."""
+
+    type: Literal["tool_call_updated"] = "tool_call_updated"
+    id: str
+    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
+    call_id: str
+    message: str
+
+
+class ToolCallEnded(BaseModel):
+    """A tool call's single terminal entry."""
+
+    type: Literal["tool_call_ended"] = "tool_call_ended"
+    id: str
+    """Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred."""
+    call_id: str
+    message: str | None = None
+    """Result or error text; None when there is nothing to voice."""
+    status: Literal["done", "error", "cancelled"]
+
+
+class ToolReplyUpdated(BaseModel):
+    """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
+    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
+    several calls; an inline first update never gets one."""
+
+    type: Literal["tool_reply_updated"] = "tool_reply_updated"
+    update_ids: list[str]
+    """``ToolCallUpdated.id`` values this reply covers."""
+    status: Literal["scheduled", "completed", "interrupted", "skipped"]
+    speech_id: str
+    """Id of the reply speech; ``speech_created`` carries its handle."""
+
+
+class ToolExecutionUpdatedEvent(BaseModel):
+    """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
+    → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``."""
+
+    type: Literal["tool_execution_updated"] = "tool_execution_updated"
+    update: Annotated[
+        ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated,
+        Field(discriminator="type"),
+    ]
+    created_at: float = Field(default_factory=time.time)
+
+
 class UserTurnExceededEvent(BaseModel):
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
@@ -516,6 +601,7 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
+    | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
@@ -524,6 +610,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
+    | ToolExecutionUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

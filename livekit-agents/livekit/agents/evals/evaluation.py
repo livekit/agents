@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..llm import LLM, ChatContext
 from .judge import JudgmentResult
@@ -108,12 +108,19 @@ class JudgeGroup:
         Args:
             llm: The LLM to use for evaluation. Can be an LLM instance or a model
                 string like "openai/gpt-4o-mini" (uses LiveKit inference gateway).
+                Model strings default to the lowest reasoning effort the model
+                supports; pass a configured LLM instance to override.
             judges: The judges to run during evaluation.
         """
         if isinstance(llm, str):
             from ..inference import LLM as InferenceLLM
+            from ..inference.llm import min_reasoning_effort
 
-            self._llm: LLM = InferenceLLM(llm)
+            extra_kwargs: dict[str, Any] = {}
+            if (effort := min_reasoning_effort(llm)) is not None:
+                extra_kwargs["reasoning_effort"] = effort
+
+            self._llm: LLM = InferenceLLM(llm, extra_kwargs=extra_kwargs)
         else:
             self._llm = llm
 
