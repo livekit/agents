@@ -28,6 +28,16 @@ from .detect import (
     RestDetectTransport,
 )
 from .models import TTSModels
+from .signal import (
+    ResembleSignal,
+    RestSignalTransport,
+    SignalAction,
+    SignalCategoryScore,
+    SignalModality,
+    SignalResult,
+    SignalTransport,
+    SignalVerdict,
+)
 from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
@@ -44,6 +54,14 @@ __all__ = [
     "DetectionSecurity",
     "DetectTransport",
     "RestDetectTransport",
+    "ResembleSignal",
+    "SignalResult",
+    "SignalCategoryScore",
+    "SignalVerdict",
+    "SignalModality",
+    "SignalAction",
+    "SignalTransport",
+    "RestSignalTransport",
     "__version__",
 ]
 

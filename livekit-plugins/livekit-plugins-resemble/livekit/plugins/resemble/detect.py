@@ -44,7 +44,14 @@ DetectionSecurity = Literal["spot", "standard", "high"]
 DetectionAction = Literal["continue", "watch", "verify", "block"]
 DetectFormFieldValue = str | int | float | bool
 
-EventTypes = Literal["result", "fake_detected", "synthetic_detected", "verdict", "error"]
+EventTypes = Literal[
+    "analysis_started",
+    "result",
+    "fake_detected",
+    "synthetic_detected",
+    "verdict",
+    "error",
+]
 
 
 class DetectTransport(Protocol):
@@ -750,6 +757,16 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
         participant_identity: str | None,
         forced: bool = False,
     ) -> None:
+        self.emit(
+            "analysis_started",
+            {
+                "window_index": index,
+                "window_start": window_start,
+                "window_end": window_start + self._opts.window_seconds,
+                "participant_identity": participant_identity,
+                "forced": forced,
+            },
+        )
         try:
             started = time.monotonic()
             item = await self._submit(pcm16)

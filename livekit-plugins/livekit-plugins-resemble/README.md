@@ -1,7 +1,7 @@
 # Resemble plugin for LiveKit Agents
 
-Support for [Resemble AI](https://www.resemble.ai/) voice synthesis and real-time
-deepfake detection in LiveKit Agents.
+Support for [Resemble AI](https://www.resemble.ai/) voice synthesis, real-time
+deepfake detection, and fraud/scam-intent scoring in LiveKit Agents.
 
 See [https://docs.livekit.io/agents/integrations/tts/resemble/](https://docs.livekit.io/agents/integrations/tts/resemble/) for more information.
 
@@ -95,6 +95,64 @@ Each result exposes a stable app payload:
 ```
 
 Use `result.to_dict()` or `verdict.to_dict()` if you want this shape directly.
+
+### Fraud and scam-intent scoring
+
+Use Resemble Signal when you want to score text, audio, video, or image content against
+fraud and scam categories. It is a companion to Detect: Detect verifies media
+authenticity, while Signal identifies suspicious intent.
+
+```python
+from livekit.plugins import resemble
+
+signal = resemble.ResembleSignal()
+
+result = await signal.score_text(
+    "Hi, it's me. Please read me the reset code you just received."
+)
+
+if result.verdict == "fraud":
+    # block the action, step up verification, or escalate to a human reviewer
+    print(result.top_category.name if result.top_category else "fraud")
+```
+
+Each Signal result exposes a stable app payload:
+
+```python
+{
+    "verdict": "fraud",
+    "score": 0.91,
+    "recommended_action": "block",
+    "input_modality": "text",
+    "top_category": {
+        "name": "CEO Impersonation / Wire Diversion",
+        "score": 0.91,
+        "icon": "wire",
+    },
+}
+```
+
+Signal can also score media files and manage custom fraud categories:
+
+```python
+await signal.score_file(
+    wav_bytes,
+    filename="call.wav",
+    media_type="audio",
+    content_type="audio/wav",
+)
+
+await signal.create_custom_category(
+    name="Tech Support Scam",
+    scenarios=[
+        "Your computer has a virus, press 1 to continue",
+        "We detected suspicious activity, verify your identity now",
+    ],
+)
+```
+
+Signal uses the same bearer authorization style as the rest of this plugin. If you need to
+override it, pass the full `Bearer ...` value as `api_key`.
 
 ### Detection options
 
