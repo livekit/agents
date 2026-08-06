@@ -53,7 +53,7 @@ def test_expression_attribute_carries_the_normalized_mood() -> None:
 
     payload = json.loads(attr["lk.expression"])
     # the provider's own words survive alongside the normalized mood
-    assert payload == {"value": "soft, with genuine care", "mood": "empathetic"}
+    assert payload == {"expression": "soft, with genuine care", "mood": "empathetic"}
 
 
 def test_unrecognized_label_still_publishes_a_mood() -> None:
@@ -62,4 +62,4 @@ def test_unrecognized_label_still_publishes_a_mood() -> None:
     assert attr is not None
 
     payload = json.loads(attr["lk.expression"])
-    assert payload == {"value": "like a pirate", "mood": DEFAULT_MOOD}
+    assert payload == {"expression": "like a pirate", "mood": DEFAULT_MOOD}

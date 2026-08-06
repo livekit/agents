@@ -697,7 +697,7 @@ class TestUniversalMarkupStrip:
 
         _, tags = split_all_markup('<emotion value="sad"/>oh no')
         attr = expression_attribute(tags)
-        assert attr == {"lk.expression": '{"value":"sad","mood":"sad"}'}
+        assert attr == {"lk.expression": '{"expression":"sad","mood":"sad"}'}
 
         # no expression/emotion tag -> no attribute
         _, tags = split_all_markup('<break time="1s"/>hi')
@@ -714,7 +714,9 @@ class TestUniversalMarkupStrip:
         out += s.flush()
         assert "<emotion" not in out
         assert out.replace(" ", "") == "Hithere"
-        assert s.expression_attribute() == {"lk.expression": '{"value":"happy","mood":"happy"}'}
+        assert s.expression_attribute() == {
+            "lk.expression": '{"expression":"happy","mood":"happy"}'
+        }
 
     def test_streaming_stripper_markdown_link_survives(self) -> None:
         from livekit.agents.tts._provider_format import TranscriptMarkupStripper

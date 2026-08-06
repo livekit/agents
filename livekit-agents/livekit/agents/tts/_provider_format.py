@@ -929,16 +929,15 @@ def strip_expr_markup(text: str) -> str:
 def expression_attribute(tags: list[ExpressiveTag]) -> dict[str, str] | None:
     """Build the ``lk.expression`` transcription attribute from stripped markup tags.
 
-    Surfaces a segment's leading delivery/emotion (``expression`` for Inworld/xAI,
-    ``emotion`` for Cartesia) as ``{"value": ..., "mood": ...}`` so the frontend can react to
-    it. ``value`` is the provider's own words; ``mood`` normalizes them to one of
-    a fixed set of moods, so a client can drive UI off an enum without reimplementing the
-    matching. Returns ``None`` when no such tag was present.
+    Surfaces a segment's leading delivery/emotion (``expression`` for Inworld/xAI, ``emotion``
+    for Cartesia) as ``{"expression": ..., "mood": ...}``: the provider's own words, plus the
+    mood they normalize to, so a client can drive UI off a fixed enum without reimplementing
+    the matching. Returns ``None`` when no such tag was present.
     """
     expression = next((t["value"] for t in tags if t["type"] in ("expression", "emotion")), None)
     if expression is None:
         return None
-    payload = {"value": expression, "mood": match_mood(expression)}
+    payload = {"expression": expression, "mood": match_mood(expression)}
     return {ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json.dumps(payload, separators=(",", ":"))}
 
 
