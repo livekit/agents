@@ -857,6 +857,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._utterance_speech_end_audio_pos = self._audio_position
         self._utterance_speech_end_wall = time.time()
         self._emit_end_of_speech()
+        self._complete_utterance()
 
     async def _safe_send_str(
         self,
@@ -1243,11 +1244,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
             return False
 
         language = data.get("language") or self._opts.language
-        confidence = data.get("language_confidence")
-        if confidence is None:
-            confidence = data.get("confidence", 0.0)
+        # Recognition confidence only: `language_confidence` is a language-identification
+        # score and stays in metadata. The endpoint sends no per-segment confidence
+        # today, and an absent value falls back to 1.0 (as `_extract_confidence` in
+        # stt.py does) so it isn't averaged downstream as "no confidence".
+        # bool is a subclass of int, so exclude it explicitly.
+        confidence = data.get("confidence")
         if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-            confidence = 0.0
+            confidence = 1.0
 
         metadata: dict[str, Any] = {
             key: data[key]

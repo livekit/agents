@@ -552,12 +552,54 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
     assert final_event.request_id == "20260608_31c9dc1d-3435-4e76-ae51-05de31025a68"
     assert final_event.alternatives[0].text == "नमस्ते आप कैसे हैं"
     assert final_event.alternatives[0].language == "hi-IN"
-    assert final_event.alternatives[0].confidence == 0.99
+    # The endpoint sends no recognition confidence, so it falls back to 1.0 and the
+    # language-identification score stays in metadata.
+    assert final_event.alternatives[0].confidence == 1.0
+    assert final_event.alternatives[0].metadata["language_confidence"] == 0.99
     assert final_event.alternatives[0].end_time == 1.75
 
     eos_event = stream._event_ch.events[2]
     assert eos_event.alternatives == []
     assert final_event.alternatives[0].metadata["speech_end_wall_time"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload_confidence", "expected"),
+    [
+        ({"confidence": 0.42}, 0.42),
+        ({}, 1.0),
+        ({"confidence": None}, 1.0),
+        ({"confidence": "high"}, 1.0),
+        # bool is a subclass of int; False must not read as zero confidence.
+        ({"confidence": False}, 1.0),
+    ],
+)
+async def test_transcript_confidence_uses_recognition_score_with_absent_fallback(
+    payload_confidence: dict[str, object],
+    expected: float,
+) -> None:
+    """`language_confidence` is a language-ID score and must not stand in for it.
+
+    An absent value falls back to 1.0 rather than 0.0, matching `_extract_confidence`
+    in stt.py, so livekit-agents' confidence averaging is not dragged toward zero.
+    """
+    stream = _make_stream(endpointing="manual")
+
+    await stream._handle_message(
+        {
+            "event": "transcript.final",
+            "utterance_idx": 0,
+            "text": "नमस्ते",
+            "language": "hi-IN",
+            "language_confidence": 0.2,
+            **payload_confidence,
+        }
+    )
+
+    final_event = stream._event_ch.events[0]
+    assert final_event.alternatives[0].confidence == expected
+    assert final_event.alternatives[0].metadata["language_confidence"] == 0.2
 
 
 @pytest.mark.asyncio
