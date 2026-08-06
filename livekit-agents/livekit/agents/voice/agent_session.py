@@ -902,9 +902,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             # Under a text simulation the simulated user interacts over text
             # streams only: disable audio I/O here, and STT/TTS/VAD via
-            # AgentActivity (both consult _text_only).
+            # AgentActivity (both consult _text_only). LiveKit Inference requests
+            # are demoted to the low class in inference._utils.get_inference_headers,
+            # which catches models this session never sees (per-agent LLMs, tasks).
             if self._text_only:
-                logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
+                from ..inference._utils import SIMULATION_INFERENCE_CLASS
+
+                logger.info(
+                    "text simulation: disabling STT/TTS/VAD and audio I/O, "
+                    f"pinning LiveKit Inference to the {SIMULATION_INFERENCE_CLASS} class"
+                )
 
             self._session_span = current_span = tracer.start_span("agent_session")
             # we detach here to avoid context issues since tokens need to be detached
@@ -2020,7 +2027,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _text_only(self) -> bool:
         """True when running under a text simulation: the session uses no audio
         I/O and no audio models (STT/TTS/VAD)."""
-        from ..simulation import SimulationMode, current_simulation
+        from ..job import current_simulation
+        from ..simulation import SimulationMode
 
         sim = current_simulation()
         return sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT

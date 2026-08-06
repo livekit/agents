@@ -46,15 +46,17 @@ def get_default_inference_url() -> str:
     return DEFAULT_INFERENCE_URL
 
 
-def get_inference_headers() -> dict[str, str]:
+def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
     """Build identification headers for inference requests.
 
     Always includes User-Agent with SDK version and Python version.
     Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, and X-LiveKit-Agent-ID
     when running inside a job context (omitted in console mode or tests).
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
-    Includes X-LiveKit-Inference-Priority pinned to SIMULATION_INFERENCE_CLASS
-    under a text simulation, which every LiveKit Inference model inherits from here.
+
+    ``inference_class`` is the class the caller configured, if any; it lands in
+    X-LiveKit-Inference-Priority. This resolves it for every LiveKit Inference model,
+    so it is the one place that decides which class a request goes out with.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
@@ -80,13 +82,17 @@ def get_inference_headers() -> dict[str, str]:
     except RuntimeError:
         pass
 
-    # Set last so a text simulation wins over anything the agent configured: every
-    # model reaching the gateway from a text simulation is demoted, no exceptions.
-    from ..simulation import SimulationMode, current_simulation
+    # A text simulation overrides the configured class rather than falling back to it:
+    # a simulation must never be able to ask for priority capacity.
+    from ..job import current_simulation
+    from ..simulation import SimulationMode
 
     sim = current_simulation()
     if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
-        headers[HEADER_INFERENCE_PRIORITY] = SIMULATION_INFERENCE_CLASS
+        inference_class = SIMULATION_INFERENCE_CLASS
+
+    if inference_class:
+        headers[HEADER_INFERENCE_PRIORITY] = inference_class
 
     return headers
 

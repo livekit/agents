@@ -94,6 +94,21 @@ def get_job_context(*, required: bool = True) -> JobContext | None:
 get_current_job_context = get_job_context
 
 
+def current_simulation() -> SimulationContext | None:
+    """The :class:`SimulationContext` of the job running on this task, or ``None``.
+
+    ``None`` covers everything that is not a simulation: a production job, and code
+    running outside a job context at all (console mode, tests). Unlike
+    :meth:`JobContext.simulation_context` this does not need the job context in hand,
+    so it can be called from deep inside the stack.
+    """
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return None
+
+    return ctx.simulation_context()
+
+
 @unique
 class JobExecutorType(Enum):
     PROCESS = "process"
