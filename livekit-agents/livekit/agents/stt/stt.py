@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,9 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 
 @unique
@@ -69,6 +72,15 @@ class SpeechData:
     source_texts: list[str] | None = None
     """the original transcription segments in the source language(s), when translation is active.
     each entry corresponds to the same-indexed entry in `source_languages`."""
+    target_languages: list[LanguageCode] | None = None
+    """the target language(s) produced by a translation-capable STT service, one entry per
+    consecutive same-language run, parallel to `target_texts`. mirrors `source_languages` /
+    `source_texts` on the source side: `language` holds the dominant (first) target language
+    and `target_languages` carries the fine-grained per-run breakdown.
+    populated when translation is active; None otherwise."""
+    target_texts: list[str] | None = None
+    """the translated transcription segments in the target language(s).
+    each entry corresponds to the same-indexed entry in `target_languages`."""
     metadata: dict[str, Any] | None = None
     """optional plugin-specific metadata (e.g. voice profile, provider diagnostics).
     plugins may populate this with provider-specific data that doesn't map to standard fields."""
@@ -82,6 +94,13 @@ class SpeechData:
                 if not isinstance(lang, LanguageCode) and isinstance(lang, str)
                 else lang
                 for lang in self.source_languages
+            ]
+        if self.target_languages is not None:
+            self.target_languages = [
+                LanguageCode(lang)
+                if not isinstance(lang, LanguageCode) and isinstance(lang, str)
+                else lang
+                for lang in self.target_languages
             ]
 
 
@@ -112,6 +131,10 @@ class STTCapabilities:
     aligned_transcript: Literal["word", "chunk", False] = False
     offline_recognize: bool = True
     """Whether the STT supports batch recognition via recognize() method"""
+    keyterms: bool = False
+    """Whether the STT supports keyterm prompting"""
+    chat_context: bool = False
+    """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
 
 
 class STTError(BaseModel):
@@ -136,6 +159,8 @@ class STT(
         self._capabilities = capabilities
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._recognize_metrics_needed = True
+        self._keyterms_unsupported_warned = False
+        self._chat_context_unsupported_warned = False
 
     @property
     def label(self) -> str:
@@ -248,6 +273,37 @@ class STT(
             ),
         )
 
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Set the framework-managed keyterms (session config + auto-detection).
+
+        Internal hook called by the framework, kept separate from the user's own keyterms
+        (constructor / ``update_options``). Plugins that support keyterms override this to
+        store the session set and apply it merged with the user keyterms.
+        """
+        if not self._capabilities.keyterms:
+            if not self._keyterms_unsupported_warned:
+                self._keyterms_unsupported_warned = True
+                logger.warning(
+                    "keyterms are not supported by this STT, ignoring keyterms update",
+                    extra={"stt": self._label},
+                )
+            return
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        """Feed a new conversation turn to the STT to bias recognition (context carryover).
+
+        Plugins with native context support set ``STTCapabilities.chat_context`` and override
+        this to forward the item to their provider's carryover field.
+        """
+        if not self._capabilities.chat_context:
+            if not self._chat_context_unsupported_warned:
+                self._chat_context_unsupported_warned = True
+                logger.warning(
+                    "chat context is not supported by this STT, ignoring chat context update",
+                    extra={"stt": self._label},
+                )
+            return
+
     def stream(
         self,
         *,
@@ -276,6 +332,18 @@ class STT(
     def prewarm(self) -> None:
         """Pre-warm connection to the STT service"""
         pass
+
+
+@runtime_checkable
+class SpeakerContext(Protocol):
+    """Protocol for STT context models that can generate LLM instructions.
+
+    STT plugins that provide speaker metadata should implement this protocol
+    on their context model so the expressive system can auto-inject
+    speaker context into the LLM.
+    """
+
+    def to_instructions(self) -> str: ...
 
 
 class RecognizeStream(ABC):
@@ -320,6 +388,21 @@ class RecognizeStream(ABC):
 
         self._start_time_offset: float = 0.0
         self._start_time: float = time.time()
+        self._context: BaseModel | None = None
+
+    @property
+    def context(self) -> BaseModel | None:
+        """Persistent speaker metadata updated by the STT plugin during recognition.
+
+        STT plugins set this to a ``BaseModel`` instance (e.g. a voice profile with
+        emotion, gender, etc.) as they learn about the speaker over the life of the
+        stream.  Accessible via ``agent.audio_recognition.stt_context``.
+        """
+        return self._context
+
+    @context.setter
+    def context(self, value: BaseModel | None) -> None:
+        self._context = value
 
     @property
     def start_time_offset(self) -> float:

@@ -43,6 +43,14 @@ from .models import TTSLangCodes  # noqa: I001
 API_AUTH_HEADER = "x-api-key"
 
 
+def _encoding_to_mime_type(encoding: str) -> str:
+    if encoding.startswith("pcm"):
+        return "audio/pcm"
+    elif encoding.startswith("mp3"):
+        return "audio/mp3"
+    return "audio/pcm"
+
+
 @dataclass
 class _TTSOptions:
     lang_code: LanguageCode
@@ -138,7 +146,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
+            f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
@@ -252,7 +260,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
                     "lang_code": self._opts.lang_code.language,
-                    "encoding": "pcm_linear",
+                    "encoding": self._opts.encoding,
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
                 },
@@ -269,7 +277,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/pcm",
+                    mime_type=_encoding_to_mime_type(self._opts.encoding),
                 )
 
                 async for line in resp.content:
@@ -333,7 +341,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            mime_type="audio/pcm",
+            mime_type=_encoding_to_mime_type(self._opts.encoding),
             stream=True,
         )
 

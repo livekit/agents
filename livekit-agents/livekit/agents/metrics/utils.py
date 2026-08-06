@@ -5,6 +5,7 @@ import logging
 from ..log import logger as default_logger
 from .base import (
     AgentMetrics,
+    AvatarMetrics,
     EOUMetrics,
     InterruptionMetrics,
     LLMMetrics,
@@ -104,3 +105,12 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "num_requests": metrics.num_requests,
             },
         )
+    elif isinstance(metrics, AvatarMetrics):
+        extra: dict[str, str | float] = {}
+        if metrics.session_started_time and metrics.avatar_joined_time:
+            extra["avatar_join_latency"] = round(
+                metrics.avatar_joined_time - metrics.session_started_time, 3
+            )
+        if metrics.playback_latency:
+            extra["playback_latency"] = round(metrics.playback_latency, 3)
+        logger.info("Avatar metrics", extra=metadata | extra)

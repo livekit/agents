@@ -44,6 +44,13 @@ from .proto import (
     StartJobRequest,
 )
 
+# Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
+# as a guardrail against close paths that hang indefinitely. If aclose() does not
+# return in this window, the rest of the shutdown sequence (on_session_end,
+# ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
+# registered shutdown callbacks are not silently dropped.
+_SESSION_ACLOSE_TIMEOUT = 60.0
+
 
 @dataclass
 class ProcStartArgs:
@@ -55,6 +62,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     log_cch: socket.socket
     logger_levels: dict[str, int]
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -78,6 +86,7 @@ def proc_main(args: ProcStartArgs) -> None:
         session_end_timeout=args.session_end_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
+        simulation_end_fnc=args.simulation_end_fnc,
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
@@ -185,12 +194,14 @@ class _JobProc:
         session_end_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
+        simulation_end_fnc: Callable[[Any], Any] | None = None,
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
+        self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
 
@@ -236,7 +247,10 @@ class _JobProc:
 
                     with contextlib.suppress(asyncio.InvalidStateError):
                         self._shutdown_fut.set_result(
-                            _ShutdownInfo(reason=msg.reason, user_initiated=False)
+                            _ShutdownInfo(
+                                reason=msg.reason or "parent process shutdown",
+                                user_initiated=False,
+                            )
                         )
 
                 if isinstance(msg, InferenceResponse):
@@ -279,7 +293,9 @@ class _JobProc:
             self._ctx_shutdown_called = True
 
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(_ShutdownInfo(user_initiated=True, reason=reason))
+                self._shutdown_fut.set_result(
+                    _ShutdownInfo(user_initiated=True, reason=reason or "user requested")
+                )
 
         self._room._info.name = msg.running_job.job.room.name
 
@@ -291,6 +307,8 @@ class _JobProc:
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
         )
+        # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
+        self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
@@ -365,9 +383,20 @@ class _JobProc:
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
+            except Exception:
+                # entrypoint raised; already logged via _on_entry_done.
+                # swallow so shutdown callbacks still run.
+                pass
 
         if session := self._job_ctx._primary_agent_session:
-            await session.aclose()
+            try:
+                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "AgentSession.aclose() timed out after %.1fs; "
+                    "proceeding with shutdown so registered callbacks still run.",
+                    _SESSION_ACLOSE_TIMEOUT,
+                )
 
         if self._session_end_fnc:
             try:
@@ -380,7 +409,10 @@ class _JobProc:
             except Exception:
                 logger.exception("error while executing the on_session_end callback")
 
-        await self._job_ctx._on_session_end()
+        try:
+            await self._job_ctx._on_session_end()
+        except Exception:
+            logger.exception("error in job_ctx._on_session_end")
 
         await self._client.send(ShuttingDown())
 
@@ -421,6 +453,7 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def thread_main(
@@ -437,6 +470,7 @@ def thread_main(
             session_end_timeout=args.session_end_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,
+            simulation_end_fnc=args.simulation_end_fnc,
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)

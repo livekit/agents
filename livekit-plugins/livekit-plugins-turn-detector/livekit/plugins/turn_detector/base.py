@@ -35,7 +35,7 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
         logger.error(
             f'Could not find file "{filename}". '
             "Make sure you have downloaded the model before running the agent. "
-            "Use `python3 your_agent.py download-files` to download the model."
+            "Use `python -m livekit.agents download-files` to download the model."
         )
         raise RuntimeError(
             "livekit-plugins-turn-detector initialization failed. "
@@ -141,7 +141,7 @@ class _EUORunnerBase(_InferenceRunner):
             logger.error(
                 f"Could not find model {HG_MODEL} with revision {revision}. "
                 "Make sure you have downloaded the model before running the agent. "
-                "Use `python3 your_agent.py download-files` to download the models."
+                "Use `python -m livekit.agents download-files` to download the models."
             )
             raise RuntimeError(
                 "livekit-plugins-turn-detector initialization failed. "

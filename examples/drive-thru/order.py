@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import string
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("drive-thru.order")
 
 
 def order_uid() -> str:
@@ -45,12 +49,27 @@ OrderedItem = Annotated[OrderedCombo | OrderedHappy | OrderedRegular, Field(disc
 @dataclass
 class OrderState:
     items: dict[str, OrderedItem]
+    # Optional async hook fired after every add/remove. The agent
+    # wires this up to push the current cart to the playground UI;
+    # exceptions inside the hook never block the order mutation.
+    on_change: Callable[[], Awaitable[None]] | None = field(default=None)
+
+    async def _fire(self) -> None:
+        if self.on_change is None:
+            return
+        try:
+            await self.on_change()
+        except Exception:
+            logger.exception("OrderState.on_change failed")
 
     async def add(self, item: OrderedItem) -> None:
         self.items[item.order_id] = item
+        await self._fire()
 
     async def remove(self, order_id: str) -> OrderedItem:
-        return self.items.pop(order_id)
+        removed = self.items.pop(order_id)
+        await self._fire()
+        return removed
 
     def get(self, order_id: str) -> OrderedItem | None:
         return self.items[order_id]

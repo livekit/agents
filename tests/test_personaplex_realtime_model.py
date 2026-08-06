@@ -19,6 +19,8 @@ from livekit.plugins.nvidia.experimental.realtime.realtime_model import (
     _ResponseGeneration,
 )
 
+pytestmark = pytest.mark.plugin("nvidia")
+
 # -- RealtimeModel init tests --
 
 

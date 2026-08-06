@@ -1,15 +1,15 @@
 from typing import Literal
 
 TTSModels = Literal[
-    "lightning-v2",
-    "lightning-v3.1",
+    "lightning_v3.1",
+    "lightning_v3.1_pro",
 ]
 
 TTSEncoding = Literal[
     "pcm",
     "mp3",
     "wav",
-    "mulaw",
+    "ulaw",
     "alaw",
 ]
 

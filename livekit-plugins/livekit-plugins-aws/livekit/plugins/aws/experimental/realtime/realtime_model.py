@@ -69,11 +69,22 @@ MAX_MESSAGE_SIZE = 1024
 MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
+RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
+    "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
+    "System instability detected. Please retry your request.",
+)
 # Session recycling: restart before 8-min AWS limit or credential expiry
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
 MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
+
+
+def _is_recoverable_validation_error(exc: object) -> bool:
+    message = getattr(exc, "message", str(exc))
+    return any(text in message for text in RECOVERABLE_VALIDATION_ERROR_MESSAGES)
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. "
     "You love helping people and having natural conversations. "
@@ -461,8 +472,9 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "Amazon"
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -500,6 +512,7 @@ class RealtimeSession(  # noqa: F811
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
+            model=self._realtime_model._model,
         )
         self._input_resampler: rtc.AudioResampler | None = None
         self._bstream = utils.audio.AudioByteStream(
@@ -741,6 +754,7 @@ class RealtimeSession(  # noqa: F811
         self._event_builder = seb(
             prompt_name=str(uuid.uuid4()),
             audio_content_name=str(uuid.uuid4()),
+            model=self._realtime_model._model,
         )
         self._tool_results_ch = utils.aio.Chan[dict[str, str]]()
         self._audio_input_chan = utils.aio.Chan[bytes]()
@@ -946,10 +960,10 @@ class RealtimeSession(  # noqa: F811
                 if (
                     last_item.type == "message"
                     and last_item.role == "user"
-                    and last_item.text_content
-                    and last_item.text_content.strip()
+                    and last_item.raw_text_content
+                    and last_item.raw_text_content.strip()
                 ):
-                    interactive_user_text = last_item.text_content.strip()
+                    interactive_user_text = last_item.raw_text_content.strip()
                     restart_ctx = restart_ctx.copy()
                     restart_ctx.items.pop()
                     logger.debug(
@@ -1528,11 +1542,10 @@ class RealtimeSession(  # noqa: F811
                     self._close_current_generation()
                     raise
                 except ValidationException as ve:
-                    # there is a 3min no-activity (e.g. silence) timeout on the stream, after which the stream is closed  # noqa: E501
-                    if (
-                        "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR"  # noqa: E501
-                        in ve.message
-                    ):
+                    # Some Bedrock ValidationException messages represent transient stream
+                    # failures. Recover by restarting the Sonic session instead of tearing
+                    # down the LiveKit session.
+                    if _is_recoverable_validation_error(ve):
                         logger.warning(f"Validation error: {ve}\nAttempting to recover...")
                         await self._restart_session(ve)
                     elif "Tool Response parsing error" in ve.message:
@@ -1771,16 +1784,16 @@ class RealtimeSession(  # noqa: F811
             ):
                 # Check if this is an audio message (already transcribed by Nova)
                 if item.id not in self._audio_message_ids:
-                    if item.text_content and item.text_content.strip():
+                    if item.raw_text_content and item.raw_text_content.strip():
                         logger.debug(
-                            f"Sending user message as interactive text: {item.text_content}"
+                            f"Sending user message as interactive text: {item.raw_text_content}"
                         )
                         # Send interactive text to Nova Sonic (triggers generation)
                         # This is the flow for generate_reply(user_input=...) from the framework
                         fut = asyncio.Future[llm.GenerationCreatedEvent]()
                         self._pending_generation_fut = fut
 
-                        text = item.text_content
+                        text = item.raw_text_content
 
                         async def _send_user_text(
                             text: str = text, fut: asyncio.Future = fut
@@ -1801,7 +1814,8 @@ class RealtimeSession(  # noqa: F811
                     self._chat_ctx.items.append(item)
                 else:
                     logger.debug(
-                        f"Skipping user message (already in context from audio): {item.text_content}"
+                        "Skipping user message (already in context from audio): "
+                        f"{item.raw_text_content}"
                     )
                     self._sent_message_ids.add(item.id)
 
@@ -2116,7 +2130,7 @@ class RealtimeSession(  # noqa: F811
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None
 
-            asyncio.create_task(_send_text())
+            send_task = asyncio.create_task(_send_text())
 
             # Set timeout from model configuration
             def _on_timeout() -> None:
@@ -2130,7 +2144,17 @@ class RealtimeSession(  # noqa: F811
             timeout_handle = asyncio.get_running_loop().call_later(
                 self._realtime_model._generate_reply_timeout, _on_timeout
             )
-            fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+            def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+                timeout_handle.cancel()
+                is_current = self._pending_generation_fut is fut
+                if is_current:
+                    self._pending_generation_fut = None
+                if f.cancelled() and is_current and not send_task.done():
+                    # external cancel before the text was sent: drop the send
+                    send_task.cancel()
+
+            fut.add_done_callback(_on_fut_done)
 
             return fut
 

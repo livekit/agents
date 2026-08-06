@@ -4,6 +4,8 @@ import pytest
 
 from livekit.agents.utils import ConnectionPool
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class DummyConnection:
     def __init__(self, id):

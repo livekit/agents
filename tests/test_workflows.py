@@ -8,6 +8,8 @@ from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.run_result import RunResult
 from livekit.rtc import Room
 
+pytestmark = pytest.mark.evals
+
 
 def _llm_model() -> llm.LLM:
     return inference.LLM(model="openai/gpt-4.1")

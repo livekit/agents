@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import inspect
-import types
+import json
+import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
-    Union,
     cast,
     get_args,
     get_origin,
     get_type_hints,
 )
 
+import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import Field, FieldInfo
@@ -106,7 +108,7 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
             # check if the content is different
             old_msg = old_ctx_by_id[new_msg.id]
             if new_msg.type == "message" and old_msg.type == "message":
-                if new_msg.text_content != old_msg.text_content:
+                if new_msg.raw_text_content != old_msg.raw_text_content:
                     to_update.append((prev_id, new_msg.id))
                 # TODO: check other content types
 
@@ -236,7 +238,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model)
+    schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
 
     return {
         "type": "function",
@@ -296,6 +298,9 @@ def to_response_format_param(
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
 
+    # No null sentinel here: nothing resolves it on the decode side (users validate
+    # the raw payload themselves), so the schema must be exactly what validation
+    # accepts. Defaulted fields stay required; the model produces their values.
     schema = _strict.to_strict_json_schema(json_schema_type)
     return {
         "type": "json_schema",
@@ -305,6 +310,182 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
+
+
+def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None:
+        if "default" in schema and not _json_schema_allows_null(schema, root=root):
+            return copy.deepcopy(schema["default"])
+        return None
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for variant in all_of:
+            if isinstance(variant, dict):
+                value = _inject_schema_defaults(value, schema=variant, root=root)
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
+                    return _inject_schema_defaults(value, schema=variant, root=root)
+
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        additional = schema.get("additionalProperties")
+        if isinstance(properties, dict) or isinstance(additional, dict):
+            # additionalProperties only governs keys not declared in properties
+            def _inject_entry(key: str, item: Any) -> Any:
+                prop = properties.get(key) if isinstance(properties, dict) else None
+                if isinstance(prop, dict):
+                    return _inject_schema_defaults(item, schema=prop, root=root)
+                if isinstance(additional, dict):
+                    return _inject_schema_defaults(item, schema=additional, root=root)
+                return item
+
+            return {key: _inject_entry(key, item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        prefix_items = schema.get("prefixItems")
+        items = schema.get("items")
+        if isinstance(prefix_items, list) or isinstance(items, dict):
+            # prefixItems covers positional slots (fixed tuples); items the rest
+            def _inject_item(i: int, item: Any) -> Any:
+                if (
+                    isinstance(prefix_items, list)
+                    and i < len(prefix_items)
+                    and isinstance(prefix_items[i], dict)
+                ):
+                    return _inject_schema_defaults(item, schema=prefix_items[i], root=root)
+                if isinstance(items, dict):
+                    return _inject_schema_defaults(item, schema=items, root=root)
+                return item
+
+            return [_inject_item(i, item) for i, item in enumerate(value)]
+
+    return value
+
+
+def _json_schema_allows_null(
+    schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
+) -> bool:
+    """Whether ``null`` is a valid instance of ``schema``.
+
+    JSON schema keywords are conjunctive: null must satisfy every constraint
+    present (type, enum, const, allOf, unions, $ref), so any keyword that
+    rejects null makes the whole schema reject it.
+    """
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        if ref in (seen_refs or set()):
+            return False
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict) and not _json_schema_allows_null(
+            resolved, root=root, seen_refs={*(seen_refs or set()), ref}
+        ):
+            return False
+
+    typ = schema.get("type")
+    if isinstance(typ, str) and typ != "null":
+        return False
+    if isinstance(typ, list) and "null" not in typ:
+        return False
+
+    if "const" in schema and schema["const"] is not None:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        return False
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(
+        _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+        for variant in all_of
+        if isinstance(variant, dict)
+    ):
+        return False
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list) and not any(
+            isinstance(variant, dict)
+            and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
+            for variant in variants
+        ):
+            return False
+
+    return True
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        resolved = _strict.resolve_ref(root=root, ref=ref)
+        if isinstance(resolved, dict):
+            schema = {**resolved, **schema}
+
+    if value is None and "default" in schema and not _json_schema_allows_null(schema, root=root):
+        return True
+
+    if "const" in schema and value != schema["const"]:
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        return False
+
+    typ = schema.get("type")
+    if isinstance(typ, list):
+        return any(_json_type_matches(value, item) for item in typ if isinstance(item, str))
+    if isinstance(typ, str) and not _json_type_matches(value, typ):
+        return False
+
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and not all(key in value for key in required):
+            return False
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            # the strict wire schema closes objects (additionalProperties: false),
+            # so a key outside the declared properties rules this variant out;
+            # otherwise a payload meant for a sibling union variant matches any
+            # variant that merely ignores the extra keys
+            if schema.get("additionalProperties") in (None, False) and any(
+                key not in properties for key in value
+            ):
+                return False
+            for key, item in value.items():
+                property_schema = properties.get(key)
+                if isinstance(property_schema, dict) and not _json_schema_matches(
+                    item, property_schema, root=root
+                ):
+                    return False
+
+    return True
+
+
+def _json_type_matches(value: Any, typ: str) -> bool:
+    if typ == "null":
+        return value is None
+    if typ == "object":
+        return isinstance(value, dict)
+    if typ == "array":
+        return isinstance(value, list)
+    if typ == "boolean":
+        return isinstance(value, bool)
+    if typ == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if typ == "number":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if typ == "string":
+        return isinstance(value, str)
+    return True
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -344,7 +525,13 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             )
             if annotated_field and hasattr(annotated_field, "asdict"):
                 # `asdict` is available after pydantic 2.12
-                field_attrs = annotated_field.asdict()["attributes"]
+                field_dict = annotated_field.asdict()
+                field_attrs = field_dict["attributes"]
+                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
+                # in `metadata`, not `attributes`. Re-attach them to the annotation
+                # so `Field(...)` constraints on a tool argument are preserved.
+                if field_dict["metadata"]:
+                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
             elif annotated_field:
                 field_attrs["default"] = annotated_field.default
                 field_attrs["description"] = annotated_field.description
@@ -370,61 +557,169 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     return create_model(model_name, **fields)
 
 
+# Patterns for chat-template tokens that sometimes leak into tool-call arguments
+# when the model fumbles its own special-token formatting. Ordered: well-formed
+# delimiters first (so we don't leave dangling halves), then stragglers.
+# Covers Qwen/ChatML-style (`<|im_start|>`, `<|tool_call|>`, the leaked `<|"|"`
+# we've seen from Gemma 4) and Gemma turn markers (`<start_of_turn>` /
+# `<end_of_turn>`).
+_TEMPLATE_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"<\|[^<>|]{0,40}\|>"),  # well-formed <|...|>
+    re.compile(r"<\|[^<>a-zA-Z0-9_]{0,10}"),  # dangling start <|"|" etc.
+    re.compile(r"[^<>a-zA-Z0-9_]{0,10}\|>"),  # dangling end
+    re.compile(r"<(?:start|end)_of_turn>"),  # Gemma turn markers
+)
+
+
+def _strip_template_tokens(value: Any) -> Any:
+    """Recursively remove leaked chat-template tokens from string values.
+
+    Only applied after a JSON repair pass — we don't want to silently rewrite
+    legitimate arguments that happen to contain `<|...|>` substrings.
+    """
+    if isinstance(value, str):
+        out = value
+        for pat in _TEMPLATE_TOKEN_PATTERNS:
+            out = pat.sub("", out)
+        return out.strip()
+    if isinstance(value, list):
+        cleaned = [_strip_template_tokens(v) for v in value]
+        # Drop empties that were left behind purely as separators between leaked
+        # tokens (e.g. `["<|", "X<|", ""]` -> `["X"]`).
+        return [v for v in cleaned if v not in ("", None)]
+    if isinstance(value, dict):
+        return {k: _strip_template_tokens(v) for k, v in value.items()}
+    return value
+
+
+def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
+    """Parse a raw JSON tool-call arguments string into a dict.
+
+    First tries strict parsing; if the JSON is malformed (common with smaller /
+    open-weight models that fumble special tokens or escaping), falls back to
+    ``json_repair`` and then strips known chat-template token leaks.
+
+    Raises ``ValueError`` if the arguments can't be recovered or don't decode
+    to a dict-shaped value.
+    """
+    try:
+        args_dict: Any = from_json(json_arguments)
+    except ValueError as strict_err:
+        repaired = json_repair.loads(json_arguments)
+        if repaired == "":
+            # json_repair returns "" when it can't recover anything meaningful.
+            raise ValueError(
+                f"could not parse function arguments as JSON: {strict_err}: {json_arguments[:200]}"
+            ) from strict_err
+        # After a repair, also strip leaked chat-template tokens — many of
+        # the failures we see are caused by `<|...|>` markers bleeding into
+        # the model's structured output.
+        cleaned = _strip_template_tokens(repaired)
+        logger.warning(
+            "repaired malformed function-call JSON arguments",
+            extra={
+                "raw_arguments": json_arguments[:500],
+                "repaired": cleaned,
+                "error": str(strict_err),
+            },
+        )
+        args_dict = cleaned
+
+    # Some providers (e.g. Nova Sonic) double-encode tool arguments as nested
+    # JSON strings. Unwrap until we reach a non-string value.
+    while isinstance(args_dict, str):
+        try:
+            args_dict = from_json(args_dict)
+        except Exception:
+            raise ValueError(
+                f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
+            ) from None
+
+    if args_dict is None:
+        return {}
+    if not isinstance(args_dict, dict):
+        raise ValueError(
+            f"expected dict from function arguments, "
+            f"got {type(args_dict).__name__}: {json_arguments[:200]}"
+        )
+    return args_dict
+
+
 def prepare_function_arguments(
     *,
     fnc: FunctionTool | RawFunctionTool,
     json_arguments: str | dict[str, Any],
     call_ctx: RunContext[Any] | None = None,
+    fnc_call: FunctionCall | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:  # returns args, kwargs
-    """
-    Create the positional and keyword arguments to call a function tool from
+    """Create the positional and keyword arguments to call a function tool from
     the raw function output from the LLM.
-    """
 
+    Argument-validation failures (bad JSON, pydantic ValidationError, missing
+    required params) are surfaced as :class:`ToolError` so the LLM gets a
+    concrete error message and can self-correct on its next turn.
+
+    When ``fnc_call`` is provided and ``json_arguments`` is a string, the
+    canonicalized JSON (post json_repair) is written back to
+    ``fnc_call.arguments`` BEFORE validation runs.
+    """
+    # phase 1: parse — raw JSON failures raise ToolError immediately (no
+    # canonical to provide since the input itself was unparseable)
+    if isinstance(json_arguments, dict):
+        args_dict = json_arguments
+    else:
+        try:
+            args_dict = parse_function_arguments(json_arguments)
+        except ValueError as e:
+            logger.error(
+                f"error parsing arguments for `{fnc.info.name}`",
+                extra={"function": fnc.info.name, "arguments": json_arguments},
+            )
+            raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
+
+        # write canonical BEFORE validation so a downstream validation failure
+        # still leaves valid JSON in chat history
+        if fnc_call is not None:
+            canonical = json.dumps(args_dict, default=str)
+            if canonical != json_arguments:
+                fnc_call.arguments = canonical
+
+    # phase 2: validate + bind
+    try:
+        return _prepare_function_arguments(fnc=fnc, args_dict=args_dict, call_ctx=call_ctx)
+    except ToolError:
+        raise
+    except (pydantic.ValidationError, ValueError, TypeError) as e:
+        logger.error(
+            f"error parsing arguments for `{fnc.info.name}`",
+            extra={"function": fnc.info.name, "arguments": json_arguments},
+        )
+        raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
+    except Exception:
+        logger.exception(
+            f"error parsing arguments for `{fnc.info.name}`",
+            extra={"function": fnc.info.name, "arguments": json_arguments},
+        )
+        raise
+
+
+def _prepare_function_arguments(
+    *,
+    fnc: FunctionTool | RawFunctionTool,
+    args_dict: dict[str, Any],
+    call_ctx: RunContext[Any] | None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
-
-    if isinstance(json_arguments, str):
-        args_dict = from_json(json_arguments)
-        # some providers (e.g. Nova Sonic) double-encode tool arguments as nested
-        # JSON strings. unwrap until we reach a non-string value.
-        while isinstance(args_dict, str):
-            try:
-                args_dict = from_json(args_dict)
-            except Exception:
-                raise ValueError(
-                    f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
-                ) from None
-
-        if args_dict is None:
-            args_dict = {}
-        elif not isinstance(args_dict, dict):
-            raise ValueError(
-                f"expected dict from function arguments, "
-                f"got {type(args_dict).__name__}: {json_arguments[:200]}"
-            )
-    else:
-        args_dict = json_arguments
 
     if isinstance(fnc, FunctionTool):
         model_type = function_arguments_to_pydantic_model(fnc)
 
-        # Function arguments with default values are treated as optional
-        # when converted to strict LLM function descriptions. (e.g., we convert default
-        # parameters to type: ["string", "null"]).
-        # The following make sure to use the default value when we receive None.
-        # (Only if the type can't be Optional)
-        for param_name, param in signature.parameters.items():
-            type_hint = type_hints[param_name]
-            if param_name in args_dict and args_dict[param_name] is None:
-                if not _is_optional_type(type_hint):
-                    if param.default is not inspect.Parameter.empty:
-                        args_dict[param_name] = param.default
-                    else:
-                        raise ValueError(
-                            f"Received None for required parameter '{param_name} ;"
-                            "this argument cannot be None and no default is available."
-                        )
+        # Strict LLM schemas represent defaulted fields as nullable (see
+        # _ensure_strict_json_schema): null means "use the default". Resolve
+        # the sentinel, including in nested models, before validation.
+        schema = model_type.model_json_schema()
+        args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
 
         model = model_type.model_validate(args_dict)  # can raise ValidationError
         raw_fields = _shallow_model_dump(model)
@@ -437,7 +732,7 @@ def prepare_function_arguments(
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
-    # inject RunContext (or subclasses like AsyncRunContext) if needed
+    # inject RunContext (or subclasses) if needed
     context_dict = {}
     for param_name, _ in signature.parameters.items():
         type_hint = type_hints[param_name]
@@ -458,44 +753,105 @@ def prepare_function_arguments(
     return bound.args, bound.kwargs
 
 
-def _is_optional_type(hint: Any) -> bool:
-    if get_origin(hint) is Annotated:
-        hint = get_args(hint)[0]
-
-    origin = get_origin(hint)
-
-    is_union = origin is Union
-    is_union = is_union or origin is types.UnionType
-
-    return is_union and type(None) in get_args(hint)
-
-
 def _shallow_model_dump(model: BaseModel, *, by_alias: bool = False) -> dict[str, Any]:
     result = {}
-    for name, field in model.__class__.model_fields.items():
-        key = field.alias if by_alias and field.alias else name
+    for name, field_info in model.__class__.model_fields.items():
+        key = field_info.alias if by_alias and field_info.alias else name
         result[key] = getattr(model, name)
     return result
 
 
-def strip_thinking_tokens(content: str | None, thinking: asyncio.Event) -> str | None:
-    if content is None:
-        return None
+@dataclass
+class ThinkingTokenFilter:
+    """State for stripping thinking tokens from streamed content."""
 
-    if thinking.is_set():
-        idx = content.find(THINK_TAG_END)
-        if idx >= 0:
-            thinking.clear()
-            content = content[idx + len(THINK_TAG_END) :]
-        else:
-            content = None
-    else:
-        idx = content.find(THINK_TAG_START)
-        if idx >= 0:
-            thinking.set()
-            content = content[idx + len(THINK_TAG_START) :]
+    start_tag: str = THINK_TAG_START
+    end_tag: str = THINK_TAG_END
+    _buffer: str = ""
+    _end_marker: str | None = None
 
-    return content
+
+def _partial_marker_length(content: str, markers: tuple[str, ...]) -> int:
+    return max(
+        (
+            length
+            for marker in markers
+            for length in range(1, min(len(content), len(marker) - 1) + 1)
+            if content.endswith(marker[:length])
+        ),
+        default=0,
+    )
+
+
+def _flatten_delta_content(content: Any) -> str | None:
+    """Flatten list-shaped streaming delta content to its concatenated text.
+
+    The OpenAI-compatible ecosystem allows ``delta.content`` to be a list of
+    typed content parts (``[{"type": "text", "text": ...}]``) instead of a
+    plain string — Mistral emits this shape on some streamed chunks — and the
+    openai SDK constructs stream models without validation, so the list
+    reaches us as-is when the plugin points at such a provider (#6323).
+    """
+    if content is None or isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        # no text part at all carries no content, unlike a part that carries an
+        # empty string - that one is kept, like a plain "" delta
+        return "".join(parts) if parts else None
+    logger.warning(
+        "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
+    )
+    return None
+
+
+def strip_thinking_tokens(
+    content: str | list[Any] | None, state: ThinkingTokenFilter, *, final: bool = False
+) -> str | None:
+    content = _flatten_delta_content(content)
+    if content is not None:
+        state._buffer += content
+
+    visible: list[str] = []
+    while state._buffer:
+        if state._end_marker is not None:
+            idx = state._buffer.find(state._end_marker)
+            if idx < 0:
+                keep = _partial_marker_length(state._buffer, (state._end_marker,))
+                state._buffer = state._buffer[-keep:] if keep else ""
+                break
+
+            state._buffer = state._buffer[idx + len(state._end_marker) :]
+            state._end_marker = None
+            continue
+
+        idx = state._buffer.find(state.start_tag)
+        if idx >= 0:
+            visible.append(state._buffer[:idx])
+            state._buffer = state._buffer[idx + len(state.start_tag) :]
+            state._end_marker = state.end_tag
+            continue
+
+        keep = _partial_marker_length(state._buffer, (state.start_tag,))
+        visible.append(state._buffer[:-keep] if keep else state._buffer)
+        state._buffer = state._buffer[-keep:] if keep else ""
+        break
+
+    if final:
+        if state._end_marker is None:
+            visible.append(state._buffer)
+        state._buffer = ""
+        state._end_marker = None
+
+    result = "".join(visible)
+    return result or ("" if content == "" else None)
 
 
 def _is_valid_function_output(value: Any) -> bool:
@@ -524,6 +880,9 @@ class FunctionCallResult:
     fnc_call_out: FunctionCallOutput | None
     raw_output: Any
     raw_exception: BaseException | None
+    fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
+    """Synthesized pairs from any ``ctx.update()`` calls during this standalone
+    execution. Empty unless the tool actually called ``ctx.update()``."""
 
 
 def make_function_call_output(
@@ -618,51 +977,46 @@ async def execute_function_call(
     function_tool = tool_ctx.function_tools.get(tool_call.name)
     if function_tool is None:
         logger.warning(f"unknown AI function `{tool_call.name}`")
+        # Name the available tools so the model can self-correct
+        msg = (
+            f"Unknown function: {tool_call.name} - available tools: "
+            f"{', '.join(tool_ctx.function_tools.keys())}"
+        )
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(
                 name=tool_call.name,
                 call_id=tool_call.call_id,
-                output=f"Unknown function: {tool_call.name}",
+                output=msg,
                 is_error=True,
             ),
             raw_output=None,
-            raw_exception=ValueError(f"Unknown function: {tool_call.name}"),
+            raw_exception=ValueError(msg),
         )
 
     try:
+        raw_args = tool_call.arguments or "{}"
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=function_tool,
-            json_arguments=tool_call.arguments or "{}",
+            json_arguments=raw_args,
             call_ctx=call_ctx,
+            fnc_call=fnc_call,
         )
-    except (pydantic.ValidationError, ValueError) as e:
-        # Surface argument validation errors to the LLM so it can self-correct.
-        # Without this, the LLM only sees "An internal error occurred" and has
-        # no signal about what was wrong with its arguments.
-        logger.warning(
-            f"invalid arguments for AI function `{tool_call.name}`: {e}",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
-        tool_error = ToolError(f"Error parsing arguments for `{tool_call.name}`: {e}")
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=tool_error)
-    except Exception as e:
-        logger.exception(
-            f"exception preparing arguments for AI function `{tool_call.name}`",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
-
-    try:
         result = function_tool(*fnc_args, **fnc_kwargs)
         if asyncio.iscoroutine(result):
             result = await result
 
-        return make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
+        out = make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
 
     except Exception as e:
-        logger.exception(
-            f"exception executing AI function `{tool_call.name}`",
-            extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
-        )
-        return make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+        if not isinstance(e, ToolError):
+            logger.exception(
+                f"exception executing AI function `{tool_call.name}`",
+                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+            )
+        out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
+
+    # surface any ctx.update() calls so callers can inspect them
+    if call_ctx is not None and call_ctx._updates:
+        out.fnc_call_updates = list(call_ctx._updates)
+    return out

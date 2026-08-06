@@ -59,11 +59,20 @@ class RealtimeModelError(BaseModel):
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    """Whether generated assistant messages can be truncated after interruption"""
     turn_detection: bool
+    """Whether the model emits server-side speech start and stop events for turn taking"""
     user_transcription: bool
+    """Whether the model emits user audio transcription events"""
     auto_tool_reply_generation: bool
+    """Whether the model automatically generates a reply after receiving tool results"""
     audio_output: bool
+    """Whether the model can produce audio output directly"""
     manual_function_calls: bool
+    """Whether function call items already in the chat context can be resumed"""
+    can_disable_turn_detection: bool = False
+    """Whether server-side turn detection can be disabled for a session so the client drives
+    turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -73,7 +82,11 @@ class RealtimeCapabilities:
     per_response_tool_choice: bool = False
     """Whether the tool and tool choice can be specified per response"""
     supports_say: bool = False
-    """Whether the model supports session.say()"""
+    """Whether session.say() can use the realtime session directly, without TTS.
+
+    When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
+    message is still added to the chat context.
+    """
 
 
 class RealtimeError(Exception):
@@ -103,7 +116,12 @@ class RealtimeModel:
         return self._label
 
     @abstractmethod
-    def session(self) -> RealtimeSession: ...
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        ``turn_detection_disabled`` is honored only by plugins reporting
+        ``can_disable_turn_detection``; the model itself is left unchanged and reusable."""
+        ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -143,6 +161,13 @@ class InputTranscriptionCompleted:
     is_final: bool
     confidence: float | None = None
     """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
+    turn_started_at: float | None = None
+    """When the turn this transcript belongs to began (``time.time()``).
+
+    A provider that withholds the final transcript until its reply has finished
+    generating should set this, so the user message can be placed on the session
+    timeline where the turn happened rather than where the transcript arrived.
+    """
 
 
 @dataclass
@@ -184,6 +209,15 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @property
     def realtime_model(self) -> RealtimeModel:
         return self._realtime_model
+
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
 
     @property
     @abstractmethod

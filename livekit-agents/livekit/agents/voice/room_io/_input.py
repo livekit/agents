@@ -50,7 +50,6 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unpublished", self._on_track_unavailable)
-        self._room.on("token_refreshed", self._on_token_refreshed)
 
         self._processor = processor
         self._processor_owned = False
@@ -131,7 +130,6 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._room.off("track_subscribed", self._on_track_available)
         self._room.off("track_unpublished", self._on_track_unavailable)
-        self._room.off("token_refreshed", self._on_token_refreshed)
         self._data_ch.close()
 
     @log_exceptions(logger=logger)
@@ -204,16 +202,6 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
-        if self._processor:
-            self._processor._on_stream_info_updated(
-                room_name=self._room.name,
-                participant_identity=participant.identity,
-                publication_sid=publication.sid,
-            )
-            if self._room._token is not None and self._room._server_url is not None:
-                self._processor._on_credentials_updated(
-                    token=self._room._token, url=self._room._server_url
-                )
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )
@@ -237,16 +225,6 @@ class _ParticipantInputStream(Generic[T], ABC):
                 continue
             if self._on_track_available(publication.track, publication, participant):
                 return
-
-    def _on_token_refreshed(self) -> None:
-        if (
-            self._processor is not None
-            and self._room._token is not None
-            and self._room._server_url is not None
-        ):
-            self._processor._on_credentials_updated(
-                token=self._room._token, url=self._room._server_url
-            )
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
@@ -304,8 +282,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             track=track,
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
-            noise_cancellation=noise_cancellation,
             frame_size_ms=self._frame_size_ms,
+            noise_cancellation=noise_cancellation,
+            auto_close_noise_cancellation=False,
         )
 
     @override
@@ -392,8 +371,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     yield self._processor._process(frame)
                 except Exception as e:
                     logger.warning(
-                        "error pre-processing audio frame",
-                        exc_info=e,
+                        "error pre-processing audio frame: %s",
+                        e,
                     )
                     yield frame
             else:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from livekit import rtc
 from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 
 from .fake_stt import FakeUserSpeech
@@ -41,7 +42,12 @@ class FakeVADStream(VADStream):
         if not self._vad._fake_user_speeches:
             return
 
-        await self._input_ch.recv()
+        async for input_frame in self._input_ch:
+            if isinstance(input_frame, rtc.AudioFrame):
+                break
+        else:
+            return
+
         start_time = time.perf_counter()
 
         def current_time() -> float:

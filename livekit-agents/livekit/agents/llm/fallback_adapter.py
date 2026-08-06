@@ -34,6 +34,10 @@ class AvailabilityChangedEvent:
 class FallbackAdapter(
     LLM[Literal["llm_availability_changed"]],
 ):
+    """Agent Fallback Adapter for LLM. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
     def __init__(
         self,
         llm: list[LLM],
@@ -103,6 +107,19 @@ class FallbackAdapter(
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
         )
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm the primary LLM.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if self._llm_instances:
+            self._llm_instances[0].prewarm(loop=loop)
 
     async def aclose(self) -> None:
         for llm_instance in self._llm_instances:
@@ -192,14 +209,16 @@ class FallbackLLMStream(LLMStream):
         except APIError as e:
             if check_recovery:
                 logger.warning(
-                    f"{llm.label} recovery failed",
-                    exc_info=e,
+                    "%s recovery failed: %s",
+                    llm.label,
+                    e,
                 )
                 raise
 
             logger.warning(
-                f"{llm.label} failed, switching to next LLM",
-                exc_info=e,
+                "%s failed, switching to next LLM: %s",
+                llm.label,
+                e,
             )
             raise
         except Exception:

@@ -38,6 +38,10 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
     RemoteItemAddedEvent,
 )
+from .realtime_fallback_adapter import (
+    RealtimeAvailabilityChangedEvent,
+    RealtimeModelFallbackAdapter,
+)
 from .tool_context import (
     FunctionTool,
     ProviderTool,
@@ -47,6 +51,7 @@ from .tool_context import (
     ToolChoice,
     ToolContext,
     ToolError,
+    ToolFlag,
     Toolset,
     find_function_tools,
     function_tool,
@@ -78,6 +83,8 @@ __all__ = [
     "CompletionUsage",
     "FallbackAdapter",
     "AvailabilityChangedEvent",
+    "RealtimeModelFallbackAdapter",
+    "RealtimeAvailabilityChangedEvent",
     "ToolChoice",
     "Tool",
     "Toolset",
@@ -90,6 +97,7 @@ __all__ = [
     "ProviderTool",
     "ToolContext",
     "ToolError",
+    "ToolFlag",
     "StopResponse",
     "utils",
     "remote_chat_context",

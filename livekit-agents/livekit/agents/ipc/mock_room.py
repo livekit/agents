@@ -9,6 +9,10 @@ from livekit import rtc
 def create_mock_room() -> Any:
     MockRoom = create_autospec(rtc.Room, instance=True)
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
+    # autospec leaves attributes as truthy mocks; pin sid/identity to real strings
+    # so they don't leak into places like inference request headers (see _utils.py).
+    MockRoom.local_participant.sid = ""
+    MockRoom.local_participant.identity = "agent"
     MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
     MockRoom.isconnected.return_value = True
     MockRoom.name = "console"
@@ -25,6 +29,7 @@ def create_mock_room() -> Any:
     mock_remote_participant.identity = "mock_user"
     mock_remote_participant.sid = "PA_mock_user"
     mock_remote_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    mock_remote_participant.state = rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
     MockRoom.remote_participants = {mock_remote_participant.sid: mock_remote_participant}
     return MockRoom
 

@@ -6,7 +6,7 @@ import dataclasses
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -18,6 +18,9 @@ from ..utils import aio
 from ..utils.audio import AudioBuffer
 from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -41,6 +44,10 @@ class _STTStatus:
 class FallbackAdapter(
     STT[Literal["stt_availability_changed"]],
 ):
+    """Agent Fallback Adapter for STT. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
     def __init__(
         self,
         stt: list[STT],
@@ -80,6 +87,8 @@ class FallbackAdapter(
                 interim_results=all(t.capabilities.interim_results for t in stt),
                 diarization=all(t.capabilities.diarization for t in stt),
                 aligned_transcript=aligned_transcript,
+                keyterms=any(t.capabilities.keyterms for t in stt),
+                chat_context=any(t.capabilities.chat_context for t in stt),
             )
         )
 
@@ -108,6 +117,16 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        # forward to every underlying STT; unsupported ones warn-and-skip internally
+        for stt_instance in self._stt_instances:
+            stt_instance._update_session_keyterms(keyterms)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # forward to every underlying STT; unsupported ones warn-and-skip internally
+        for stt_instance in self._stt_instances:
+            stt_instance._push_conversation_item(ev)
 
     async def _try_recognize(
         self,
@@ -143,15 +162,17 @@ class FallbackAdapter(
         except APIError as e:
             if recovering:
                 logger.warning(
-                    f"{stt.label} recovery failed",
-                    exc_info=e,
+                    "%s recovery failed: %s",
+                    stt.label,
+                    e,
                     extra={"streamed": False},
                 )
                 raise
 
             logger.warning(
-                f"{stt.label} failed, switching to next STT",
-                exc_info=e,
+                "%s failed, switching to next STT: %s",
+                stt.label,
+                e,
                 extra={"streamed": False},
             )
             raise
@@ -198,8 +219,8 @@ class FallbackAdapter(
                         "stt_availability_changed",
                         AvailabilityChangedEvent(stt=stt, available=True),
                     )
-                except Exception:
-                    logger.debug(f"{stt.label} recovery attempt failed", exc_info=True)
+                except Exception as e:
+                    logger.debug("%s recovery attempt failed: %s", stt.label, e)
                     return
 
             stt_status.recovering_recognize_task = asyncio.create_task(_recover_stt_task(stt))
@@ -258,6 +279,15 @@ class FallbackAdapter(
         conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
+
+    def prewarm(self) -> None:
+        """Pre-warm the primary STT.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+        """
+        if self._stt_instances:
+            self._stt_instances[0].prewarm()
 
     async def aclose(self) -> None:
         for stt_status in self._status:
@@ -336,6 +366,10 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
+                    # update main_stream start time offset so transcript timestamps are properly adjusted
+                    main_stream.start_time_offset = self.start_time_offset + (
+                        time.time() - self._start_time
+                    )
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())
@@ -353,8 +387,9 @@ class FallbackRecognizeStream(RecognizeStream):
                         raise
                     except APIError as e:
                         logger.warning(
-                            f"{stt.label} failed, switching to next STT",
-                            exc_info=e,
+                            "%s failed, switching to next STT: %s",
+                            stt.label,
+                            e,
                             extra={"streamed": True},
                         )
                         raise
@@ -429,8 +464,9 @@ class FallbackRecognizeStream(RecognizeStream):
                     )
                 except APIError as e:
                     logger.warning(
-                        f"{stream._stt.label} recovery failed",
-                        exc_info=e,
+                        "%s recovery failed: %s",
+                        stream._stt.label,
+                        e,
                         extra={"streamed": True},
                     )
                 except Exception:

@@ -102,6 +102,7 @@ class LLM(
     def __init__(self) -> None:
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def label(self) -> str:
@@ -143,11 +144,50 @@ class LLM(
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
-    def prewarm(self) -> None:
-        """Pre-warm connection to the LLM service"""
-        pass
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm connection to the LLM service.
 
-    async def aclose(self) -> None: ...
+        Establishes DNS resolution and the TLS connection to the provider before the
+        first inference request, reducing time-to-first-token on the initial reply.
+        It is called automatically when an ``AgentSession`` is constructed and when an
+        agent activity starts, but can also be called directly.
+
+        Non-blocking (fire-and-forget) and idempotent. Providers enable it by
+        overriding ``_prewarm_impl``.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if type(self)._prewarm_impl is LLM._prewarm_impl:
+            return  # no provider-specific prewarm implemented
+
+        if self._prewarm_task is not None:
+            return
+
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        async def _prewarm() -> None:
+            try:
+                await self._prewarm_impl()
+            except Exception:
+                pass
+
+        self._prewarm_task = loop.create_task(_prewarm())
+
+    async def _prewarm_impl(self) -> None:
+        """Provider-specific prewarm request, overriding it enables ``prewarm()``.
+
+        Implementations should perform a cheap, token-free request (e.g. listing
+        models) using the same client that serves chat requests, so DNS + TLS are
+        established and a keep-alive connection is left in the pool. Exceptions
+        are swallowed by ``prewarm()``; subclasses overriding ``aclose`` must call
+        ``await super().aclose()`` to cancel an in-flight prewarm."""
+
+    async def aclose(self) -> None:
+        if self._prewarm_task is not None:
+            await aio.cancel_and_wait(self._prewarm_task)
 
     async def __aenter__(self) -> LLM:
         return self

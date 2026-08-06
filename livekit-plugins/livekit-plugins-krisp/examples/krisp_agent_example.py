@@ -6,14 +6,20 @@ This example demonstrates how to integrate Krisp noise cancellation
 into a LiveKit voice agent for human-to-bot conversations.
 
 The audio pipeline:
-    Room → RoomIO (with KrispVivaFilterFrameProcessor) → VAD → STT → LLM → TTS → Room
+    Room → RoomIO (with voice_isolation) → VAD → STT → LLM → TTS → Room
+
+Authentication:
+    By default the plugin uses ``krisp.auth.livekit_cloud()`` — auth + metering
+    happen via the room's existing JWT, which the agent framework hands to the
+    FrameProcessor automatically. No Krisp env vars are required when running
+    against LiveKit Cloud. To use your own Krisp license + ``.kef`` model file
+    instead, see the commented ``auth_provider=`` block below.
 
 Prerequisites:
-    1. Set KRISP_VIVA_FILTER_MODEL_PATH environment variable to your .kef model file
+    1. Standard agent env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
     2. Install required packages:
        - livekit-agents (with PR #4145 support for FrameProcessor)
        - livekit-plugins-krisp
-       - livekit-plugins-silero (for VAD)
        - livekit-plugins-openai (or your preferred STT/LLM/TTS)
 
 Usage:
@@ -30,9 +36,10 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     cli,
+    inference,
     room_io,
 )
-from livekit.plugins import krisp, openai, silero
+from livekit.plugins import krisp, openai
 
 logger = logging.getLogger("krisp-agent-example")
 load_dotenv()
@@ -66,7 +73,7 @@ async def entrypoint(ctx: JobContext):
 
     # Configure the agent session
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt=openai.STT(model="whisper-1"),
         llm=openai.LLM(model="gpt-4o-mini"),
         tts=openai.TTS(voice="alloy"),
@@ -77,24 +84,37 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Starting agent session with RoomIO and Krisp noise cancellation")
 
-    # Create Krisp FrameProcessor for noise cancellation
-    processor = krisp.KrispVivaFilterFrameProcessor(
+    # Create the Krisp voice isolation FrameProcessor.
+    # Defaults to krisp.auth.livekit_cloud() — the framework pushes the room's
+    # JWT to the FrameProcessor via _on_credentials_updated and auto-refreshes
+    # it on token rotation. No manual credential plumbing required. Input frames
+    # of any size and sample rate are buffered and adapted automatically.
+    noise_cancellation = krisp.voice_isolation(
         noise_suppression_level=100,  # 0-100, where 100 is maximum suppression
-        frame_duration_ms=10,
-        sample_rate=16000,  # Pre-load model at this sample rate
     )
+    # For telephony audio (for example, SIP participants), use
+    # krisp.voice_isolation_telephony() instead.
 
-    # Start the session with RoomIO configuration
-    # IMPORTANT: frame_size_ms must match Krisp's frame_duration_ms
+    # To use a Krisp license key + .kef model file instead, supply an explicit
+    # auth provider:
+    #
+    #     noise_cancellation = krisp.KrispVivaFilterFrameProcessor(
+    #         auth_provider=krisp.auth.krisp_license(
+    #             # Both default to env vars KRISP_VIVA_SDK_LICENSE_KEY and
+    #             # KRISP_VIVA_FILTER_MODEL_PATH if omitted.
+    #             license_key="...",
+    #             model_path="/path/to/model.kef",
+    #         ),
+    #         noise_suppression_level=100,
+    #     )
+
+    # Start the session with RoomIO configuration.
     await session.start(
         agent=KrispAgent(),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                sample_rate=16000,  # Krisp supports: 8k, 16k, 24k, 32k, 44.1k, 48k
-                num_channels=1,
-                frame_size_ms=10,  # Must match Krisp frame_duration_ms (10, 15, 20, 30, or 32)
-                noise_cancellation=processor,  # Pass FrameProcessor directly
+                noise_cancellation=noise_cancellation,  # Pass the FrameProcessor directly
             ),
         ),
     )

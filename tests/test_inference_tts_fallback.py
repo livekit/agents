@@ -7,6 +7,8 @@ from livekit.agents.inference.tts import (
     _parse_model_string,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_tts(**kwargs):
     """Helper to create TTS with required credentials."""

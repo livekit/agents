@@ -25,6 +25,10 @@ from .stt import (
     STTOptions,
     TranslationConfig,
 )
+from .tts import (
+    TTS,
+    SynthesizeStream,
+)
 from .version import __version__
 
 __all__ = [
@@ -34,6 +38,8 @@ __all__ = [
     "ContextGeneralItem",
     "ContextTranslationTerm",
     "TranslationConfig",
+    "TTS",
+    "SynthesizeStream",
     "__version__",
 ]
 

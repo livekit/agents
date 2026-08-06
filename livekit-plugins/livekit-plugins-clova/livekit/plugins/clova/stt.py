@@ -111,10 +111,11 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
+            lang = self._language
             if is_given(language):
                 normalized = LanguageCode(language).iso
-                self._language = clova_languages_mapping.get(normalized, normalized)
-            payload = json.dumps({"language": self._language, "completion": "sync"})
+                lang = clova_languages_mapping.get(normalized, normalized)
+            payload = json.dumps({"language": lang, "completion": "sync"})
 
             buffer = merge_frames(buffer)
             buffer_bytes = resample_audio(
@@ -155,7 +156,7 @@ class STT(stt.STT):
                         f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
                     )
                 logger.info(f"final event: {response_data}")
-                return self._transcription_to_speech_event(text=text)
+                return self._transcription_to_speech_event(text=text, language=lang)
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -171,8 +172,11 @@ class STT(stt.STT):
         self,
         text: str,
         event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        language: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,
-            alternatives=[stt.SpeechData(text=text, language=LanguageCode(self._language))],
+            alternatives=[
+                stt.SpeechData(text=text, language=LanguageCode(language or self._language))
+            ],
         )

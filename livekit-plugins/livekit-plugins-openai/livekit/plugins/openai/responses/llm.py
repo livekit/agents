@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 import aiohttp
 import httpx
+from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
@@ -33,6 +34,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -42,20 +44,34 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
+from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
+# ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
+_WS_HEARTBEAT = 30.0
+# max connections to try when a reused socket is stale, before the outer retry takes over
+_WS_SEND_MAX_ATTEMPTS = 6
+
 
 class _ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: float | None, base_url: str | None = None
+        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
+        if url.host != "api.openai.com":
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        self._base_url = str(url)
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -76,6 +92,7 @@ class _ResponsesWebsocket:
                 self._ensure_http_session().ws_connect(
                     self._base_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
+                    heartbeat=_WS_HEARTBEAT,
                 ),
                 timeout,
             )
@@ -93,7 +110,19 @@ class _ResponsesWebsocket:
     async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
-                return o.model_dump(mode="json")
+                # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
+                # transport serializes request models itself instead of going
+                # through the openai SDK (which omits unset fields). Without
+                # exclude_none, every Optional field the model defaults to None
+                # is emitted as an explicit `null` on the wire. The Responses API
+                # rejects explicit nulls on fields that expect an enum: e.g. after
+                # openai-python added `Reasoning.mode` (default None), a plain
+                # `Reasoning(effort=...)` began serializing `"mode": null`, which
+                # the API 400s with "Invalid type for 'reasoning.mode': expected
+                # one of 'standard' or 'pro', but got null instead." Omitting None
+                # mirrors the SDK's on-the-wire shape and is forward-compatible
+                # with future Optional additions to these models.
+                return o.model_dump(mode="json", exclude_none=True)
             raise TypeError(f"unexpected type {type(o)}")
 
         try:
@@ -101,12 +130,9 @@ class _ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        async with self._pool.connection(timeout=self._timeout) as ws:
-            try:
-                await ws.send_str(data)
-            except Exception as e:
-                raise APIConnectionError("failed to send request over WebSocket") from e
-
+        ws = await self._acquire_and_send(data)
+        completed = False
+        try:
             while True:
                 raw_msg = await ws.receive()
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
@@ -131,7 +157,33 @@ class _ResponsesWebsocket:
                 event = json.loads(raw_msg.data)
                 yield event
                 if event["type"] in ["response.completed", "response.failed", "error"]:
+                    completed = True
                     return
+        finally:
+            # only a cleanly completed exchange is safe to reuse; discard on any error
+            if completed:
+                self._pool.put(ws)
+            else:
+                self._pool.remove(ws)
+
+    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+        # a socket closed while idle surfaces only as a send failure on reuse
+        last_exc: Exception | None = None
+        for _ in range(_WS_SEND_MAX_ATTEMPTS):
+            ws = await self._pool.get(timeout=self._timeout)
+            reused = self._pool.last_connection_reused
+            try:
+                await ws.send_str(data)
+                return ws
+            except Exception as e:
+                self._pool.remove(ws)  # discard the failed socket
+                last_exc = e
+                if not reused:
+                    break  # a fresh connection failing to send is a real error, not staleness
+            except BaseException:
+                self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
+                raise
+        raise APIConnectionError("failed to send request over WebSocket") from last_exc
 
 
 @dataclass
@@ -151,6 +203,10 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
+    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
+    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
+    _provider_tool_type: type[llm.ProviderTool] = OpenAITool
+
     def __init__(
         self,
         *,
@@ -180,7 +236,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -223,6 +279,7 @@ class LLM(llm.LLM):
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
                 timeout=timeout.connect if timeout is not None else None,
+                model=str(model),
                 base_url=base_url if is_given(base_url) else None,
             )
 
@@ -406,7 +463,9 @@ class LLMStream(llm.LLMStream):
         tool_schemas = cast(
             list[ToolParam],
             self._tool_ctx.parse_function_tools(
-                "openai.responses", strict=self._strict_tool_schema
+                "openai.responses",
+                strict=self._strict_tool_schema,
+                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 
@@ -488,7 +547,14 @@ class LLMStream(llm.LLMStream):
 
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate({**event.get("error", {}), **event})
+            # Top-level protocol error frames (e.g. a request-validation 400) do
+            # NOT carry `sequence_number`, which ResponseErrorEvent marks required.
+            # Validating them as-is raises a pydantic ValidationError that masks
+            # the real API message ("... 1 validation error ... sequence_number
+            # Field required ..."). Default the field so the genuine error
+            # surfaces as a clean APIStatusError via _handle_error instead.
+            merged = {"sequence_number": -1, **event.get("error", {}), **event}
+            return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
@@ -540,6 +606,21 @@ class LLMStream(llm.LLMStream):
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        for item in event.response.output:
+            # Every item.type is a discriminator of openai's ResponseOutputItem union.
+            # Of those, only these are produced/consumed by the agent itself; all other
+            # members of the union are tools the Responses API runs server-side (e.g.
+            # openai web_search, xAI web_search and x_search's custom_tool_call subcalls),
+            # so anything not in this set is a provider-executed tool.
+            if item.type not in ("message", "reasoning", "function_call", "function_call_output"):
+                logger.info(
+                    "provider tool executed",
+                    extra={
+                        "tool_type": item.type,
+                        "result": item.model_dump(exclude_none=True),
+                    },
+                )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
@@ -579,6 +660,17 @@ class LLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
+                ),
+            )
         return chunk
 
     def _handle_response_output_text_delta(

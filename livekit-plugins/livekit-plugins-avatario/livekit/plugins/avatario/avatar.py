@@ -63,6 +63,7 @@ class AvatarSession(BaseAvatarSession):
                                      room. Defaults to "avatario-avatar-agent"
             conn_options: Connection options for the aiohttp session.
         """
+        super().__init__()
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
@@ -90,6 +91,14 @@ class AvatarSession(BaseAvatarSession):
             if utils.is_given(avatar_participant_name)
             else _AVATAR_AGENT_NAME
         )
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "avatario"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -145,9 +154,11 @@ class AvatarSession(BaseAvatarSession):
                 },
             )
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )
