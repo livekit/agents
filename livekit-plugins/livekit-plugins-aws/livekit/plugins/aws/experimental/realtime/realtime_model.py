@@ -554,6 +554,15 @@ class RealtimeSession(  # noqa: F811
         # audio input is flowing (Nova Sonic requires active audio to generate).
         self._stream_ready = asyncio.Event()
 
+        # Gate that pauses audio frame transmission while a text block is in-flight.
+        # This prevents the race condition where an audioInput frame arrives at the
+        # server between TEXT contentStart and TEXT contentEnd, which triggers:
+        # "ValidationException: Chat history should be sent completely before streaming audio."
+        # The gate starts open (set) so audio flows freely by default. _send_text_message
+        # clears it while sending a text block, causing _process_audio_input to wait.
+        self._text_block_gate = asyncio.Event()
+        self._text_block_gate.set()  # Initially open — audio can flow
+
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
             "audio_output_content_start": self._handle_audio_output_content_start_event,
@@ -1957,6 +1966,11 @@ class RealtimeSession(  # noqa: F811
                     if task == audio_task:
                         try:
                             audio_bytes = cast(bytes, task.result())
+                            # Wait for any in-flight text block to complete before
+                            # sending the audio frame. This prevents the race condition
+                            # where audioInput arrives between TEXT contentStart and
+                            # TEXT contentEnd.
+                            await self._text_block_gate.wait()
                             blob = base64.b64encode(audio_bytes)
                             audio_event = self._event_builder.create_audio_input_event(
                                 audio_content=blob.decode("utf-8"),
@@ -2189,14 +2203,23 @@ class RealtimeSession(  # noqa: F811
                 content_name=content_name, role="USER"
             )
 
-        # Send event sequence: contentStart → textInput → contentEnd
-        await self._send_raw_event(event)
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(
-            self._event_builder.create_text_content_event(content_name, text)
-        )
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+        # Gate audio frames while the text block is in-flight.
+        # This ensures TEXT contentEnd arrives before the next audioInput frame,
+        # preventing the "Chat history should be sent completely before streaming audio"
+        # ValidationException from Nova Sonic.
+        self._text_block_gate.clear()  # Pause audio frame transmission
+        try:
+            # Send event sequence: contentStart → textInput → contentEnd
+            await self._send_raw_event(event)
+            await asyncio.sleep(0.01)
+            await self._send_raw_event(
+                self._event_builder.create_text_content_event(content_name, text)
+            )
+            await asyncio.sleep(0.01)
+            await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+        finally:
+            self._text_block_gate.set()  # Resume audio frame transmission
+
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
         )
