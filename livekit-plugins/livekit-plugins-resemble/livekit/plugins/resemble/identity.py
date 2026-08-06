@@ -19,6 +19,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -69,6 +70,7 @@ class IdentityMatch:
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a stable payload for this enrolled-speaker match."""
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -228,6 +230,11 @@ class ResembleIdentity:
         url = url.strip()
         if not url:
             raise ValueError("url is required")
+        # the URL is fetched by Resemble's backend — never forward non-web schemes
+        # (file://, internal metadata endpoints, ...) from untrusted input
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("url must be an absolute http(s) URL")
         if threshold is not None:
             _validate_threshold(threshold)
         item = await self._transport.search(

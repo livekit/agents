@@ -283,3 +283,61 @@ class ResembleSignalTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int = 200, body: bytes = b"") -> None:
+        self.status = status
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode()
+
+    async def __aenter__(self) -> _FakeHttpResponse:
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+
+class _FakeHttpSession:
+    def __init__(self, response: _FakeHttpResponse) -> None:
+        self._response = response
+        self.calls: list[tuple[str, str]] = []
+
+    def request(self, method: str, url: str, **_kwargs: Any) -> _FakeHttpResponse:
+        self.calls.append((method, url))
+        return self._response
+
+
+class RestSignalTransportResponseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_succeeds_on_204_no_content(self) -> None:
+        from livekit.plugins.resemble import RestSignalTransport
+
+        session = _FakeHttpSession(_FakeHttpResponse(status=204))
+        transport = RestSignalTransport(api_key="key", http_session=session)  # type: ignore[arg-type]
+
+        await transport.delete_submission("sub-1", request_timeout=5.0)
+
+        self.assertEqual(session.calls, [("DELETE", "https://app.resemble.ai/api/v2/signal/sub-1")])
+
+    async def test_delete_succeeds_on_empty_body(self) -> None:
+        from livekit.plugins.resemble import RestSignalTransport
+
+        session = _FakeHttpSession(_FakeHttpResponse(status=200, body=b""))
+        transport = RestSignalTransport(api_key="key", http_session=session)  # type: ignore[arg-type]
+
+        await transport.delete_custom_category(7, request_timeout=5.0)
+
+    async def test_invalid_json_raises_api_error(self) -> None:
+        from livekit.agents import APIStatusError
+        from livekit.plugins.resemble import RestSignalTransport
+
+        session = _FakeHttpSession(_FakeHttpResponse(status=200, body=b"<html>not json</html>"))
+        transport = RestSignalTransport(api_key="key", http_session=session)  # type: ignore[arg-type]
+
+        with self.assertRaises(APIStatusError):
+            await transport.list_submissions(page=1, per_page=10, request_timeout=5.0)
