@@ -35,11 +35,11 @@ SAFE_KEYS = frozenset(
         "lk.retry_count",
         "lk.provider_request_ids",
         "lk.participant_id",
-        "lk.participant_identity",  # identifier PII: deferred to AGT-3074
         "lk.participant_kind",
         "lk.job_id",
         "lk.agent_name",
-        "lk.room_name",  # identifier PII (SIP): deferred to AGT-3074
+        "lk.cloud_agent_id",
+        "lk.deployment_id",
         "lk.session_options",
         "lk.generation_id",
         "lk.parent_generation_id",

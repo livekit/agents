@@ -21,7 +21,7 @@ so it can be cross-referenced with the provider's logs for debugging."""
 
 
 ATTR_PARTICIPANT_ID = "lk.participant_id"
-ATTR_PARTICIPANT_IDENTITY = "lk.participant_identity"
+ATTR_PARTICIPANT_IDENTITY = "lk.pii.participant_identity"
 ATTR_PARTICIPANT_KIND = "lk.participant_kind"
 
 # session start
@@ -29,7 +29,7 @@ ATTR_JOB_ID = "lk.job_id"
 ATTR_AGENT_NAME = "lk.agent_name"
 ATTR_CLOUD_AGENT_ID = "lk.cloud_agent_id"
 ATTR_DEPLOYMENT_ID = "lk.deployment_id"
-ATTR_ROOM_NAME = "lk.room_name"
+ATTR_ROOM_NAME = "lk.pii.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
 # agent turn
