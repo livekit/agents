@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import datetime
 import os
 import platform
@@ -19,12 +20,25 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
-# Inference class forced on every LiveKit Inference request issued from a text
-# simulation. A simulation run dispatches many jobs at once and nobody is waiting
-# on the answers, so it is batch load: it must never compete with live traffic for
-# gateway capacity. Audio simulations are excluded: they run in real time against
-# the audio pipeline, so their latency has to stay representative.
-SIMULATION_INFERENCE_CLASS = "low"
+INFERENCE_CLASS_LOW = "low"
+
+# Class pinned for the current job, overriding whatever each model was configured
+# with. This module only exposes the knob: what deserves pinning is decided by the
+# job runner (see job._pin_simulation_inference_class), so nothing down here needs
+# to know why a job is special.
+_pinned_inference_class: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "livekit_pinned_inference_class", default=None
+)
+
+
+def pin_inference_class(inference_class: str) -> None:
+    """Pin every LiveKit Inference request made from this task, and the tasks it
+    spawns, to ``inference_class``.
+
+    Overrides the class each model was configured with, so callers cannot opt back
+    out. Set once per job, before the entrypoint runs.
+    """
+    _pinned_inference_class.set(inference_class)
 
 
 def get_default_inference_url() -> str:
@@ -55,8 +69,8 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
 
     ``inference_class`` is the class the caller configured, if any; it lands in
-    X-LiveKit-Inference-Priority. This resolves it for every LiveKit Inference model,
-    so it is the one place that decides which class a request goes out with.
+    X-LiveKit-Inference-Priority unless the job pinned one via
+    :func:`pin_inference_class`.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
@@ -82,14 +96,8 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
     except RuntimeError:
         pass
 
-    # A text simulation overrides the configured class rather than falling back to it:
-    # a simulation must never be able to ask for priority capacity.
-    from ..job import current_simulation
-    from ..simulation import SimulationMode
-
-    sim = current_simulation()
-    if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
-        inference_class = SIMULATION_INFERENCE_CLASS
+    if (pinned := _pinned_inference_class.get()) is not None:
+        inference_class = pinned
 
     if inference_class:
         headers[HEADER_INFERENCE_PRIORITY] = inference_class

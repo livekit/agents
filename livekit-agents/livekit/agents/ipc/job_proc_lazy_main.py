@@ -25,7 +25,13 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
+from ..job import (
+    JobContext,
+    JobExecutorType,
+    JobProcess,
+    _JobContextVar,
+    _pin_simulation_inference_class,
+)
 from ..log import logger
 from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
@@ -323,6 +329,8 @@ class _JobProc:
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
+        # before the entrypoint, so every model it builds inherits the pinned class
+        _pin_simulation_inference_class(self._job_ctx)
 
         @tracer.start_as_current_span("job_entrypoint")
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:

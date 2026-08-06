@@ -62,9 +62,6 @@ class _CtxConnected:
         self.room = _FakeLiveRoom(connected=True)
         self.agent = _FakeAgent(agent_sid)
 
-    def simulation_context(self) -> None:
-        return None
-
 
 class _CtxDisconnected:
     """Room not connected: ``isconnected()`` is False and ``agent`` access raises.
@@ -80,17 +77,9 @@ class _CtxDisconnected:
     def agent(self):  # noqa: ANN201 - matches the raising property under test
         raise Exception("cannot access local participant before connecting")
 
-    def simulation_context(self) -> None:
-        return None
-
 
 def _patch_ctx(monkeypatch: pytest.MonkeyPatch, ctx: object) -> None:
-    # keyword-only `required`, matching the real get_job_context: the header builder
-    # calls it both ways (required=True for the ids, required=False for the sim check).
-    def _get(*, required: bool = True) -> object:
-        return ctx
-
-    monkeypatch.setattr("livekit.agents.job.get_job_context", _get)
+    monkeypatch.setattr("livekit.agents.job.get_job_context", lambda: ctx)
 
 
 def test_omits_agent_header_when_room_not_connected(
@@ -152,12 +141,10 @@ def test_omits_agent_header_when_sid_empty(monkeypatch: pytest.MonkeyPatch) -> N
 def test_no_job_context_returns_only_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Outside a job context (console mode / tests) only User-Agent is set."""
 
-    def _no_ctx(*, required: bool = True) -> object:
-        if required:
-            raise RuntimeError("no job context found")
-        return None
+    def _raise() -> object:
+        raise RuntimeError("no job context found")
 
-    monkeypatch.setattr("livekit.agents.job.get_job_context", _no_ctx)
+    monkeypatch.setattr("livekit.agents.job.get_job_context", _raise)
 
     headers = get_inference_headers()
 
