@@ -109,31 +109,6 @@ def current_simulation() -> SimulationContext | None:
     return ctx.simulation_context()
 
 
-def _pin_simulation_inference_class(ctx: JobContext) -> None:
-    """Pin a text simulation's LiveKit Inference requests to the low class.
-
-    A text simulation is batch load: a run fans out many jobs at once and nobody is
-    waiting on the answers, so it must not compete with live traffic for gateway
-    capacity. This overrides the class the agent configured, so a simulation cannot
-    ask for priority capacity.
-
-    Audio simulations are excluded: they run in real time against the audio pipeline,
-    so their latency has to stay representative of production.
-
-    Called by the job runner before the entrypoint, so it covers every model the job
-    goes on to build, not just the ones an AgentSession happens to hold.
-    """
-    from .inference._utils import INFERENCE_CLASS_LOW, pin_inference_class
-    from .simulation import SimulationMode
-
-    sim = ctx.simulation_context()
-    if sim is None or sim.simulation_mode != SimulationMode.SIMULATION_MODE_TEXT:
-        return
-
-    pin_inference_class(INFERENCE_CLASS_LOW)
-    logger.info(f"text simulation: pinning LiveKit Inference to the {INFERENCE_CLASS_LOW} class")
-
-
 @unique
 class JobExecutorType(Enum):
     PROCESS = "process"
@@ -528,6 +503,30 @@ class JobContext:
 
         self._simulation_ctx = SimulationContext(dispatch, self)
         return self._simulation_ctx
+
+    @property
+    def inference_headers(self) -> dict[str, str]:
+        """Extra headers this job puts on every LiveKit Inference request it makes.
+
+        Merged last by ``inference.get_inference_headers``, so what the job asserts
+        about itself outranks what an individual model was configured with. Empty for
+        an ordinary job.
+        """
+        from .inference._utils import HEADER_INFERENCE_PRIORITY, INFERENCE_CLASS_LOW
+        from .simulation import SimulationMode
+
+        headers: dict[str, str] = {}
+
+        # A text simulation is batch load: a run fans out many jobs at once and nobody
+        # is waiting on the answers, so it must not compete with live traffic for
+        # gateway capacity, and it must not be able to ask for priority either. Audio
+        # simulations are excluded: they run in real time against the audio pipeline,
+        # so their latency has to stay representative of production.
+        sim = self.simulation_context()
+        if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
+            headers[HEADER_INFERENCE_PRIORITY] = INFERENCE_CLASS_LOW
+
+        return headers
 
     @property
     def local_participant_identity(self) -> str:

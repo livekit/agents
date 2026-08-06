@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextvars
 import datetime
 import os
 import platform
@@ -21,24 +20,6 @@ HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 INFERENCE_CLASS_LOW = "low"
-
-# Class pinned for the current job, overriding whatever each model was configured
-# with. This module only exposes the knob: what deserves pinning is decided by the
-# job runner (see job._pin_simulation_inference_class), so nothing down here needs
-# to know why a job is special.
-_pinned_inference_class: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "livekit_pinned_inference_class", default=None
-)
-
-
-def pin_inference_class(inference_class: str) -> None:
-    """Pin every LiveKit Inference request made from this task, and the tasks it
-    spawns, to ``inference_class``.
-
-    Overrides the class each model was configured with, so callers cannot opt back
-    out. Set once per job, before the entrypoint runs.
-    """
-    _pinned_inference_class.set(inference_class)
 
 
 def get_default_inference_url() -> str:
@@ -69,12 +50,15 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
 
     ``inference_class`` is the class the caller configured, if any; it lands in
-    X-LiveKit-Inference-Priority unless the job pinned one via
-    :func:`pin_inference_class`.
+    X-LiveKit-Inference-Priority. A job can override it through
+    :attr:`JobContext.inference_headers`, which is merged last.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
     }
+    if inference_class:
+        headers[HEADER_INFERENCE_PRIORITY] = inference_class
+
     try:
         from ..job import get_job_context
 
@@ -93,14 +77,11 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
         # cleared, so the access below won't raise once isconnected() is True.
         if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
+        # merged last: what the job asserts about itself outranks what an individual
+        # model was configured with.
+        headers.update(ctx.inference_headers)
     except RuntimeError:
         pass
-
-    if (pinned := _pinned_inference_class.get()) is not None:
-        inference_class = pinned
-
-    if inference_class:
-        headers[HEADER_INFERENCE_PRIORITY] = inference_class
 
     return headers
 

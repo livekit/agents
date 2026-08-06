@@ -57,6 +57,7 @@ class _CtxConnected:
     """Connected room: ``isconnected()`` is True and ``agent.sid`` is reachable."""
 
     job = _FakeJob()
+    inference_headers: dict[str, str] = {}
 
     def __init__(self, agent_sid: object) -> None:
         self.room = _FakeLiveRoom(connected=True)
@@ -72,6 +73,7 @@ class _CtxDisconnected:
 
     job = _FakeJob()
     room = _FakeLiveRoom(connected=False)
+    inference_headers: dict[str, str] = {}
 
     @property
     def agent(self):  # noqa: ANN201 - matches the raising property under test
