@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from ._mood import match_mood
-from .markup_utils import convert_expression_tags, extract_and_strip
+from .markup_utils import (
+    LEADING_WS,
+    _dedup_removal_space,
+    convert_expression_tags,
+    extract_and_strip,
+)
 
 
 class ExpressiveTag(TypedDict):
@@ -715,14 +720,18 @@ def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceT
 
 
 _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
-# any <expr ...> or <expr .../> tag (open or self-closing; attrs in group 1)
-_EXPR_OPEN_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
-_EXPR_CLOSE_RE = re.compile(r"</expr\s*>")
+# every marker pattern captures the space before it as "pre" so _dedup_removal_space can
+# drop it when the marker vanishes from between two spaces
+# any <expr ...> or <expr .../> tag (open or self-closing)
+_EXPR_OPEN_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/?\s*>")
+_EXPR_CLOSE_RE = re.compile(LEADING_WS + r"</expr\s*>")
 # self-closing markers only (the trailing / is required)
-_EXPR_SELF_RE = re.compile(r"<expr\b([^>]*?)/\s*>")
+_EXPR_SELF_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/\s*>")
 # a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
 _EXPR_WRAP_RE = re.compile(
-    r'<expr\b(?=[^>]*type="(?:prosody|spell)")([^>]*?)>(.*?)</expr\s*>', re.DOTALL
+    LEADING_WS + r'<expr\b(?=[^>]*type="(?:prosody|spell)")(?P<attrs>[^>]*?)>'
+    r"(?P<inner>.*?)</expr\s*>",
+    re.DOTALL,
 )
 # a non-wrapping type the LLM forgot to self-close (normalize_markup fixes these)
 _EXPR_UNCLOSED_RE = re.compile(
@@ -765,12 +774,12 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
     tags: list[ExpressiveTag] = []
 
     def _repl(m: re.Match[str]) -> str:
-        attrs = _expr_attrs(m.group(1))
+        attrs = _expr_attrs(m.group("attrs"))
         tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return ""
+        return _dedup_removal_space(m, "")
 
     clean = _EXPR_OPEN_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_RE.sub("", clean)
+    clean = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), clean)
     return clean, tags
 
 
@@ -787,10 +796,10 @@ def _convert_expr(provider: str, text: str) -> str:
         return text
 
     def _wrap(m: re.Match[str]) -> str:
-        attrs = _expr_attrs(m.group(1))
+        attrs = _expr_attrs(m.group("attrs"))
         marker_type = attrs.get("type", "")
         label = attrs.get("label", "").strip().lower()
-        inner = m.group(2)
+        inner = m.group("inner")
         if marker_type == "spell":
             return f"<spell>{inner}</spell>" if provider == "cartesia" else inner
         # prosody: native wrapping tags exist only for xAI
@@ -810,10 +819,13 @@ def _convert_expr(provider: str, text: str) -> str:
             return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
         return inner
 
-    text = _EXPR_WRAP_RE.sub(_wrap, text)
+    # a marker the provider doesn't support lowers to "" — _dedup_removal_space keeps its
+    # removal from leaving two spaces behind (this text is the transcript when
+    # use_tts_aligned_transcript is on)
+    text = _EXPR_WRAP_RE.sub(lambda m: _dedup_removal_space(m, _wrap(m)), text)
 
     def _self(m: re.Match[str]) -> str:
-        attrs = _expr_attrs(m.group(1))
+        attrs = _expr_attrs(m.group("attrs"))
         marker_type = attrs.get("type", "")
         label = attrs.get("label", "")
         if marker_type == "expression":
@@ -838,11 +850,11 @@ def _convert_expr(provider: str, text: str) -> str:
             return _CARTESIA_PROSODY.get(label.strip().lower(), "")
         return ""
 
-    text = _EXPR_SELF_RE.sub(_self, text)
+    text = _EXPR_SELF_RE.sub(lambda m: _dedup_removal_space(m, _self(m)), text)
     # a stray unpaired expr tag (e.g. a prosody wrapper split across stream chunks)
     # must never reach the TTS as literal text — drop the delimiters, keep the words
-    text = _EXPR_OPEN_RE.sub("", text)
-    text = _EXPR_CLOSE_RE.sub("", text)
+    text = _EXPR_OPEN_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
+    text = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
     return text
 
 
@@ -954,6 +966,31 @@ class TranscriptMarkupStripper:
     def __init__(self) -> None:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
+        self._seam_after_strip = False
+
+    def _consume(self, text: str, *, final: bool) -> str:
+        """Strip *text*, record its tags, and keep a removed tag from doubling a space.
+
+        ``split_all_markup`` drops one of the two spaces a removed tag sat between, but
+        only when it can see both. Trailing whitespace is therefore held back rather than
+        emitted, so a tag opening the *next* chunk is still stripped against the space
+        before it; ``final`` releases the held whitespace at segment end.
+        """
+        if self._seam_after_strip and text[:1] in (" ", "\t"):
+            # a tag was stripped right at the held whitespace: collapse that whitespace
+            # with the run following it, leaving the single separator the words need
+            text = text[:1] + text[1:].lstrip(" \t")
+
+        clean, tags = split_all_markup(text)
+        self._tags.extend(tags)
+
+        held = "" if final else clean[len(clean.rstrip(" \t")) :]
+        self._buf = held
+        # the held whitespace only abuts a removal when this chunk *ended* on a tag; a tag
+        # stripped earlier in the chunk leaves whitespace the LLM itself wrote, which is
+        # passed through rather than collapsed
+        self._seam_after_strip = bool(tags) and bool(held) and text.rstrip(" \t").endswith(">")
+        return clean[: len(clean) - len(held)]
 
     def _has_open_tag(self) -> bool:
         # hold a tag-shaped trailing "<" (partial XML tag) so "3 < 5" isn't stalled. An
@@ -971,19 +1008,13 @@ class TranscriptMarkupStripper:
         self._buf += text
         if self._has_open_tag():
             return ""
-        clean, tags = split_all_markup(self._buf)
-        self._buf = ""
-        self._tags.extend(tags)
-        return clean
+        return self._consume(self._buf, final=False)
 
     def flush(self) -> str:
         """Drain any buffered text at segment end; return the remaining clean text."""
         if not self._buf:
             return ""
-        clean, tags = split_all_markup(self._buf)
-        self._buf = ""
-        self._tags.extend(tags)
-        return clean
+        return self._consume(self._buf, final=True)
 
     @property
     def tags(self) -> list[ExpressiveTag]:

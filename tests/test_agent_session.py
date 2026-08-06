@@ -272,6 +272,37 @@ async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
     check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
 
 
+async def test_llm_node_ttfs_anchors_on_synthesis_start() -> None:
+    # ttfs is the LLM->TTS handoff: inference start until the first sentence reached the
+    # provider. The fake TTS only synthesizes once its input is flushed (~2.0s in, when the
+    # LLM stream ends), so ttfs must be ~2.0 and ttfb ~0.2 -- together they decompose the
+    # gap between the first token and the first audio.
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=2.0)
+    actions.add_tts(1.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant_messages = [
+        ev.item
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    metrics = assistant_messages[0].metrics
+    assert "llm_node_ttfs" in metrics
+    check_timestamp(metrics["llm_node_ttfs"], 2.0, speed_factor=speed)
+    check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+
+
 async def test_tool_call() -> None:
     speed = 1
     actions = FakeActions()
