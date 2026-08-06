@@ -219,6 +219,7 @@ class _ParticipantLegacyTranscriptionOutput:
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._next_segment_id: str | None = None
 
         self._reset_state()
         self.set_participant(participant)
@@ -257,6 +258,21 @@ class _ParticipantLegacyTranscriptionOutput:
         self._capturing = False
         self._pushed_text = ""
 
+    def set_segment_id(self, segment_id: str) -> None:
+        """Key the next segment on an upstream id (e.g. a realtime item_id), so a
+        repeated final for the same item reuses the segment id and clients revise
+        the segment in place instead of rendering a new one."""
+        if self._capturing:
+            if self._current_id == segment_id:
+                return
+            if self._pushed_text:
+                self.flush()
+            else:
+                # nothing visible was published yet: re-key the open segment
+                self._current_id = segment_id
+                return
+        self._next_segment_id = segment_id
+
     @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
         if self._participant_identity is None or self._track_id is None:
@@ -267,6 +283,9 @@ class _ParticipantLegacyTranscriptionOutput:
 
         if not self._capturing:
             self._reset_state()
+            if self._next_segment_id is not None:
+                self._current_id = self._next_segment_id
+                self._next_segment_id = None
             self._capturing = True
 
         if self._is_delta_stream:
@@ -385,6 +404,7 @@ class _ParticipantStreamTranscriptionOutput:
         self._room.on("local_track_published", self._on_local_track_published)
         self._flush_atask: asyncio.Task[None] | None = None
         self._closed = False
+        self._next_segment_id: str | None = None
 
         self._reset_state()
         self.set_participant(participant)
@@ -458,6 +478,21 @@ class _ParticipantStreamTranscriptionOutput:
             attributes=attributes,
         )
 
+    def set_segment_id(self, segment_id: str) -> None:
+        """Key the next segment on an upstream id (e.g. a realtime item_id), so a
+        repeated final for the same item reuses the segment id and clients revise
+        the segment in place instead of rendering a new one."""
+        if self._capturing:
+            if self._current_id == segment_id:
+                return
+            if self._latest_text:
+                self.flush()
+            else:
+                # nothing visible was published yet: re-key the open segment
+                self._current_id = segment_id
+                return
+        self._next_segment_id = segment_id
+
     @utils.log_exceptions(logger=logger)
     async def capture_text(self, text: str) -> None:
         if self._participant_identity is None:
@@ -468,6 +503,9 @@ class _ParticipantStreamTranscriptionOutput:
 
         if not self._capturing:
             self._reset_state()
+            if self._next_segment_id is not None:
+                self._current_id = self._next_segment_id
+                self._next_segment_id = None
             self._capturing = True
 
         # the raw text (expressive markup intact) arrives here; publish only the visible
@@ -618,6 +656,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
             source.set_participant(participant)
+
+    def set_segment_id(self, segment_id: str) -> None:
+        for source in self.__outputs:
+            source.set_segment_id(segment_id)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])

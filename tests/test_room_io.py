@@ -9,12 +9,15 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID
+from livekit.agents.voice.events import UserInputTranscribedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantLegacyTranscriptionOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -189,6 +192,124 @@ async def test_transcription_output_aclose_unregisters_and_closes_resources() ->
     assert room.listener_count("local_track_published") == 0
     assert legacy_output._flush_task is not None and legacy_output._flush_task.done()
     assert writer.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_transcription_output_reuses_segment_id_for_repeated_finals() -> None:
+    room = _FakeRoom()
+    seg_ids: list[str] = []
+
+    async def _stream_text(**kwargs) -> _FakeWriter:
+        seg_ids.append(kwargs["attributes"][ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID])
+        return _FakeWriter()
+
+    room.local_participant.stream_text = AsyncMock(side_effect=_stream_text)
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=False, participant="user"
+    )
+
+    async def _publish_final(item_id: str, text: str) -> None:
+        output.set_segment_id(f"SG_{item_id}")
+        await output.capture_text(text)
+        output.flush()
+        assert output._flush_atask is not None
+        await output._flush_atask
+
+    # a provider re-finalizing the same item must reuse the same segment id
+    await _publish_final("item1", "hello")
+    await _publish_final("item1", "hello world")
+    await _publish_final("item2", "bye")
+
+    # non-delta streams open one writer per capture and one per flush
+    assert seg_ids == ["SG_item1"] * 4 + ["SG_item2"] * 2
+
+
+@pytest.mark.asyncio
+async def test_transcription_output_rekeys_empty_open_segment_in_place() -> None:
+    room = _FakeRoom()
+    seg_ids: list[str] = []
+
+    async def _stream_text(**kwargs) -> _FakeWriter:
+        seg_ids.append(kwargs["attributes"][ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID])
+        return _FakeWriter()
+
+    room.local_participant.stream_text = AsyncMock(side_effect=_stream_text)
+
+    output = _ParticipantStreamTranscriptionOutput(
+        room=room, is_delta_stream=False, participant="user"
+    )
+
+    # an empty interim (e.g. realtime input_speech_stopped) opens a segment with
+    # nothing published; keying it afterwards must not leak an empty segment
+    await output.capture_text("")
+    output.set_segment_id("SG_item1")
+    await output.capture_text("hello")
+    output.flush()
+    assert output._flush_atask is not None
+    await output._flush_atask
+
+    assert seg_ids == ["SG_item1"] * 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_output_reuses_segment_id_for_repeated_finals() -> None:
+    room = _FakeRoom()
+    published: list[rtc.TranscriptionSegment] = []
+
+    async def _publish_transcription(transcription: rtc.Transcription) -> None:
+        published.extend(transcription.segments)
+
+    room.local_participant.publish_transcription = AsyncMock(side_effect=_publish_transcription)
+
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant="user")
+    output._track_id = "TR_123"
+
+    for text in ("hello", "hello world"):
+        output.set_segment_id("SG_item1")
+        await output.capture_text(text)
+        output.flush()
+        assert output._flush_task is not None
+        await output._flush_task
+
+    assert {seg.id for seg in published} == {"SG_item1"}
+    assert published[-1].final and published[-1].text == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_forward_user_transcript_keys_segments_on_item_id() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    async def _capture_text(text: str) -> None:
+        calls.append(("capture", text))
+
+    fake_output = SimpleNamespace(
+        set_segment_id=lambda seg_id: calls.append(("set", seg_id)),
+        capture_text=_capture_text,
+        flush=lambda: calls.append(("flush",)),
+    )
+
+    room_io = RoomIO.__new__(RoomIO)
+    room_io._user_tr_output = fake_output
+
+    ch = utils.aio.Chan[UserInputTranscribedEvent]()
+    task = asyncio.create_task(RoomIO._forward_user_transcript(room_io, ch))
+    ch.send_nowait(UserInputTranscribedEvent(transcript="hi", is_final=True, item_id="item1"))
+    ch.send_nowait(UserInputTranscribedEvent(transcript="hi there", is_final=True, item_id="item1"))
+    ch.send_nowait(UserInputTranscribedEvent(transcript="no id", is_final=True))
+    ch.close()
+    await task
+
+    assert calls == [
+        ("set", "SG_item1"),
+        ("capture", "hi"),
+        ("flush",),
+        ("set", "SG_item1"),
+        ("capture", "hi there"),
+        ("flush",),
+        ("capture", "no id"),
+        ("flush",),
+    ]
 
 
 @pytest.mark.asyncio

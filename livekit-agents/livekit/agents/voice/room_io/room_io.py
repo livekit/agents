@@ -366,6 +366,12 @@ class RoomIO:
             if self._user_tr_output is None:
                 continue
 
+            if ev.item_id:
+                # a realtime provider may re-finalize the same item with a longer
+                # revision; keying the segment on the item id lets clients update
+                # it in place instead of rendering each final as a new segment
+                self._user_tr_output.set_segment_id(f"SG_{ev.item_id}")
+
             await self._user_tr_output.capture_text(ev.transcript)
             if ev.is_final:
                 self._user_tr_output.flush()
