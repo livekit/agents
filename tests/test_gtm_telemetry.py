@@ -529,9 +529,35 @@ async def test_generate_report_raises_if_not_attached() -> None:
         collector.generate_report()
 
 
-async def test_generate_report_is_idempotent() -> None:
-    """Calling generate_report() twice returns the same report_id and created_at,
-    so the webhook dispatch and the CRM adapter receive identical identities."""
+async def test_generate_report_snapshots_mid_call() -> None:
+    """Before the close event, generate_report() returns fresh snapshots every
+    call — the report is live and reflects accumulated state."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    try:
+        report1 = collector.generate_report()
+
+        # Add a turn after the first snapshot — the next call should reflect it.
+        collector._on_conversation_item_added(
+            ConversationItemAddedEvent(
+                item=ChatMessage(role="user", content=["hello"], created_at=1.0)
+            )
+        )
+        report2 = collector.generate_report()
+
+        # Different calls produce different report objects — but both are valid.
+        assert report1 is not report2
+        assert report1.report_id != report2.report_id
+        assert len(report1.turns) == 0
+        assert len(report2.turns) == 1
+    finally:
+        await collector.aclose()
+
+
+async def test_generate_report_idempotent_after_close() -> None:
+    """After the close event, the report is frozen and cached so the webhook
+    dispatch and CRM adapter receive identical report_id and created_at."""
     session = AgentSession()
     collector = PostCallTelemetryCollector(session)
     collector.attach()
@@ -541,6 +567,10 @@ async def test_generate_report_is_idempotent() -> None:
                 item=ChatMessage(role="user", content=["hello"], created_at=1.0)
             )
         )
+        # Simulate the close event arriving.
+        collector._on_close(
+            CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED, created_at=99.0)
+        )
 
         report1 = collector.generate_report()
         report2 = collector.generate_report()
@@ -548,6 +578,7 @@ async def test_generate_report_is_idempotent() -> None:
         assert report1 is report2
         assert report1.report_id == report2.report_id
         assert report1.created_at == report2.created_at
+        assert report1.close_reason == "participant_disconnected"
     finally:
         await collector.aclose()
 

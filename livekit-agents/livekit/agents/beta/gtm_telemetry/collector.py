@@ -174,10 +174,12 @@ class PostCallTelemetryCollector:
     def generate_report(self) -> PostCallReport:
         """Build the :class:`PostCallReport` from the collected state.
 
-        Idempotent: the report is built once and cached. Subsequent calls
-        return the same instance, so the webhook dispatch and the CRM adapter
-        receive identical ``report_id`` and ``created_at`` values. The cache is
-        cleared in :meth:`aclose`.
+        Before the session's ``close`` event the report is a live snapshot:
+        every call constructs a fresh instance reflecting the current state.
+        Once the close event has been observed the report is frozen and cached;
+        subsequent calls return the same instance, so the webhook dispatch and
+        the CRM adapter receive identical ``report_id`` and ``created_at``
+        values.  The cache is cleared in :meth:`aclose` and :meth:`attach`.
         """
         if self._cached_report is not None:
             return self._cached_report
@@ -197,7 +199,7 @@ class PostCallTelemetryCollector:
                 sum(self._llm_ttfts) / len(self._llm_ttfts) * 1000 if self._llm_ttfts else None
             ),
         )
-        self._cached_report = PostCallReport(
+        report = PostCallReport(
             room_name=self._room_name,
             room_id=self._room_id,
             job_id=self._job_id,
@@ -208,7 +210,11 @@ class PostCallTelemetryCollector:
             tool_invocations=all_tools,
             metrics=metrics,
         )
-        return self._cached_report
+
+        if self._close_event is not None:
+            self._cached_report = report
+
+        return report
 
     async def aflush(self, *, timeout: float = 45.0) -> None:
         """Await the auto-flush task spawned by the ``close`` handler.
