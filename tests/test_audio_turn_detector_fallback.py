@@ -259,7 +259,7 @@ class TestDetectorViewAfterFallback:
             stream._opts.thresholds._update_defaults(
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
-            stream._fall_back_to_local(reason=APIConnectionError("boom"))
+            stream._fallback_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
 
             assert detector.model == "turn-detector-v1-mini"
@@ -297,7 +297,7 @@ class TestWarningDedupe:
             stream = _make_stream_with_transport(transport)
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # Trigger a second fallback path by calling the method directly.
-            stream._fall_back_to_local(reason=APIConnectionError("boom2"))
+            stream._fallback_to_local(reason=APIConnectionError("boom2"))
             # Only one warning across both invocations.
             cloud_warnings = [r for r in caplog.records if "cloud turn detector" in r.getMessage()]
             assert len(cloud_warnings) == 1
@@ -593,7 +593,7 @@ class TestThresholdRescaleOnFallback:
             stream._opts.thresholds._update_defaults(
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
-            stream._fall_back_to_local(reason=APIConnectionError("boom"))
+            stream._fallback_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             assert stream.is_fallback is True
             value = await stream.unlikely_threshold(LanguageCode("en"))
@@ -608,7 +608,7 @@ class TestThresholdRescaleOnFallback:
             stream._opts.thresholds._update_defaults(
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
-            stream._fall_back_to_local(reason=APIConnectionError("boom"))
+            stream._fallback_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             # ratio 1.0 → local table unchanged
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(
@@ -623,7 +623,7 @@ class TestThresholdRescaleOnFallback:
             stream._opts.thresholds._update_defaults(
                 dict(SERVER_THRESHOLDS), SERVER_DEFAULT_THRESHOLD
             )
-            stream._fall_back_to_local(reason=APIConnectionError("boom"))
+            stream._fallback_to_local(reason=APIConnectionError("boom"))
             await _wait_for(lambda: stream.model == "turn-detector-v1-mini")
             assert stream.is_fallback is True
             assert await stream.unlikely_threshold(LanguageCode("en")) == pytest.approx(

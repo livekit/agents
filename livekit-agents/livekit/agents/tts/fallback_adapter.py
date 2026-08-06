@@ -33,7 +33,11 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 @dataclass
 class _TTSStatus:
     available: bool
-    recovering_task: asyncio.Task[None] | None
+    # One slot per recovery path, mirroring `_STTStatus`. A single shared slot let a probe in
+    # flight on one path suppress probing on the other, and let the second path to run drop the
+    # first path's task so `aclose()` could no longer cancel it.
+    recovering_synthesize_task: asyncio.Task[None] | None
+    recovering_stream_task: asyncio.Task[None] | None
     needs_resampling: bool
 
 
@@ -92,6 +96,7 @@ class FallbackAdapter(
 
         self._tts_instances = tts
         self._max_retry_per_tts = max_retry_per_tts
+        self._closed = False
 
         self._status: list[_TTSStatus] = []
         for t in tts:
@@ -100,7 +105,12 @@ class FallbackAdapter(
                 logger.info(f"resampling {t.label} from {t.sample_rate}Hz to {sample_rate}Hz")
 
             self._status.append(
-                _TTSStatus(available=True, recovering_task=None, needs_resampling=needs_resampling)
+                _TTSStatus(
+                    available=True,
+                    recovering_synthesize_task=None,
+                    recovering_stream_task=None,
+                    needs_resampling=needs_resampling,
+                )
             )
 
             t.on("metrics_collected", self._on_metrics_collected)
@@ -131,9 +141,18 @@ class FallbackAdapter(
         self.emit("metrics_collected", *args, **kwargs)
 
     async def aclose(self) -> None:
+        # set before the sweep: _try_recovery is synchronous, so a probe is
+        # either already in a slot (and cancelled below) or refused by this
+        # flag. A stream still in flight runs its finally after this returns,
+        # and must not start a probe that nothing is left to cancel
+        self._closed = True
+
         for tts_status in self._status:
-            if tts_status.recovering_task is not None:
-                await aio.cancel_and_wait(tts_status.recovering_task)
+            if tts_status.recovering_synthesize_task is not None:
+                await aio.cancel_and_wait(tts_status.recovering_synthesize_task)
+
+            if tts_status.recovering_stream_task is not None:
+                await aio.cancel_and_wait(tts_status.recovering_stream_task)
 
         for t in self._tts_instances:
             t.off("metrics_collected", self._on_metrics_collected)
@@ -181,8 +200,13 @@ class FallbackChunkedStream(ChunkedStream):
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
 
+        if self._tts._closed:
+            # nothing would cancel a probe started from here
+            return
+
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
-        if tts_status.recovering_task is None or tts_status.recovering_task.done():
+        recovering_task = tts_status.recovering_synthesize_task
+        if recovering_task is None or recovering_task.done():
 
             async def _recover_tts_task(tts: TTS) -> None:
                 try:
@@ -198,7 +222,7 @@ class FallbackChunkedStream(ChunkedStream):
                 except Exception:  # exceptions already logged inside _try_synthesize
                     return
 
-            tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
+            tts_status.recovering_synthesize_task = asyncio.create_task(_recover_tts_task(tts))
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         assert isinstance(self._tts, FallbackAdapter)
@@ -371,6 +395,12 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
         input_task = asyncio.create_task(_forward_input_task())
 
+        # a probe needs text to synthesize, and _pushed_tokens is only filled
+        # once _forward_input_task has run: an instance that is skipped because
+        # it is already unavailable is reached before that happens, so the
+        # probes are started below, after the input has been consumed
+        pending_recovery: list[TTS] = []
+
         try:
             for i, tts in enumerate(self._fallback_adapter._tts_instances):
                 tts_status = self._fallback_adapter._status[i]
@@ -433,7 +463,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             )
                             return
 
-                self._try_recovery(tts)
+                pending_recovery.append(tts)
 
             raise APIConnectionError(
                 f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
@@ -441,15 +471,24 @@ class FallbackSynthesizeStream(SynthesizeStream):
         finally:
             await utils.aio.cancel_and_wait(input_task)
 
+            for tts in pending_recovery:
+                self._try_recovery(tts)
+
     def _try_recovery(self, tts: TTS) -> None:
         assert isinstance(self._tts, FallbackAdapter)
+
+        if self._tts._closed:
+            # a stream still in flight when the adapter closed runs its finally
+            # after the sweep, and nothing would cancel a probe started here
+            return
 
         retry_text = self._pushed_tokens.copy()
         if not retry_text:
             return
 
         tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
-        if tts_status.recovering_task is None or tts_status.recovering_task.done():
+        recovering_task = tts_status.recovering_stream_task
+        if recovering_task is None or recovering_task.done():
 
             async def _recover_tts_task(tts: TTS) -> None:
                 try:
@@ -481,4 +520,4 @@ class FallbackSynthesizeStream(SynthesizeStream):
                 except Exception:
                     return
 
-            tts_status.recovering_task = asyncio.create_task(_recover_tts_task(tts))
+            tts_status.recovering_stream_task = asyncio.create_task(_recover_tts_task(tts))
