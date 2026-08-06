@@ -252,12 +252,12 @@ async def test_options_apply_without_a_reconnect() -> None:
     assert _sent_transcription(ws)["keywords"] == ["Acme Corp"]
     assert _sent_transcription(ws)["prompt"] == "a support call"
 
-    instance.update_options(language="fr")
-    await _settle(stream)
-    assert _sent_transcription(ws)["languages"] == ["fr"]
-    assert stream._language == "fr"
-
     assert not stream._reconnect_event.is_set()
+
+    # a language is the exception: it always rebuilds
+    instance.update_options(language="fr")
+    assert stream._language == "fr"
+    assert stream._reconnect_event.is_set()
 
     await stream.aclose()
 
@@ -563,8 +563,8 @@ async def test_a_rebuild_drops_the_idle_pooled_connection(
     await stream.aclose()
 
 
-async def test_a_stream_asking_to_detect_the_language_drops_the_pooled_connection() -> None:
-    # stream(language=...) is the same option change, so it needs the same rebuild
+async def test_a_stream_with_its_own_language_takes_its_own_connection() -> None:
+    # a pooled socket carries whatever language the stream before it set
     instance = _offline_stt(model="gpt-live-transcribe", language="en")
     session = _FakeSession()
     instance._session = session  # type: ignore[assignment]
@@ -572,27 +572,69 @@ async def test_a_stream_asking_to_detect_the_language_drops_the_pooled_connectio
 
     stream = instance.stream(language=[])
 
-    assert instance._opts.languages == []
+    assert stream._opts.languages == []
+    assert instance._opts.languages == ["en"]  # the STT default is untouched
     await _connected(stream)
     assert session.connects == 2
 
     await stream.aclose()
 
 
-async def test_a_stream_language_reaches_the_streams_already_open() -> None:
-    # the options are shared, so an open stream must hear about the change too
+async def test_a_stream_language_stays_out_of_the_streams_already_open() -> None:
     instance = _offline_stt(model="gpt-live-transcribe", language="en")
     open_stream = instance.stream()
-    ws = await _connected(open_stream)
+    await _connected(open_stream)
 
     later = instance.stream(language="fr")
-    await _settle(open_stream)
 
-    assert _sent_transcription(ws)["languages"] == ["fr"]
-    assert open_stream._language == "fr"
+    assert open_stream._opts.languages == ["en"]
+    assert open_stream._language == "en"
+    assert later._opts.languages == ["fr"]
 
     await open_stream.aclose()
     await later.aclose()
+
+
+async def test_a_stream_switches_its_own_language() -> None:
+    instance = _offline_stt(model="gpt-live-transcribe", language="en")
+    stream = instance.stream()
+    await _connected(stream)
+    other = instance.stream()
+
+    stream.update_options(language="fr")
+
+    # the stream rebuilds on its own language, and nothing else moves
+    assert stream._reconnect_event.is_set()
+    assert stream._language == "fr"
+    assert other._opts.languages == ["en"]
+    assert instance._opts.languages == ["en"]
+
+    # and it is pinned, so an STT change that names no language leaves it alone
+    instance.update_options(keywords=["Acme Corp"])
+    assert stream._opts.languages == ["fr"]
+
+    await stream.aclose()
+    await other.aclose()
+
+
+async def test_an_stt_language_change_overrides_a_stream_of_its_own() -> None:
+    instance = _offline_stt(model="gpt-live-transcribe", language="en")
+    pinned = instance.stream(language="fr")
+    plain = instance.stream()
+
+    # a change that names no language leaves the pinned stream on its own
+    instance.update_options(keywords=["Acme Corp"])
+    assert pinned._opts.languages == ["fr"]
+    assert pinned._opts.keywords == ["Acme Corp"]  # the rest still reaches it
+    assert plain._opts.languages == ["en"]
+
+    # naming one takes the stream back
+    instance.update_options(language="de")
+    assert pinned._opts.languages == ["de"]
+    assert plain._opts.languages == ["de"]
+
+    await pinned.aclose()
+    await plain.aclose()
 
 
 async def test_session_keyterms_reach_the_next_connection() -> None:

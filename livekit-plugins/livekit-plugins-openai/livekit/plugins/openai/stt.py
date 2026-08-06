@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import json
 import os
 import time
@@ -85,12 +86,10 @@ _TURN_DETECTION: TypeAdapter[RealtimeTranscriptionSessionAudioInputTurnDetection
     RealtimeTranscriptionSessionAudioInputTurnDetection
 )
 
-# these models are served only over the realtime API, and without server-side endpointing: they
-# reject any turn_detection config and emit no speech_started/stopped, so the client has to commit
-# the audio buffer to close a segment (e.g. driven by a VAD)
+# realtime-only, and with no server-side endpointing: they reject turn_detection and emit no
+# speech_started/stopped, so the client commits the buffer to close a segment
 _REALTIME_ONLY_MODELS = ("gpt-realtime-whisper", "gpt-live-transcribe")
-# these accept a plural `languages` list and `keywords`; earlier models take a single `language`
-# and no keywords
+# these take a plural `languages` list and `keywords`; earlier models take neither
 _CONTEXT_HINT_MODELS = ("gpt-transcribe", "gpt-live-transcribe")
 
 
@@ -429,13 +428,18 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        opts = dataclasses.replace(self._opts)
         if is_given(language):
-            # the options are shared, so this takes the path any other change takes
-            self.update_options(language=language)
+            opts.languages = _as_languages(language)
+            _validate_context(opts.model, opts.languages, opts.keywords)
+            if opts.languages != self._opts.languages:
+                # the pool would otherwise hand this stream a socket carrying another language
+                self._pool.invalidate()
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
             conn_options=conn_options,
+            opts=opts,
             vad_instance=self._vad,
         )
         self._streams.add(stream)
@@ -475,10 +479,13 @@ class STT(stt.STT):
             languages = []
         user_keywords = list(keywords) if is_given(keywords) else self._user_keywords
         _validate_context(resolved_model, languages, user_keywords)
+        if not is_given(language):
+            # a stream keeps its own language, which the new model may not take
+            for stream in self._streams:
+                _validate_context(resolved_model, stream._opts.languages, user_keywords)
 
-        # the transport is fixed for the life of the instance: AgentSession wraps a non-streaming
-        # STT in a StreamAdapter once, so `streaming` cannot flip under a running pipeline. the
-        # other direction needs no guard, since the realtime API serves every model.
+        # the transport is fixed at construction: AgentSession wraps a non-streaming STT once.
+        # the realtime API serves every model, so only this direction can break
         if not self.capabilities.streaming and _is_realtime_only(resolved_model):
             raise ValueError(
                 f"{resolved_model} is served only over the realtime API, and this STT was "
@@ -497,11 +504,8 @@ class STT(stt.STT):
                 "to drive `input_audio_buffer.commit` yourself"
             )
 
-        # a reconnect is the only way to apply these: gateways route on the ?model= in the
-        # upgrade URL, and `languages` cannot be cleared on an open session
-        needs_reconnect = resolved_model != self._opts.model or (
-            bool(self._opts.languages) and not languages
-        )
+        needs_reconnect = resolved_model != self._opts.model or languages != self._opts.languages
+        languages_given = is_given(language) or is_given(detect_language)
         self._opts.model = resolved_model
         self._capabilities.keyterms = _supports_context_hints(resolved_model)
         self._opts.languages = languages
@@ -530,15 +534,11 @@ class STT(stt.STT):
                 self._opts.temperature = temperature
 
         if needs_reconnect:
-            # the pool keeps idle sockets for reuse, and `_streams` may be empty between two
-            # speech sessions, so the drop happens here rather than per stream
+            # the streams do this too, but `_streams` is empty between two speech sessions
             self._pool.invalidate()
 
         for stream in self._streams:
-            if needs_reconnect:
-                stream.reconnect()
-            else:
-                stream.apply_options()
+            stream.update_options(language=languages if languages_given else NOT_GIVEN)
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         if not self.capabilities.keyterms:
@@ -549,7 +549,7 @@ class STT(stt.STT):
         self._session_keyterms = list(keyterms)
         self._opts.keywords = list(dict.fromkeys([*self._user_keywords, *keyterms]))
         for stream in self._streams:
-            stream.apply_options()
+            stream.update_options()
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         query_params: dict[str, str] = {
@@ -623,8 +623,7 @@ class STT(stt.STT):
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
             )
 
-            # what the model detected beats the hint that was sent, the first code being the
-            # dominant one; an empty list means nothing was detected reliably, so the hint stands
+            # the detected language beats the hint, dominant code first; an empty list keeps it
             sd = stt.SpeechData(text=resp.text, language=_transcript_language(self._opts.languages))
             if isinstance(resp, TranscriptionVerbose) and resp.language:
                 sd.language = LanguageCode(resp.language)
@@ -653,14 +652,16 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        opts: _STTOptions,
         vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
         self._pool = pool
-        # the STT mutates these in place; every acquired connection is configured from them
-        self._opts = stt._opts
-        self._language = _transcript_language(stt._opts.languages)
+        # this stream's own options, and the STT's to refresh them from
+        self._opts = opts
+        self._stt: STT = stt
+        self._language = _transcript_language(opts.languages)
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -670,12 +671,25 @@ class SpeechStream(stt.SpeechStream):
         self._vad = vad_instance
         self._speaking = False
 
-    def apply_options(self) -> None:
-        """Apply an option change on the open connection instead of reconnecting."""
-        self._language = _transcript_language(self._opts.languages)
-        self._update_task = asyncio.create_task(
-            self._send_update(_session_update(self._opts), old_task=self._update_task)
-        )
+    def update_options(self, *, language: NotGivenOr[str | list[str]] = NOT_GIVEN) -> None:
+        """Set the language for this stream alone, and take the rest from the STT."""
+        # only a named language moves this stream off its own
+        opts = dataclasses.replace(self._stt._opts, languages=self._opts.languages)
+        if is_given(language):
+            opts.languages = _as_languages(language)
+            _validate_context(opts.model, opts.languages, opts.keywords)
+        # a language cannot be cleared on an open session, nor can a pooled socket carrying
+        # another one be reused; gateways route on the ?model= in the URL
+        rebuild = opts.model != self._opts.model or opts.languages != self._opts.languages
+        self._opts = opts
+        self._language = _transcript_language(opts.languages)
+        if rebuild:
+            self._pool.invalidate()
+            self._reconnect_event.set()
+        else:
+            self._update_task = asyncio.create_task(
+                self._send_update(_session_update(opts), old_task=self._update_task)
+            )
 
     async def _send_update(
         self, event: SessionUpdateEvent, *, old_task: asyncio.Task[None] | None
@@ -694,11 +708,6 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             # a dropped update is not worth failing the stream over
             logger.warning("failed to update the transcription session", exc_info=True)
-
-    def reconnect(self) -> None:
-        """Rebuild the connection so it carries the current options. The STT drops the pool."""
-        self._language = _transcript_language(self._opts.languages)
-        self._reconnect_event.set()
 
     async def aclose(self) -> None:
         if self._update_task is not None:
@@ -771,8 +780,7 @@ class SpeechStream(stt.SpeechStream):
                         self._start_speaking()
                     elif ev.type == vad.VADEventType.END_OF_SPEECH:
                         self._stop_speaking()
-                        # a model with server-side endpointing closes the segment itself, so a
-                        # commit from here would cut it a second time
+                        # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -930,11 +938,11 @@ class SpeechStream(stt.SpeechStream):
                 self._report_connection_acquired(
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
-                # published before the config is sent, so a change made during the send is
-                # applied after it rather than dropped as having no live connection
+                # published before the config is sent, so a change made during the send lands
+                # after it rather than finding no live connection
                 self._ws = ws
-                # a pooled connection may have been configured for older options. the lock is
-                # taken before the first await, so no queued update can overtake this one.
+                # a pooled connection may carry older options; the lock is taken before the
+                # first await, so no queued update overtakes this one
                 try:
                     async with self._config_lock:
                         await ws.send_json(
