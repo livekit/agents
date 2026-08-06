@@ -2209,11 +2209,30 @@ class RealtimeSession(  # noqa: F811
         # ValidationException from Nova Sonic.
         async with self._text_block_lock:
             # Send event sequence: contentStart → textInput → contentEnd
-            await self._send_raw_event(event)
-            await self._send_raw_event(
-                self._event_builder.create_text_content_event(content_name, text)
-            )
-            await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+            # Use try/finally to guarantee contentEnd is sent even if the task is
+            # cancelled mid-send. Without this, a cancelled reply leaves the text
+            # block open server-side, causing all subsequent audio to be rejected.
+            content_started = False
+            try:
+                await self._send_raw_event(event)
+                content_started = True
+                await self._send_raw_event(
+                    self._event_builder.create_text_content_event(content_name, text)
+                )
+                await self._send_raw_event(
+                    self._event_builder.create_content_end_event(content_name)
+                )
+            except (asyncio.CancelledError, Exception):
+                if content_started:
+                    # Best-effort: close the text block so the server doesn't
+                    # reject all future audio frames for this session.
+                    try:
+                        await self._send_raw_event(
+                            self._event_builder.create_content_end_event(content_name)
+                        )
+                    except Exception:
+                        pass
+                raise
 
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
