@@ -266,6 +266,10 @@ class LLM(llm.LLM):
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
 
+    async def _prewarm_impl(self) -> None:
+        # also fetches auth tokens ahead of time on vertexai
+        await self._client.aio.models.list(config={"page_size": 1})
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -428,6 +432,15 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
+
+    async def aclose(self) -> None:
+        """Close the LLM and release its GenAI HTTP clients."""
+        await super().aclose()
+
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
 
 
 class LLMStream(llm.LLMStream):

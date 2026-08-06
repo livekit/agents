@@ -34,6 +34,24 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
+# Every session event the host forwards to a remote consumer. Asserting the set
+# rather than its size says which events are forwarded, and pairs register with
+# aclose: an `on` added without its `off` leaks a handler across reconnects and
+# only shows up as a mismatch between these two.
+FORWARDED_EVENTS = {
+    "agent_false_interruption",
+    "agent_state_changed",
+    "conversation_item_added",
+    "debug_message",
+    "error",
+    "function_tools_executed",
+    "overlapping_speech",
+    "session_usage_updated",
+    "tool_execution_updated",
+    "user_input_transcribed",
+    "user_state_changed",
+}
+
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
 # ---------------------------------------------------------------------------
@@ -158,6 +176,14 @@ class TestMetricsToProto:
         pb = _metrics_to_proto(metrics)
         assert pb.transcription_delay == pytest.approx(0.42)
 
+    def test_llm_node_throughput_fields(self) -> None:
+        # guards the dict-key -> proto-field mapping: a mismatch (e.g. "tps" vs
+        # "llm_node_tps") raises at MetricsReport(**kwargs) instead of silently dropping.
+        metrics = {"llm_node_tps": 12.5, "llm_node_ttfs": 0.6}
+        pb = _metrics_to_proto(metrics)
+        assert pb.llm_node_tps == pytest.approx(12.5)
+        assert pb.llm_node_ttfs == pytest.approx(0.6)
+
 
 class TestSessionUsageToProto:
     def test_llm_usage(self) -> None:
@@ -278,7 +304,8 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 10
+        subscribed = {call.args[0] for call in mock_session.on.call_args_list}
+        assert subscribed == FORWARDED_EVENTS
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -516,6 +543,7 @@ class TestSessionHostRequests:
         options.max_tool_steps = 5
         options.user_away_timeout = 30
         options.user_away_on = "presence"
+        options.transcription_timeout = None
         options.preemptive_generation = {"enabled": False}
         options.min_consecutive_speech_delay = 0.5
         options.use_tts_aligned_transcript = True
@@ -661,4 +689,5 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 10
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
