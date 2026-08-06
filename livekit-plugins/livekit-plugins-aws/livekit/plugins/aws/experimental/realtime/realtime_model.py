@@ -558,10 +558,10 @@ class RealtimeSession(  # noqa: F811
         # This prevents the race condition where an audioInput frame arrives at the
         # server between TEXT contentStart and TEXT contentEnd, which triggers:
         # "ValidationException: Chat history should be sent completely before streaming audio."
-        # The gate starts open (set) so audio flows freely by default. _send_text_message
-        # clears it while sending a text block, causing _process_audio_input to wait.
-        self._text_block_gate = asyncio.Event()
-        self._text_block_gate.set()  # Initially open — audio can flow
+        # Uses a Lock instead of an Event so that concurrent text sends (e.g.,
+        # update_chat_ctx + generate_reply firing at the same time) serialize
+        # properly — audio only resumes after ALL text blocks have completed.
+        self._text_block_lock = asyncio.Lock()
 
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
@@ -1969,13 +1969,13 @@ class RealtimeSession(  # noqa: F811
                             # Wait for any in-flight text block to complete before
                             # sending the audio frame. This prevents the race condition
                             # where audioInput arrives between TEXT contentStart and
-                            # TEXT contentEnd.
-                            await self._text_block_gate.wait()
-                            blob = base64.b64encode(audio_bytes)
-                            audio_event = self._event_builder.create_audio_input_event(
-                                audio_content=blob.decode("utf-8"),
-                            )
-                            await self._send_raw_event(audio_event)
+                            # TEXT contentEnd. The lock serializes with _send_text_message.
+                            async with self._text_block_lock:
+                                blob = base64.b64encode(audio_bytes)
+                                audio_event = self._event_builder.create_audio_input_event(
+                                    audio_content=blob.decode("utf-8"),
+                                )
+                                await self._send_raw_event(audio_event)
                             # Create new task for next audio
                             audio_task = asyncio.create_task(self._audio_input_chan.recv())
                             pending.add(audio_task)
@@ -2207,16 +2207,13 @@ class RealtimeSession(  # noqa: F811
         # This ensures TEXT contentEnd arrives before the next audioInput frame,
         # preventing the "Chat history should be sent completely before streaming audio"
         # ValidationException from Nova Sonic.
-        self._text_block_gate.clear()  # Pause audio frame transmission
-        try:
+        async with self._text_block_lock:
             # Send event sequence: contentStart → textInput → contentEnd
             await self._send_raw_event(event)
             await self._send_raw_event(
                 self._event_builder.create_text_content_event(content_name, text)
             )
             await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
-        finally:
-            self._text_block_gate.set()  # Resume audio frame transmission
 
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
