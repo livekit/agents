@@ -6,13 +6,11 @@ import os
 import struct
 import threading
 import time
-from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import pytest
 
-from livekit import rtc
 from livekit.agents import inference
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.audio import audio_frames_from_file
@@ -491,24 +489,6 @@ async def test_wav_multi_chunk_with_resampling():
     await decoder.aclose()
 
 
-def _decode_errors(caplog: pytest.LogCaptureFixture) -> list[str]:
-    """Decode errors, each tagged with the decoder state that let it through the close guard."""
-    errors = []
-    for record in caplog.records:
-        if "error decoding" not in record.getMessage() or not record.exc_info:
-            continue
-        exc_type, _, tb = record.exc_info
-        decoder = tb.tb_frame.f_locals.get("self") if tb else None
-        buf = getattr(decoder, "_input_buf", None)
-        errors.append(
-            f"{exc_type.__name__ if exc_type else '?'}"
-            f"(closed={getattr(decoder, '_closed', None)},"
-            f" eof={getattr(buf, '_eof', None)},"
-            f" buf_closed={getattr(buf, '_closed', None)})"
-        )
-    return errors
-
-
 @pytest.mark.asyncio
 async def test_aclose_while_probing_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
     """Closing a decoder mid-probe is intentional and must not be reported as a decode failure."""
@@ -523,30 +503,44 @@ async def test_aclose_while_probing_is_not_an_error(caplog: pytest.LogCaptureFix
         await decoder.aclose()
         await asyncio.sleep(0.05)
 
-    assert _decode_errors(caplog) == []
+    assert [r.getMessage() for r in caplog.records if "error decoding" in r.getMessage()] == []
 
 
 @pytest.mark.asyncio
-async def test_stop_before_first_frame_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
-    """The BackgroundAudioPlayer stop() path: aborting playback is not a decode failure.
+async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The BackgroundAudioPlayer stop() path: an aborted read is a truncated file, not an EOF.
 
-    A stop that lands before the first frame catches the decode thread while it still probes
-    the container, which is the window every report in the wild falls into.
+    Signalling the end of input hands the partial file to PyAV as a complete container, which
+    it then reports as invalid data.
     """
+    real_push, real_end_input = AudioStreamDecoder.push, AudioStreamDecoder.end_input
+    pushes: list[None] = []
+    ends: list[None] = []
 
-    async def drain(gen: AsyncGenerator[rtc.AudioFrame, None]) -> None:
+    def slow_push(self: AudioStreamDecoder, chunk: bytes) -> None:
+        pushes.append(None)
+        time.sleep(0.005)  # hold the reader mid-file for the whole test
+        real_push(self, chunk)
+
+    def spy_end_input(self: AudioStreamDecoder) -> None:
+        ends.append(None)
+        real_end_input(self)
+
+    monkeypatch.setattr(AudioStreamDecoder, "push", slow_push)
+    monkeypatch.setattr(AudioStreamDecoder, "end_input", spy_end_input)
+
+    gen = audio_frames_from_file(TEST_AUDIO_FILEPATH)
+
+    async def drain() -> None:
         async for _ in gen:
             pass
 
-    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
-        for i in range(120):
-            gen = audio_frames_from_file(TEST_AUDIO_FILEPATH)
-            task = asyncio.create_task(drain(gen))
-            await asyncio.sleep((i % 20) * 0.0001)  # sweep the probe window
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await gen.aclose()  # what PlayHandle.stop() ultimately triggers
-        await asyncio.sleep(0.05)
+    task = asyncio.create_task(drain())
+    await asyncio.sleep(0.005)  # one chunk in, many chunks from the end
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await gen.aclose()  # what PlayHandle.stop() ultimately triggers
 
-    assert _decode_errors(caplog) == []
+    assert pushes, "the reader never ran, so the abort was never exercised"
+    assert ends == []
