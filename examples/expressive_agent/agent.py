@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,7 +19,8 @@ logger = logging.getLogger("expressive-agent")
 
 load_dotenv()
 
-AGENT_NAME = "expressive_agent"
+# overridable so a local dev worker doesn't race the deployed agent for dispatches
+AGENT_NAME = os.environ.get("EXPRESSIVE_AGENT_NAME", "expressive_agent")
 INSTRUCTIONS = (Path(__file__).parent / "prompt.md").read_text()
 
 GREETING = (

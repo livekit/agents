@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Expressive Agent</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  </head>
+  <body>
+    <main class="stage">
+      <div class="aura-wrap">
+        <canvas id="aura" class="aura"></canvas>
+      </div>
+
+      <div id="mood-row" class="mood-row hidden">
+        <span id="mood-dot" class="mood-dot"></span>
+        <span id="mood-label" class="mood-label">neutral</span>
+        <span id="expression-label" class="expression-label"></span>
+      </div>
+
+      <div id="pipeline" class="pipeline"></div>
+
+      <div class="controls">
+        <button id="mic" class="icon-button hidden" title="Mute microphone" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" x2="12" y1="19" y2="22" />
+          </svg>
+        </button>
+
+        <div class="segmented" role="group" aria-label="Expressive mode">
+          <button id="mode-expressive" type="button" aria-pressed="true">Expressive</button>
+          <button id="mode-flat" type="button" aria-pressed="false">Flat</button>
+        </div>
+
+        <div class="select-wrap">
+          <select id="tts" aria-label="Voice">
+            <option value="fishaudio" selected>Fish Audio</option>
+            <option value="inworld">Inworld</option>
+            <option value="cartesia">Cartesia</option>
+            <option value="xai">xAI</option>
+          </select>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </div>
+
+        <button id="connect" class="primary" type="button">Start talking</button>
+      </div>
+
+      <div id="captions" class="captions"></div>
+
+      <p id="hint" class="hint">
+        Tell it some good news, or some bad news, and listen to how the delivery changes.
+      </p>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
