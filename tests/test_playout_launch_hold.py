@@ -85,6 +85,22 @@ def test_holds_when_user_speaking_at_playout_start() -> None:
     assert activity._paused_speech.timeout == 0
 
 
+def test_hold_preserves_upgraded_timeout_for_same_handle() -> None:
+    # _interrupt_by_audio_activity may have raised this handle's timeout to
+    # false_interruption_timeout; re-holding at playout start must not downgrade
+    # it back to 0, or the resume fires the instant the user pauses
+    from livekit.agents.voice.agent_activity import _PausedSpeechInfo
+
+    activity, output = _make_activity()
+    speech = _speech()
+    activity._paused_speech = _PausedSpeechInfo(handle=speech, agent_state="thinking", timeout=2.0)
+
+    assert activity._hold_playout_if_user_speaking(speech)
+    assert output.paused == 1
+    assert activity._paused_speech.timeout == 2.0
+    assert activity._paused_speech.handle is speech
+
+
 def test_no_hold_when_user_silent() -> None:
     activity, output = _make_activity(user_state="listening")
     assert not activity._hold_playout_if_user_speaking(_speech())

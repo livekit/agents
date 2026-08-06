@@ -597,6 +597,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    hold_playout: Callable[[], bool] | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -611,7 +612,7 @@ async def forward_generation(
         audio_out: _AudioOutput | None = None
         if audio_output is not None and audio_source is not None:
             forward_audio_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=audio_source
+                audio_output=audio_output, tts_output=audio_source, hold_playout=hold_playout
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))

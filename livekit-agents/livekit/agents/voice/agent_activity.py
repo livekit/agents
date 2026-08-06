@@ -3373,6 +3373,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                hold_playout=lambda: self._hold_playout_if_user_speaking(speech_handle),
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -4309,7 +4310,11 @@ class AgentActivity(RecognitionHooks):
         ):
             assert (audio_output := self._session.output.audio) is not None
 
-            self._update_paused_speech(speech_handle, timeout=0)
+            # don't downgrade a timeout already recorded for this handle
+            # (_interrupt_by_audio_activity may have upgraded it to
+            # false_interruption_timeout); only place a fresh hold
+            if self._paused_speech is None or self._paused_speech.handle is not speech_handle:
+                self._update_paused_speech(speech_handle, timeout=0)
             audio_output.pause()
             return True
 
