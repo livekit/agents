@@ -233,6 +233,7 @@ async def audio_frames_from_file(
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
     async def file_reader() -> None:
+        aborted = False
         try:
             async with aiofiles.open(file_path, mode="rb") as f:
                 while True:
@@ -241,8 +242,14 @@ async def audio_frames_from_file(
                         break
 
                     decoder.push(chunk)
+        except asyncio.CancelledError:
+            aborted = True
+            raise
         finally:
-            decoder.end_input()
+            # a cancelled read leaves a truncated file, not an end of input: signalling EOF
+            # would make the decoder report the abort as invalid audio. aclose() closes it.
+            if not aborted:
+                decoder.end_input()
 
     reader_task = asyncio.create_task(file_reader())
 
