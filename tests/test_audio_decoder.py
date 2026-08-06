@@ -492,7 +492,21 @@ async def test_wav_multi_chunk_with_resampling():
 
 
 def _decode_errors(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [r.getMessage() for r in caplog.records if "error decoding" in r.getMessage()]
+    """Decode errors, each tagged with the decoder state that let it through the close guard."""
+    errors = []
+    for record in caplog.records:
+        if "error decoding" not in record.getMessage() or not record.exc_info:
+            continue
+        exc_type, _, tb = record.exc_info
+        decoder = tb.tb_frame.f_locals.get("self") if tb else None
+        buf = getattr(decoder, "_input_buf", None)
+        errors.append(
+            f"{exc_type.__name__ if exc_type else '?'}"
+            f"(closed={getattr(decoder, '_closed', None)},"
+            f" eof={getattr(buf, '_eof', None)},"
+            f" buf_closed={getattr(buf, '_closed', None)})"
+        )
+    return errors
 
 
 @pytest.mark.asyncio
