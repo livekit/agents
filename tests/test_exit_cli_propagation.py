@@ -55,3 +55,33 @@ class TestExitCliPropagation:
         except _ExitCli:
             caught = True
         assert caught
+
+    def test_propagates_out_of_a_task(self) -> None:
+        # #6724: SIGTERM landing while the main thread is inside a job-request task
+        # (a request_fnc doing blocking work) puts the raise in a coroutine, not a
+        # callback. Task.__step re-raises only SystemExit/KeyboardInterrupt out of the
+        # loop; any other BaseException is stored on the task ("Task exception was never
+        # retrieved") and the loop keeps running, so the worker never drains.
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def _job_request_task() -> None:
+                raise _ExitCli()
+
+            async def _main() -> None:
+                await asyncio.sleep(30)  # the worker's main task, still running
+
+            main_task = loop.create_task(_main())
+            loop.call_soon(lambda: loop.create_task(_job_request_task()))
+
+            swallowed: list[dict] = []
+            loop.set_exception_handler(lambda _loop, ctx: swallowed.append(ctx))
+            loop.call_later(0.5, loop.stop)  # safety stop for the broken case
+
+            with pytest.raises(_ExitCli):
+                loop.run_until_complete(main_task)
+
+            assert not swallowed, "exit was left on the task instead of reaching the loop"
+        finally:
+            main_task.cancel()
+            loop.close()
