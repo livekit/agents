@@ -110,4 +110,8 @@ class InferenceProcExecutor(SupervisedProc):
         return extra
 
     def is_alive(self) -> bool:
-        return self._proc.is_alive()
+        try:
+            return self._proc.is_alive()
+        except ValueError:
+            # the process object is closed after _supervise_task exits
+            return False
