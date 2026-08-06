@@ -543,6 +543,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._active_endpointing = opts.endpointing
         self._pending_endpointing: RealtimeEndpointing | str | None = None
         self._endpointing_update_acknowledged = False
+        self._endpointing_update_sent = False
         self._pending_config_update: dict[str, Any] | None = None
         self._manual_speech_started = False
         self._pending_final_data: dict[str, Any] | None = None
@@ -676,6 +677,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if opts.endpointing != previous_opts.endpointing:
             self._pending_endpointing = opts.endpointing
             self._endpointing_update_acknowledged = False
+            self._endpointing_update_sent = False
 
         update = self._config_update_payload(previous_opts, opts)
         if update is not None:
@@ -715,10 +717,32 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 payload[key] = new_value
         return payload if len(payload) > 1 else None
 
-    def _handle_config_updated(self) -> None:
-        if self._pending_endpointing is not None:
-            self._endpointing_update_acknowledged = True
-            self._apply_pending_endpointing()
+    @staticmethod
+    def _ack_lists_endpointing(data: dict[str, Any]) -> bool | None:
+        """Whether a ``config.updated`` acknowledges an endpointing change.
+
+        The server echoes each applied key as ``"<key>=<value>"``, optionally
+        suffixed when the change is deferred to the next utterance boundary.
+        Returns ``None`` when ``applied`` is missing or not a list of strings, so
+        the caller can fall back instead of stalling on an unexpected shape.
+        """
+        applied = data.get("applied")
+        if not isinstance(applied, list) or not all(isinstance(e, str) for e in applied):
+            return None
+        return any(e.split("=", 1)[0].strip() == "endpointing" for e in applied)
+
+    def _handle_config_updated(self, data: dict[str, Any]) -> None:
+        if self._pending_endpointing is None:
+            return
+        if not self._endpointing_update_sent:
+            # This acknowledges an earlier update; ours is still queued locally and
+            # the server is still in the old mode.
+            return
+        if self._ack_lists_endpointing(data) is False:
+            return
+
+        self._endpointing_update_acknowledged = True
+        self._apply_pending_endpointing()
 
     def _apply_pending_endpointing(self) -> None:
         if (
@@ -729,6 +753,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             self._active_endpointing = self._pending_endpointing
             self._pending_endpointing = None
             self._endpointing_update_acknowledged = False
+            self._endpointing_update_sent = False
 
     def _complete_utterance(self) -> None:
         self._utterance_in_progress = False
@@ -863,9 +888,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self,
         ws: Any,
         payload: dict[str, Any],
-    ) -> None:
+    ) -> bool:
+        """Send a JSON control message, tolerating a peer that already closed.
+
+        Returns:
+            Whether the payload reached the socket.
+        """
         if ws.closed:
-            return
+            return False
 
         try:
             await ws.send_str(json.dumps(payload))
@@ -874,6 +904,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 "Sarvam realtime STT WebSocket closed before send completed",
                 extra={**self._build_log_context(), "payload": payload},
             )
+            return False
+        return True
 
     async def _safe_send_bytes(self, ws: Any, payload: bytes) -> None:
         if ws.closed:
@@ -890,8 +922,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
     async def _send_pending_config_update(self, ws: Any) -> None:
         payload = self._pending_config_update
         self._pending_config_update = None
-        if payload is not None:
-            await self._safe_send_str(ws, payload)
+        if payload is None:
+            return
+        if await self._safe_send_str(ws, payload) and "endpointing" in payload:
+            # Only now can a config.updated acknowledgement refer to our change.
+            self._endpointing_update_sent = True
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         ws_url = _build_realtime_ws_url(self._opts.base_url, self._opts)
@@ -1104,7 +1139,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         elif event == "session.end":
             self._handle_session_end(data)
         elif event == "config.updated":
-            self._handle_config_updated()
+            self._handle_config_updated(data)
             return
         elif event == "error":
             self._handle_error_event(data)

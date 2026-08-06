@@ -70,6 +70,19 @@ def _make_stream(
     return stream
 
 
+async def _flush_pending_config_update(
+    stream: stt_streaming.RealtimeSpeechStream,
+) -> list[dict[str, object]]:
+    """Send the queued config update the way the audio pump does."""
+    sent: list[dict[str, object]] = []
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=lambda payload: asyncio.sleep(0, result=sent.append(json.loads(payload))),
+    )
+    await stream._send_pending_config_update(ws)
+    return sent
+
+
 def _parse_ws_url(url: str) -> dict[str, str]:
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
@@ -480,7 +493,8 @@ def test_stream_update_options_without_arguments_is_a_no_op() -> None:
     assert stream._opts.language == "hi-IN"
 
 
-def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None:
+@pytest.mark.asyncio
+async def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None:
     stream = _make_stream()
     stream._active_endpointing = "vad"
     stream._utterance_in_progress = True
@@ -492,11 +506,103 @@ def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None
     assert stream._active_endpointing == "vad"
     assert stream._pending_endpointing == "manual"
 
-    stream._handle_config_updated()
+    assert await _flush_pending_config_update(stream) == [
+        {"event": "config.update", "endpointing": "manual"}
+    ]
+    stream._handle_config_updated({"applied": ["endpointing=manual"]})
     assert stream._active_endpointing == "vad"
 
     stream._utterance_in_progress = False
     stream._apply_pending_endpointing()
+    assert stream._active_endpointing == "manual"
+
+
+@pytest.mark.asyncio
+async def test_endpointing_ignores_ack_for_an_update_not_yet_sent() -> None:
+    """An earlier update's acknowledgement must not promote a still-queued switch.
+
+    The payload is only flushed on the next audio frame, so a ``config.updated`` for a
+    previous change can arrive first. Promoting on it would put the client in manual
+    mode, sending client-delimited boundaries, while the server is still in ``vad``.
+    """
+    stream = _make_stream()
+    # An earlier prompt update that has already been sent and is awaiting its ack.
+    stream.update_options(prompt="LiveKit")
+    await _flush_pending_config_update(stream)
+    # The endpointing switch is queued but not yet on the wire.
+    stream.update_options(endpointing="manual")
+    assert stream._pending_config_update == {
+        "event": "config.update",
+        "endpointing": "manual",
+    }
+
+    await stream._handle_message({"event": "config.updated", "applied": ["prompt=LiveKit"]})
+
+    assert stream._active_endpointing == "vad"
+    assert stream._pending_endpointing == "manual"
+    assert stream._endpointing_update_acknowledged is False
+
+    # Once it is actually sent and acknowledged, the switch promotes.
+    await _flush_pending_config_update(stream)
+    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
+    assert stream._active_endpointing == "manual"
+
+
+@pytest.mark.asyncio
+async def test_endpointing_ignores_ack_that_does_not_list_endpointing() -> None:
+    """Acks are per message, so a later unrelated ack can arrive after ours is sent."""
+    stream = _make_stream()
+    stream.update_options(endpointing="manual")
+    await _flush_pending_config_update(stream)
+
+    await stream._handle_message({"event": "config.updated", "applied": ["mode=translate"]})
+
+    assert stream._active_endpointing == "vad"
+    assert stream._pending_endpointing == "manual"
+
+    # A multi-key ack that does include endpointing is accepted.
+    await stream._handle_message(
+        {"event": "config.updated", "applied": ["mode=translate", "endpointing=manual"]}
+    )
+    assert stream._active_endpointing == "manual"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "applied",
+    [None, "endpointing=manual", [42]],
+    ids=["missing", "not_a_list", "non_string_entries"],
+)
+async def test_endpointing_falls_back_when_applied_list_is_unusable(
+    applied: object,
+) -> None:
+    """An unexpected `applied` shape must not stall the switch forever."""
+    stream = _make_stream()
+    stream.update_options(endpointing="manual")
+    await _flush_pending_config_update(stream)
+
+    payload: dict[str, object] = {"event": "config.updated"}
+    if applied is not None:
+        payload["applied"] = applied
+    await stream._handle_message(payload)
+
+    assert stream._active_endpointing == "manual"
+
+
+@pytest.mark.asyncio
+async def test_deferred_endpointing_ack_is_accepted() -> None:
+    """The server suffixes the entry when it defers to the next utterance boundary."""
+    stream = _make_stream()
+    stream.update_options(endpointing="manual")
+    await _flush_pending_config_update(stream)
+
+    await stream._handle_message(
+        {
+            "event": "config.updated",
+            "applied": ["endpointing=manual (pending: applies next boundary)"],
+        }
+    )
+
     assert stream._active_endpointing == "manual"
 
 
@@ -522,7 +628,8 @@ async def test_speech_end_promotes_pending_endpointing_without_a_valid_final(
     stream = _make_stream()
     stream.update_options(endpointing="manual")
     await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    await stream._handle_message({"event": "config.updated", "applied": ["endpointing"]})
+    await _flush_pending_config_update(stream)
+    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
 
     assert stream._utterance_in_progress is True
     assert stream._active_endpointing == "vad"
@@ -560,7 +667,8 @@ async def test_repeated_speech_end_still_completes_the_utterance() -> None:
     stream = _make_stream()
     stream.update_options(endpointing="manual")
     await stream._handle_message({"event": "vad.speech_start", "utterance_idx": 0})
-    await stream._handle_message({"event": "config.updated", "applied": ["endpointing"]})
+    await _flush_pending_config_update(stream)
+    await stream._handle_message({"event": "config.updated", "applied": ["endpointing=manual"]})
     await stream._handle_message({"event": "vad.speech_end", "utterance_idx": 0})
     # A duplicate speech end takes the already-emitted branch; it must not reopen or
     # strand the utterance.
