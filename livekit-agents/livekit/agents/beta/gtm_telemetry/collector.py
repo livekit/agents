@@ -122,12 +122,14 @@ class PostCallTelemetryCollector:
         self._close_event: CloseEvent | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._started_at: float | None = None
+        self._cached_report: PostCallReport | None = None
 
     def attach(self) -> None:
         """Register the session event handlers and start the call timer."""
         if self._started_at is not None:
             return
 
+        self._cached_report = None
         self._started_at = time.time()
         self._session.on("conversation_item_added", self._on_conversation_item_added)
         self._session.on("tool_execution_updated", self._on_tool_execution_updated)
@@ -160,6 +162,7 @@ class PostCallTelemetryCollector:
 
         self._started_at = None
         self._flush_task = None
+        self._cached_report = None
         self._turns = []
         self._pending_tools = {}
         self._completed_tools = {}
@@ -169,7 +172,16 @@ class PostCallTelemetryCollector:
         self._close_event = None
 
     def generate_report(self) -> PostCallReport:
-        """Build the :class:`PostCallReport` from the collected state."""
+        """Build the :class:`PostCallReport` from the collected state.
+
+        Idempotent: the report is built once and cached. Subsequent calls
+        return the same instance, so the webhook dispatch and the CRM adapter
+        receive identical ``report_id`` and ``created_at`` values. The cache is
+        cleared in :meth:`aclose`.
+        """
+        if self._cached_report is not None:
+            return self._cached_report
+
         if self._started_at is None:
             raise RuntimeError("collector not attached — call attach() first")
 
@@ -185,7 +197,7 @@ class PostCallTelemetryCollector:
                 sum(self._llm_ttfts) / len(self._llm_ttfts) * 1000 if self._llm_ttfts else None
             ),
         )
-        return PostCallReport(
+        self._cached_report = PostCallReport(
             room_name=self._room_name,
             room_id=self._room_id,
             job_id=self._job_id,
@@ -196,6 +208,7 @@ class PostCallTelemetryCollector:
             tool_invocations=all_tools,
             metrics=metrics,
         )
+        return self._cached_report
 
     async def aflush(self, *, timeout: float = 45.0) -> None:
         """Await the auto-flush task spawned by the ``close`` handler.

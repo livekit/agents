@@ -529,6 +529,50 @@ async def test_generate_report_raises_if_not_attached() -> None:
         collector.generate_report()
 
 
+async def test_generate_report_is_idempotent() -> None:
+    """Calling generate_report() twice returns the same report_id and created_at,
+    so the webhook dispatch and the CRM adapter receive identical identities."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    try:
+        collector._on_conversation_item_added(
+            ConversationItemAddedEvent(
+                item=ChatMessage(role="user", content=["hello"], created_at=1.0)
+            )
+        )
+
+        report1 = collector.generate_report()
+        report2 = collector.generate_report()
+
+        assert report1 is report2
+        assert report1.report_id == report2.report_id
+        assert report1.created_at == report2.created_at
+    finally:
+        await collector.aclose()
+
+
+async def test_generate_report_cache_cleared_on_aclose() -> None:
+    """After aclose(), a re-attached collector produces a fresh report with a
+    new report_id."""
+    session = AgentSession()
+    collector = PostCallTelemetryCollector(session)
+    collector.attach()
+    report1 = collector.generate_report()
+    await collector.aclose()
+
+    collector.attach()
+    collector._on_conversation_item_added(
+        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["world"], created_at=2.0))
+    )
+    report2 = collector.generate_report()
+
+    assert report1 is not report2
+    assert report1.report_id != report2.report_id
+    assert report1.created_at != report2.created_at
+    await collector.aclose()
+
+
 async def test_end_to_end_fake_session() -> None:
     """Full integration test: attach to a fake-session run, receive a webhook."""
     from livekit.agents import Agent
