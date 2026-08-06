@@ -33,7 +33,6 @@ def test_matches_known_labels(label: str, expected: str) -> None:
 
 @pytest.mark.parametrize("label", ["like a pirate", "across the room", "", "   "])
 def test_unmatched_falls_back(label: str) -> None:
-    # "pirate" must not reach angry via "irate", nor "across" via the "cross" stem
     assert match_mood(label) == DEFAULT_MOOD
     assert match_mood(label, fallback=None) is None
 
@@ -46,20 +45,14 @@ def test_keywords_match_at_word_start_only() -> None:
     assert match_mood("unexcited", fallback=None) is None
 
 
-def test_expression_attribute_carries_the_normalized_mood() -> None:
-    _, tags = split_all_markup('<expr type="expression" label="soft, with genuine care"/>hey')
+@pytest.mark.parametrize(
+    ("label", "mood"),
+    [("soft, with genuine care", "empathetic"), ("like a pirate", DEFAULT_MOOD)],
+)
+def test_expression_attribute_carries_the_normalized_mood(label: str, mood: str) -> None:
+    _, tags = split_all_markup(f'<expr type="expression" label="{label}"/>hey')
     attr = expression_attribute(tags)
     assert attr is not None
 
-    payload = json.loads(attr["lk.expression"])
-    # the provider's own words survive alongside the normalized mood
-    assert payload == {"expression": "soft, with genuine care", "mood": "empathetic"}
-
-
-def test_unrecognized_label_still_publishes_a_mood() -> None:
-    _, tags = split_all_markup('<expr type="expression" label="like a pirate"/>arr')
-    attr = expression_attribute(tags)
-    assert attr is not None
-
-    payload = json.loads(attr["lk.expression"])
-    assert payload == {"expression": "like a pirate", "mood": DEFAULT_MOOD}
+    # the provider's own words survive alongside the normalized mood, even unrecognized ones
+    assert json.loads(attr["lk.expression"]) == {"expression": label, "mood": mood}

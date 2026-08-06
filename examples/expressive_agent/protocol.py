@@ -67,11 +67,6 @@ VOICES: dict[str, Voice] = {
 }
 
 
-def resolve_voice(provider: str | None) -> Voice:
-    """Pick a voice by provider name, falling back to the default."""
-    return VOICES.get(provider or "", VOICES[DEFAULT_VOICE])
-
-
 class SessionRequest(BaseModel, extra="ignore"):
     """The dispatch metadata, as sent. Unknown fields are ignored so an older
     agent still starts against a newer frontend."""
@@ -93,7 +88,8 @@ class SessionRequest(BaseModel, extra="ignore"):
             return cls()
 
     def resolve(self) -> SessionConfig:
-        return SessionConfig(expressive=self.expressive, voice=resolve_voice(self.tts))
+        voice = VOICES.get(self.tts or "", VOICES[DEFAULT_VOICE])
+        return SessionConfig(expressive=self.expressive, voice=voice)
 
 
 class SessionConfig(BaseModel, arbitrary_types_allowed=True):

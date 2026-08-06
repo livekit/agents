@@ -1,7 +1,3 @@
-# Generated from the emotion words in Parrott's hierarchical classification of emotions
-# (2001), mapped onto the moods in `_mood.py`, plus the delivery descriptors providers use
-# in place of naming a feeling ("bright", "hushed", "clipped").
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -9,9 +5,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ._mood import AgentMood
 
-# Weighted keywords per mood. Weight 2 names the mood outright; weight 1 is a supporting
-# descriptor that loses to an explicit naming elsewhere in the same label. That is what lets
-# "gently curious, welcoming" resolve to `curious` rather than `empathetic`.
+# Weighted keywords per mood: the emotion words from Parrott's hierarchical classification of
+# emotions (2001) mapped onto the moods in `_mood.py`, plus the delivery descriptors providers
+# use in place of naming a feeling ("bright", "hushed", "clipped").
+#
+# Weight 2 names a mood outright; weight 1 is a supporting descriptor that loses to an explicit
+# naming elsewhere in the same label. That is what lets "gently curious, welcoming" resolve to
+# `curious` rather than `empathetic`.
 MOOD_KEYWORDS: dict[AgentMood, dict[str, int]] = {
     "excited": {
         "excit": 2,
