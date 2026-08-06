@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
+from openai.types.realtime import RealtimeErrorEvent
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -163,6 +165,7 @@ def _handle_error_session(
         SimpleNamespace(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _opts=SimpleNamespace(turn_detection=turn_detection),
+            _chat_ctx_event_items={},
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -174,7 +177,7 @@ def test_handle_error_raises_on_fatal() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
     event = SimpleNamespace(
-        error=SimpleNamespace(message="quota exceeded", code="insufficient_quota")
+        error=SimpleNamespace(event_id=None, message="quota exceeded", code="insufficient_quota")
     )
     with pytest.raises(APIError) as exc_info:
         RealtimeSession._handle_error(session, event)
@@ -185,14 +188,18 @@ def test_handle_error_raises_on_fatal() -> None:
 def test_handle_error_emits_transient_as_recoverable() -> None:
     captured: dict[str, object] = {}
     session = _handle_error_session(captured)
-    event = SimpleNamespace(error=SimpleNamespace(message="server hiccup", code="server_error"))
+    event = SimpleNamespace(
+        error=SimpleNamespace(event_id=None, message="server hiccup", code="server_error")
+    )
     RealtimeSession._handle_error(session, event)
     assert captured["recoverable"] is True
 
 
 def test_handle_error_ignores_cancellation_failed() -> None:
     captured: dict[str, object] = {}
-    event = SimpleNamespace(error=SimpleNamespace(message="Cancellation failed: no response"))
+    event = SimpleNamespace(
+        error=SimpleNamespace(event_id=None, message="Cancellation failed: no response")
+    )
     RealtimeSession._handle_error(_handle_error_session(captured), event)
     assert captured == {}  # early return, nothing emitted
 
@@ -200,6 +207,7 @@ def test_handle_error_ignores_cancellation_failed() -> None:
 def _empty_commit_event() -> SimpleNamespace:
     return SimpleNamespace(
         error=SimpleNamespace(
+            event_id=None,
             message="Error committing input audio buffer: buffer too small.",
             code="input_audio_buffer_commit_empty",
         )
@@ -253,3 +261,30 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     )
     RealtimeSession._handle_response_done_but_not_complete(session, event)
     assert captured["recoverable"] is True
+
+
+async def test_a_rejected_chat_ctx_event_releases_its_waiter() -> None:
+    # a rejected delete gets an error instead of conversation.item.deleted, so nothing else
+    # settles the future that update_chat_ctx awaits inside the speech
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._item_delete_future = {}
+    session._item_create_future = {}
+    session._chat_ctx_event_items = {"chat_ctx_delete_abc": "item_1"}
+    session._item_delete_future["item_1"] = (waiter := asyncio.Future())
+
+    session._handle_error(
+        RealtimeErrorEvent.construct(
+            type="error",
+            event_id="chat_ctx_delete_abc",
+            error={
+                "message": "Item not found: item_1",
+                "type": "invalid_request_error",
+                "code": "invalid_request_error",
+                "event_id": "chat_ctx_delete_abc",
+            },
+        )
+    )
+
+    assert waiter.done(), "update_chat_ctx would wait out its timeout, and the speech with it"
+    assert isinstance(waiter.exception(), llm.RealtimeError)
+    assert "item_1" not in session._item_delete_future
