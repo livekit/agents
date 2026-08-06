@@ -495,6 +495,7 @@ def perform_audio_forwarding(
     *,
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
+    hold_playout: Callable[[], bool] | None = None,
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
     # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
@@ -502,7 +503,9 @@ def perform_audio_forwarding(
     out.first_frame_fut.add_done_callback(
         lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
     )
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+    task = asyncio.create_task(
+        _audio_forwarding_task(audio_output, tts_output, out, hold_playout=hold_playout)
+    )
     return task, out
 
 
@@ -511,12 +514,18 @@ async def _audio_forwarding_task(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    hold_playout: Callable[[], bool] | None = None,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
     cancelled = False
     try:
-        audio_output.resume()
+        # this resume() clears a pause left over from an earlier speech; when the
+        # caller reports the output must stay held right now (e.g. the user is
+        # speaking at this very moment), skip it — the pause/false-interruption
+        # machinery owns the release.
+        if hold_playout is None or not hold_playout():
+            audio_output.resume()
 
         async for frame in tts_output:
             out.audio.append(frame)
