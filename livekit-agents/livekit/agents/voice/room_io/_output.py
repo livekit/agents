@@ -163,17 +163,17 @@ class _ParticipantAudioOutput(io.AudioOutput):
         )
 
         interrupted = self._interrupted_event.is_set()
-        pushed_duration = self._pushed_duration
+        pushed_duration = max(
+            self._source_pushed_duration - self._source_discarded_duration,
+            0,
+        )
 
         if interrupted:
             queued_duration = self._audio_source.queued_duration
             while not self._audio_buf.empty():
                 self._audio_buf.recv_nowait()
 
-            pushed_duration = max(
-                self._source_pushed_duration - self._source_discarded_duration - queued_duration,
-                0,
-            )
+            pushed_duration = max(pushed_duration - queued_duration, 0)
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
         else:
@@ -192,7 +192,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._source_discarded_duration += self._audio_source.queued_duration
                 self._audio_source.clear_queue()
                 await self._playback_enabled.wait()
-                # TODO(long): save the frames in the queue and play them later
+                # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
+                # discarded mid-stream audio instead of only correcting playback duration.
                 # TODO(long): ignore frames from previous syllable
 
             if self._interrupted_event.is_set() or self._pushed_duration == 0:

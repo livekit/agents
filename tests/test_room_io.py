@@ -395,10 +395,16 @@ class _QueuedAudioSource(_FakeAudioSource):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.clear_count = 0
+        self.played_duration = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
         self.queued_duration += frame.duration
+
+    async def wait_for_playout(self) -> None:
+        await asyncio.sleep(0)
+        self.played_duration += self.queued_duration
+        self.queued_duration = 0.0
 
     def clear_queue(self) -> None:
         self.clear_count += 1
@@ -482,3 +488,37 @@ async def test_audio_output_does_not_report_discarded_audio_as_played() -> None:
     assert len(finished) == 1
     assert finished[0].interrupted
     assert finished[0].playback_position == 0
+
+
+@pytest.mark.asyncio
+async def test_audio_output_excludes_discarded_audio_after_resume() -> None:
+    frame = rtc.AudioFrame(bytes(24000 * 2), 48000, 1, 24000)  # 500ms
+    resumed_frame = rtc.AudioFrame(bytes(9600 * 2), 48000, 1, 9600)  # 200ms
+
+    with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=48000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    output._subscribed_fut.set_result(None)  # skip track publish/subscription
+    forward_task = asyncio.create_task(output._forward_audio())
+
+    try:
+        await output.capture_frame(frame)
+        await asyncio.sleep(0)
+
+        output.pause()
+        await output.capture_frame(resumed_frame)
+        output.flush()
+        await asyncio.sleep(0)
+        assert output._audio_source.clear_count == 1
+
+        output.resume()
+        finished = await output.wait_for_playout()
+    finally:
+        await utils.aio.cancel_and_wait(forward_task)
+
+    assert not finished.interrupted
+    assert finished.playback_position == pytest.approx(output._audio_source.played_duration)
