@@ -9,6 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
@@ -369,7 +370,7 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     await stream.aclose()
 
 
-# -- audio output playback_started tests --------------------------------------
+# -- audio output tests -------------------------------------------------------
 
 
 class _FakeAudioSource:
@@ -388,6 +389,20 @@ class _FakeAudioSource:
 
     async def aclose(self) -> None:
         pass
+
+
+class _QueuedAudioSource(_FakeAudioSource):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.clear_count = 0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        self.queued_duration += frame.duration
+
+    def clear_queue(self) -> None:
+        self.clear_count += 1
+        self.queued_duration = 0.0
 
 
 @pytest.mark.asyncio
@@ -428,3 +443,42 @@ async def test_audio_output_playback_started_fires_once_across_pause_resume() ->
     assert len(started) == 1
 
     await utils.aio.cancel_and_wait(forward_task)
+
+
+@pytest.mark.asyncio
+async def test_audio_output_does_not_report_discarded_audio_as_played() -> None:
+    frame = rtc.AudioFrame(bytes(24000 * 2), 48000, 1, 24000)  # 500ms
+    next_frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+
+    with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=48000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    output._subscribed_fut.set_result(None)  # skip track publish/subscription
+    forward_task = asyncio.create_task(output._forward_audio())
+
+    finished: list[PlaybackFinishedEvent] = []
+    output.on("playback_finished", finished.append)
+
+    try:
+        await output.capture_frame(frame)
+        await asyncio.sleep(0)
+        assert output._audio_source.queued_duration > 0
+
+        output.pause()
+        await output.capture_frame(next_frame)
+        output.flush()
+        await asyncio.sleep(0)
+        assert output._audio_source.clear_count == 1
+
+        output.clear_buffer()
+        await output.wait_for_playout()
+    finally:
+        await utils.aio.cancel_and_wait(forward_task)
+
+    assert len(finished) == 1
+    assert finished[0].interrupted
+    assert finished[0].playback_position == 0

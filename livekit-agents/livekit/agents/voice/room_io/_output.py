@@ -64,6 +64,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._forwarding_task: asyncio.Task[None] | None = None
 
         self._pushed_duration: float = 0.0
+        self._source_pushed_duration: float = 0.0
+        self._source_discarded_duration: float = 0.0
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
@@ -166,15 +168,20 @@ class _ParticipantAudioOutput(io.AudioOutput):
         if interrupted:
             queued_duration = self._audio_source.queued_duration
             while not self._audio_buf.empty():
-                queued_duration += self._audio_buf.recv_nowait().duration
+                self._audio_buf.recv_nowait()
 
-            pushed_duration = max(pushed_duration - queued_duration, 0)
+            pushed_duration = max(
+                self._source_pushed_duration - self._source_discarded_duration - queued_duration,
+                0,
+            )
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
         else:
             wait_for_interruption.cancel()
 
         self._pushed_duration = 0
+        self._source_pushed_duration = 0
+        self._source_discarded_duration = 0
         self._interrupted_event.clear()
         self._first_frame_event.clear()
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
@@ -182,6 +189,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
             if not self._playback_enabled.is_set():
+                self._source_discarded_duration += self._audio_source.queued_duration
                 self._audio_source.clear_queue()
                 await self._playback_enabled.wait()
                 # TODO(long): save the frames in the queue and play them later
@@ -197,6 +205,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
             if not self._first_frame_event.is_set():
                 self._first_frame_event.set()
                 self.on_playback_started(created_at=time.time())
+            self._source_pushed_duration += frame.duration
             await self._audio_source.capture_frame(frame)
 
 
