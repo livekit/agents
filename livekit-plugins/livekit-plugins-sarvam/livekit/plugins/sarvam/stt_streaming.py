@@ -433,8 +433,24 @@ class STTRealtime(stt.STT):
             else self._opts.lid_confidence_threshold,
         )
         self._opts = opts
+        # Forward the given fields only, so a stream created with a per-stream
+        # override (e.g. `stream(language=...)`) keeps it through unrelated updates.
         for stream in self._streams:
-            stream.update_options(opts)
+            stream.update_options(
+                language=language,
+                stream_type=stream_type,
+                mode=mode,
+                endpointing=endpointing,
+                sample_rate=sample_rate,
+                prompt=prompt,
+                return_timestamps=return_timestamps,
+                vad_sot_threshold=vad_sot_threshold,
+                vad_min_speech_ms=vad_min_speech_ms,
+                vad_min_silence_ms=vad_min_silence_ms,
+                vad_prefix_padding_ms=vad_prefix_padding_ms,
+                lid_gate_seconds=lid_gate_seconds,
+                lid_confidence_threshold=lid_confidence_threshold,
+            )
 
     def stream(
         self,
@@ -551,18 +567,83 @@ class RealtimeSpeechStream(stt.SpeechStream):
         """Return the configuration resolved by Sarvam for this connection."""
         return dict(self._resolved_config) if self._resolved_config is not None else None
 
-    def update_options(self, opts: RealtimeSTTOptions) -> None:
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
+        mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
+        endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
+        vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        vad_prefix_padding_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        lid_gate_seconds: NotGivenOr[float | None] = NOT_GIVEN,
+        lid_confidence_threshold: NotGivenOr[float | None] = NOT_GIVEN,
+    ) -> None:
         """Apply an option change to this live connection.
 
-        Connection-time options are retained at their current values and a warning is
-        logged, since changing them would desynchronize the already-negotiated session.
-        Every other change is queued as an in-band ``config.update`` sent before the
-        next audio frame.
+        Only the options explicitly passed here are changed, so per-stream overrides
+        such as a ``language`` given to :meth:`STTRealtime.stream` survive an unrelated
+        update. Connection-time options are retained at their current values and a
+        warning is logged, since changing them would desynchronize the
+        already-negotiated session. Every other change is queued as an in-band
+        ``config.update`` sent before the next audio frame.
 
         Args:
-            opts: The requested options for this stream.
+            language: BCP-47 language code, or ``auto`` for adaptive identification.
+            stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
+            mode: Task applied to finals.
+            endpointing: ``vad`` for server-side turn detection, or ``manual``.
+            sample_rate: Audio sample rate in Hz; retained on a live stream.
+            prompt: Context or terminology hint; ``None`` clears it.
+            return_timestamps: Segment-level timestamps; retained on a live stream.
+            vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
+            vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
+            vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
+            vad_prefix_padding_ms: Speech-onset padding; retained on a live stream.
+            lid_gate_seconds: Language-promotion audio gate; retained on a live stream.
+            lid_confidence_threshold: Language-promotion confidence; retained.
+
+        Raises:
+            ValueError: If an option falls outside the values the endpoint accepts.
         """
         previous_opts = self._opts
+        requested: dict[str, Any] = {}
+        if is_given(language):
+            requested["language"] = language
+        if is_given(stream_type):
+            requested["stream_type"] = stream_type
+        if is_given(mode):
+            requested["mode"] = mode
+        if is_given(endpointing):
+            requested["endpointing"] = endpointing
+        if is_given(sample_rate):
+            requested["sample_rate"] = sample_rate
+        if is_given(prompt):
+            requested["prompt"] = prompt
+        if is_given(return_timestamps):
+            requested["return_timestamps"] = return_timestamps
+        if is_given(vad_sot_threshold):
+            requested["vad_sot_threshold"] = vad_sot_threshold
+        if is_given(vad_min_speech_ms):
+            requested["vad_min_speech_ms"] = vad_min_speech_ms
+        if is_given(vad_min_silence_ms):
+            requested["vad_min_silence_ms"] = vad_min_silence_ms
+        if is_given(vad_prefix_padding_ms):
+            requested["vad_prefix_padding_ms"] = vad_prefix_padding_ms
+        if is_given(lid_gate_seconds):
+            requested["lid_gate_seconds"] = lid_gate_seconds
+        if is_given(lid_confidence_threshold):
+            requested["lid_confidence_threshold"] = lid_confidence_threshold
+
+        if not requested:
+            return
+
+        opts = replace(previous_opts, **requested)
         connection_only_options: list[str] = []
         if opts.sample_rate != previous_opts.sample_rate:
             connection_only_options.append("sample_rate")
@@ -897,7 +978,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._manual_speech_started = False
                     self._end_manual_utterance()
 
-        self._audio_duration_collector.flush()
+        self._emit_local_usage_fallback()
         if not self._session_ended:
             await self._safe_send_str(ws, {"event": "end"})
 

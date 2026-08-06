@@ -361,17 +361,15 @@ def test_simulated_streaming_allows_auto_language_and_mode() -> None:
 def test_streaming_option_update_uses_in_band_contract_config_message() -> None:
     stream = _make_stream()
     stream._ws = None
-    updated_options = stt_streaming.RealtimeSTTOptions(
+
+    stream.update_options(
         language="en-IN",
-        api_key="sk_test",
         stream_type="fast",
         mode="translate",
         endpointing="vad",
         prompt="LiveKit",
         vad_sot_threshold=0.6,
     )
-
-    stream.update_options(updated_options)
 
     assert stream._pending_config_update == {
         "event": "config.update",
@@ -388,16 +386,13 @@ def test_active_stream_keeps_connection_only_options_on_update(
 ) -> None:
     stream = _make_stream()
     stream._pending_config_update = None
-    updated_options = stt_streaming.RealtimeSTTOptions(
-        language="hi-IN",
-        api_key="sk_test",
-        sample_rate=8000,
-        return_timestamps=True,
-        prompt="LiveKit",
-    )
 
     with caplog.at_level(logging.WARNING, logger=stt_streaming.logger.name):
-        stream.update_options(updated_options)
+        stream.update_options(
+            sample_rate=8000,
+            return_timestamps=True,
+            prompt="LiveKit",
+        )
 
     assert stream._opts.sample_rate == 16000
     assert stream._opts.return_timestamps is False
@@ -411,21 +406,8 @@ def test_active_stream_keeps_connection_only_options_on_update(
 def test_streaming_option_updates_merge_before_the_next_audio_frame() -> None:
     stream = _make_stream()
     stream._pending_config_update = None
-    stream.update_options(
-        stt_streaming.RealtimeSTTOptions(
-            language="hi-IN",
-            api_key="sk_test",
-            prompt="LiveKit",
-        )
-    )
-    stream.update_options(
-        stt_streaming.RealtimeSTTOptions(
-            language="hi-IN",
-            api_key="sk_test",
-            prompt="LiveKit",
-            mode="translate",
-        )
-    )
+    stream.update_options(prompt="LiveKit")
+    stream.update_options(prompt="LiveKit", mode="translate")
 
     assert stream._pending_config_update == {
         "event": "config.update",
@@ -452,6 +434,52 @@ def test_streaming_option_update_clears_prompt_with_empty_string() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_instance_update_preserves_per_stream_language_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated instance-level update must not clobber a per-stream override.
+
+    ``stream(language=...)`` is a per-stream override, so pushing the instance
+    defaults wholesale would silently reset it and queue a server-side language
+    change the caller never asked for.
+    """
+
+    async def _idle_run(self: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(stt_streaming.RealtimeSpeechStream, "_run", _idle_run)
+
+    stt_impl = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        language="hi-IN",
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    stream = stt_impl.stream(language="ta-IN")
+
+    stt_impl.update_options(prompt="LiveKit")
+
+    assert stream._opts.language == "ta-IN"
+    assert stt_impl._opts.language == "hi-IN"
+    assert stream._pending_config_update == {
+        "event": "config.update",
+        "prompt": "LiveKit",
+    }
+
+    await stream.aclose()
+    await stt_impl.aclose()
+
+
+def test_stream_update_options_without_arguments_is_a_no_op() -> None:
+    stream = _make_stream()
+    stream._pending_config_update = None
+
+    stream.update_options()
+
+    assert stream._pending_config_update is None
+    assert stream._opts.language == "hi-IN"
+
+
 def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None:
     stream = _make_stream()
     stream._active_endpointing = "vad"
@@ -459,13 +487,7 @@ def test_active_stream_defers_endpointing_until_config_acknowledgement() -> None
     stream._pending_endpointing = None
     stream._endpointing_update_acknowledged = False
     stream._pending_config_update = None
-    stream.update_options(
-        stt_streaming.RealtimeSTTOptions(
-            language="hi-IN",
-            api_key="sk_test",
-            endpointing="manual",
-        )
-    )
+    stream.update_options(endpointing="manual")
 
     assert stream._active_endpointing == "vad"
     assert stream._pending_endpointing == "manual"
