@@ -442,7 +442,9 @@ class LLMStream(llm.LLMStream):
             extra_headers.update(get_inference_headers())
             if self._provider:
                 extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
-            if self._inference_class:
+            # get_inference_headers() already pinned the class under a text simulation;
+            # leave it alone there so a simulation can never claim priority capacity.
+            if self._inference_class and HEADER_INFERENCE_PRIORITY not in extra_headers:
                 extra_headers[HEADER_INFERENCE_PRIORITY] = self._inference_class
 
             self._oai_stream = stream = await self._client.chat.completions.create(

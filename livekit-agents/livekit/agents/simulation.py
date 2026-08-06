@@ -137,3 +137,20 @@ class SimulationContext:
     def user_verdict(self) -> SimulationVerdict | None:
         """Your veto set via :meth:`fail`, or None if you didn't veto the run."""
         return self._user_verdict
+
+
+def current_simulation() -> SimulationContext | None:
+    """The :class:`SimulationContext` of the job running on this task, or ``None``.
+
+    ``None`` covers everything that is not a simulation: a production job, and code
+    running outside a job context at all (console mode, tests). Unlike
+    :meth:`JobContext.simulation_context` this does not need the job context in hand,
+    so it can be called from deep inside the stack.
+    """
+    from .job import get_job_context
+
+    job_ctx = get_job_context(required=False)
+    if job_ctx is None:
+        return None
+
+    return job_ctx.simulation_context()

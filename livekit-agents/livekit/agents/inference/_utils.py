@@ -19,6 +19,13 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
+# Inference class forced on every LiveKit Inference request issued from a text
+# simulation. A simulation run dispatches many jobs at once and nobody is waiting
+# on the answers, so it is batch load: it must never compete with live traffic for
+# gateway capacity. Audio simulations are excluded: they run in real time against
+# the audio pipeline, so their latency has to stay representative.
+SIMULATION_INFERENCE_CLASS = "low"
+
 
 def get_default_inference_url() -> str:
     """Get the default inference URL based on the environment.
@@ -46,6 +53,8 @@ def get_inference_headers() -> dict[str, str]:
     Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, and X-LiveKit-Agent-ID
     when running inside a job context (omitted in console mode or tests).
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
+    Includes X-LiveKit-Inference-Priority pinned to SIMULATION_INFERENCE_CLASS
+    under a text simulation, which every LiveKit Inference model inherits from here.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
@@ -70,6 +79,15 @@ def get_inference_headers() -> dict[str, str]:
             headers[HEADER_AGENT_ID] = agent_sid
     except RuntimeError:
         pass
+
+    # Set last so a text simulation wins over anything the agent configured: every
+    # model reaching the gateway from a text simulation is demoted, no exceptions.
+    from ..simulation import SimulationMode, current_simulation
+
+    sim = current_simulation()
+    if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
+        headers[HEADER_INFERENCE_PRIORITY] = SIMULATION_INFERENCE_CLASS
+
     return headers
 
 
