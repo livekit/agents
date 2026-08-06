@@ -411,6 +411,18 @@ class _QueuedAudioSource(_FakeAudioSource):
         self.queued_duration = 0.0
 
 
+class _BlockingAudioSource(_QueuedAudioSource):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.wait_started = asyncio.Event()
+        self.playout_allowed = asyncio.Event()
+
+    async def wait_for_playout(self) -> None:
+        self.wait_started.set()
+        await self.playout_allowed.wait()
+        await super().wait_for_playout()
+
+
 @pytest.mark.asyncio
 async def test_audio_output_playback_started_fires_once_across_pause_resume() -> None:
     """A mid-segment pause/resume (false interruption) must not re-announce playback_started.
@@ -522,3 +534,48 @@ async def test_audio_output_excludes_discarded_audio_after_resume() -> None:
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(output._audio_source.played_duration)
+
+
+@pytest.mark.asyncio
+async def test_audio_output_waits_for_source_playout_after_buffer_drains() -> None:
+    frame = rtc.AudioFrame(bytes(24000 * 2), 48000, 1, 24000)  # 500ms
+
+    with patch("livekit.rtc.AudioSource", _BlockingAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=48000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    output._subscribed_fut.set_result(None)  # skip track publish/subscription
+    forward_task = asyncio.create_task(output._forward_audio())
+    playout_task: asyncio.Task[PlaybackFinishedEvent] | None = None
+    source_wait_task: asyncio.Task[bool] | None = None
+
+    try:
+        await output.capture_frame(frame)
+        await asyncio.sleep(0)
+        output.flush()
+        playout_task = asyncio.create_task(output.wait_for_playout())
+        source_wait_task = asyncio.create_task(output._audio_source.wait_started.wait())
+
+        done, _ = await asyncio.wait(
+            (source_wait_task, playout_task),
+            timeout=1.0,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        assert source_wait_task in done
+        assert not playout_task.done()
+
+        output._audio_source.playout_allowed.set()
+        finished = await playout_task
+    finally:
+        if source_wait_task is not None and not source_wait_task.done():
+            await utils.aio.cancel_and_wait(source_wait_task)
+        if playout_task is not None and not playout_task.done():
+            await utils.aio.cancel_and_wait(playout_task)
+        await utils.aio.cancel_and_wait(forward_task)
+
+    assert not finished.interrupted
+    assert finished.playback_position == pytest.approx(frame.duration)
