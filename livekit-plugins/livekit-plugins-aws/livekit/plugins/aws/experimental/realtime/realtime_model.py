@@ -554,6 +554,15 @@ class RealtimeSession(  # noqa: F811
         # audio input is flowing (Nova Sonic requires active audio to generate).
         self._stream_ready = asyncio.Event()
 
+        # Gate that pauses audio frame transmission while a text block is in-flight.
+        # This prevents the race condition where an audioInput frame arrives at the
+        # server between TEXT contentStart and TEXT contentEnd, which triggers:
+        # "ValidationException: Chat history should be sent completely before streaming audio."
+        # Uses a Lock instead of an Event so that concurrent text sends (e.g.,
+        # update_chat_ctx + generate_reply firing at the same time) serialize
+        # properly — audio only resumes after ALL text blocks have completed.
+        self._text_block_lock = asyncio.Lock()
+
         self._event_handlers = {
             "completion_start": self._handle_completion_start_event,
             "audio_output_content_start": self._handle_audio_output_content_start_event,
@@ -1957,11 +1966,16 @@ class RealtimeSession(  # noqa: F811
                     if task == audio_task:
                         try:
                             audio_bytes = cast(bytes, task.result())
-                            blob = base64.b64encode(audio_bytes)
-                            audio_event = self._event_builder.create_audio_input_event(
-                                audio_content=blob.decode("utf-8"),
-                            )
-                            await self._send_raw_event(audio_event)
+                            # Wait for any in-flight text block to complete before
+                            # sending the audio frame. This prevents the race condition
+                            # where audioInput arrives between TEXT contentStart and
+                            # TEXT contentEnd. The lock serializes with _send_text_message.
+                            async with self._text_block_lock:
+                                blob = base64.b64encode(audio_bytes)
+                                audio_event = self._event_builder.create_audio_input_event(
+                                    audio_content=blob.decode("utf-8"),
+                                )
+                                await self._send_raw_event(audio_event)
                             # Create new task for next audio
                             audio_task = asyncio.create_task(self._audio_input_chan.recv())
                             pending.add(audio_task)
@@ -2189,14 +2203,38 @@ class RealtimeSession(  # noqa: F811
                 content_name=content_name, role="USER"
             )
 
-        # Send event sequence: contentStart → textInput → contentEnd
-        await self._send_raw_event(event)
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(
-            self._event_builder.create_text_content_event(content_name, text)
-        )
-        await asyncio.sleep(0.01)
-        await self._send_raw_event(self._event_builder.create_content_end_event(content_name))
+        # Gate audio frames while the text block is in-flight.
+        # This ensures TEXT contentEnd arrives before the next audioInput frame,
+        # preventing the "Chat history should be sent completely before streaming audio"
+        # ValidationException from Nova Sonic.
+        async with self._text_block_lock:
+            # Send event sequence: contentStart → textInput → contentEnd
+            # Use try/finally to guarantee contentEnd is sent even if the task is
+            # cancelled mid-send. Without this, a cancelled reply leaves the text
+            # block open server-side, causing all subsequent audio to be rejected.
+            content_started = False
+            try:
+                await self._send_raw_event(event)
+                content_started = True
+                await self._send_raw_event(
+                    self._event_builder.create_text_content_event(content_name, text)
+                )
+                await self._send_raw_event(
+                    self._event_builder.create_content_end_event(content_name)
+                )
+                content_started = False
+            except (asyncio.CancelledError, Exception):
+                if content_started:
+                    # Best-effort: close the text block so the server doesn't
+                    # reject all future audio frames for this session.
+                    try:
+                        await self._send_raw_event(
+                            self._event_builder.create_content_end_event(content_name)
+                        )
+                    except Exception:
+                        pass
+                raise
+
         logger.info(
             f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
         )
