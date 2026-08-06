@@ -34,7 +34,7 @@ from livekit.plugins import krisp, openai
 async def entrypoint(ctx: JobContext):
     # Default: LiveKit Cloud auth + bundled model. No keys or model files.
     noise_cancellation = krisp.voice_isolation(
-        noise_suppression_level=100,  # 0-100
+        noise_suppression_level=75,  # 0-100
     )
 
     session = AgentSession(
@@ -69,7 +69,7 @@ telephony.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `auth_provider` | `LiveKitCloudAuthProvider \| KrispLicenseAuthProvider` | `LiveKitCloudAuthProvider` | Authentication backend. Defaults to LiveKit Cloud. See [the alternative](#alternative-krisp-license-auth). |
-| `noise_suppression_level` | int | 100 | Noise reduction intensity (0-100) |
+| `noise_suppression_level` | int | 75 | Noise reduction intensity (0-100) |
 
 Input frames of any size and sample rate are buffered and adapted automatically.
 
@@ -122,7 +122,7 @@ noise_cancellation = krisp.voice_isolation(
         license_key="...",                    # or KRISP_VIVA_SDK_LICENSE_KEY
         model_path="/path/to/noise_model.kef",  # or KRISP_VIVA_FILTER_MODEL_PATH
     ),
-    noise_suppression_level=100,
+    noise_suppression_level=75,
 )
 ```
 

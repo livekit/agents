@@ -52,6 +52,7 @@ _SOFT_CAPABILITIES = (
     "mutable_tools",
     "per_response_tool_choice",
     "supports_say",
+    "can_disable_turn_detection",
 )
 
 # child events re-emitted on the wrapper
@@ -127,8 +128,8 @@ class RealtimeModelFallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
-    def session(self) -> _FallbackRealtimeSession:
-        sess = _FallbackRealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
+        sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -150,9 +151,13 @@ class RealtimeModelFallbackAdapter(
 class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
-    def __init__(self, adapter: RealtimeModelFallbackAdapter) -> None:
+    def __init__(
+        self, adapter: RealtimeModelFallbackAdapter, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(adapter)
         self._adapter = adapter
+        # applied to every underlying session, including those brought up on a swap
+        self._turn_detection_disabled = turn_detection_disabled
 
         # session state replayed onto a new child on swap
         self._instructions: NotGivenOr[str] = NOT_GIVEN
@@ -184,7 +189,9 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._swapping = False
 
         self._active_index = 0
-        self._active = adapter._models[0].session()
+        self._active = adapter._models[0].session(
+            turn_detection_disabled=self._turn_detection_disabled
+        )
         self._bind(self._active)
 
     def _bind(self, child: RealtimeSession) -> None:
@@ -287,7 +294,9 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             # return the error so the caller can try the next model
             async def _bring_up(index: int) -> Exception | None:
                 try:
-                    self._active = self._adapter._models[index].session()
+                    self._active = self._adapter._models[index].session(
+                        turn_detection_disabled=self._turn_detection_disabled
+                    )
                     self._active_index = index
                     self._bind(self._active)
                     await self._active._update_session(
