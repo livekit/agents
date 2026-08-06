@@ -227,18 +227,17 @@ def _duplicate_key(
     if scope != "name_and_args":
         return (fnc_name, None)
 
-    try:
-        arguments = validated_arguments(fnc, raw_arguments)
-    except Exception:
-        # invalid arguments are the call's own problem — it raises ToolError once it
-        # runs. Fall back to what was sent so it still dedups against an identical call
-        # rather than failing the guard here.
-        arguments = raw_arguments
+    # the confirm flag is harness state, not an argument
+    raw = {k: v for k, v in raw_arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
 
-    # the confirm flag is harness state, not an argument: a confirming re-call has to
-    # key identically to the call it confirms
-    arguments = {k: v for k, v in arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
-    return (fnc_name, _canonical_args(arguments))
+    try:
+        # encoding stays in the try: validated values are Python objects, so something
+        # like dict[SomeEnum, int] yields keys json can't encode
+        return (fnc_name, _canonical_args(validated_arguments(fnc, raw)))
+    except Exception:
+        # bad arguments are the call's own problem — it raises ToolError once it runs.
+        # Key on what was sent (always encodable) instead of failing the guard here.
+        return (fnc_name, _canonical_args(raw))
 
 
 @dataclass
@@ -247,7 +246,7 @@ class _RunningTask:
     exe_task: asyncio.Task[Any]
     executor: _ToolExecutor
     allow_cancellation: bool
-    duplicate_key: tuple[str, str | None] = ("", None)
+    duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
 
 
 @dataclass
@@ -316,25 +315,28 @@ class _ToolExecutor:
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
 
-        # derived AFTER the pop: CONFIRM_DUPLICATE_PARAM is harness state, not a tool
-        # argument, and a confirming re-call must key identically to the call it
-        # confirms — otherwise `confirm` + `name_and_args` would never match.
-        dup_key = _duplicate_key(
-            fnc=tool,
-            fnc_name=fnc_name,
-            scope=info.duplicate_scope,
-            raw_arguments=raw_arguments,
-        )
-
-        duplicate_result = await self._check_duplicate(
-            dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
-        )
-        if duplicate_result is not None:
-            logger.debug(
-                "duplicate tool call rejected",
-                extra={"call_id": call_id, "function": fnc_name},
+        # keys are name-scoped and on_duplicate is per tool, so nothing can ever match
+        # an "allow" tool's key — don't bother deriving one
+        dup_key: tuple[str, str | None] | None = None
+        if on_duplicate != "allow":
+            # derived AFTER the pop, so a confirming re-call keys identically to the
+            # call it confirms
+            dup_key = _duplicate_key(
+                fnc=tool,
+                fnc_name=fnc_name,
+                scope=info.duplicate_scope,
+                raw_arguments=raw_arguments,
             )
-            return duplicate_result
+
+            duplicate_result = await self._check_duplicate(
+                dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
+            )
+            if duplicate_result is not None:
+                logger.debug(
+                    "duplicate tool call rejected",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                return duplicate_result
 
         if call_id in self._running_tasks:
             raise ValueError(f"Task already running for call_id: {call_id}")
