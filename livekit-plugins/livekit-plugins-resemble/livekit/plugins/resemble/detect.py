@@ -142,6 +142,12 @@ class DetectionResult:
     forced: bool = False
     """True if this check was triggered on demand via :meth:`DetectionMonitor.check_now`
     rather than by the ambient schedule."""
+    unclear_threshold: float = _DEFAULT_UNCLEAR_THRESHOLD
+    """This monitor's configured boundary between the ``continue`` and ``watch`` bands."""
+    likely_synthetic_threshold: float = _DEFAULT_LIKELY_SYNTHETIC_THRESHOLD
+    """This monitor's configured boundary between the ``watch`` and ``verify`` bands."""
+    fake_threshold: float = _DEFAULT_FAKE_THRESHOLD
+    """This monitor's configured boundary between the ``verify`` and ``block`` bands."""
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
     """Raw ``item`` payload returned by the API."""
 
@@ -183,12 +189,12 @@ class DetectionResult:
 
     @property
     def recommended_action(self) -> DetectionAction:
-        """Action band using the default Resemble Detect score strategy."""
-        if self.aggregated_score < _DEFAULT_UNCLEAR_THRESHOLD:
+        """Action band using this monitor's configured score thresholds."""
+        if self.aggregated_score < self.unclear_threshold:
             return "continue"
-        if self.aggregated_score < _DEFAULT_LIKELY_SYNTHETIC_THRESHOLD:
+        if self.aggregated_score < self.likely_synthetic_threshold:
             return "watch"
-        if self.aggregated_score < _DEFAULT_FAKE_THRESHOLD:
+        if self.aggregated_score < self.fake_threshold:
             return "verify"
         return "block"
 
@@ -365,11 +371,13 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
             analysis_budget_seconds (float, optional): Speech budget for ``"first_n"`` mode.
                 Overrides the selected preset.
             fake_threshold (float, optional): ``aggregated_score`` at or above which a
-                window emits ``"fake_detected"``. Defaults to 0.7.
-            likely_synthetic_threshold (float, optional): Score at or above which a final
-                verdict is inconclusive unless agreement confirms a synthetic caller.
+                window emits ``"fake_detected"`` and ``recommended_action`` becomes
+                ``"block"``. Defaults to 0.7.
+            likely_synthetic_threshold (float, optional): Score at or above which a
+                result's ``recommended_action`` escalates from ``"watch"`` to ``"verify"``.
             unclear_threshold (float, optional): Score at or above which a final verdict is
-                inconclusive instead of real.
+                inconclusive instead of real; also the boundary between the ``"continue"``
+                and ``"watch"`` action bands.
             agreement_window (int, optional): Number of recent checks considered for
                 agreement. Overrides the selected preset.
             min_fake_results (int, optional): Suspicious results needed within
@@ -652,11 +660,19 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
     async def _consume(self, stream: rtc.AudioStream, participant_identity: str | None) -> None:
         window_samples = int(self._opts.window_seconds * DETECT_SAMPLE_RATE)
         buf = bytearray()
-        stream_pos = 0.0  # seconds of audio consumed from the stream
-        cooldown_until = 0.0  # sampled mode: ignore audio until this stream position
+        # samples consumed from the stream, including audio dropped while paused, so window
+        # timestamps and spot-check spacing track real elapsed stream time (integer sample
+        # counting stays exact over arbitrarily long calls)
+        stream_samples = 0
+        cooldown_until = 0.0  # sampled mode: ignore audio until this stream position (seconds)
 
         try:
             async for event in stream:
+                frame = event.frame
+                data = frame.data
+                nbytes = data.nbytes if isinstance(data, memoryview) else len(data)
+                stream_samples += nbytes // 2
+
                 # paused (e.g. while our own agent is speaking): drop audio and never let
                 # a window straddle the pause boundary, so the agent's voice is never scored
                 if self._paused:
@@ -664,21 +680,20 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
                         buf.clear()
                     continue
 
-                frame = event.frame
-                buf.extend(frame.data)
+                buf.extend(data)
                 if len(buf) // 2 < window_samples:
                     continue
 
                 window = bytes(buf[: window_samples * 2])
                 del buf[: window_samples * 2]
-                window_start = stream_pos
-                stream_pos += self._opts.window_seconds
+                window_end = (stream_samples - len(buf) // 2) / DETECT_SAMPLE_RATE
+                window_start = window_end - self._opts.window_seconds
 
                 forced = self._force_pending  # check_now(): analyze the next window right away
 
                 if self._opts.mode == "sampled" and not forced:
                     # between spot-checks, drain audio without analyzing it
-                    if stream_pos <= cooldown_until:
+                    if window_end <= cooldown_until:
                         continue
                     # ambient budget spent: idle, but keep listening for on-demand checks
                     if self._samples_taken >= self._opts.samples:
@@ -714,7 +729,7 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
                 if self._opts.mode == "sampled":
                     if not forced:
                         self._samples_taken += 1
-                        cooldown_until = stream_pos + self._opts.sample_interval_seconds
+                        cooldown_until = window_end + self._opts.sample_interval_seconds
                         if self._samples_taken >= self._opts.samples:
                             # settle the ambient verdict but stay alive for check_now()
                             await self._flush_and_emit_verdict()
@@ -781,7 +796,11 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
             # the API pads the score array with None for a trailing partial frame
             scores = [float(s) for s in metrics.get("score") or [] if s is not None]
             aggregated = float(metrics["aggregated_score"])
-            label: DetectionLabel = "fake" if metrics["label"] == "fake" else "real"
+            raw_label = metrics["label"]
+            # never report an unclassifiable window as a verified human speaker
+            label: DetectionLabel = (
+                raw_label if raw_label in ("fake", "real", "inconclusive") else "inconclusive"
+            )
         except (KeyError, TypeError, ValueError):
             self.emit("error", APIConnectionError(f"unexpected detect response shape: {item}"))
             return
@@ -798,6 +817,9 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
             detection_uuid=item.get("uuid"),
             latency=latency,
             forced=forced,
+            unclear_threshold=self._opts.unclear_threshold,
+            likely_synthetic_threshold=self._opts.likely_synthetic_threshold,
+            fake_threshold=self._opts.fake_threshold,
             raw=item,
         )
         self._results.append(result)

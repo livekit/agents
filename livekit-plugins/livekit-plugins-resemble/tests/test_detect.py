@@ -82,6 +82,28 @@ class _FakeAudioStream:
         self.closed = True
 
 
+class _ScriptedAudioStream:
+    """Audio stream that can run callables (pause/resume) between frames."""
+
+    def __init__(self, *items: Any) -> None:
+        self._items = iter(items)
+        self.closed = False
+
+    def __aiter__(self) -> _ScriptedAudioStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        for item in self._items:
+            if callable(item):
+                item()
+                continue
+            return SimpleNamespace(frame=SimpleNamespace(data=item))
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_standard_requires_agreement_before_confirming_synthetic(self) -> None:
         transport = _FakeTransport(0.92, 0.05, 0.88)
@@ -288,6 +310,86 @@ class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(monitor._opts.mode, "continuous")
         self.assertEqual(monitor._opts.sample_interval_seconds, 11.0)
         self.assertEqual(transport.calls, [{"frame_length": 3, "request_timeout": 12.0}])
+
+    async def test_recommended_action_honors_configured_thresholds(self) -> None:
+        transport = _FakeTransport(0.75)
+        monitor = DetectionMonitor(
+            transport=transport,
+            unclear_threshold=0.2,
+            likely_synthetic_threshold=0.6,
+            fake_threshold=0.9,
+        )
+
+        await monitor._analyze_window(
+            b"\0\0",
+            index=0,
+            window_start=0.0,
+            participant_identity="caller",
+        )
+
+        # the default cutoffs would say "block" at 0.75; the configured policy says "verify"
+        self.assertEqual(monitor.results[0].recommended_action, "verify")
+
+    async def test_unclassifiable_labels_are_reported_as_inconclusive(self) -> None:
+        class _WeirdLabelTransport:
+            def __init__(self) -> None:
+                self._labels = iter(["inconclusive", "unknown-future-label"])
+
+            async def submit(
+                self,
+                _pcm16: bytes,
+                *,
+                frame_length: int,
+                request_timeout: float,
+            ) -> dict[str, Any]:
+                del frame_length, request_timeout
+                return {
+                    "uuid": "detect-x",
+                    "status": "completed",
+                    "metrics": {
+                        "score": [0.5],
+                        "aggregated_score": 0.5,
+                        "label": next(self._labels),
+                        "consistency": 90.0,
+                    },
+                }
+
+        monitor = DetectionMonitor(transport=_WeirdLabelTransport())
+
+        await monitor._analyze_window(
+            b"\0\0",
+            index=0,
+            window_start=0.0,
+            participant_identity="caller",
+        )
+        await monitor._analyze_window(
+            b"\0\0",
+            index=1,
+            window_start=4.0,
+            participant_identity="caller",
+        )
+
+        self.assertEqual([r.label for r in monitor.results], ["inconclusive", "inconclusive"])
+        self.assertEqual(monitor.results[0].normalized_label, "inconclusive")
+
+    async def test_paused_audio_still_advances_window_timestamps(self) -> None:
+        second = b"\x00\x40" * 16000  # 1s of loud (non-silent) 16 kHz PCM16
+        transport = _FakeTransport(0.1, 0.1)
+        monitor = DetectionMonitor(transport=transport, sample_interval_seconds=0.0)
+
+        stream = _ScriptedAudioStream(
+            second * 4,  # window [0, 4) analyzed
+            monitor.pause,
+            second * 3,  # dropped while paused, but stream time still passes
+            monitor.resume,
+            second * 4,  # window [7, 11) analyzed
+        )
+        await monitor._consume(stream, "caller")
+
+        self.assertEqual(
+            [(r.window_start, r.window_end) for r in monitor.results],
+            [(0.0, 4.0), (7.0, 11.0)],
+        )
 
     def test_invalid_explicit_overrides_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "samples must be >= 1"):

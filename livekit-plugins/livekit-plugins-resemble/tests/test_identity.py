@@ -128,6 +128,13 @@ class ResembleIdentityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "url is required"):
             await identity.search_url("   ")
 
+        # never forward non-web schemes to Resemble's URL fetcher
+        with self.assertRaisesRegex(ValueError, "http"):
+            await identity.search_url("file:///etc/passwd")
+
+        with self.assertRaisesRegex(ValueError, "http"):
+            await identity.search_url("ftp://internal-host/clip.wav")
+
         with self.assertRaisesRegex(ValueError, "audio is required"):
             await identity.search(b"")
 

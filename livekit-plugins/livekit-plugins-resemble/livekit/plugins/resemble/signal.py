@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import inspect
+import json as _json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -112,6 +113,7 @@ class SignalCategoryScore:
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a stable payload for this category score."""
         return {
             "name": self.name,
             "score": self.score,
@@ -569,7 +571,21 @@ class RestSignalTransport:
                     request_id=None,
                     body=body[:500],
                 )
-            payload: object = await resp.json()
+            # deletes legitimately answer 204 / an empty body — that is success, not JSON
+            if resp.status == 204:
+                return {}
+            body = await resp.read()
+            if not body.strip():
+                return {}
+            try:
+                payload: object = _json.loads(body)
+            except ValueError:
+                raise APIStatusError(
+                    message="resemble signal response was not valid JSON",
+                    status_code=resp.status,
+                    request_id=None,
+                    body=body[:500].decode(errors="replace"),
+                ) from None
             if not isinstance(payload, dict):
                 raise APIStatusError(
                     message="resemble signal response was not a JSON object",
