@@ -59,6 +59,20 @@ from .models import (
     _is_sonic_3,
 )
 
+# Word timestamps on non-preview sonic models are limited to these languages.
+# Preview models support all languages. See Cartesia TTS docs / #6493.
+_WORD_TIMESTAMP_LANGUAGES = frozenset({"en", "de", "es", "fr"})
+
+
+def _supports_word_timestamps(model: str, language: LanguageCode | None) -> bool:
+    """Return whether Cartesia can deliver word timestamps for this config."""
+    if "preview" in model:
+        return True
+    if language is None:
+        # language unset — don't assume unsupported; API may still deliver
+        return True
+    return language.language in _WORD_TIMESTAMP_LANGUAGES
+
 
 @dataclass
 class _TTSOptions:
@@ -127,10 +141,13 @@ class TTS(tts.TTS):
             base_url (str, optional): The base URL for the Cartesia API. Defaults to "https://api.cartesia.ai".
         """  # noqa: E501
 
+        language_code = LanguageCode(language) if language else None
+        aligned_transcript = word_timestamps and _supports_word_timestamps(model, language_code)
+
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=word_timestamps,
+                aligned_transcript=aligned_transcript,
             ),
             sample_rate=sample_rate,
             num_channels=1,
@@ -147,7 +164,7 @@ class TTS(tts.TTS):
 
         self._opts = _TTSOptions(
             model=model,
-            language=LanguageCode(language) if language else None,
+            language=language_code,
             encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
@@ -181,22 +198,7 @@ class TTS(tts.TTS):
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
 
-        if word_timestamps:
-            if "preview" not in self._opts.model and (
-                self._opts.language is not None
-                and self._opts.language.language
-                not in {
-                    "en",
-                    "de",
-                    "es",
-                    "fr",
-                }
-            ):
-                # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-                logger.warning(
-                    "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
-                    " or all languages with `preview` models"
-                )
+        self._warn_if_aligned_transcript_unsupported()
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
@@ -289,6 +291,30 @@ class TTS(tts.TTS):
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
+
+        # model/language changes can enable or disable timestamp delivery (#6493)
+        self._refresh_aligned_transcript_capability()
+
+    def _refresh_aligned_transcript_capability(self) -> None:
+        """Narrow ``capabilities.aligned_transcript`` to configs that can deliver timestamps."""
+        supported = _supports_word_timestamps(self._opts.model, self._opts.language)
+        self._capabilities.aligned_transcript = self._opts.word_timestamps and supported
+        self._warn_if_aligned_transcript_unsupported()
+
+    def _warn_if_aligned_transcript_unsupported(self) -> None:
+        if not self._opts.word_timestamps:
+            return
+        if _supports_word_timestamps(self._opts.model, self._opts.language):
+            return
+        # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
+        logger.warning(
+            "model configuration does not support aligned transcript "
+            "(word_timestamps); disabling capabilities.aligned_transcript. "
+            "Supported: languages en, de, es, and fr with `sonic` models, "
+            "or all languages with `preview` models. model=%s language=%s",
+            self._opts.model,
+            self._opts.language.language if self._opts.language else None,
+        )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -603,6 +629,9 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             options["generation_config"] = generation_config
 
     if streaming:
-        options["add_timestamps"] = opts.word_timestamps
+        # only request timestamps when the model/language combo can deliver them
+        options["add_timestamps"] = opts.word_timestamps and _supports_word_timestamps(
+            opts.model, opts.language
+        )
 
     return options
