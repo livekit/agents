@@ -4,6 +4,7 @@ import contextlib
 import inspect
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -372,6 +373,29 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+async def test_upload_session_report_marks_stt_keyterms_as_pii() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    stt_context_options = {
+        "keyterms": ["Acme Corp"],
+        "keyterm_detection": {"enabled": False},
+        "forward_chat_context": True,
+    }
+    report.options = SimpleNamespace(stt_context_options=stt_context_options)
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+
+    session_report_call = next(
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+    )
+    serialized_stt_options = session_report_call.kwargs["attributes"]["session.options"][
+        "stt_context_options"
+    ]
+    assert serialized_stt_options["lk.pii.keyterms"] == ["Acme Corp"]
+    assert "keyterms" not in serialized_stt_options
+    assert stt_context_options["keyterms"] == ["Acme Corp"]
 
 
 async def test_upload_audio_only_no_file() -> None:

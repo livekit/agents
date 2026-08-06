@@ -522,7 +522,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "flush_done":
                     pass
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         cartesia_context_id = utils.shortuuid()
         try:

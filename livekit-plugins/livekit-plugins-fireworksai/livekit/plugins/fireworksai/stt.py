@@ -444,7 +444,7 @@ class SpeechStream(stt.SpeechStream):
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
         ws = await self._session.ws_connect(url, headers=headers)
-        logger.info("connected to Fireworks AI STT", extra={"url": url})
+        logger.info("connected to Fireworks AI STT", extra={"lk.pii.url": url})
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
