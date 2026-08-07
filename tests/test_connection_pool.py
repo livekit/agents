@@ -1,6 +1,9 @@
 import time
 
 import pytest
+from aiohttp import RequestInfo, WSServerHandshakeError
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 from livekit.agents.utils import ConnectionPool
 
@@ -24,6 +27,15 @@ def dummy_connect_factory():
         return DummyConnection(counter)
 
     return dummy_connect
+
+
+def _handshake_error_with_api_key(api_key: str) -> WSServerHandshakeError:
+    url = URL("wss://api.cartesia.ai/tts/websocket")
+    headers = CIMultiDict({"Host": "api.cartesia.ai", "X-API-Key": api_key})
+    request_info = RequestInfo(
+        url=url, method="GET", headers=CIMultiDictProxy(headers), real_url=url
+    )
+    return WSServerHandshakeError(request_info, (), status=401, message="Unauthorized")
 
 
 @pytest.mark.asyncio
@@ -83,3 +95,24 @@ async def test_get_expired():
 
     conn2 = await pool.get(timeout=10.0)
     assert conn2 is not conn, "Expected a new connection to be returned."
+
+
+@pytest.mark.asyncio
+async def test_prewarm_failure_does_not_leak_api_key_in_logs(caplog):
+    """Prewarm must swallow connect failures so asyncio never logs an unretrieved
+    task whose exception repr embeds auth headers (livekit/agents#6739)."""
+    secret = "cartesia-secret-api-key-do-not-log"
+
+    async def failing_connect(timeout: float):
+        raise _handshake_error_with_api_key(secret)
+
+    pool = ConnectionPool(connect_cb=failing_connect)
+    with caplog.at_level("WARNING"):
+        pool.prewarm()
+        task = pool._prewarm_task()
+        assert task is not None
+        await task
+
+    assert secret not in repr(task)
+    assert all(secret not in record.getMessage() for record in caplog.records)
+    assert any("failed to prewarm connection pool" in r.getMessage() for r in caplog.records)

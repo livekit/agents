@@ -24,6 +24,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -329,7 +330,15 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": self._request_id},
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to cartesia") from None
+        except aiohttp.ClientResponseError as e:
+            # Do not chain the aiohttp error: RequestInfo embeds auth headers and
+            # can leak API keys via Task/exception repr in logs (see #6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except aiohttp.ClientConnectorError as e:
             raise APIConnectionError("failed to connect to cartesia") from e
         return ws
 
