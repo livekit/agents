@@ -260,9 +260,9 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
-        return _DuplexRealtimeSession(
-            self, self._duplex_model.session(), self._gate(), self._stalled_timeout
-        )
+        # AgentActivity configures the session before it is used
+        duplex = self._duplex_model.session(wait_for_config=True)
+        return _DuplexRealtimeSession(self, duplex, self._gate(), self._stalled_timeout)
 
     async def aclose(self) -> None:
         await self._duplex_model.aclose()

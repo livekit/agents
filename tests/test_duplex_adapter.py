@@ -63,8 +63,8 @@ class _FakeDuplexModel(llm.DuplexModel):
     def provider(self) -> str:
         return "fake"
 
-    def session(self) -> _FakeDuplexSession:
-        self.session_obj = _FakeDuplexSession(self)
+    def session(self, *, wait_for_config: bool = False) -> _FakeDuplexSession:
+        self.session_obj = _FakeDuplexSession(self, wait_for_config=wait_for_config)
         return self.session_obj
 
     async def aclose(self) -> None:
@@ -72,8 +72,8 @@ class _FakeDuplexModel(llm.DuplexModel):
 
 
 class _FakeDuplexSession(llm.DuplexSession):
-    def __init__(self, model: _FakeDuplexModel) -> None:
-        super().__init__(model)
+    def __init__(self, model: _FakeDuplexModel, *, wait_for_config: bool = False) -> None:
+        super().__init__(model, wait_for_config=wait_for_config)
         self.audio_ch = aio.Chan[llm.DuplexAudioFrame]()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext([])
@@ -789,6 +789,17 @@ async def test_configuration_is_handed_over_as_one_unit(duplex) -> None:
     instructions, _chat_ctx, tools = fake.config_batches[0]
     assert instructions == "be brief"
     assert tools == []
+
+
+async def test_adapter_promises_the_session_a_configuration() -> None:
+    """Only the adapter knows AgentActivity will configure the session it just created."""
+    model = _FakeDuplexModel()
+    session = llm.DuplexRealtimeAdapter(model).session()
+    promised = model.session_obj
+    assert promised is not None and not promised._config_delivered.is_set()
+
+    assert model.session()._config_delivered.is_set(), "a session built directly must not wait"
+    await session.aclose()
 
 
 async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex) -> None:

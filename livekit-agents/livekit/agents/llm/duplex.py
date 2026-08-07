@@ -125,7 +125,9 @@ class DuplexModel(ABC):
         return self._label
 
     @abstractmethod
-    def session(self) -> DuplexSession: ...
+    def session(self, *, wait_for_config: bool = False) -> DuplexSession:
+        """Open a session, ``wait_for_config`` promising it a :meth:`DuplexSession._update_session`
+        call before it is used."""
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -143,9 +145,20 @@ class DuplexModel(ABC):
 
 
 class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TEvent]):
-    def __init__(self, duplex_model: DuplexModel) -> None:
+    def __init__(self, duplex_model: DuplexModel, *, wait_for_config: bool = False) -> None:
         super().__init__()
         self._duplex_model = duplex_model
+        self._config_delivered = asyncio.Event()
+        if not wait_for_config:
+            self._config_delivered.set()  # nothing was promised, so there is nothing to wait for
+
+    async def _await_config(self) -> None:
+        """Block until the promised configuration arrives, for a model that must send it on connect.
+
+        Returns at once where none was promised. Set ``_config_delivered`` from ``aclose`` too, or
+        a session closed before it was configured never finishes closing.
+        """
+        await self._config_delivered.wait()
 
     @property
     def duplex_model(self) -> DuplexModel:
@@ -225,14 +238,17 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
 
         A model whose configuration is immutable once started should compose it here.
         """
-        if is_given(instructions):
-            await self._update_instructions(instructions)
+        try:
+            if is_given(instructions):
+                await self._update_instructions(instructions)
 
-        if is_given(chat_ctx):
-            await self._update_chat_ctx(chat_ctx)
+            if is_given(chat_ctx):
+                await self._update_chat_ctx(chat_ctx)
 
-        if is_given(tools):
-            await self._update_tools(tools)
+            if is_given(tools):
+                await self._update_tools(tools)
+        finally:
+            self._config_delivered.set()
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
