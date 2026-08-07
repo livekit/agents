@@ -115,4 +115,35 @@ async def test_prewarm_failure_does_not_leak_api_key_in_logs(caplog):
 
     assert secret not in repr(task)
     assert all(secret not in record.getMessage() for record in caplog.records)
-    assert any("failed to prewarm connection pool" in r.getMessage() for r in caplog.records)
+    warning_records = [
+        r for r in caplog.records if "failed to prewarm connection pool" in r.getMessage()
+    ]
+    assert warning_records
+    assert warning_records[0].exception_type == "WSServerHandshakeError"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
+    """str(exception) can embed ?api_key= / &jwt_token=; logs must not include them."""
+    secret_key = "url-secret-api-key-do-not-log"
+    secret_jwt = "url-secret-jwt-token-do-not-log"
+
+    async def failing_connect(timeout: float):
+        raise ConnectionError(
+            f"wss://example.com/ws?api_key={secret_key}&jwt_token={secret_jwt}"
+        )
+
+    pool = ConnectionPool(connect_cb=failing_connect)
+    with caplog.at_level("WARNING"):
+        pool.prewarm()
+        task = pool._prewarm_task()
+        assert task is not None
+        await task
+
+    assert all(secret_key not in record.getMessage() for record in caplog.records)
+    assert all(secret_jwt not in record.getMessage() for record in caplog.records)
+    warning_records = [
+        r for r in caplog.records if "failed to prewarm connection pool" in r.getMessage()
+    ]
+    assert warning_records
+    assert warning_records[0].exception_type == "ConnectionError"

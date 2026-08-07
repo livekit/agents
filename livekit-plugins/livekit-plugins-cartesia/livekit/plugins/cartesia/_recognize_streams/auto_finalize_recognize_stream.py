@@ -414,8 +414,13 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to cartesia", retryable=True) from e
+        except Exception as e:
+            # Do not chain the cause: some transport errors embed auth headers or
+            # URL credentials that would leak via __cause__ / traceback (see #6739).
+            raise APIConnectionError(
+                f"failed to connect to cartesia ({type(e).__name__})",
+                retryable=True,
+            ) from None
         return ws
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:

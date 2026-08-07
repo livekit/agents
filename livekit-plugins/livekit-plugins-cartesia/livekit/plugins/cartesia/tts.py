@@ -234,7 +234,9 @@ class TTS(tts.TTS):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError() from e
+            # Do not chain the cause: some transport errors embed auth headers or
+            # URL credentials that would leak via __cause__ / traceback (see #6739).
+            raise APIConnectionError(type(e).__name__) from None
 
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(

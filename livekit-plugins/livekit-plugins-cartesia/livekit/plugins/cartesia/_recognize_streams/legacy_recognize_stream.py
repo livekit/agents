@@ -338,8 +338,12 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
-        except aiohttp.ClientConnectorError as e:
-            raise APIConnectionError("failed to connect to cartesia") from e
+        except Exception as e:
+            # Do not chain the cause: some transport errors embed auth headers or
+            # URL credentials that would leak via __cause__ / traceback (see #6739).
+            raise APIConnectionError(
+                f"failed to connect to cartesia ({type(e).__name__})",
+            ) from None
         return ws
 
     def _process_stream_event(self, data: STTEventMessage) -> None:

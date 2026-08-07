@@ -9,7 +9,7 @@ from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIConnectionError, APIStatusError
 
 pytestmark = pytest.mark.plugin("cartesia")
 
@@ -51,3 +51,30 @@ async def test_connect_ws_redacts_api_key_from_handshake_error():
     assert err.status_code == 401
     assert SECRET_API_KEY not in repr(err)
     assert err.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_connect_ws_generic_error_does_not_chain_cause():
+    """Generic connect failures must not chain __cause__ (may embed auth headers)."""
+    from livekit.plugins.cartesia import TTS
+
+    tts = TTS(api_key=SECRET_API_KEY)
+    leaky = ConnectionError(
+        f"wss://api.cartesia.ai/tts/websocket?api_key={SECRET_API_KEY}"
+    )
+
+    async def _raise(*_args, **_kwargs):
+        raise leaky
+
+    session = MagicMock()
+    session.ws_connect = MagicMock(side_effect=_raise)
+    tts._session = session
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await tts._connect_ws(timeout=5.0)
+
+    err = exc_info.value
+    assert err.__cause__ is None
+    assert str(err) == "ConnectionError"
+    assert SECRET_API_KEY not in repr(err)
+    assert SECRET_API_KEY not in str(err)
