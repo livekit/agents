@@ -131,8 +131,13 @@ def _xai_break_to_bracket(match: re.Match[str]) -> str:
 # framework-standard intermediates (<expression value="..."/>, <sound value="..."/>,
 # <break time="..."/>, <emphasis>word</emphasis>) and convert_markup rewrites them to
 # Fish's native square brackets: [very EMOTION], [SOUND], [break]/[long-break], and
-# [emphasis] word (a prefix marker stressing the word that follows). The tag names stay
-# in _FISHAUDIO_TAGS so hallucinated native markup is still stripped from transcripts.
+# [emphasis] word (a prefix marker stressing the word that follows). Tone wrapping
+# (<expr type="prosody" label="whispering">...</expr>) lowers directly to Fish's prefix
+# form, [whispering] followed by the span. The tag names stay in _FISHAUDIO_TAGS so
+# hallucinated native markup is still stripped from transcripts.
+#
+# Every label below is from Fish's documented vocabulary, and every emotion maps to a
+# non-fallback mood in _mood.py so lk.expression stays meaningful for clients.
 _FISHAUDIO_EMOTIONS = [
     "regretful",
     "hopeful",
@@ -143,8 +148,31 @@ _FISHAUDIO_EMOTIONS = [
     "sad",
     "empathetic",
     "sarcastic",
+    "calm",
+    "angry",
+    "worried",
+    "nervous",
+    "confident",
+    "grateful",
+    "delighted",
+    "disappointed",
+    "frustrated",
+    "determined",
 ]
-_FISHAUDIO_SOUNDS = ["laughing", "chuckling", "clear throat"]
+_FISHAUDIO_SOUNDS = [
+    "laughing",
+    "chuckling",
+    "clear throat",
+    "sighing",
+    "gasping",
+    "groaning",
+    "yawning",
+    "sobbing",
+]
+# Fish's tone controls: prefix markers steering the delivery of the words after them.
+# Neutral delivery styles, so they are never steering-filtered (same stance as xAI's
+# whisper/pitch wraps).
+_FISHAUDIO_TONES = ["whispering", "soft", "shouting", "hurried"]
 _FISHAUDIO_TAGS = ["expression", "sound", "break", "emphasis"]
 
 _FISHAUDIO_EXPRESSION_RE = re.compile(
@@ -413,8 +441,11 @@ _FISHAUDIO_EXAMPLES = [
     '<expr type="expression" label="excited"/> That\'s hilarious! <expr type="sound" label="laughing"/> <expr type="expression" label="happy"/> You always lighten the mood.',  # noqa: E501
     '<expr type="expression" label="empathetic"/> <expr type="sound" label="clear throat"/> That sounds like a <expr type="prosody" label="emphasis">really</expr> difficult experience.',  # noqa: E501
     '<expr type="expression" label="sad"/> Oh, my goodness <expr type="sound" label="clear throat"/> <expr type="break" label="2s"/> that\'s a real shame.',  # noqa: E501
+    '<expr type="expression" label="frustrated"/> <expr type="sound" label="sighing"/> I\'ve been going in circles with this all morning. <expr type="expression" label="determined"/> Okay. One more try.',  # noqa: E501
     # sound-free, so at least one example survives any steering filter
     '<expr type="expression" label="happy"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the <expr type="prosody" label="emphasis">ninth</expr>. <expr type="expression" label="curious"/> Is there anything else I can help you with?',  # noqa: E501
+    # sound-free tone example: the wrap is scoped to the span, not the sentence
+    '<expr type="expression" label="delighted"/> <expr type="prosody" label="whispering">Okay, don\'t tell anyone yet</expr> <expr type="expression" label="excited"/> but I think we actually pulled it off!',  # noqa: E501
 ]
 
 # The original block baked light disfluencies into the few-shots — that's what made
@@ -452,11 +483,16 @@ replies need no break markers at all; reserve them for a deliberate mid-sentence
 before a key detail (a date, a name, a number)."""
     )
     sections.append(
+        f"""Tone - wraps a span delivered in a distinct style.
+   <expr type="prosody" label="whispering">don't tell anyone yet.</expr>
+   Labels are a fixed vocabulary: {", ".join(_FISHAUDIO_TONES)}.
+   Use a tone only where the moment clearly calls for one — most sentences need \
+none. Never nest tone markers, and always close the tag with </expr>."""
+    )
+    sections.append(
         """Emphasis - stresses exactly the ONE word it wraps.
    Are you <expr type="prosody" label="emphasis">sure</expr> you want to do this?
-   Wrap a single word, never a phrase. "emphasis" is the only prosody label for this \
-voice — there are no other wrapping style markers. Never nest it, and always close it \
-with </expr>."""
+   Wrap a single word, never a phrase. Never nest it, and always close it with </expr>."""
     )
 
     parts = [
@@ -476,7 +512,9 @@ English — labels are a fixed vocabulary, never translated.""",
     register = [
         "At heavy moments reach for empathetic, sad, regretful, or hopeful — never a "
         'bright label like "happy" or "excited" against hard news; bright labels belong '
-        "to bright moments."
+        "to bright moments.",
+        "Whispering and soft belong to gentle or conspiratorial beats; shouting only to "
+        "genuinely high-energy ones.",
     ]
     if any(s in sounds for s in ("laughing", "chuckling")):
         register.append(
@@ -574,12 +612,12 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     },
     "fishaudio": {
         "laughing": ["laughing", "chuckling"],
-        "breathing": [],
-        "sighing": [],
-        "crying": [],
-        "vocalizing": [],
+        "breathing": ["gasping"],
+        "sighing": ["sighing"],
+        "crying": ["sobbing"],
+        "vocalizing": ["groaning"],
         "mouth_sounds": [],
-        "reflex_sounds": ["clear throat"],
+        "reflex_sounds": ["clear throat", "yawning"],
     },
 }
 
@@ -744,7 +782,16 @@ _XAI_SOUND_ALIASES = {"breathe": "breath"}
 # expr sound labels that differ from Fish's native marker names (other providers
 # advertise "laugh"/"chuckle", so a hallucinated one still lowers to a sound Fish
 # renders)
-_FISHAUDIO_SOUND_ALIASES = {"laugh": "laughing", "chuckle": "chuckling"}
+_FISHAUDIO_SOUND_ALIASES = {
+    "laugh": "laughing",
+    "chuckle": "chuckling",
+    "sigh": "sighing",
+    "gasp": "gasping",
+    "groan": "groaning",
+    "yawn": "yawning",
+    "sob": "sobbing",
+    "cry": "sobbing",
+}
 
 # Cartesia prosody labels -> native point controls (coarse steps of the numeric ratios)
 _CARTESIA_PROSODY = {
@@ -815,8 +862,12 @@ def _convert_expr(provider: str, text: str) -> str:
             # wrapping form of the point controls: apply before the span
             return _CARTESIA_PROSODY.get(label, "") + inner
         if provider == "fishaudio":
-            # emphasis is Fish's only wrapping control; other labels are dropped
-            return f"<emphasis>{inner}</emphasis>" if label == "emphasis" else inner
+            if label == "emphasis":
+                return f"<emphasis>{inner}</emphasis>"
+            # tone controls are prefix markers: [whispering] steers the words after it
+            if label in _FISHAUDIO_TONES:
+                return f"[{label}] {inner}"
+            return inner
         return inner
 
     # a marker the provider doesn't support lowers to "" — _dedup_removal_space keeps its
@@ -848,6 +899,11 @@ def _convert_expr(provider: str, text: str) -> str:
         if marker_type == "prosody" and provider == "cartesia":
             # Cartesia prosody is a self-closing point control (speed/volume)
             return _CARTESIA_PROSODY.get(label.strip().lower(), "")
+        if marker_type == "prosody" and provider == "fishaudio":
+            # tones are taught as wrapping, but Fish's native form is a prefix
+            # marker anyway — salvage a self-closing one as-is
+            tone = label.strip().lower()
+            return f"[{tone}]" if tone in _FISHAUDIO_TONES else ""
         return ""
 
     text = _EXPR_SELF_RE.sub(lambda m: _dedup_removal_space(m, _self(m)), text)
