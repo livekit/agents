@@ -10,10 +10,15 @@ from openai.types.realtime import (
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeAudioConfigOutput,
+    RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseCreatedEvent,
     ResponseTextDeltaEvent,
 )
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm, utils
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
@@ -21,9 +26,55 @@ from livekit.plugins.openai.realtime.realtime_model import (
     _DiscardedGeneration,
     _MessageGeneration,
 )
-from livekit.plugins.xai.realtime.realtime_model import RealtimeSession
+from livekit.plugins.xai.realtime.realtime_model import (
+    XAI_DEFAULT_MODEL,
+    RealtimeModel,
+)
+from livekit.plugins.xai.realtime.realtime_session import RealtimeSession
 
 pytestmark = pytest.mark.unit
+
+
+def test_default_model_is_grok_voice_latest() -> None:
+    assert XAI_DEFAULT_MODEL == "grok-voice-latest"
+    model = RealtimeModel(api_key="fake")
+    assert model.model == "grok-voice-latest"
+    assert model.capabilities.supports_say is True
+    assert model._opts.input_audio_transcription is not None
+    assert model._opts.input_audio_transcription.model == "grok-transcribe"
+
+
+def test_wrap_session_update_lifts_voice_and_turn_detection() -> None:
+    turn_detection = ServerVad(type="server_vad", create_response=True, interrupt_response=True)
+    req = RealtimeSessionCreateRequest(
+        type="realtime",
+        audio=RealtimeAudioConfig(
+            input=RealtimeAudioConfigInput(turn_detection=turn_detection),
+            output=RealtimeAudioConfigOutput(voice="Ara"),
+        ),
+    )
+    sess = RealtimeSession.__new__(RealtimeSession)
+    sess._opts = SimpleNamespace(is_azure=False, api_version=None)  # type: ignore[attr-defined]
+    event = RealtimeSession._wrap_session_update(sess, "evt", req)
+    assert getattr(req, "voice", None) == "Ara"
+    assert getattr(req, "turn_detection", None) == turn_detection
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+    assert dumped["type"] == "session.update"
+    assert dumped["session"].get("voice") == "Ara" or getattr(req, "voice", None) == "Ara"
+
+
+def test_transcription_updated_emits_non_final() -> None:
+    session, emitted = _make_session()
+    session._on_xai_server_event(
+        {
+            "type": "conversation.item.input_audio_transcription.updated",
+            "item_id": "item_1",
+            "transcript": "hello there",
+        }
+    )
+    assert [(ev.item_id, ev.transcript, ev.is_final) for ev in emitted] == [
+        ("item_1", "hello there", False)
+    ]
 
 
 def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionCompleted]]:

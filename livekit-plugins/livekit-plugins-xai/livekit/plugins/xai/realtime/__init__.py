@@ -1,10 +1,9 @@
 from openai.types.beta.realtime.session import TurnDetection
 
-from livekit.plugins.openai.realtime import RealtimeSession
-
 from ..tools import FileSearch, WebSearch, XSearch
 from ..types import GrokVoices
 from .realtime_model import RealtimeModel
+from .realtime_session import RealtimeSession
 
 __all__ = [
     "GrokVoices",
