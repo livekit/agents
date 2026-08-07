@@ -70,6 +70,7 @@ from .keyterm_detection import (
     _stt_context_from_keyterms_options,
 )
 from .recorder_io import RecorderIO
+from .redaction import RedactionOptions
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -292,6 +293,7 @@ class AgentSessionOptions:
     ivr_detection: bool
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
+    redaction: RedactionOptions | None
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -389,6 +391,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
+        redaction: NotGivenOr[RedactionOptions] = NOT_GIVEN,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -485,6 +488,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            redaction (RedactionOptions, optional): Opt-in PII redaction applied to a copy
+                of the chat content at the enabled egress sinks (currently the chat context
+                sent to the LLM); the in-memory history keeps the raw values. Disabled when
+                NOT_GIVEN.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -571,6 +578,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
+            redaction=redaction if is_given(redaction) else None,
         )
         # expressive mode is not publicly exposed; the pipeline stays disabled
         self._expressive: bool | ExpressiveOptions = False
