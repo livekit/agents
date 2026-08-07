@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -55,7 +55,9 @@ _SOFT_CAPABILITIES = (
     "can_disable_turn_detection",
 )
 
-# child events re-emitted on the wrapper
+# child events re-emitted on the wrapper. plugin-specific events (e.g. openai's
+# ``openai_server_event_received``) are not listed here -- the adapter cannot know them
+# ahead of time, so ``on()`` adds a forwarder for whatever a caller subscribes to.
 _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
     "input_speech_started",
     "input_speech_stopped",
@@ -148,7 +150,9 @@ class RealtimeModelFallbackAdapter(
             await model.aclose()
 
 
-class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
+# ``str`` rather than a Literal: the wrapper stands in for any provider session, and a
+# plugin's own event names are only known to that plugin.
+class _FallbackRealtimeSession(RealtimeSession[str]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
     def __init__(
@@ -164,17 +168,15 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._tools: NotGivenOr[list[Tool]] = NOT_GIVEN
         self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
 
-        # stable per-event forwarders so they can be detached on swap
-        def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
-            # callbacks receive only the payload, so bind the event name per forwarder
-            def _forward(ev: object) -> None:
-                self.emit(event, ev)
-
-            return _forward
-
-        self._forwarders: dict[EventTypes, Callable[[object], None]] = {
-            event: _make_forwarder(event) for event in _FORWARDED_EVENTS
-        }
+        # stable per-event forwarders so they can be detached on swap. ``_bind`` replays
+        # this dict onto every new child, so anything in it survives a swap.
+        self._forwarders: dict[str, Callable[..., None]] = {}
+        # whether ``_forwarders`` are currently attached to ``self._active``. a forwarder
+        # added while unbound is picked up by the next ``_bind`` instead of being attached
+        # to the child that is on its way out.
+        self._child_bound = False
+        for event in _FORWARDED_EVENTS:
+            self._add_forwarder(event)
 
         # per-model availability, with a cooldown after a failure
         self._available = [True] * len(adapter._models)
@@ -194,15 +196,55 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         )
         self._bind(self._active)
 
+    def _add_forwarder(self, event: str) -> None:
+        """Start re-emitting ``event`` from the child, attaching to one if it is bound.
+
+        ``error`` is excluded: ``_on_child_error`` already re-emits it, sometimes re-stamped
+        as recoverable, and a second forwarder would duplicate every error.
+        """
+        if event in self._forwarders or event == "error":
+            return
+
+        # varargs, since a plugin event may carry any number of payload arguments
+        def _forward(*args: object) -> None:
+            self.emit(event, *args)
+
+        self._forwarders[event] = _forward
+        if self._child_bound:
+            self._active.on(event, _forward)
+
+    def on(self, event: str, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        """Subscribe to a child event on the wrapper, plugin-specific ones included.
+
+        Handlers registered here survive a swap. The adapter keeps a forwarder for every
+        subscribed event and re-attaches it to each new child, so a ``restart_session()`` or
+        a fallback does not silently drop them -- unlike subscribing on ``_active``, which
+        binds to the one child that a swap then discards.
+        """
+        self._add_forwarder(event)
+        return super().on(event, callback)
+
+    def once(self, event: str, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        """One-shot :meth:`on`, registering the forwarder the same way.
+
+        ``EventEmitter.once`` currently routes through ``on``, so this would work without the
+        override. Registering here too keeps one-shot plugin subscriptions from silently
+        never firing if that ever stops being true.
+        """
+        self._add_forwarder(event)
+        return super().once(event, callback)
+
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
         child.on("error", self._on_child_error)
+        self._child_bound = True
 
     def _unbind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.off(event, forwarder)
         child.off("error", self._on_child_error)
+        self._child_bound = False
 
     def _set_available(self, index: int, available: bool) -> None:
         if self._available[index] == available:
