@@ -886,8 +886,8 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
-        # item id per in-flight event id, so a rejection can be traced back to its item
-        self._chat_ctx_event_items: dict[str, str] = {}
+        # future per in-flight chat ctx event, so a rejection settles the one it answers
+        self._chat_ctx_event_futures: dict[str, asyncio.Future] = {}
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
@@ -946,7 +946,9 @@ class RealtimeSession(
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
-            # chat context
+            # chat context. the turn state goes first, since what it settles belongs in the
+            # mirror that is replayed below
+            self._reset_input_turn_state()
             chat_ctx = self.chat_ctx.copy(
                 exclude_function_call=True,
                 exclude_instructions=True,
@@ -956,7 +958,6 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._reset_input_turn_state()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -1433,20 +1434,20 @@ class RealtimeSession(
 
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
-            self._chat_ctx_event_items = {}
+            self._chat_ctx_event_futures = {}
 
             for ev in events:
                 futs.append(f := asyncio.Future[None]())
                 if isinstance(ev, ConversationItemDeleteEvent):
-                    item_id = ev.item_id
-                    self._item_delete_future[item_id] = f
+                    self._item_delete_future[ev.item_id] = f
                 else:
                     assert ev.item.id is not None
-                    item_id = ev.item.id
-                    self._item_create_future[item_id] = f
+                    self._item_create_future[ev.item.id] = f
 
+                # an updated item sends a delete and a create under the same id, so only the
+                # event id tells a rejection which of the two it answers
                 if ev.event_id:
-                    self._chat_ctx_event_items[ev.event_id] = item_id
+                    self._chat_ctx_event_futures[ev.event_id] = f
                 self.send_event(ev)
 
             if not futs:
@@ -1456,15 +1457,15 @@ class RealtimeSession(
                     asyncio.gather(*futs, return_exceptions=True), timeout=5.0
                 )
             except asyncio.TimeoutError:
-                # clean up timed-out futures so late server responses don't hit
-                # InvalidStateError when calling set_result on cancelled futures
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+            finally:
+                # the waiters end with the update, so a late reply finds nothing to settle
                 for ev in events:
                     if isinstance(ev, ConversationItemDeleteEvent):
                         self._item_delete_future.pop(ev.item_id, None)
-                    elif isinstance(ev, ConversationItemCreateEvent):
+                    else:
                         assert ev.item.id is not None
                         self._item_create_future.pop(ev.item.id, None)
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
 
             # a rejected item is not worth failing the turn over
             if rejected := [str(r) for r in results if isinstance(r, BaseException)]:
@@ -1931,8 +1932,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_create_future.pop(event.item.id, None):
-            if fut.cancelled():
-                logger.error(f"item create future for `{event.item.id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item create future for `{event.item.id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -1950,8 +1951,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
-            if fut.cancelled():
-                logger.error(f"item delete future for `{event.item_id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item delete future for `{event.item_id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -2273,12 +2274,13 @@ class RealtimeSession(
         # a rejected item event gets no deleted/added reply, so fail its future rather than
         # leave update_chat_ctx to stall inside the speech that awaits it
         if (event_id := event.error.event_id) and (
-            item_id := self._chat_ctx_event_items.pop(event_id, None)
+            fut := self._chat_ctx_event_futures.pop(event_id, None)
         ):
-            for pending in (self._item_delete_future, self._item_create_future):
-                if (fut := pending.pop(item_id, None)) and not fut.done():
-                    fut.set_exception(llm.RealtimeError(event.error.message))
-            return
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(event.error.message))
+            # a terminal one still has to end the session, whatever it came in reply to
+            if not _is_fatal_error(event.error):
+                return
 
         if event.error.message.startswith("Cancellation failed"):
             return

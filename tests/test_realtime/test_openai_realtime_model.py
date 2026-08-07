@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
-from openai.types.realtime import RealtimeErrorEvent
+from openai.types.realtime import ConversationItemDeletedEvent, RealtimeErrorEvent
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -165,7 +165,7 @@ def _handle_error_session(
         SimpleNamespace(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _opts=SimpleNamespace(turn_detection=turn_detection),
-            _chat_ctx_event_items={},
+            _chat_ctx_event_futures={},
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -263,28 +263,82 @@ def test_response_done_failed_transient_stays_recoverable() -> None:
     assert captured["recoverable"] is True
 
 
+def _chat_ctx_update_session() -> RealtimeSession:
+    """A session mid-update, with the delete and the create of one updated item in flight."""
+    session = _handle_error_session({})
+    session._item_delete_future = {"item_1": asyncio.Future()}
+    session._item_create_future = {"item_1": asyncio.Future()}
+    session._chat_ctx_event_futures = {
+        "chat_ctx_delete_abc": session._item_delete_future["item_1"],
+        "chat_ctx_create_abc": session._item_create_future["item_1"],
+    }
+    return session
+
+
+def _rejection(event_id: str, code: str = "invalid_request_error") -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.construct(
+        type="error",
+        event_id=event_id,
+        error={
+            "message": "Item not found: item_1",
+            "type": "invalid_request_error",
+            "code": code,
+            "event_id": event_id,
+        },
+    )
+
+
 async def test_a_rejected_chat_ctx_event_releases_its_waiter() -> None:
     # a rejected delete gets an error instead of conversation.item.deleted, so nothing else
     # settles the future that update_chat_ctx awaits inside the speech
-    session = RealtimeSession.__new__(RealtimeSession)
-    session._item_delete_future = {}
-    session._item_create_future = {}
-    session._chat_ctx_event_items = {"chat_ctx_delete_abc": "item_1"}
-    session._item_delete_future["item_1"] = (waiter := asyncio.Future())
+    session = _chat_ctx_update_session()
+    waiter = session._item_delete_future["item_1"]
 
-    session._handle_error(
-        RealtimeErrorEvent.construct(
-            type="error",
-            event_id="chat_ctx_delete_abc",
-            error={
-                "message": "Item not found: item_1",
-                "type": "invalid_request_error",
-                "code": "invalid_request_error",
-                "event_id": "chat_ctx_delete_abc",
-            },
-        )
-    )
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
 
     assert waiter.done(), "update_chat_ctx would wait out its timeout, and the speech with it"
     assert isinstance(waiter.exception(), llm.RealtimeError)
-    assert "item_1" not in session._item_delete_future
+
+
+async def test_a_rejected_waiter_is_not_settled_twice() -> None:
+    # the waiter stays parked under its item id, where a late reply would set a result on it
+    session = _chat_ctx_update_session()
+    session._remote_chat_ctx = RemoteChatContext()
+    session._input_transcript_accumulators = {}
+    session._input_speech_started_at = {}
+    waiter = session._item_delete_future["item_1"]
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
+
+    RealtimeSession._handle_conversion_item_deleted(
+        session,
+        ConversationItemDeletedEvent.construct(
+            type="conversation.item.deleted", event_id="evt", item_id="item_1"
+        ),
+    )
+
+    assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+async def test_a_rejection_leaves_its_sibling_event_alone() -> None:
+    # an updated item is deleted and created under one id, and the create can still land
+    session = _chat_ctx_update_session()
+    sibling = session._item_create_future["item_1"]
+
+    RealtimeSession._handle_error(session, _rejection("chat_ctx_delete_abc"))
+
+    assert not sibling.done()
+    assert session._item_create_future["item_1"] is sibling
+
+
+async def test_a_fatal_error_on_a_chat_ctx_event_still_ends_the_session() -> None:
+    # the error names the event that drew it, and an exhausted quota must stop the session
+    session = _chat_ctx_update_session()
+    waiter = session._item_create_future["item_1"]
+
+    with pytest.raises(APIError) as exc_info:
+        RealtimeSession._handle_error(
+            session, _rejection("chat_ctx_create_abc", code="insufficient_quota")
+        )
+
+    assert exc_info.value.retryable is False
+    assert isinstance(waiter.exception(), llm.RealtimeError)

@@ -245,14 +245,19 @@ def test_a_new_item_transcript_finalizes_the_previous_turn() -> None:
 
 
 def test_reconnect_delivers_the_held_transcript() -> None:
-    # item ids do not survive a reconnect, so deliver the turn before they go
+    # item ids do not survive a reconnect, so deliver the turn before they go, and into the
+    # mirror that is replayed to the new session
     session, emitted = _make_session()
+    _mirror(session, ("item_1", "user", ""))
 
     _commit(session, "item_1", "are you still there")
     session._reset_input_turn_state()
 
     assert _finals(emitted) == [("item_1", "are you still there")]
     assert session._pending_transcription is None
+    remote = session._remote_chat_ctx.get("item_1")
+    assert remote is not None
+    assert remote.item.content == ["are you still there"], "the turn is replayed without it"
 
 
 def test_speech_onset_survives_a_resumed_turn() -> None:
