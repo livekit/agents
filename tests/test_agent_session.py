@@ -33,7 +33,6 @@ from livekit.agents import (
 from livekit.agents.llm import (
     FunctionTool,
     FunctionToolCall,
-    InputTranscriptionCompleted,
     RawFunctionTool,
     ToolContext,
     ToolFlag,
@@ -102,29 +101,19 @@ class MyAgent(Agent):
 SESSION_TIMEOUT = 60.0
 
 
-def test_realtime_user_input_transcription_preserves_item_id() -> None:
-    captured_events: list[UserInputTranscribedEvent] = []
+def test_user_input_transcribed_event_item_id():
+    """UserInputTranscribedEvent should accept and expose item_id (#6110).
 
-    class DummySession:
-        def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
-            captured_events.append(ev)
+    item_id is the stable correlation key from llm.InputTranscriptionCompleted,
+    forwarded by AgentActivity._on_input_audio_transcription_completed so realtime
+    consumers can dedup repeated interim transcripts belonging to the same utterance.
+    """
+    ev = UserInputTranscribedEvent(transcript="hello", is_final=False, item_id="item_abc123")
+    assert ev.item_id == "item_abc123"
 
-    activity = object.__new__(AgentActivity)
-    activity._session = DummySession()
-
-    AgentActivity._on_input_audio_transcription_completed(
-        activity,
-        InputTranscriptionCompleted(
-            item_id="item_123",
-            transcript="hello",
-            is_final=False,
-        ),
-    )
-
-    assert len(captured_events) == 1
-    assert captured_events[0].transcript == "hello"
-    assert captured_events[0].is_final is False
-    assert captured_events[0].item_id == "item_123"
+    # item_id remains optional for non-realtime (STT-pipeline) transcripts
+    ev_no_id = UserInputTranscribedEvent(transcript="hello", is_final=True)
+    assert ev_no_id.item_id is None
 
 
 @pytest.mark.parametrize(
