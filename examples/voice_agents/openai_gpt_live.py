@@ -1,16 +1,18 @@
 """OpenAI GPT-Live (alpha) full-duplex voice agent.
 
 GPT-Live is a server-driven, full-duplex voice model: it listens and speaks at the
-same time and decides when to reply, so unlike the Realtime API there is no client
-`generate_reply`. Reasoning and tools are delegated to a backend Responses model
-(``gpt-5.5``), so ordinary ``@function_tool`` methods and the hosted ``web_search``
-tool work as usual.
+same time and decides for itself when to reply. Reasoning and tools are delegated to a
+backend Responses model (``gpt-5.6-sol``), so ordinary ``@function_tool`` methods and
+the hosted ``web_search`` tool work as usual.
 
 Notes for this alpha:
-- The model is reactive: it responds after the user speaks. There is no proactive
-  greeting, so ``on_enter`` does not call ``generate_reply`` (it would raise).
+- ``generate_reply`` asks rather than tells: it places a spoken instruction in the
+  model's context, which is how ``on_enter`` greets first. The model may decline, and
+  the call then fails rather than waiting forever.
 - Barge-in is the model's own: it keeps listening while it speaks and decides when to yield,
   so the framework does not cut playback when you start talking.
+- A ``chat_ctx`` passed before the session starts seeds the conversation as history;
+  afterwards the API is append-only, so nothing can be edited or removed.
 - The Agent's ``instructions`` are the voice persona and are immutable once the
   session starts; the backend reasoning model is configured via ``backend_instructions``.
 - Audio the model never transcribes — a backchannel, a laugh — still plays; it simply
@@ -52,6 +54,9 @@ class Assistant(Agent):
             ),
         )
 
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="greet the user and ask how you can help them today.")
+
     @function_tool
     async def lookup_weather(self, context: RunContext, location: str) -> str:
         """Look up the current weather for a location.
@@ -81,6 +86,7 @@ async def entrypoint(ctx: JobContext) -> None:
             # hosted server-side tool, in addition to the @function_tool above
             web_search=True,
         ),
+        turn_handling={"interruption": {"enabled": False}}
     )
 
     await session.start(agent=Assistant(), room=ctx.room)
