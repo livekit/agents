@@ -22,7 +22,7 @@ class DuplexAudioFrame:
     """One frame of a duplex model's output, tagged with the turn it belongs to."""
 
     frame: rtc.AudioFrame
-    message_id: str | None = None
+    turn_id: str | None = None
     """The model's turn id, or None when the plugin does not know it yet.
 
     Never a per-fragment id: a change of id means a change of turn, so report None rather than
@@ -37,7 +37,7 @@ class DuplexTranscriptDelta:
     """A fragment of the model's transcript of its own speech."""
 
     text: str
-    message_id: str | None = None
+    turn_id: str | None = None
     """The model's turn id, or None while the model has not announced one yet."""
     start_ms: int | None = None
     end_ms: int | None = None
@@ -49,14 +49,14 @@ class DuplexTranscriptDelta:
 
 @dataclass
 class DuplexTurnStartedEvent:
-    message_id: str
+    turn_id: str
 
 
 @dataclass
 class DuplexTurnEndedEvent:
     """Emitted after the turn's last transcript, so it also means fully transcribed."""
 
-    message_id: str
+    turn_id: str
 
 
 @dataclass

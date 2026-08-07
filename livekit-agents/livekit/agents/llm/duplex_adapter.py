@@ -135,7 +135,7 @@ class _Burst:
     text_ch: aio.Chan[str]
     audio_ch: aio.Chan[rtc.AudioFrame]
     modalities: asyncio.Future[list[Literal["text", "audio"]]]
-    model_message_id: str | None = None
+    model_turn_id: str | None = None
     transcript: str = ""
     has_audio: bool = False
     transcript_end_ms: int | None = None
@@ -161,7 +161,7 @@ class _Burst:
             # model's own timeline, so neither side moves with network latency
             return self.transcript_end_ms < self._voiced_end_ms
         # a turn the model claimed still owes its text; audio it never claimed is a backchannel
-        return self.model_message_id is not None
+        return self.model_turn_id is not None
 
     def track_audio(self, start_ms: int | None, duration: float, *, voiced: bool) -> None:
         """Advance the playback timeline with a frame that is about to be forwarded."""
@@ -322,19 +322,19 @@ class _DuplexRealtimeSession(RealtimeSession):
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
         # every frame keeps the floor tracking; a tagged one also holds the gate through its tail
-        voiced = self._gate.update(f.frame, forced=f.message_id is not None)
+        voiced = self._gate.update(f.frame, forced=f.turn_id is not None)
 
-        if f.message_id is not None:
+        if f.turn_id is not None:
             burst = self._burst
             # an orphaned burst holds a dead turn's text, which would prefix this one
             if burst is not None and (
-                burst.orphaned or burst.model_message_id not in (None, f.message_id)
+                burst.orphaned or burst.model_turn_id not in (None, f.turn_id)
             ):
                 self._close_burst()
                 burst = None
             if burst is None:
                 burst = self._open_burst()
-            burst.model_message_id = f.message_id
+            burst.model_turn_id = f.turn_id
             self._feed(burst, f)
             return
 
@@ -434,7 +434,7 @@ class _DuplexRealtimeSession(RealtimeSession):
                     "duplex transcript outlived the audio it describes",
                     extra={
                         "text": ev.text,
-                        "message_id": ev.message_id,
+                        "turn_id": ev.turn_id,
                         "span_ms": (ev.start_ms, ev.end_ms),
                         "closed_audio_end_ms": self._closed_audio_end_ms,
                     },
@@ -448,23 +448,23 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._maybe_close()
 
     def _on_turn_started(self, ev: DuplexTurnStartedEvent) -> None:
-        self._open_turns.add(ev.message_id)
+        self._open_turns.add(ev.turn_id)
         if (burst := self._burst) is None:
             return
 
-        if burst.model_message_id is None:
+        if burst.model_turn_id is None:
             # a turn is announced after its first audio, so an unlabelled burst is this one
-            burst.model_message_id = ev.message_id
+            burst.model_turn_id = ev.turn_id
             self._cancel_close()
-        elif burst.model_message_id != ev.message_id:
+        elif burst.model_turn_id != ev.turn_id:
             # whatever is open belongs to the previous turn, the only boundary an
             # untagging model gives
             self._close_burst()
 
     def _on_turn_ended(self, ev: DuplexTurnEndedEvent) -> None:
-        self._open_turns.discard(ev.message_id)
+        self._open_turns.discard(ev.turn_id)
         burst = self._burst
-        if burst is not None and burst.model_message_id == ev.message_id:
+        if burst is not None and burst.model_turn_id == ev.turn_id:
             # the model is the authority on its turn being over; the gate still ends the sound
             burst.turn_ended = True
             self._maybe_close()
