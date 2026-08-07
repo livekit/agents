@@ -146,7 +146,7 @@ You'll need the following environment variables for this example:
 
 ---
 
-This code snippet is abbreviated. For the full example, see [multi_agent.py](examples/voice_agents/multi_agent.py)
+This code snippet is abbreviated. For the full example, see the [LiveKit docs](https://docs.livekit.io/agents/handoffs/)
 
 ```python
 ...
@@ -251,44 +251,10 @@ For more examples and detailed setup instructions, see the [examples directory](
 </p>
 </td>
 <td width="50%">
-<h3>🔄 Multi-user push to talk</h3>
-<p>Responds to multiple users in the room via push-to-talk.</p>
-<p>
-<a href="examples/voice_agents/push_to_talk.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>🎵 Background audio</h3>
-<p>Background ambient and thinking audio to improve realism.</p>
-<p>
-<a href="examples/voice_agents/background_audio.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>🛠️ Dynamic tool creation</h3>
-<p>Creating function tools dynamically.</p>
-<p>
-<a href="examples/voice_agents/dynamic_tool_creation.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
 <h3>☎️ Outbound caller</h3>
 <p>Agent that makes outbound phone calls</p>
 <p>
 <a href="https://github.com/livekit-examples/outbound-caller-python">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>📋 Structured output</h3>
-<p>Using structured output from LLM to guide TTS tone.</p>
-<p>
-<a href="examples/voice_agents/structured_output.py">Code</a>
 </p>
 </td>
 </tr>
@@ -302,10 +268,27 @@ For more examples and detailed setup instructions, see the [examples directory](
 </p>
 </td>
 <td width="50%">
-<h3>💬 Text-only agent</h3>
-<p>Skip voice altogether and use the same code for text-only integrations</p>
+<h3>📝 Multi-user transcriber</h3>
+<p>Produce transcriptions from all users in the room</p>
 <p>
-<a href="examples/other/text_only.py">Code</a>
+<a href="examples/other/transcription/multi-user-transcriber.py">Code</a>
+</p>
+</td>
+</tr>
+
+<tr>
+<td width="50%">
+<h3>🎥 Video avatars</h3>
+<p>Add an AI avatar with Tavus, Bithuman, LemonSlice, and more</p>
+<p>
+<a href="examples/avatar/">Code</a>
+</p>
+</td>
+<td width="50%">
+<h3>👁️ Gemini Live vision</h3>
+<p>Full example (including iOS app) of Gemini Live agent that can see.</p>
+<p>
+<a href="https://github.com/livekit-examples/vision-demo">Code</a>
 </p>
 </td>
 </tr>
