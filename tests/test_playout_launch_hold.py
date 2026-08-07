@@ -32,6 +32,9 @@ def _make_activity() -> tuple[AgentActivity, MagicMock]:
     activity._user_silence_event = asyncio.Event()
     activity._user_silence_event.set()
     activity._paused_speech = None
+    activity._false_interruption_timer = None
+    activity._false_interruption_pending = False
+    activity._audio_recognition = None
     return activity, audio_output
 
 
@@ -73,6 +76,31 @@ async def test_playout_launch_resumes_after_silence_gate_reopens() -> None:
     audio_output.resume.assert_called_once_with()
     audio_output.pause.assert_not_called()
     assert activity._paused_speech is None
+
+
+async def test_playout_launch_releases_hold_when_interruptions_are_disabled() -> None:
+    activity, audio_output = _make_activity()
+    speech_handle = SpeechHandle.create()
+    activity._update_paused_speech(speech_handle, timeout=2.0)
+    timer = MagicMock()
+    activity._false_interruption_timer = timer
+    activity._false_interruption_pending = True
+
+    speech_handle.allow_interruptions = False
+    activity._prepare_audio_playout(speech_handle)
+
+    assert activity._paused_speech is None
+    timer.cancel.assert_called_once_with()
+    assert activity._false_interruption_timer is None
+    assert activity._false_interruption_pending is False
+
+    speech_handle.allow_interruptions = True
+    activity._prepare_audio_playout(speech_handle)
+    await activity._cancel_speech_pause()
+
+    audio_output.pause.assert_not_called()
+    assert audio_output.resume.call_count == 2
+    assert speech_handle.interrupted is False
 
 
 async def test_audio_forwarding_prepares_playout_before_first_frame() -> None:

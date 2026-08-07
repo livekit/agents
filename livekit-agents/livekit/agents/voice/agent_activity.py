@@ -4302,6 +4302,14 @@ class AgentActivity(RecognitionHooks):
                 audio_output.pause()
                 return
 
+        if (
+            not speech_handle.allow_interruptions
+            and self._paused_speech
+            and self._paused_speech.handle is speech_handle
+        ):
+            self._cancel_false_interruption_timer()
+            self._paused_speech = None
+
         if audio_output is not None:
             audio_output.resume()
 
