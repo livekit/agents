@@ -241,7 +241,7 @@ where the API can be protocol-shaped and truthful:
 class GPTLiveSession(llm.DuplexSession):
     def append_context(self, text: str) -> None: ...              # session.context.append
     def send_delegation_output(self, *, call_id, output) -> None: ...
-    def send_event(self, event: dict[str, Any]) -> None: ...      # escape hatch
+    def send_event(self, event: ClientEvent | dict[str, Any]) -> None: ...   # escape hatch
 
     async def _update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         ...  # diffs, then calls the two above
@@ -495,30 +495,81 @@ class GPTLiveModel(llm.DuplexModel):
 already names the other OpenAI API in this same plugin (`openai.realtime.RealtimeModel`). The API is
 alpha, so the rename is free now and expensive later.
 
+### Waiting for the configuration
+
+The first event of a connection carries the whole configuration, and the voice, instructions and
+history in it are immutable once the session starts. So the send loop waits for it — with no
+deadline, because the session is *told* whether one is coming:
+
+```python
+DuplexModel.session(*, wait_for_config: bool = False)   # the promise
+await self._await_config()                              # the wait, in the send loop
+```
+
+`DuplexRealtimeAdapter.session()` passes True, since `AgentActivity` configures the session it
+creates. A session an application builds directly promises nothing, so the flag defaults False and
+it starts on its constructor alone. `_update_session` releases the wait in a `finally` — a handover
+that failed part way still starts the connection — and so does `aclose`.
+
+This replaces a 2 s timeout on the same wait. A timeout is a guess about wall-clock whose failure
+mode is a *silently unconfigured session*, appearing only under load; making the promise explicit
+removes the guess instead of tuning it. Two alternatives were tried and dropped: relying on
+`_update_session` reaching the session before the connection task runs (true today, but an unstated
+dependency on framework scheduling), and opening the connection lazily on the first outbound event
+(spreads the trigger across every sender, and each one still depends on that same ordering).
+
+The flag lives on `session()` rather than a post-construction hook so it is part of the signature a
+plugin author reads, and it generalises: any duplex model needing its context at connection time
+rather than after wants exactly this.
+
+### Typed wire events
+
+`gpt_live_types.py` carries every client and server event of the alpha as a model, imported as
+`types` so the session reads and writes `types.TurnDoneEvent` rather than dictionaries. They
+subclass `openai.BaseModel` — itself a `pydantic.BaseModel` — so
+`Event.construct(**payload)` builds nested models **without validating** — the same call the
+Realtime plugin in this package already uses. That is the property the choice turns on: a field the
+alpha adds, drops or reshapes cannot raise mid-session, while the handlers still get attributes
+mypy checks. Outbound, `model_dump(exclude_none=True)` is also what makes a later `session.update`
+sparse, so the delegation-only update is built as a `SessionConfig` carrying just `delegation`
+rather than by composing the whole session and deleting the immutable keys.
+
+`send_event` still accepts a raw dictionary, and both raw-event signals still emit dictionaries: an
+event the alpha adds before this module knows about it must stay reachable.
+
 ### Syncing the chat context
 
-`_update_chat_ctx` diffs the incoming context against what has already gone out with
-`llm.utils.compute_chat_ctx_diff`, the same machinery the Realtime plugin uses, and routes what is
-new by kind. A result answering a call **this connection delegated** goes back on
-`delegation.function_call_output.create`, the backend model's channel, and is not context at all.
-Everything else becomes **one** `session.context.append` carrying a `role: text` transcript of what
-was added since the last sync.
+Every context item — message, tool call, tool result — goes through one renderer, `_render_item`,
+which returns the role and text the protocol carries. Messages keep their own role; a tool call has
+none in this protocol, so it is narrated to the `developer` role that startup history accepts. One
+renderer rather than a branch per kind, because the two sinks below want the same thing.
 
-Which side a tool call falls on is tracked, not assumed. A resumed call, an agent handoff and a
-reconnect all hand over prior `function_call_output` items whose `call_id` the backend never issued
-— and `_reset_for_reconnect` clears the mirror, so after a drop the entire history re-syncs. Sent
-blind, every one of those becomes a delegation output answering nothing. The session therefore
-records the calls it delegates, clears them with the connection, and renders the rest into the
-transcript as `tool call:` / `tool result:` lines, where they read as history instead of as protocol.
+**Before the first `session.update` goes out**, the whole context is startup history: it is held in
+the mirror and rendered into `initial_items` when the connection opens. A removal or a revision
+still applies, since nothing has been told to the model yet.
 
-One append rather than one per message, because the Live API's context entries carry no role: split
-across events, a user question and the answer to it arrive as unattributed fragments. Written as a
-transcript in a single block they stay legible, which also answers how to seed a resumed call —
-flattening prior history into one text block is not a workaround here, it is the shape the protocol
-has.
+**After it**, `_update_chat_ctx` diffs the incoming context against the mirror with
+`llm.utils.compute_chat_ctx_diff`, the same machinery the Realtime plugin uses. A result answering a
+call **this connection delegated** goes back on `delegation.function_call_output.create`, the
+backend model's channel, and is not context at all. Everything else becomes `session.context.append`
+carrying a `role: text` transcript, in as few events as the 500-token cap allows: the Live API's
+context entries have no role of their own, so a user question and the answer to it split across
+events arrive as unattributed fragments. A removal or a revision is now logged as an error and
+ignored — the model keeps what it has been told.
 
-A removal or a revision is logged as an error and otherwise ignored. The model keeps what it has
-been told, and pretending otherwise would leave the plugin's mirror disagreeing with the session.
+Which side a tool call falls on is tracked, not assumed. An agent handoff and a resumed call both
+hand over prior `function_call_output` items whose `call_id` the backend never issued; sent blind,
+each becomes a delegation output answering nothing. The session records the calls it delegates and
+clears them with the connection.
+
+**A reconnect keeps the conversation.** The mirror is the whole of it — startup history plus the
+turns and tool calls since — and every connection seeds `initial_items` from it, so the replacement
+starts where the dropped one stopped instead of relaying the gap through 500-token appends. There is
+no separate startup context to hold, and `_reset_for_reconnect` leaves the mirror alone.
+
+The service caps startup history at 128 messages and 8192 rendered tokens, one context append at
+500 tokens, and feedback at 4096 characters. Each is enforced and warned about rather than sent and
+rejected; with no tokenizer in the plugin, ~4 characters a token serves as the budget.
 
 A known limitation disappears: *"`turn.done`(assistant) lags the turn's last audio delta, so the
 filler streamed in between is forwarded as part of the segment"* is no longer a defect, because
