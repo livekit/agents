@@ -1599,9 +1599,16 @@ class AgentActivity(RecognitionHooks):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
+        A queued speech that disallows interruptions keeps playing, along with the ones
+        behind it, unless ``force`` is set.
+
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated
+
+        Raises:
+            RuntimeError: If the speech currently playing disallows interruptions and
+                ``force`` is False.
         """
         self._cancel_preemptive_generation()
 
@@ -1613,12 +1620,24 @@ class AgentActivity(RecognitionHooks):
             self._current_speech.interrupt(force=force)
             interrupted_speeches.append(self._current_speech)
 
-        for _, _, speech in self._speech_q:
-            speech.interrupt(force=force)
-            interrupted_speeches.append(speech)
-
         if self._rt_session is not None:
             self._rt_session.interrupt()
+
+        # _speech_q is a heap, so its list order is not the order it pops in
+        for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
+            try:
+                speech.interrupt(force=force)
+            except RuntimeError:
+                # the speeches behind this one are going to play, so stopping
+                # here keeps the conversation contiguous
+                logger.warning(
+                    "a queued speech does not allow interruptions and will play after the "
+                    "interruption, use interrupt(force=True) to interrupt it as well",
+                    extra={"speech_id": speech.id},
+                )
+                break
+
+            interrupted_speeches.append(speech)
 
         if not interrupted_speeches:
             future.set_result(None)
