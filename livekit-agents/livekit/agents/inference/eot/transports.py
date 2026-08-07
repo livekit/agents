@@ -207,13 +207,17 @@ class _CloudTransport:
                 request_sent_at_ms = inference_stats.latest_client_created_at.ToMilliseconds()
                 current_time = Timestamp()
                 current_time.GetCurrentTime()
-                detection_delay_ms = current_time.ToMilliseconds() - request_sent_at_ms
                 inference_duration_ms = inference_stats.server_e2e_latency.ToMilliseconds()
+                # Unset timestamps read as epoch 0; treat that as unknown instead
+                # of reporting a decades-long `now - 0` delay.
+                detection_delay: float | None = None
+                if request_sent_at_ms > 0:
+                    detection_delay = (current_time.ToMilliseconds() - request_sent_at_ms) / 1000.0
 
                 stream._resolve_prediction(
                     msg.request_id,
                     prediction.probability,
-                    detection_delay=detection_delay_ms / 1000.0,
+                    detection_delay=detection_delay,
                     inference_duration=inference_duration_ms / 1000.0,
                     backchannel_probability=prediction.backchannel_probability,
                 )
@@ -227,7 +231,7 @@ class _CloudTransport:
                             timestamp=time.time(),
                             total_duration=client_e2e_ms / 1000.0,
                             prediction_duration=inference_duration_ms / 1000.0,
-                            detection_delay=detection_delay_ms / 1000.0,
+                            detection_delay=detection_delay,
                             num_requests=1,
                             metadata=Metadata(
                                 model_name=detector.model,

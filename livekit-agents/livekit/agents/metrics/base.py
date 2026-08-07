@@ -119,8 +119,9 @@ class EOTInferenceMetrics(_BaseMetrics):
     timestamp: float
     total_duration: float
     """Earliest audio creation time in an inference to response receive time."""
-    detection_delay: float
-    """Latest audio creation time in an inference to response receive time."""
+    detection_delay: float | None
+    """Latest audio creation time in an inference to response receive time.
+    ``None`` when the server did not report the client-side timestamp."""
     prediction_duration: float
     """Server side model inference time."""
     num_requests: int = 1
