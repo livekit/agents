@@ -36,9 +36,13 @@ A collection of voice-based agent examples, including basic voice interactions, 
 
 Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
 
-### 🚗 [Drive-Thru](./drive-thru/)
+### 🚗 [Drive-Thru](./drive_thru/)
 
 A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
+
+### 🎭 [Expressive Agent](./expressive_agent/)
+
+A free-form companion agent running Expressive Mode. Tell it good news or bad news and hear the delivery change: emotion, pacing, and non-verbal sounds, all chosen from context.
 
 ### 🏢 [Front Desk](./frontdesk/)
 

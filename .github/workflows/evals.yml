@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [frontdesk, drive-thru]
+        example: [frontdesk, drive_thru]
 
     runs-on: ubuntu-latest
     name: ${{ matrix.example }}
