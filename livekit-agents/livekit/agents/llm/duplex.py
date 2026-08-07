@@ -204,8 +204,14 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[object]:
-        """Ask the model to speak now, where the protocol allows it."""
+    ) -> asyncio.Future[str | None]:
+        """Ask the model to speak now, where the protocol allows it.
+
+        Resolves once the ask lands, with the id of the turn that will answer it, or None where
+        the protocol names none and the model's next turn should be taken as the reply. Fail it
+        where the ask could not be delivered; raise :class:`RealtimeError` where the model cannot
+        be asked at all.
+        """
         raise RealtimeError(f"{type(self).__name__} decides for itself when to speak")
 
     async def _update_session(

@@ -80,6 +80,8 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.model_ms = 0
         self.config_batches: list[tuple[object, object, object]] = []
         self.replies_requested: list[object] = []
+        # the turn a protocol names as answering an ask, where it names one at all
+        self.answering_turn: str | None = None
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
@@ -120,13 +122,15 @@ class _FakeDuplexSession(llm.DuplexSession):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[object]:
+    ) -> asyncio.Future[str | None]:
         if not self.capabilities.manual_response_creation:
             return super()._generate_reply(
                 instructions=instructions, tool_choice=tool_choice, tools=tools
             )
         self.replies_requested.append(instructions)
-        return asyncio.get_running_loop().create_future()
+        fut: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+        fut.set_result(self.answering_turn)
+        return fut
 
     async def _update_session(
         self,
@@ -805,6 +809,62 @@ async def test_generate_reply_reaches_a_model_that_supports_it() -> None:
     assert session.realtime_model.capabilities.manual_response_creation
     session.generate_reply(instructions="say hi")
     assert fake.replies_requested == ["say hi"]
+    await session.aclose()
+
+
+def _askable(
+    answering_turn: str | None = None,
+) -> tuple[_FakeDuplexSession, _DuplexRealtimeSession]:
+    """A session whose model can be asked to speak, naming its answering turn or not."""
+    model = _FakeDuplexModel()
+    model._capabilities.manual_response_creation = True
+    session = llm.DuplexRealtimeAdapter(model, stalled_transcript_timeout=STALLED).session()
+    assert isinstance(session, _DuplexRealtimeSession)
+    fake = model.session_obj
+    assert fake is not None
+    fake.answering_turn = answering_turn
+    return fake, session
+
+
+async def test_a_requested_reply_is_the_speech_that_follows_it() -> None:
+    """The model answers on the same stream as everything else, so a burst is all there is."""
+    fake, session = _askable()
+    fut = session.generate_reply()
+    fake.push(0.001, count=20)  # let the gate learn the model's floor
+    fake.push(0.5, count=3)
+    await _settle()
+
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated  # or the framework schedules it a second time, on its own
+    await session.aclose()
+
+
+async def test_a_reply_the_model_never_gives_does_not_strand_the_caller(monkeypatch) -> None:
+    """Asking a duplex model is a request; it stays free to say nothing at all."""
+    monkeypatch.setattr("livekit.agents.llm.duplex_adapter._REPLY_TIMEOUT", 0.05)
+    fake, session = _askable()
+    fut = session.generate_reply()
+    fake.push(0.001, count=20)  # silence: the model declined
+
+    with pytest.raises(llm.RealtimeError):
+        await asyncio.wait_for(fut, 1)
+    await session.aclose()
+
+
+async def test_a_named_turn_is_not_claimed_by_a_burst_of_another() -> None:
+    """A model asked mid-answer must not hand back the answer it was already giving."""
+    fake, session = _askable(answering_turn="turn_reply")
+    fut = session.generate_reply()
+    fake.push(0.001, count=20)
+    await _settle()
+
+    fake.push(0.5, count=3, turn_id="turn_other")
+    await _settle()
+    assert not fut.done()
+
+    fake.push(0.5, count=3, turn_id="turn_reply")
+    await _settle()
+    assert (await asyncio.wait_for(fut, 1)).user_initiated
     await session.aclose()
 
 

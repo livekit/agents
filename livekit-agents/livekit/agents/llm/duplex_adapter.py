@@ -40,6 +40,9 @@ _SILENCE_FLOOR = 1e-4
 # liveness bound only: a turn closes on its transcript catching up, or on the model ending it
 _STALLED_TRANSCRIPT_TIMEOUT = 3.0
 
+# how long a requested reply waits for the model to start speaking before it counts as declined
+_REPLY_TIMEOUT = 5.0
+
 
 def _frame_rms(frame: rtc.AudioFrame) -> float:
     """Root-mean-square level of a frame, normalized to 0..1."""
@@ -282,6 +285,10 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._sound_stopped = False
         self._closed_audio_end_ms: int | None = None
         self._open_turns: set[str] = set()
+        # user_initiated has to be settled before a burst's event goes out, or the framework
+        # schedules it as a turn of the model's own as well
+        self._pending_reply: asyncio.Future[GenerationCreatedEvent] | None = None
+        self._reply_turn_id: str | None = None
 
         duplex.on("transcript_delta", self._on_transcript_delta)
         duplex.on("turn_started", self._on_turn_started)
@@ -333,7 +340,7 @@ class _DuplexRealtimeSession(RealtimeSession):
                 self._close_burst()
                 burst = None
             if burst is None:
-                burst = self._open_burst()
+                burst = self._open_burst(turn_id=f.turn_id)
             burst.model_turn_id = f.turn_id
             self._feed(burst, f)
             return
@@ -359,7 +366,14 @@ class _DuplexRealtimeSession(RealtimeSession):
         if not burst.audio_ch.closed:
             burst.audio_ch.send_nowait(f.frame)
 
-    def _open_burst(self, *, orphaned: bool = False) -> _Burst:
+    def _claims_reply(self, turn_id: str | None) -> bool:
+        """Whether a burst just opening is the reply a caller asked for."""
+        if self._pending_reply is None or self._pending_reply.done():
+            return False
+        # a burst already attributed to another turn cannot be the answer to this ask
+        return self._reply_turn_id is None or turn_id in (None, self._reply_turn_id)
+
+    def _open_burst(self, *, turn_id: str | None = None, orphaned: bool = False) -> _Burst:
         burst = _Burst(
             id=shortuuid("item_"),
             orphaned=orphaned,
@@ -378,15 +392,17 @@ class _DuplexRealtimeSession(RealtimeSession):
                 modalities=burst.modalities,
             )
         )
-        self.emit(
-            "generation_created",
-            GenerationCreatedEvent(
-                message_stream=burst.message_ch,
-                function_stream=burst.function_ch,
-                user_initiated=False,
-                response_id=burst.id,
-            ),
+        ev = GenerationCreatedEvent(
+            message_stream=burst.message_ch,
+            function_stream=burst.function_ch,
+            user_initiated=False,
+            response_id=burst.id,
         )
+        if self._claims_reply(turn_id):
+            assert self._pending_reply is not None
+            ev.user_initiated = True
+            self._pending_reply.set_result(ev)
+        self.emit("generation_created", ev)
         return burst
 
     def _maybe_close(self) -> None:
@@ -477,6 +493,9 @@ class _DuplexRealtimeSession(RealtimeSession):
         # a dropped connection never delivers the turn's end, which would hold the burst forever
         self._open_turns.clear()
         self._close_burst()
+        if self._pending_reply is not None and not self._pending_reply.done():
+            # the request went to a session that no longer exists
+            self._pending_reply.cancel()
         self.emit("session_reconnected", ev)
 
     # -- RealtimeSession -------------------------------------------------------------------
@@ -536,11 +555,43 @@ class _DuplexRealtimeSession(RealtimeSession):
     ) -> asyncio.Future[GenerationCreatedEvent]:
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.Future()
         try:
-            self._duplex._generate_reply(
+            asked = self._duplex._generate_reply(
                 instructions=instructions, tool_choice=tool_choice, tools=tools
             )
         except RealtimeError as e:
             fut.set_exception(e)
+            return fut
+
+        # the reply arrives as a burst on the one output stream, and only this side sees bursts
+        if self._pending_reply is not None and not self._pending_reply.done():
+            self._pending_reply.cancel()
+        self._pending_reply, self._reply_turn_id = fut, None
+
+        def _on_asked(f: asyncio.Future[str | None]) -> None:
+            # the plugin reports the ask landing, and names the answering turn where it can
+            if fut.done():
+                return
+            if f.cancelled():
+                fut.cancel()
+            elif (exc := f.exception()) is not None:
+                fut.set_exception(exc)
+            elif self._pending_reply is fut:
+                self._reply_turn_id = f.result()
+
+        def _on_timeout() -> None:
+            # asking is a request, not a command: the model may simply never answer
+            if not fut.done():
+                fut.set_exception(RealtimeError("the model did not start speaking when asked"))
+
+        timeout = asyncio.get_running_loop().call_later(_REPLY_TIMEOUT, _on_timeout)
+
+        def _on_settled(_: asyncio.Future[GenerationCreatedEvent]) -> None:
+            timeout.cancel()
+            if self._pending_reply is fut:
+                self._pending_reply, self._reply_turn_id = None, None
+
+        asked.add_done_callback(_on_asked)
+        fut.add_done_callback(_on_settled)
         return fut
 
     def commit_audio(self) -> None:
@@ -565,5 +616,7 @@ class _DuplexRealtimeSession(RealtimeSession):
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
+        if self._pending_reply is not None and not self._pending_reply.done():
+            self._pending_reply.cancel()
         with contextlib.suppress(Exception):
             await self._duplex.aclose()
