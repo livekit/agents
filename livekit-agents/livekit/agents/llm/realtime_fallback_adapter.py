@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from livekit import rtc
 
@@ -176,6 +176,10 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             event: _make_forwarder(event) for event in _FORWARDED_EVENTS
         }
 
+        # provider-specific handlers registered via on_active_session, re-attached
+        # to every new child a swap brings up
+        self._child_handlers: dict[str, list[Callable[[object], None]]] = {}
+
         # per-model availability, with a cooldown after a failure
         self._available = [True] * len(adapter._models)
         self._cooldown_deadline = [0.0] * len(adapter._models)
@@ -197,12 +201,54 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
+        for child_event, callbacks in self._child_handlers.items():
+            for callback in callbacks:
+                child.on(cast(Any, child_event), callback)
         child.on("error", self._on_child_error)
 
     def _unbind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.off(event, forwarder)
+        for child_event, callbacks in self._child_handlers.items():
+            for callback in callbacks:
+                child.off(cast(Any, child_event), callback)
         child.off("error", self._on_child_error)
+
+    @property
+    def active_session(self) -> RealtimeSession:
+        """The provider session currently in use; replaced on every failover/restart.
+
+        Handlers attached directly to it are lost when a swap replaces the child —
+        register them with :meth:`on_active_session` instead to survive failover.
+        """
+        return self._active
+
+    def on_active_session(
+        self, event: str, callback: Callable[[object], None]
+    ) -> Callable[[object], None]:
+        """Attach a provider-specific event handler to the active child session.
+
+        The handler is re-attached automatically to every new child session a
+        failover or restart brings up, so events like the openai plugin's
+        ``openai_server_event_received`` keep flowing after a swap. Events the
+        active child's provider never emits simply don't fire, making handlers
+        inert while a different provider's model is active.
+
+        Returns the callback, so it can be used as a decorator.
+        """
+        self._child_handlers.setdefault(event, []).append(callback)
+        self._active.on(cast(Any, event), callback)
+        return callback
+
+    def off_active_session(self, event: str, callback: Callable[[object], None]) -> None:
+        """Detach a handler registered with :meth:`on_active_session`."""
+        callbacks = self._child_handlers.get(event)
+        if callbacks is None or callback not in callbacks:
+            return
+        callbacks.remove(callback)
+        if not callbacks:
+            del self._child_handlers[event]
+        self._active.off(cast(Any, event), callback)
 
     def _set_available(self, index: int, available: bool) -> None:
         if self._available[index] == available:
