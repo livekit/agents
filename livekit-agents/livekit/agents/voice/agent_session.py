@@ -679,6 +679,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
+        # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
+        self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -817,6 +819,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -831,6 +834,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -844,6 +848,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -857,6 +862,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
             room: The room to use for input and output
+            session_host: Whether a `RemoteSession` can drive and observe this session
+                over the room. Defaults to True, or False when another session in the
+                same job is already the primary. Set False when the room already has
+                its agent and this session is only a participant in it, such as a
+                client talking to that agent. Ignored under the console subcommand,
+                where hosting is how the console reaches the session at all.
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
@@ -897,6 +908,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             self._recording_options = _resolve_recording_options(False)
 
                 job_ctx.init_recording(self._recording_options)
+
+            # hosting needs the primary designation as before, and the caller's consent
+            hosting = is_primary and (session_host if is_given(session_host) else True)
 
             # Under a text simulation the simulated user interacts over text
             # streams only: disable audio I/O here, and STT/TTS/VAD via
@@ -982,7 +996,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                if is_primary:
+                if hosting:
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
@@ -1604,21 +1618,44 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 continue
 
     @asynccontextmanager
-    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+    async def _wait_for_idle_and_hold(
+        self, *, run_state: RunResult | None = None
+    ) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit.
+
+        ``run_state`` is the run that owns the turn of the caller. That run is guarded for
+        the whole scope, since reaching idle is itself what completes the run: without the
+        guard, whatever the scope does next lands after ``run()`` returned and goes
+        unrecorded. A caller whose turn already ended guards nothing, so background work
+        cannot hold a later run open.
+        """
         from .agent_activity import _IdleHoldContextVar
 
-        activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
-        token = _IdleHoldContextVar.set(True)
+        # registered before the wait below, which is what lets the run complete
+        guard: asyncio.Future[None] | None = None
+        if run_state is not None and run_state is self._global_run_state and not run_state.done():
+            guard = asyncio.get_running_loop().create_future()
+            run_state._watch_handle(guard)
+            self._foreground_guards.add(guard)
+
         try:
-            yield activity
+            activity = await self.wait_for_idle()
+            self._idle_holds += 1
+            self._idle_released.clear()
+            token = _IdleHoldContextVar.set(True)
+            try:
+                yield activity
+            finally:
+                _IdleHoldContextVar.reset(token)
+                self._idle_holds -= 1
+                if self._idle_holds == 0:
+                    self._idle_released.set()
         finally:
-            _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            if guard is not None:
+                self._foreground_guards.discard(guard)
+                # the run re-checks from the done callback; releasing here rather than on
+                # the way out of the inner block covers a floor that never arrives
+                guard.set_result(None)
 
     async def _update_activity(
         self,
