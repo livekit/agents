@@ -231,12 +231,12 @@ def _duplicate_key(
     raw = {k: v for k, v in raw_arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
 
     try:
-        # encoding stays in the try: validated values are Python objects, so something
-        # like dict[SomeEnum, int] yields keys json can't encode
+        # encoding is in the try too: validated values are Python objects, so a type like
+        # dict[SomeEnum, int] yields keys json can't encode
         return (fnc_name, _canonical_args(validated_arguments(fnc, raw)))
     except Exception:
-        # bad arguments are the call's own problem — it raises ToolError once it runs.
-        # Key on what was sent (always encodable) instead of failing the guard here.
+        # the call raises ToolError on its own later; key on what was sent, which always
+        # encodes, rather than failing the guard here
         return (fnc_name, _canonical_args(raw))
 
 
@@ -315,12 +315,10 @@ class _ToolExecutor:
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
 
-        # keys are name-scoped and on_duplicate is per tool, so nothing can ever match
-        # an "allow" tool's key — don't bother deriving one
+        # nothing can match an "allow" tool's key: keys are name-scoped, the mode is per tool
         dup_key: tuple[str, str | None] | None = None
         if on_duplicate != "allow":
-            # derived AFTER the pop, so a confirming re-call keys identically to the
-            # call it confirms
+            # derived AFTER the pop, so a confirming re-call keys like the call it confirms
             dup_key = _duplicate_key(
                 fnc=tool,
                 fnc_name=fnc_name,
