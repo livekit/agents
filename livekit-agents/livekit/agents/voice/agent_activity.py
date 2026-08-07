@@ -50,6 +50,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .backchannel import is_backchannel_only
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -2013,6 +2014,23 @@ class AgentActivity(RecognitionHooks):
 
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
+                return
+
+        if (
+            self.stt is not None
+            and (backchannel_phrases := interruption_options.get("backchannel_phrases"))
+            and self._audio_recognition is not None
+        ):
+            text = self._audio_recognition._current_transcript
+            # the overlapping speech transcribed so far is only acknowledgments
+            # ("okay", "thank you") — keep talking. partial=True: interims arrive
+            # word by word, so a trailing prefix of a phrase ("thank") defers the
+            # cut; the next interim re-judges the full text
+            if text and is_backchannel_only(text, backchannel_phrases, partial=True):
+                logger.debug(
+                    "skipping interruption, backchannel-only transcript",
+                    extra={"transcript": text},
+                )
                 return
 
         if self._rt_session is not None:
