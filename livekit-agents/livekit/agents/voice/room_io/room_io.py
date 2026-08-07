@@ -138,6 +138,7 @@ class RoomIO:
                     if utils.is_given(output_audio_options.track_name)
                     else "roomio_audio"
                 ),
+                fade_out_on_interruption=output_audio_options.fade_out_on_interruption,
             )
 
         output_text_options = self._options.get_text_output_options()
