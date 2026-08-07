@@ -172,6 +172,9 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        # what the caller asked for, kept apart from what the responses taught us
+        self._word_timestamps_requested = word_timestamps
+        self._no_word_timestamps: set[tuple[str, str | None]] = set()
         self._sentence_tokenizer = (
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
@@ -180,23 +183,6 @@ class TTS(tts.TTS):
             self._stream_pacer = tts.SentenceStreamPacer()
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
-
-        if word_timestamps:
-            if "preview" not in self._opts.model and (
-                self._opts.language is not None
-                and self._opts.language.language
-                not in {
-                    "en",
-                    "de",
-                    "es",
-                    "fr",
-                }
-            ):
-                # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-                logger.warning(
-                    "word_timestamps is only supported for languages en, de, es, and fr with `sonic` models"
-                    " or all languages with `preview` models"
-                )
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
@@ -287,6 +273,11 @@ class TTS(tts.TTS):
         if is_given(api_version):
             self._opts.api_version = api_version
 
+        if is_given(model) or is_given(language):
+            # whether timestamps arrive is a property of the combination, so a
+            # negative result learned for the previous one says nothing here
+            self._sync_word_timestamps()
+
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
 
@@ -308,6 +299,44 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
+
+    def _word_timestamps_combination(self) -> tuple[str, str | None]:
+        return self._opts.model, self._opts.language.language if self._opts.language else None
+
+    def _sync_word_timestamps(self) -> None:
+        """Request word timestamps unless this combination is known not to send them."""
+        enabled = (
+            self._word_timestamps_requested
+            and self._word_timestamps_combination() not in self._no_word_timestamps
+        )
+        self._opts.word_timestamps = enabled
+        # the transcript can only be read from the TTS alignment when they arrive
+        self._capabilities.aligned_transcript = enabled
+
+    def _word_timestamps_unavailable(self, *, model: str, language: str | None) -> None:
+        """Stop asking for word timestamps this model/language never returns.
+
+        Which combinations support them is the provider's business and changes
+        over time, so it is learned from the responses rather than declared
+        here: a synthesis of real words that produced audio but no timestamps
+        settles it. The result is remembered per combination, so switching
+        model or language starts over rather than staying degraded for the
+        session. The combination is the one the finished request was sent with,
+        which is not necessarily the one set now.
+        """
+        combination = (model, language)
+        if not self._word_timestamps_requested or combination in self._no_word_timestamps:
+            return
+
+        logger.warning(
+            "Cartesia returned no word timestamps for model %s (language %s); not requesting "
+            "them for this combination. "
+            "See https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints",
+            model,
+            language or "unset",
+        )
+        self._no_word_timestamps.add(combination)
+        self._sync_word_timestamps()
 
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
@@ -405,6 +434,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         input_sent_event = asyncio.Event()
         sent_tokens = deque[str]()
+        # punctuation or an emoji still yields audio but never a timestamp, so
+        # only a synthesis of real words can tell us anything about support
+        sent_words = False
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
         flush_on_chunk = isinstance(self._tts._sentence_tokenizer, tokenize.SentenceTokenizer)
@@ -420,11 +452,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
             if flush_on_chunk is True:
                 base_pkt["max_buffer_delay_ms"] = 0
+            nonlocal sent_words
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = cartesia_context_id
                 token_pkt["transcript"] = ev.token + " "
                 sent_tokens.append(ev.token + " ")
+                sent_words = sent_words or any(char.isalnum() for char in ev.token)
                 token_pkt["continue"] = True
                 self._mark_started()
                 await ws.send_str(json.dumps(token_pkt))
@@ -451,6 +485,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             current_segment_id: str | None = None
             await input_sent_event.wait()
             skip_aligning = False
+            # timestamps are only reported for some model/language combinations;
+            # audio without any is how we learn this one is not among them
+            received_audio = False
+            received_timestamps = False
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -479,14 +517,29 @@ class SynthesizeStream(tts.SynthesizeStream):
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
                 if data.get("data"):
+                    received_audio = True
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)
                 elif data.get("done"):
+                    if (
+                        self._opts.word_timestamps
+                        and sent_words
+                        and received_audio
+                        and not received_timestamps
+                    ):
+                        # keyed on what this request was sent with: update_options
+                        # may have moved the instance on since then
+                        self._tts._word_timestamps_unavailable(
+                            model=self._opts.model,
+                            language=self._opts.language.language if self._opts.language else None,
+                        )
+
                     if sent_tokenizer_stream.closed:
                         # close only if the input stream is closed
                         output_emitter.end_input()
                         break
                 elif word_timestamps := data.get("word_timestamps"):
+                    received_timestamps = True
                     # assuming Cartesia echos the sent text in the original format and order.
                     for word, start, end in zip(
                         word_timestamps["words"],
