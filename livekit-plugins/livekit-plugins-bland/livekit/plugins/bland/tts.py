@@ -439,11 +439,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                         return
                     raise APIError("Bland did not cancel the turn cleanly", body=data)
                 if data.get("type") == "error":
-                    # Admission failures do not create a turn or emit a terminal.
-                    # Other errors can follow a failed terminal, so closing is the
-                    # only way to guarantee no diagnostic remains queued.
-                    if data.get("code") in ("insufficient_credits", "rate_limited"):
-                        return
+                    # An admission failure creates no turn and emits no terminal, so
+                    # there is nothing left to drain to. Returning here would hand the
+                    # socket back reusable — but a server that refuses a context can
+                    # answer each delta of it separately, and any error still queued
+                    # would then surface against the next, unrelated turn. Raising
+                    # closes the socket, which costs one reconnect on a path that has
+                    # already failed and keeps turns from contaminating each other.
                     raise _api_error(data)
 
         cancelled: asyncio.CancelledError | None = None

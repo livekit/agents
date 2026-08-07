@@ -832,3 +832,101 @@ def test_update_options_without_changes_keeps_the_session():
     with patch.object(tts._pool, "invalidate") as invalidate:
         tts.update_options()
     invalidate.assert_not_called()
+
+
+class _RefusingWSServer:
+    """Refuses admission on every ``speak``, as the server does per delta, and
+    holds the replies back until ``cancel`` so they are queued behind a
+    cancelling client's receive task."""
+
+    def __init__(self) -> None:
+        self.speaks: list[dict[str, Any]] = []
+        self.sessions = 0
+        self.two_speaks = asyncio.Event()
+
+    async def _handle(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self.sessions += 1
+        async for msg in ws:
+            if msg.type is not aiohttp.WSMsgType.TEXT:
+                continue
+            message = json.loads(msg.data)
+            if message["type"] == "init":
+                await ws.send_json(
+                    {
+                        "type": "ready",
+                        "session_id": f"session-{self.sessions}",
+                        "encoding": "pcm_s16le",
+                        "sample_rate": 48000,
+                    }
+                )
+            elif message["type"] == "speak":
+                self.speaks.append(message)
+                if len(self.speaks) == 2:
+                    self.two_speaks.set()
+            elif message["type"] == "cancel":
+                for speak in self.speaks[:2]:
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "context_id": speak["context_id"],
+                            "code": "insufficient_credits",
+                            "message": "wallet depleted",
+                        }
+                    )
+            elif message["type"] == "close":
+                await ws.send_json({"type": "done", "session_id": "done"})
+                await ws.close()
+        return ws
+
+    async def __aenter__(self) -> _RefusingWSServer:
+        app = web.Application()
+        app.router.add_get("/v2/tts/ws", self._handle)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await self._site.start()
+        self.base_url = f"http://127.0.0.1:{self._runner.addresses[0][1]}/v2"
+        self.session = aiohttp.ClientSession()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.session.close()
+        await self._runner.cleanup()
+
+
+async def test_refused_turn_does_not_contaminate_the_next_one():
+    """A cancelled turn whose admission was refused must not poison the pool.
+
+    A refused context never becomes a turn, so the server can answer every one of
+    its deltas separately. Draining only the first reply would hand the socket
+    back with the rest still queued, and the next turn would read someone else's
+    failure as its own.
+    """
+    from livekit.plugins.bland import TTS
+
+    async with _RefusingWSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url, http_session=srv.session)
+        options = APIConnectOptions(max_retry=0, timeout=5)
+
+        stream = tts.stream(conn_options=options)
+        stream.push_text("first")
+        stream.push_text(" second")
+        await asyncio.wait_for(srv.two_speaks.wait(), timeout=5)
+        await stream.aclose()
+
+        replacement = tts.stream(conn_options=options)
+        replacement.push_text("replacement")
+        replacement.end_input()
+        try:
+            async for _ in replacement:
+                pass
+        except APIError as e:  # a fresh session may still fail, but never on stale state
+            assert "insufficient_credits" not in str(e), e
+        finally:
+            await replacement.aclose()
+
+        # The contaminated socket must be discarded rather than reused.
+        assert srv.sessions == 2, srv.sessions
+        await tts.aclose()
