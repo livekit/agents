@@ -70,9 +70,19 @@ class RealtimeCapabilities:
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
     """Whether function call items already in the chat context can be resumed"""
+    manual_response_creation: bool = True
+    """Whether generate_reply() can ask the model to speak, rather than only waiting for it to"""
     can_disable_turn_detection: bool = False
     """Whether server-side turn detection can be disabled for a session so the client drives
     turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
+    server_barge_in: bool = False
+    """Whether the model handles barge-in itself, stopping its own output when the user speaks.
+
+    Full-duplex models keep streaming through user speech and decide for themselves whether to
+    yield, so their ``turn_detection`` speech-started event says nothing about the output. The
+    framework then leaves playback alone on that event, and only interrupts from its own VAD or
+    interruption detection.
+    """
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
