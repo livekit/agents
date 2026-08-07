@@ -38,7 +38,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 DEFAULT_BASE_URL = "https://api.bland.ai/v2"
-DEFAULT_VOICE_ID = "29158307-9893-4149-8a75-bc9ce313d64e"
+DEFAULT_VOICE_ID = "2f29fdbb-c55e-4add-9c7c-93437ebf379d"
 DEFAULT_SAMPLE_RATE = 48000
 NUM_CHANNELS = 1
 
