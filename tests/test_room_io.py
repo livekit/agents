@@ -62,20 +62,29 @@ class _MockAudioStream:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.ended = asyncio.Event()
+        self._events: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
         self.started.set()
-        await self.ended.wait()
-        raise StopAsyncIteration
+        frame = await self._events.get()
+        if frame is None:
+            raise StopAsyncIteration
+        return SimpleNamespace(frame=frame)
 
     async def aclose(self) -> None:
-        self.ended.set()
+        self.end()
 
     def end(self) -> None:
+        if self.ended.is_set():
+            return
         self.ended.set()
+        self._events.put_nowait(None)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self._events.put_nowait(frame)
 
 
 class _MockFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
@@ -281,6 +290,39 @@ async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscrib
     track, publication, participant = _make_track_available_args()
     first_stream = _MockAudioStream()
     replacement_stream = _MockAudioStream()
+    second_replacement_stream = _MockAudioStream()
+    frame = rtc.AudioFrame(bytes(480 * 2), 24000, 1, 480)
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[first_stream, replacement_stream, second_replacement_stream],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(first_stream.started.wait(), timeout=1)
+
+        first_stream.push_frame(frame)
+        first_stream.end()
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+        replacement_stream.push_frame(frame)
+        replacement_stream.end()
+        await asyncio.wait_for(second_replacement_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 3
+    assert audio_input._stream is second_replacement_stream
+    assert audio_input._publication is publication
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_stops_reattaching_when_replacement_closes_without_frames() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    first_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
 
     with patch(
         "livekit.rtc.AudioStream.from_track",
@@ -290,12 +332,16 @@ async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscrib
         await asyncio.wait_for(first_stream.started.wait(), timeout=1)
 
         first_stream.end()
-
         await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
 
+        replacement_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
     assert create_stream.call_count == 2
-    assert audio_input._stream is replacement_stream
-    assert audio_input._publication is publication
+    assert audio_input._data_ch.qsize() == 1
+    assert audio_input._stream is None
+    assert audio_input._publication is None
 
     await audio_input.aclose()
 
