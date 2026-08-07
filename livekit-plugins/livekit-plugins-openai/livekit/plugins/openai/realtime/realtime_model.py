@@ -1459,7 +1459,7 @@ class RealtimeSession(
             except asyncio.TimeoutError:
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
             finally:
-                # the waiters end with the update, so a late reply finds nothing to settle
+                self._chat_ctx_event_futures = {}
                 for ev in events:
                     if isinstance(ev, ConversationItemDeleteEvent):
                         self._item_delete_future.pop(ev.item_id, None)

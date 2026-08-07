@@ -7,7 +7,11 @@ from typing import cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
-from openai.types.realtime import ConversationItemDeletedEvent, RealtimeErrorEvent
+from openai.types.realtime import (
+    ConversationItemCreateEvent,
+    ConversationItemDeletedEvent,
+    RealtimeErrorEvent,
+)
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -317,6 +321,35 @@ async def test_a_rejected_waiter_is_not_settled_twice() -> None:
     )
 
     assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+async def test_an_error_outliving_its_update_is_still_reported() -> None:
+    # an error that lands on a waiter the update already retired settles nothing, so it has to
+    # go down the ordinary path rather than pass for a rejected item
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = SimpleNamespace(_provider_label="openai", _label="openai")  # type: ignore[assignment]
+    session._opts = SimpleNamespace(turn_detection=None)  # type: ignore[assignment]
+    session._update_chat_ctx_lock = asyncio.Lock()
+    session._remote_chat_ctx = RemoteChatContext()
+    session._item_delete_future = {}
+    session._item_create_future = {}
+    session._chat_ctx_event_futures = {}
+    sent: list[ConversationItemCreateEvent] = []
+    session.send_event = sent.append  # type: ignore[method-assign,assignment]
+    errors: list[llm.RealtimeModelError] = []
+    session.emit = lambda name, ev: errors.append(ev)  # type: ignore[method-assign,assignment]
+
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello", id="item_1")
+    update = asyncio.create_task(session.update_chat_ctx(chat_ctx))
+    await asyncio.sleep(0)  # let it send the create and start waiting on it
+    assert (waiter := session._item_create_future.get("item_1")) is not None
+    waiter.set_result(None)  # what conversation.item.added does
+    await update
+
+    session._handle_error(_rejection(sent[0].event_id))
+
+    assert [e.recoverable for e in errors] == [True], "swallowed by a retired waiter"
 
 
 async def test_a_rejection_leaves_its_sibling_event_alone() -> None:
