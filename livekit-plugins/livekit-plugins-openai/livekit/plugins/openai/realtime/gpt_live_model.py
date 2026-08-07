@@ -582,7 +582,7 @@ class GPTLiveSession(
             self._audio_ch.send_nowait(
                 llm.DuplexAudioFrame(
                     frame=frame,
-                    message_id=self._assistant_turn_id,
+                    turn_id=self._assistant_turn_id,
                     start_ms=_as_int(event.get("start_ms")),
                 )
             )
@@ -594,15 +594,15 @@ class GPTLiveSession(
             return
         # only the open turn may label a fragment: item.id is per fragment, and the framework reads
         # a change of id as a change of turn. before turn.created there is no id, and None says so
-        message_id = self._assistant_turn_id
-        if message_id is not None:
-            self._assistant_transcripts[message_id] = (
-                self._assistant_transcripts.get(message_id, "") + text
+        turn_id = self._assistant_turn_id
+        if turn_id is not None:
+            self._assistant_transcripts[turn_id] = (
+                self._assistant_transcripts.get(turn_id, "") + text
             )
         self.emit(
             "transcript_delta",
             llm.DuplexTranscriptDelta(
-                message_id=message_id,
+                turn_id=turn_id,
                 text=text,
                 start_ms=_as_int(event.get("start_ms")),
                 end_ms=_as_int(event.get("end_ms")),
@@ -617,7 +617,7 @@ class GPTLiveSession(
             self._remote_chat_ctx.items.append(
                 llm.ChatMessage(id=turn_id, role="assistant", content=[transcript])
             )
-        self.emit("turn_ended", llm.DuplexTurnEndedEvent(message_id=turn_id))
+        self.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id=turn_id))
 
     # -- user turns ------------------------------------------------------------------------------
 
@@ -648,7 +648,7 @@ class GPTLiveSession(
                 self._emit_user_transcript(turn_id, is_final=False)
         else:
             self._assistant_turn_id = turn_id
-            self.emit("turn_started", llm.DuplexTurnStartedEvent(message_id=turn_id))
+            self.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id=turn_id))
 
     def _handle_turn_delta(self, event: dict[str, Any]) -> None:
         # only user transcript here; assistant text comes from output_transcript.added
