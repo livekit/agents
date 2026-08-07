@@ -111,6 +111,14 @@ def test_custom_phrases() -> None:
     assert not is_backchannel_only("de acuerdo", DEFAULT_BACKCHANNEL_PHRASES)
 
 
+def test_blank_phrase_entries_are_ignored() -> None:
+    # a phrase that normalizes to nothing must not match-without-consuming
+    # (it would hang the matching loop on any non-backchannel utterance)
+    assert not is_backchannel_only("so my question is", ["", "...", "—", "okay"])
+    assert is_backchannel_only("okay", ["", "...", "okay"])
+    assert not is_backchannel_only("anything", ["", "..."])
+
+
 # endregion
 
 # region session behavior

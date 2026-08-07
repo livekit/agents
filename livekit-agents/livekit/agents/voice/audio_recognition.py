@@ -1249,6 +1249,12 @@ class AudioRecognition:
                     "dropping backchannel transcript overlapping agent speech",
                     extra={"user_transcript": transcript},
                 )
+                # also drop the utterance's partial text, mirroring the reset
+                # below — left in place it would keep feeding _current_transcript
+                # (suppressing a later real barge-in if no interim overwrites it)
+                # and would resurface in a manual commit_user_turn
+                self._audio_interim_transcript = ""
+                self._audio_preflight_transcript = ""
                 return
 
             self._hooks.on_final_transcript(

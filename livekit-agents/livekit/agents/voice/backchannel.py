@@ -57,8 +57,10 @@ def _normalize(text: str) -> list[str]:
 
 @lru_cache(maxsize=8)
 def _split_phrases(phrases: tuple[str, ...]) -> list[list[str]]:
-    # longest-first so "uh huh" wins over a lone filler "uh"
-    return sorted((_normalize(p) for p in phrases), key=len, reverse=True)
+    # longest-first so "uh huh" wins over a lone filler "uh". a phrase that
+    # normalizes to nothing ("", "...") would match without consuming a word
+    # and hang the matching loop — drop it
+    return sorted((w for p in phrases if (w := _normalize(p))), key=len, reverse=True)
 
 
 def is_backchannel_only(text: str, phrases: Sequence[str], *, partial: bool = False) -> bool:
