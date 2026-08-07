@@ -9,7 +9,11 @@ from typing import Any
 import pytest
 
 from livekit.agents import llm
-from livekit.plugins.openai.realtime.gpt_live_model import GPTLiveModel, GPTLiveSession
+from livekit.plugins.openai.realtime.gpt_live_model import (
+    GPTLiveDelegation,
+    GPTLiveModel,
+    GPTLiveSession,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -112,6 +116,83 @@ async def test_closing_releases_a_session_still_waiting_for_its_config(
     elapsed = time.perf_counter() - started
     assert elapsed < 0.5, f"aclose blocked {elapsed:.2f}s on a configuration that never came"
     await model.aclose()
+
+
+async def test_client_delegation_reaches_the_application_and_is_answered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", delegation="client")
+    session = model.session(wait_for_config=True)
+    delegations: list[GPTLiveDelegation] = []
+    session.on("delegation_created", delegations.append)
+    try:
+        await session._update_session(instructions="Be concise.", tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
+
+        # a responses-targeted delegation is the backend's, so it must not reach the app
+        session._handle_event(
+            {
+                "type": "delegation.created",
+                "item": {"id": "item_1", "type": "delegation", "target": "responses"},
+            }
+        )
+        assert not delegations
+
+        session._handle_event(
+            {
+                "type": "delegation.created",
+                "offset_ms": 1000,
+                "item": {
+                    "id": "item_delegation_123",
+                    "type": "delegation",
+                    "target": "client",
+                    "content": [{"type": "input_text", "text": "What is the weather?"}],
+                },
+            }
+        )
+        # a plugin type, not the wire event: the alpha's shape must not reach the application
+        assert delegations == [
+            GPTLiveDelegation(id="item_delegation_123", text="What is the weather?")
+        ]
+
+        session.send_delegation_context(delegation_id=delegations[0].id, text="62 and raining.")
+        await asyncio.sleep(0.05)
+        answer = ws.sent[-1]
+        assert answer["type"] == "delegation.context.append"
+        assert answer["delegation_item_id"] == "item_delegation_123"
+        assert answer["channel"] == "speakable"
+        assert answer["content"] == [{"type": "input_text", "text": "62 and raining."}]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_delegation_target_switches_in_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A later session.update is sparse, so the switch carries delegation and nothing else."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", backend_model="gpt-5.6-sol")
+    session = model.session(wait_for_config=True)
+    try:
+        await session._update_session(instructions="Be concise.", tools=[])
+        await asyncio.sleep(0.05)
+        assert ws.sent[0]["session"]["delegation"]["type"] == "responses"
+
+        session.update_delegation("client")
+        await asyncio.sleep(0.05)
+        assert ws.sent[-1]["session"] == {"delegation": {"type": "client"}}
+
+        # switching back to responses has to carry the backend model again
+        session.update_delegation("responses")
+        await asyncio.sleep(0.05)
+        assert ws.sent[-1]["session"]["delegation"]["responses"]["model"] == "gpt-5.6-sol"
+        assert "instructions" not in ws.sent[-1]["session"]
+    finally:
+        await session.aclose()
+        await model.aclose()
 
 
 async def test_first_event_is_a_session_update_carrying_the_whole_configuration(

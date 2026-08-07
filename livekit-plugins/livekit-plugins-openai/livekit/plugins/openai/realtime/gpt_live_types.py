@@ -12,6 +12,8 @@ from typing import Any, Literal
 from openai import BaseModel
 
 TurnRole = Literal["user", "assistant"]
+DelegationTarget = Literal["responses", "client"]
+"""``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
 InitialItemRole = Literal["system", "developer", "user", "assistant"]
 Channel = Literal["speakable", "commentary"]
 """``speakable`` context prompts the model to act on the text now; ``commentary`` is silent."""
@@ -76,7 +78,7 @@ class ResponsesConfig(BaseModel):
 
 
 class Delegation(BaseModel):
-    type: Literal["responses", "client"] = "responses"
+    type: DelegationTarget = "responses"
     responses: ResponsesConfig | None = None
 
 
@@ -293,7 +295,7 @@ class TurnDoneEvent(BaseModel):
 class DelegationItem(BaseModel):
     id: str | None = None
     type: Literal["delegation"] = "delegation"
-    target: Literal["client", "responses"] | None = None
+    target: DelegationTarget | None = None
     response_id: str | None = None
     content: list[InputTextPart] = []
 

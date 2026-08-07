@@ -1,4 +1,4 @@
-from .gpt_live_model import GPTLiveModel, GPTLiveSession
+from .gpt_live_model import GPTLiveDelegation, GPTLiveModel, GPTLiveSession
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
@@ -6,6 +6,7 @@ __all__ = [
     "RealtimeModel",
     "GPTLiveModel",
     "GPTLiveSession",
+    "GPTLiveDelegation",
 ]
 
 # Cleanup docs of unexported modules

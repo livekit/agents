@@ -88,14 +88,12 @@ second lifecycle for the whole voice pipeline, in exchange for content that is s
 **No shared base class for `RealtimeModel` and `DuplexModel`.** Considered and rejected — see
 Alternatives.
 
-**Client delegation is parked.** In Responses mode the backend's tool calls arrive as
-`response.function_call_arguments.done` and flow through the generation's existing `function_stream`;
-the framework's tool executor runs them, `_update_chat_ctx` returns the results as
-`delegation.function_call_output.create`, and `auto_tool_reply_generation=True` covers the
-continuation. That is entirely existing machinery. `DelegationCreatedEvent`,
-`push_delegation_result`, `client_delegation`, `AgentSession(delegation_llm=)`,
-`Agent.delegation_node` and `_execute_delegation_tools` — all present on
-`longc/agent-delegation` and `longc/openai-live-realtime` — stay parked.
+**Delegation stays out of the framework.** In Responses mode the backend's tool calls flow through
+the generation's existing `function_stream`, the framework's tool executor runs them, and
+`auto_tool_reply_generation=True` covers the continuation — entirely existing machinery. Client
+delegation ships in the plugin only (see below). `DelegationCreatedEvent`, `push_delegation_result`,
+`client_delegation`, `AgentSession(delegation_llm=)`, `Agent.delegation_node` and
+`_execute_delegation_tools` — all present on `longc/agent-delegation` — stay parked.
 
 **Video, WebRTC and SIP transports** are out of scope. WebSocket only; `push_video` is a no-op.
 
@@ -521,6 +519,25 @@ dependency on framework scheduling), and opening the connection lazily on the fi
 The flag lives on `session()` rather than a post-construction hook so it is part of the signature a
 plugin author reads, and it generalises: any duplex model needing its context at connection time
 rather than after wants exactly this.
+
+### Client delegation
+
+`GPTLiveModel(delegation="client")` sends work to the application instead of a backend model. The
+service asks in plain text, so there is no tool channel at all: `@function_tool` cannot be reached
+in this mode, and registering tools logs one warning naming them. `update_delegation` moves between
+the two mid-session, sending `{"type": "client"}` rather than the documented `null`, which
+`exclude_none=True` would drop.
+
+The app answers, and nothing in the framework mediates:
+
+```python
+live.on("delegation_created", lambda d: ...)          # GPTLiveDelegation(id, text)
+live.send_delegation_context(delegation_id=d.id, text="62 and raining.")
+```
+
+`GPTLiveDelegation` is a plugin type, not the wire event: `delegation.created` nests its request in
+`item.content[]`, and an SDK that ships these types later would reshape it. The conversion flattens
+that to the two fields an app needs, so the alpha's shape stops at the plugin boundary.
 
 ### Typed wire events
 

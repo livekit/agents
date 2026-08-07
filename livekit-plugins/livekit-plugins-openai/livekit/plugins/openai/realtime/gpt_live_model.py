@@ -31,8 +31,8 @@ from . import gpt_live_types as types
 
 # GPT-Live is a full-duplex voice model. Unlike the Realtime API it is server-driven: the model
 # decides when to speak and self-manages barge-in, so there is no client response.create / cancel /
-# truncate / commit. Reasoning and tools are delegated to a backend Responses model; this
-# implementation covers the "responses" delegation mode over WebSocket.
+# truncate / commit. Reasoning and tools are delegated, over WebSocket, either to a backend
+# Responses model or to the application.
 #
 # output audio streams continuously, inter-turn filler and silence included. every frame reaches
 # the DuplexSession audio stream tagged with the assistant turn it belongs to, and the framework's
@@ -144,10 +144,21 @@ def _render_item(item: llm.ChatItem) -> tuple[llm.ChatRole, str] | None:
 
 
 @dataclass
+class GPTLiveDelegation:
+    """Work the model handed to the application, under client delegation."""
+
+    id: str
+    """Answer it with :meth:`GPTLiveSession.send_delegation_context`."""
+    text: str
+    """What the model is asking for, in its own words."""
+
+
+@dataclass
 class _LiveOptions:
     model: str
     voice: str
     instructions: str | None
+    delegation: types.DelegationTarget
     backend_model: str
     backend_instructions: str | None
     tool_choice: llm.ToolChoice | None
@@ -170,6 +181,7 @@ class GPTLiveModel(llm.DuplexModel):
         model: str = DEFAULT_MODEL,
         voice: str = DEFAULT_VOICE,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegation: types.DelegationTarget = "responses",
         backend_model: str = DEFAULT_BACKEND_MODEL,
         backend_instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -188,6 +200,9 @@ class GPTLiveModel(llm.DuplexModel):
             model: GPT-Live voice model slug.
             voice: Output voice. Immutable after the session starts.
             instructions: Voice-model system instructions. Immutable after the session starts.
+            delegation: Where delegated work goes. ``responses`` runs it on a backend model, so
+                ``@function_tool`` works as usual; ``client`` hands it to the application as a
+                ``delegation_created`` event, which no framework tool can answer.
             backend_model: Responses model the voice model delegates reasoning and tools to.
             backend_instructions: Instructions for the backend Responses model.
             tool_choice: Tool selection policy for the backend Responses model.
@@ -224,6 +239,7 @@ class GPTLiveModel(llm.DuplexModel):
             model=model,
             voice=voice,
             instructions=instructions if is_given(instructions) else None,
+            delegation=delegation,
             backend_model=backend_model,
             backend_instructions=backend_instructions if is_given(backend_instructions) else None,
             tool_choice=tool_choice if is_given(tool_choice) else None,
@@ -268,13 +284,16 @@ class GPTLiveModel(llm.DuplexModel):
 
 
 class GPTLiveSession(
-    llm.DuplexSession[Literal["openai_server_event_received", "openai_client_event_queued"]]
+    llm.DuplexSession[
+        Literal["openai_server_event_received", "openai_client_event_queued", "delegation_created"]
+    ]
 ):
     """A session for the OpenAI GPT-Live API (WebSocket), reached with ``Agent.duplex_session``.
 
-    Exposes two extra events mirroring the Realtime session:
+    Exposes three extra events:
     - openai_server_event_received: raw server events
     - openai_client_event_queued: raw client events sent to the server
+    - delegation_created: a :class:`GPTLiveDelegation`, under client delegation
     """
 
     def __init__(self, duplex_model: GPTLiveModel, *, wait_for_config: bool = False) -> None:
@@ -305,6 +324,7 @@ class GPTLiveSession(
         self._assistant_turn_id: str | None = None
         # calls this connection delegated; only their results mean anything to the backend
         self._delegated_calls: set[str] = set()
+        self._tools_ignored = False
         # everything the model has been told, and the baseline a context sync diffs against
         self._remote_chat_ctx = llm.ChatContext.empty()
 
@@ -321,6 +341,17 @@ class GPTLiveSession(
             self._msg_ch.send_nowait(event)
 
     def _build_delegation(self) -> types.Delegation:
+        if self._opts.delegation == "client":
+            # there is no backend model to give tools to; the model asks the app in plain text
+            if self._tools.function_tools and not self._tools_ignored:
+                self._tools_ignored = True
+                logger.warning(
+                    "gpt-live client delegation has no tool channel; answer delegation_created "
+                    "with send_delegation_context instead",
+                    extra={"tools": list(self._tools.function_tools)},
+                )
+            return types.Delegation(type="client")
+
         tools = _build_delegation_tools(self._tools.flatten())
         if self._opts.web_search:
             tools.insert(0, {"type": "web_search"})
@@ -586,6 +617,8 @@ class GPTLiveSession(
             self._handle_turn_delta(types.TurnDeltaEvent.construct(**event))
         elif etype == "turn.done":
             self._handle_turn_done(types.TurnDoneEvent.construct(**event))
+        elif etype == "delegation.created":
+            self._handle_delegation_created(types.DelegationCreatedEvent.construct(**event))
         elif etype == "response.output_item.done":
             self._handle_response_output_item_done(
                 types.ResponseOutputItemDoneEvent.construct(**event)
@@ -736,7 +769,17 @@ class GPTLiveSession(
         elif role == "assistant":
             self._end_assistant_turn(turn_id)
 
-    # -- function calls --------------------------------------------------------------------------
+    # -- delegated work --------------------------------------------------------------------------
+
+    def _handle_delegation_created(self, event: types.DelegationCreatedEvent) -> None:
+        # a responses delegation is the backend's; only client-targeted work needs the app
+        if event.item.target != "client":
+            return
+        if not event.item.id:
+            logger.warning("gpt-live client delegation has no item id; nothing can answer it")
+            return
+        text = "\n".join(part.text for part in event.item.content if part.text)
+        self.emit("delegation_created", GPTLiveDelegation(id=event.item.id, text=text))
 
     def _handle_response_output_item_done(self, event: types.ResponseOutputItemDoneEvent) -> None:
         # only the completed item carries all three; the arguments event has no name or call id
@@ -899,6 +942,35 @@ class GPTLiveSession(
                 content=[types.InputTextPart(text=text)],
             )
         )
+
+    def send_delegation_context(
+        self, *, delegation_id: str, text: str, channel: types.Channel = "speakable"
+    ) -> None:
+        """Answer a :class:`GPTLiveDelegation`, capped at 500 tokens.
+
+        Repeated calls continue the same delegation rather than starting a new one;
+        ``commentary`` reports progress silently.
+        """
+        if len(text) > _MAX_CONTEXT_CHARS:
+            logger.warning(
+                "gpt-live delegation context exceeds the 500 token limit; truncating",
+                extra={"delegation_id": delegation_id, "chars": len(text)},
+            )
+            text = text[:_MAX_CONTEXT_CHARS]
+        self.send_event(
+            types.DelegationContextAppendEvent(
+                event_id=utils.shortuuid("delegation_context_"),
+                delegation_item_id=delegation_id,
+                channel=channel,
+                content=[types.InputTextPart(text=text)],
+            )
+        )
+
+    def update_delegation(self, target: types.DelegationTarget) -> None:
+        """Move delegated work between the backend model and the application, mid-session."""
+        self._opts.delegation = target
+        if self._initial_config_sent:
+            self.send_event(self._create_delegation_update_event())
 
     def send_delegation_output(self, *, call_id: str, output: str) -> None:
         """Return the result of a tool call the backend model delegated to the client."""
