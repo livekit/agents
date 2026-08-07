@@ -10,11 +10,14 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, function_tool
+from livekit import rtc
+from livekit.agents import Agent, AgentSession, function_tool, llm, utils
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.speech_handle import SpeechHandle
 
+from .fake_io import FakeAudioOutput
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -180,3 +183,162 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
 
     for items in (agent.chat_ctx.items, session.history.items):
         assert not any(i.type in ("function_call", "function_call_output") for i in items)
+
+
+# --- realtime models -------------------------------------------------------------------
+# A realtime model also holds the tool call open server-side. Gemini blocks the session until
+# it is answered and offers no way to cancel, so the preserved result is synced to the session
+# as well as to the local context (issue #6569).
+
+_SAMPLE_RATE = 24000
+
+
+def _audio_frame(duration: float) -> rtc.AudioFrame:
+    samples = int(_SAMPLE_RATE * duration)
+    return rtc.AudioFrame(
+        data=b"\x00\x01" * samples,
+        sample_rate=_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _realtime_turn_interrupted_after_tool(agent: Agent) -> FakeRealtimeModel:
+    """Run a realtime turn whose tool finishes during playout, then barge in."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(agent)
+
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("let me check")
+        text_ch.close()
+        # a full second of audio, so the turn is still playing when the tool returns
+        audio_ch.send_nowait(_audio_frame(1.0))
+        audio_ch.close()
+        function_ch.send_nowait(
+            llm.FunctionCall(call_id="1", name=agent.tools[0].info.name, arguments="{}")
+        )
+        function_ch.close()
+
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+
+        await asyncio.wait_for(agent.tool_executed.wait(), timeout=5)  # type: ignore[attr-defined]
+        session.interrupt()
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+
+        _assert_weather_tool_preserved(agent, session)
+
+    return model
+
+
+async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> None:
+    """The result reaches both the local context and the realtime session."""
+
+    class RealtimeWeatherAgent(WeatherAgent):
+        @function_tool
+        async def get_weather(self) -> str:
+            """Called when the user asks about the weather."""
+            self.tool_executed.set()
+            return "The weather in Tokyo is sunny today."
+
+    model = await _realtime_turn_interrupted_after_tool(RealtimeWeatherAgent())
+
+    synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
+    assert len(synced) == 1, "the tool output was never synced to the realtime session"
+    assert synced[0].call_id == "1"
+
+
+async def test_realtime_handoff_tool_not_recorded_when_interrupted() -> None:
+    """Handoffs stay retryable on a realtime model too, so nothing is recorded or synced."""
+
+    class RealtimeTransferAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def transfer_to_billing(self) -> Agent:
+            """Transfer the user to the billing department."""
+            self.tool_executed.set()
+            return Agent(instructions="You are the billing agent.")
+
+    agent = RealtimeTransferAgent()
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(agent)
+
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("transferring you now")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(1.0))
+        audio_ch.close()
+        function_ch.send_nowait(
+            llm.FunctionCall(call_id="1", name="transfer_to_billing", arguments="{}")
+        )
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+
+        await asyncio.wait_for(agent.tool_executed.wait(), timeout=5)
+        session.interrupt()
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+
+        for items in (agent.chat_ctx.items, session.history.items):
+            assert not any(i.type == "function_call_output" for i in items)
+        assert not any(
+            i.type == "function_call_output" for i in model.active_session.chat_ctx.items
+        )

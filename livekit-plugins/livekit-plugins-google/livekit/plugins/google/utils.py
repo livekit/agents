@@ -69,13 +69,12 @@ def create_function_response(
         name=output.name,
         response={"error": output.output} if output.is_error else {"output": output.output},
     )
-    if is_given(tool_response_scheduling):
-        # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
-        # it's the user's responsibility to avoid this parameter when using vertexai
-        res.scheduling = tool_response_scheduling
     if not vertexai:
-        # vertexai does not support id in FunctionResponse
+        # vertexai supports neither scheduling nor id in FunctionResponse; the gemini api
+        # defaults scheduling to WHEN_IDLE
         # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
+        if is_given(tool_response_scheduling):
+            res.scheduling = tool_response_scheduling
         res.id = output.call_id
     return res
 

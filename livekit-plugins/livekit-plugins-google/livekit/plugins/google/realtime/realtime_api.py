@@ -90,6 +90,13 @@ def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
         )
 
 
+def _warn_vertex_scheduling_unsupported() -> None:
+    logger.warning(
+        "tool_response_scheduling is not supported by Vertex AI and will be ignored; "
+        "tool responses use the default scheduling there."
+    )
+
+
 def _get_1008_error_hint(error_message: str) -> str | None:
     """
     Generate a hint for WebSocket 1008 policy violation errors.
@@ -296,6 +303,8 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
+        if use_vertexai and is_given(tool_response_scheduling):
+            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
@@ -508,6 +517,8 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
+        # whether playout of the current turn was cut short
+        self._playout_interrupted = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -574,6 +585,8 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
+            if self._opts.vertexai:
+                _warn_vertex_scheduling_unsupported()
             # no need to restart
 
         if is_given(tool_choice):
@@ -659,10 +672,19 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
+            scheduling = self._opts.tool_response_scheduling
+            if (
+                self._playout_interrupted
+                # only honoured on NON_BLOCKING declarations
+                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+            ):
+                # the turn is over, so record the result without prompting more speech
+                scheduling = types.FunctionResponseScheduling.SILENT
+
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
-                tool_response_scheduling=self._opts.tool_response_scheduling,
+                tool_response_scheduling=scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
@@ -819,6 +841,9 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def interrupt(self) -> None:
+        # recorded locally since this cannot reach Gemini under automatic activity detection
+        self._playout_interrupted = True
+
         # Gemini Live treats activity start as interruption, so we rely on start_user_activity
         # notifications to handle it
         if (
@@ -1212,6 +1237,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
+        self._playout_interrupted = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()

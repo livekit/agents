@@ -4105,6 +4105,27 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # commit results of tools that finished despite the interruption, similar to the pipeline task
+            interrupted_fnc_outputs = [
+                sanitized_out.fnc_call_out
+                for sanitized_out in tool_output.output
+                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None
+            ]
+            if interrupted_fnc_outputs:
+                self._agent._chat_ctx.insert(interrupted_fnc_outputs)
+                self._session._tool_items_added(interrupted_fnc_outputs)
+
+                # unlike the pipeline, a realtime model holds the call open server-side
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.items.extend(interrupted_fnc_outputs)
+                try:
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync the tool results of an interrupted generation",
+                        extra={"error": str(e)},
+                    )
             return
 
         # wait for the tool execution to complete
