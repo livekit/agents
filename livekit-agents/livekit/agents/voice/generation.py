@@ -243,6 +243,7 @@ async def _llm_inference_task(
 
             # extract text content from either str or ChatChunk
             content: str | None = None
+            flush_after_content = False
 
             if isinstance(chunk, str):
                 content = chunk
@@ -252,6 +253,12 @@ async def _llm_inference_task(
                     usage = chunk.usage
                 if not chunk.delta:
                     continue
+
+                # A tool call is starting: flush any buffered text preamble to TTS now,
+                # so it plays while the tool arguments are still streaming in. The flush
+                # is sent after this chunk's content, which may carry the last preamble
+                # token in the same delta as the tool call.
+                flush_after_content = chunk.delta.tool_call_started
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
@@ -297,6 +304,9 @@ async def _llm_inference_task(
                 last_content_at = now
                 data.generated_text += content
                 text_ch.send_nowait(content)
+
+            if flush_after_content:
+                text_ch.send_nowait(FlushSentinel())
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
