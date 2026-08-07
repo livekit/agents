@@ -17,7 +17,11 @@ _PCM_FRAME = b"\x00\x01" * 240
 
 
 @asynccontextmanager
-async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[RealtimeSession]:
+async def _make_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    tool_behavior: types.Behavior | None = None,
+) -> AsyncIterator[RealtimeSession]:
     """A session whose background connect loop is stopped before it hits the network.
 
     Closed on exit so the genai http clients are released here instead of by
@@ -25,7 +29,10 @@ async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Realti
     is running when the collector happens to reach them.
     """
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-    session = RealtimeModel().session()
+    model = (
+        RealtimeModel(tool_behavior=tool_behavior) if tool_behavior is not None else RealtimeModel()
+    )
+    session = model.session()
     # cancel the connect loop before the event loop ever schedules it, so no
     # websocket connection is attempted
     session._msg_ch.close()
@@ -130,3 +137,70 @@ async def test_session_close_releases_the_genai_client(
         monkeypatch.setattr(session._client.aio, "aclose", _spy)
 
     assert closed
+
+
+async def test_blocking_tool_call_finalizes_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="get_weather", args={})]
+            )
+        )
+
+        function_call = gen.function_ch.recv_nowait()
+        assert function_call.call_id == "call-1"
+        assert function_call.name == "get_weather"
+        assert gen._done
+        assert gen.message_ch.closed
+        assert gen.audio_ch.closed
+        assert gen.text_ch.closed
+
+
+async def test_non_blocking_tool_call_keeps_generation_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        tool_behavior=types.Behavior.NON_BLOCKING,
+    ) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="get_weather", args={})]
+            )
+        )
+
+        function_call = gen.function_ch.recv_nowait()
+        assert function_call.call_id == "call-1"
+        assert function_call.name == "get_weather"
+        assert not gen._done
+        assert not gen.message_ch.closed
+        assert not gen.audio_ch.closed
+        assert not gen.text_ch.closed
+
+        session._handle_server_content(
+            _audio_content(
+                output_transcription=types.Transcription(text="still speaking"),
+                generation_complete=True,
+            )
+        )
+
+        assert gen.output_text == "still speaking"
+        assert gen.audio_ch.qsize() == 1
+        assert gen.audio_ch.closed
+        assert gen.text_ch.closed
+        assert not gen._done
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert gen._done
+        assert gen.message_ch.closed
