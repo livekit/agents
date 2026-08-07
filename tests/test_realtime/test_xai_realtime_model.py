@@ -29,8 +29,8 @@ from livekit.plugins.openai.realtime.realtime_model import (
 from livekit.plugins.xai.realtime.realtime_model import (
     XAI_DEFAULT_MODEL,
     RealtimeModel,
+    RealtimeSession,
 )
-from livekit.plugins.xai.realtime.realtime_session import RealtimeSession
 
 pytestmark = pytest.mark.unit
 

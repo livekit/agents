@@ -2,8 +2,7 @@ from openai.types.beta.realtime.session import TurnDetection
 
 from ..tools import FileSearch, WebSearch, XSearch
 from ..types import GrokVoices
-from .realtime_model import RealtimeModel
-from .realtime_session import RealtimeSession
+from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
     "GrokVoices",
