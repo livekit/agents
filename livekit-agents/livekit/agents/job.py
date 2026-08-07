@@ -392,12 +392,8 @@ class JobContext:
             model_usage=session.usage.model_usage,
         )
 
-        if recorder_io:
-            if recorder_io.output_path:
-                sr.audio_recording_path = recorder_io.output_path
-            if recorder_io.recording_started_at:
-                sr.audio_recording_started_at = recorder_io.recording_started_at
-                sr.duration = sr.timestamp - sr.audio_recording_started_at
+        if sr.audio_recording_started_at:
+            sr.duration = sr.timestamp - sr.audio_recording_started_at
 
         return sr
 
