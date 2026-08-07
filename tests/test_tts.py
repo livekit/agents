@@ -492,6 +492,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": bland.TTS(),
+            "proxy-upstream": "api.bland.ai:443",
+        },
+        id="bland",
+    ),
+    pytest.param(
+        lambda: {
             "tts": elevenlabs.TTS(),
             "proxy-upstream": "api.elevenlabs.io:443",
         },
