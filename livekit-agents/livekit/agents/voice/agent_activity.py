@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -106,6 +106,29 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+
+
+async def _aligned_transcript_or_text(
+    timed_texts: AsyncIterable[str], text: AsyncIterable[str]
+) -> AsyncGenerator[str, None]:
+    """Forward the TTS-aligned transcript, falling back to the spoken text.
+
+    ``aligned_transcript`` says the TTS was asked for word timings, not that this
+    model/language pair returns any. When none arrive the aligned stream is simply
+    empty, and forwarding it alone would leave the turn with no transcript.
+    """
+    aligned = False
+    async for timed_text in timed_texts:
+        aligned = True
+        yield timed_text
+
+    if not aligned:
+        logger.warning(
+            "no aligned transcript was returned from tts, "
+            "forwarding the generated text without word timings"
+        )
+        async for chunk in text:
+            yield chunk
 
 
 def _transcripts_equivalent(first: str, second: str | None) -> bool:
@@ -2853,7 +2876,7 @@ class AgentActivity(RecognitionHooks):
                     and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)
                 ):
-                    text_source = timed_texts
+                    text_source = _aligned_transcript_or_text(timed_texts, text_source)
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output, tts_output=tts_gen_data.audio_ch
@@ -3355,7 +3378,10 @@ class AgentActivity(RecognitionHooks):
                 and use_aligned_transcript
                 and (timed_texts := await segment.tts.timed_texts_fut)
             ):
-                transcript = timed_texts
+                # the channel exists as soon as the node streams, before any timed
+                # word has arrived, so a TTS that advertises alignment it doesn't
+                # deliver would leave the segment with no transcript at all
+                transcript = _aligned_transcript_or_text(timed_texts, segment.text)
                 read_transcript_from_tts = True
 
             tr_node = self._agent.transcription_node(transcript, model_settings)
@@ -3886,7 +3912,7 @@ class AgentActivity(RecognitionHooks):
                         and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                         and (timed_texts := await tts_gen_data.timed_texts_fut)
                     ):
-                        tr_text_input = timed_texts
+                        tr_text_input = _aligned_transcript_or_text(timed_texts, tr_text_input)
                         read_transcript_from_tts = True
 
                     tasks.append(tts_task)
