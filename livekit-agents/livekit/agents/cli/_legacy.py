@@ -75,7 +75,9 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(BaseException):
+class _ExitCli(SystemExit):
+    # SystemExit so asyncio's Handle._run re-raises it instead of swallowing it
+    # when the signal-handler raise lands inside a loop callback (#5856).
     pass
 
 
