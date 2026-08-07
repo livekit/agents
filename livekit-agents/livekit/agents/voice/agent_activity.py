@@ -3449,6 +3449,12 @@ class AgentActivity(RecognitionHooks):
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
+            if self._audio_recognition:
+                self._audio_recognition._on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time(), paused=True
+                )
+            if self.interruption_enabled:
+                self._restore_interruption_by_audio_activity()
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self._audio_recognition:

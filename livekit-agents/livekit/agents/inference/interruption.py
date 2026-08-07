@@ -667,7 +667,7 @@ class InterruptionStreamBase(ABC):
                 prediction_duration=ev.prediction_duration,
                 detection_delay=ev.detection_delay,
                 num_interruptions=1 if ev.is_interruption else 0,
-                num_backchannels=1 if not ev.is_interruption else 0,
+                num_backchannels=1 if not ev.is_interruption and not ev.agent_ended else 0,
                 num_requests=ev.num_requests,
                 metadata=Metadata(
                     model_name=self._model.model, model_provider=self._model.provider
