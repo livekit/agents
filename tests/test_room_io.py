@@ -59,14 +59,23 @@ class _FakeRoom:
 
 
 class _MockAudioStream:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.ended = asyncio.Event()
+
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        self.started.set()
+        await self.ended.wait()
         raise StopAsyncIteration
 
     async def aclose(self) -> None:
-        pass
+        self.ended.set()
+
+    def end(self) -> None:
+        self.ended.set()
 
 
 class _MockFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
@@ -134,8 +143,12 @@ def _make_track_available_args(
     publication = MagicMock()
     publication.source = rtc.TrackSource.SOURCE_MICROPHONE
     publication.sid = sid
+    publication.track = track
+    publication.subscribed = True
+    publication.audio_features = []
     participant = MagicMock()
     participant.identity = identity
+    participant.track_publications = {sid: publication}
     return track, publication, participant
 
 
@@ -261,6 +274,77 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
 
 
 @pytest.mark.asyncio
+async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscribed() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    first_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[first_stream, replacement_stream],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(first_stream.started.wait(), timeout=1)
+
+        first_stream.end()
+
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 2
+    assert audio_input._stream is replacement_stream
+    assert audio_input._publication is publication
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_does_not_reattach_after_unsubscribe() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+
+        publication.track = None
+        publication.subscribed = False
+        rtc_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
+    create_stream.assert_called_once()
+    assert audio_input._stream is None
+    assert audio_input._publication is None
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_does_not_reattach_during_close() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+
+        await audio_input.aclose()
+
+    create_stream.assert_called_once()
+    assert audio_input._stream is None
+    assert audio_input._publication is None
+
+
+@pytest.mark.asyncio
 async def test_direct_processor_lifecycle() -> None:
     """Direct FrameProcessor survives track transitions and is only closed on aclose()."""
     room = _FakeRoom()
@@ -343,6 +427,7 @@ async def test_selector_processor_track_disappears() -> None:
     assert stream._processor is processor
 
     # track unpublished with no replacement
+    participant.track_publications.clear()
     stream._on_track_unavailable(publication, participant)
 
     assert processor.close_calls == 1
