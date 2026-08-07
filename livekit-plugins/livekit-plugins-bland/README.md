@@ -2,7 +2,7 @@
 
 Support for voice synthesis with the [Bland](https://bland.ai/) API.
 
-See [https://docs.bland.ai/api-v2/post/tts](https://docs.bland.ai/api-v2/post/tts) for more information.
+Voice agents stream text into a single realtime session; `synthesize()` also works over HTTP for complete strings. See [https://docs.bland.ai/api-v2/post/tts-ws](https://docs.bland.ai/api-v2/post/tts-ws) for more information.
 
 ## Installation
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 from collections.abc import Callable
 from typing import Any
@@ -9,7 +10,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError
 from livekit.agents.types import NOT_GIVEN
 
 pytestmark = pytest.mark.plugin("bland")
@@ -91,10 +92,10 @@ def test_provider_property():
     assert TTS(api_key="test-key").provider == "Bland"
 
 
-def test_not_streaming():
+def test_streaming():
     from livekit.plugins.bland import TTS
 
-    assert TTS(api_key="test-key").capabilities.streaming is False
+    assert TTS(api_key="test-key").capabilities.streaming is True
 
 
 def test_default_voice_id():
@@ -351,3 +352,349 @@ async def test_non_json_error_body_still_raises():
             await _collect(tts)
 
     assert excinfo.value.status_code == 502
+
+
+# --- /v2/tts/ws ----------------------------------------------------------------------
+
+
+class _WSServer:
+    """Local ``/v2/tts/ws`` stand-in speaking the real turn protocol."""
+
+    def __init__(
+        self,
+        *,
+        frames: list[bytes] | None = None,
+        init_error: dict[str, Any] | None = None,
+        turn_error: dict[str, Any] | None = None,
+        end_reason: str = "complete",
+        stale_terminator: bool = False,
+    ) -> None:
+        self._frames = frames if frames is not None else [_pcm(480)]
+        self._init_error = init_error
+        self._turn_error = turn_error
+        self._end_reason = end_reason
+        self._stale_terminator = stale_terminator
+        self.received: list[dict[str, Any]] = []
+        self.headers: dict[str, str] = {}
+        self.sessions = 0
+
+    async def _handle(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self.headers = dict(request.headers)
+        self.sessions += 1
+
+        async for msg in ws:
+            if msg.type is not aiohttp.WSMsgType.TEXT:
+                continue
+            message = json.loads(msg.data)
+            self.received.append(message)
+
+            if message["type"] == "init":
+                if self._init_error is not None:
+                    await ws.send_json({"type": "error", **self._init_error})
+                    await ws.close()
+                    return ws
+                await ws.send_json(
+                    {
+                        "type": "ready",
+                        "session_id": "test-session",
+                        "encoding": message.get("audio", {}).get("encoding", "pcm_s16le"),
+                        "sample_rate": message.get("audio", {}).get("sample_rate", 48000),
+                    }
+                )
+            elif message["type"] == "end_of_turn":
+                context_id = message["context_id"]
+                if self._turn_error is not None:
+                    await ws.send_json(
+                        {"type": "error", "context_id": context_id, **self._turn_error}
+                    )
+                    continue
+                await ws.send_json({"type": "utterance_start", "context_id": context_id})
+                for frame in self._frames:
+                    await ws.send_bytes(frame)
+                if self._stale_terminator:
+                    await ws.send_json(
+                        {
+                            "type": "utterance_end",
+                            "context_id": "someone-else",
+                            "reason": "cancelled",
+                        }
+                    )
+                await ws.send_json(
+                    {
+                        "type": "utterance_end",
+                        "context_id": context_id,
+                        "reason": self._end_reason,
+                        "frames": len(self._frames),
+                        "duration_ms": 40 * len(self._frames),
+                    }
+                )
+            elif message["type"] == "close":
+                await ws.send_json({"type": "done", "session_id": "test-session"})
+                await ws.close()
+
+        return ws
+
+    async def __aenter__(self) -> _WSServer:
+        app = web.Application()
+        app.router.add_get("/v2/tts/ws", self._handle)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await self._site.start()
+        port = self._runner.addresses[0][1]
+        self.base_url = f"http://127.0.0.1:{port}/v2"
+        self.session = aiohttp.ClientSession()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.session.close()
+        await self._runner.cleanup()
+
+    def of_type(self, type: str) -> list[dict[str, Any]]:
+        return [m for m in self.received if m["type"] == type]
+
+
+async def _stream_turn(tts, tokens: list[str], **conn: Any) -> bytes:
+    """Push one turn's text deltas through a stream and drain the resulting audio.
+
+    One stream is one segment is one turn, so several turns means several streams.
+    """
+    options = APIConnectOptions(max_retry=0, timeout=5, **conn)
+    stream = tts.stream(conn_options=options)
+    for text in tokens:
+        stream.push_text(text)
+    stream.end_input()
+
+    audio = bytearray()
+    try:
+        async for ev in stream:
+            audio.extend(ev.frame.data.tobytes())
+    finally:
+        await stream.aclose()
+    return bytes(audio)
+
+
+def test_ws_url_derives_from_base_url():
+    from livekit.plugins.bland.tts import DEFAULT_BASE_URL, _ws_url
+
+    assert _ws_url(DEFAULT_BASE_URL) == "wss://api.bland.ai/v2/tts/ws"
+    assert _ws_url("http://127.0.0.1:8080/v2") == "ws://127.0.0.1:8080/v2/tts/ws"
+
+
+def test_stream_returns_synthesize_stream():
+    from livekit.plugins.bland import TTS
+    from livekit.plugins.bland.tts import SynthesizeStream
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    tts = TTS(api_key="test-key")
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        stream = tts.stream()
+    assert isinstance(stream, SynthesizeStream)
+
+
+async def test_init_sent_once_with_voice_and_format():
+    from livekit.plugins.bland import TTS
+    from livekit.plugins.bland.tts import DEFAULT_VOICE_ID
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="test-key", base_url=srv.base_url)
+        tts._session = srv.session
+        await _stream_turn(tts, ["hello world"])
+        await tts.aclose()
+
+    inits = srv.of_type("init")
+    assert len(inits) == 1
+    assert inits[0]["voice"] == DEFAULT_VOICE_ID
+    assert inits[0]["audio"] == {"encoding": "pcm_s16le", "sample_rate": 48000}
+    assert "controls" not in inits[0]
+    assert srv.headers["Authorization"] == "Bearer test-key"
+
+
+async def test_init_carries_controls_when_set():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url, expressiveness=0.9, stability=0.4)
+        tts._session = srv.session
+        await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert srv.of_type("init")[0]["controls"] == {"expressiveness": 0.9, "stability": 0.4}
+
+
+async def test_tokens_stream_through_verbatim():
+    """Bland picks its own synthesis boundaries, so deltas must not be re-tokenized."""
+    from livekit.plugins.bland import TTS
+
+    tokens = ["The weather", " is clear", " today."]
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        await _stream_turn(tts, tokens)
+        await tts.aclose()
+
+    assert [m["text"] for m in srv.of_type("speak")] == tokens
+
+
+async def test_each_turn_gets_its_own_context_id():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        await _stream_turn(tts, ["first."])
+        await _stream_turn(tts, ["second."])
+        await tts.aclose()
+
+    speaks = srv.of_type("speak")
+    ends = srv.of_type("end_of_turn")
+
+    assert [m["text"] for m in speaks] == ["first.", "second."]
+    assert speaks[0]["context_id"] != speaks[1]["context_id"]
+    # each turn is terminated under the id its deltas were sent with
+    assert [m["context_id"] for m in ends] == [m["context_id"] for m in speaks]
+
+
+async def test_binary_frames_reach_the_pipeline_unchanged():
+    from livekit.plugins.bland import TTS
+
+    frames = [_pcm(480), _pcm(480), _pcm(240)]
+
+    async with _WSServer(frames=frames) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        audio = await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    _assert_audio_is(audio, b"".join(frames))
+
+
+async def test_session_is_reused_across_turns():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        for token in ("one.", "two.", "three."):
+            await _stream_turn(tts, [token])
+        await tts.aclose()
+
+    assert srv.sessions == 1
+    assert len(srv.of_type("init")) == 1
+
+
+async def test_close_settles_the_session():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert len(srv.of_type("close")) == 1
+
+
+async def test_stale_utterance_end_does_not_end_the_turn():
+    from livekit.plugins.bland import TTS
+
+    frames = [_pcm(480), _pcm(480)]
+
+    async with _WSServer(frames=frames, stale_terminator=True) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        audio = await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    _assert_audio_is(audio, b"".join(frames))
+
+
+async def test_unfinished_turn_raises():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer(end_reason="failed") as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        with pytest.raises(APIError) as excinfo:
+            await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert "failed" in str(excinfo.value)
+
+
+async def test_turn_error_raises_with_code_and_message():
+    from livekit.plugins.bland import TTS
+
+    error = {"code": "insufficient_credits", "message": "Your account is out of credits."}
+
+    async with _WSServer(turn_error=error) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        with pytest.raises(APIError) as excinfo:
+            await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert "insufficient_credits" in str(excinfo.value)
+    assert "Your account is out of credits." in str(excinfo.value)
+    assert excinfo.value.retryable is False
+
+
+async def test_synthesis_failure_stays_retryable():
+    from livekit.plugins.bland import TTS
+
+    error = {"code": "synthesis_failed", "message": "Synthesis failed."}
+
+    async with _WSServer(turn_error=error) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        with pytest.raises(APIError) as excinfo:
+            await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert excinfo.value.retryable is True
+
+
+async def test_rejected_init_surfaces_the_reason():
+    from livekit.plugins.bland import TTS
+
+    error = {"code": "voice_not_found", "message": "Voice was not found."}
+
+    async with _WSServer(init_error=error) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        with pytest.raises(APIError) as excinfo:
+            await _stream_turn(tts, ["hello"])
+        await tts.aclose()
+
+    assert "voice_not_found" in str(excinfo.value)
+
+
+async def test_update_options_invalidates_the_session():
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer() as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        await _stream_turn(tts, ["hello"])
+        tts.update_options(voice_id="c18a1cd5-91ef-4b06-841a-e58b8b487e8c")
+        await _stream_turn(tts, ["hello again"])
+        await tts.aclose()
+
+    inits = srv.of_type("init")
+    assert len(inits) == 2
+    assert inits[1]["voice"] == "c18a1cd5-91ef-4b06-841a-e58b8b487e8c"
+
+
+def test_update_options_without_changes_keeps_the_session():
+    from livekit.plugins.bland import TTS
+
+    tts = TTS(api_key="k")
+    with patch.object(tts._pool, "invalidate") as invalidate:
+        tts.update_options()
+    invalidate.assert_not_called()
