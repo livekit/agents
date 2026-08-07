@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
+import urllib.parse
 from collections.abc import Iterable
 from types import TracebackType
 from typing import TypedDict
@@ -135,6 +137,7 @@ class RTZROpenAPIClient:
         self._http_session = http_session
         self._owns_session = http_session is None  # Track if we own the session
         self._token: _Token | None = None
+        self._token_lock = asyncio.Lock()
         self._api_base = "https://openapi.vito.ai"
         self._ws_base = "wss://" + self._api_base.split("://", 1)[1]
 
@@ -152,14 +155,15 @@ class RTZROpenAPIClient:
         await self.close()
 
     async def get_token(self) -> str:
-        """Get a valid access token, refreshing if necessary."""
-        token = self._token
-        if token is None or token["expire_at"] < time.time() - 3600:
-            await self._refresh_token()
-            token = self._token
-        if token is None:
-            raise RTZRAPIError("Failed to obtain RTZR access token")
-        return token["access_token"]
+        """Get a valid access token, refreshing if necessary (30 mins prior to expiry)."""
+        async with self._token_lock:
+            # Refresh if token is missing or expires within the next 30 minutes (1800 seconds)
+            if self._token is None or time.time() + 1800 >= self._token["expire_at"]:
+                await self._refresh_token()
+
+            if self._token is None:
+                raise RTZRAPIError("Failed to obtain RTZR access token")
+            return self._token["access_token"]
 
     async def _refresh_token(self) -> None:
         """Refresh the access token."""
@@ -193,7 +197,9 @@ class RTZROpenAPIClient:
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""
         if not self._http_session:
-            self._http_session = aiohttp.ClientSession()
+            # We explicitly configure a TCPConnector though it defaults to TCP_NODELAY=True
+            connector = aiohttp.TCPConnector(enable_cleanup_closed=True)
+            self._http_session = aiohttp.ClientSession(connector=connector)
         return self._http_session
 
     async def close(self) -> None:
@@ -206,20 +212,22 @@ class RTZROpenAPIClient:
         self, config: dict[str, str], headers: dict[str, str] | None = None
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the streaming WebSocket endpoint."""
-        # Build URL like reference client
-        query_string = "&".join(f"{k}={v}" for k, v in config.items())
+        # Build URL with properly encoded query string
+        query_string = urllib.parse.urlencode(config, safe=":,")
         url = f"{self._ws_base}/v1/transcribe:streaming?{query_string}"
 
         # Prepare headers
         token = await self.get_token()
-        ws_headers = {"Authorization": f"bearer {token}"}
+        ws_headers = {"Authorization": f"Bearer {token}"}
         if headers:
             ws_headers.update(headers)
 
         session = self._ensure_http_session()
 
         try:
-            ws = await session.ws_connect(url, headers=ws_headers)
+            # heartbeat=15.0 sends a ping every 15s to keep NAT/firewalls open
+            # and detect dead peers quickly
+            ws = await session.ws_connect(url, headers=ws_headers, heartbeat=15.0)
             logger.debug("Connected to RTZR WebSocket at %s", url)
             return ws
         except aiohttp.ClientResponseError as e:
@@ -241,8 +249,12 @@ class RTZROpenAPIClient:
         epd_time: float = 0.5,
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
+        use_itn: bool = True,
+        use_disfluency_filter: bool = False,
+        use_profanity_filter: bool = False,
         use_punctuation: bool = False,
         keywords: Iterable[str | tuple[str, float]] | None = None,
+        language: str = "ko",
     ) -> dict[str, str]:
         """Build configuration dictionary for WebSocket connection."""
         config = {
@@ -253,8 +265,13 @@ class RTZROpenAPIClient:
             "epd_time": str(epd_time),
             "noise_threshold": str(noise_threshold),
             "active_threshold": str(active_threshold),
+            "use_itn": "true" if use_itn else "false",
+            "use_disfluency_filter": "true" if use_disfluency_filter else "false",
+            "use_profanity_filter": "true" if use_profanity_filter else "false",
             "use_punctuation": "true" if use_punctuation else "false",
         }
+        if model_name == "whisper":
+            config["language"] = language
 
         if keywords:
             config["keywords"] = _format_keywords(keywords)
