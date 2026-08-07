@@ -59,9 +59,7 @@ async def test_connect_ws_generic_error_does_not_chain_cause():
     from livekit.plugins.cartesia import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
-    leaky = ConnectionError(
-        f"wss://api.cartesia.ai/tts/websocket?api_key={SECRET_API_KEY}"
-    )
+    leaky = ConnectionError(f"wss://api.cartesia.ai/tts/websocket?api_key={SECRET_API_KEY}")
 
     async def _raise(*_args, **_kwargs):
         raise leaky

@@ -129,9 +129,7 @@ async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
     secret_jwt = "url-secret-jwt-token-do-not-log"
 
     async def failing_connect(timeout: float):
-        raise ConnectionError(
-            f"wss://example.com/ws?api_key={secret_key}&jwt_token={secret_jwt}"
-        )
+        raise ConnectionError(f"wss://example.com/ws?api_key={secret_key}&jwt_token={secret_jwt}")
 
     pool = ConnectionPool(connect_cb=failing_connect)
     with caplog.at_level("WARNING"):
