@@ -969,15 +969,17 @@ class LLM(llm.LLM):
         ``provider/model`` string.
 
         Args:
-            model (str): Model in ``provider/model`` form, e.g.
-                ``"workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"`` or ``"openai/gpt-4o"``.
+            model (str): Model in ``provider/model`` form for third-party providers, e.g.
+                ``"openai/gpt-4o"``. Workers AI models instead use the ``@cf/author/model`` form,
+                e.g. ``"@cf/meta/llama-3.3-70b-instruct-fp8-fast"``, and require ``gateway_id``.
             account_id (str | None, optional): Cloudflare account ID used to build the endpoint
                 URL. Falls back to ``CLOUDFLARE_ACCOUNT_ID``. Required unless ``base_url`` is set.
-            api_key (str | None, optional): Cloudflare API token with the ``AI Gateway``
-                permission, sent as the ``Authorization: Bearer`` header. Falls back to
-                ``CLOUDFLARE_API_TOKEN``.
+            api_key (str | None, optional): Cloudflare API token with the
+                ``Account > Workers AI > Read`` permission, sent as the ``Authorization: Bearer``
+                header. Falls back to ``CLOUDFLARE_API_TOKEN``.
             gateway_id (str | None, optional): Route through a specific gateway via the
-                ``cf-aig-gateway-id`` header. Defaults to the account's default gateway.
+                ``cf-aig-gateway-id`` header. Defaults to the account's default gateway for
+                third-party providers; required for Workers AI (``@cf/...``) models.
             base_url (str | None, optional): Full endpoint URL, e.g.
                 ``"https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1"``.
                 Overrides ``account_id`` when provided.
