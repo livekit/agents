@@ -37,3 +37,33 @@ References:
 
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
 - [Vertex Live API](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)
+
+## Realtime translation
+
+`RealtimeTranslationModel` wraps the Gemini Live translate model
+(`gemini-3.5-live-translate-preview`) for live, low-latency speech-to-speech
+translation that transcribes, translates, and synthesizes in one step — no STT/TTS/VAD
+plugins are needed. Each translated utterance is a turn delimited by the server's
+`turn_complete`, so it plugs straight into `AgentSession`:
+
+```python
+from livekit.agents import Agent, AgentSession
+from livekit.plugins import google
+
+session = AgentSession(
+    llm=google.realtime.RealtimeTranslationModel(target_language="es"),
+)
+await session.start(room=ctx.room, agent=Agent(instructions=""))
+```
+
+The source-language transcript is emitted as the user transcript, and the translated
+audio + target-language transcript flow through the agent's output.
+
+Notes:
+
+- One model instance translates into a single `target_language` (one-way). To translate
+  a room into several languages, run one session per direction — see
+  `examples/other/translation/realtime-multi-user-translator.py` (set
+  `TRANSLATION_PROVIDER=google`).
+- Requires access to the translate-preview model; override `model=` if Google publishes
+  a different id. A 1008/policy error usually means the model isn't enabled for your account.
