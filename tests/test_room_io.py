@@ -290,6 +290,49 @@ async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscrib
     first_stream = _MockAudioStream()
     replacement_stream = _MockAudioStream()
     second_replacement_stream = _MockAudioStream()
+    final_replacement_stream = _MockAudioStream()
+    frame = rtc.AudioFrame(bytes(480 * 2), 24000, 1, 480)
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[
+            first_stream,
+            replacement_stream,
+            second_replacement_stream,
+            final_replacement_stream,
+        ],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(first_stream.started.wait(), timeout=1)
+
+        first_stream.push_frame(frame)
+        first_stream.end()
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+        replacement_stream.push_frame(frame)
+        replacement_stream.end()
+        await asyncio.wait_for(second_replacement_stream.started.wait(), timeout=1)
+
+        second_replacement_stream.end()
+        await asyncio.wait_for(final_replacement_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 4
+    assert audio_input._stream is final_replacement_stream
+    assert audio_input._publication is publication
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_counts_frames_received_while_detached_for_reattach_limit() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    audio_input.on_detached()
+    track, publication, participant = _make_track_available_args()
+    first_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+    second_replacement_stream = _MockAudioStream()
     frame = rtc.AudioFrame(bytes(480 * 2), 24000, 1, 480)
 
     with patch(
@@ -303,11 +346,11 @@ async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscrib
         first_stream.end()
         await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
 
-        replacement_stream.push_frame(frame)
         replacement_stream.end()
         await asyncio.wait_for(second_replacement_stream.started.wait(), timeout=1)
 
     assert create_stream.call_count == 3
+    assert audio_input._data_ch.qsize() == 1
     assert audio_input._stream is second_replacement_stream
     assert audio_input._publication is publication
 
