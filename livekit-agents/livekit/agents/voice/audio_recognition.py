@@ -273,6 +273,10 @@ class AudioRecognition:
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
+        # VAD-measured voiced duration for the current/most recent segment; preferred
+        # by ``current_speech_duration`` so STT-triggered min_duration matches the
+        # VAD path (wall-clock includes trailing silence / STT latency).
+        self._vad_speech_duration: float | None = None
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -606,11 +610,17 @@ class AudioRecognition:
 
     @property
     def current_speech_duration(self) -> float | None:
-        """Duration (s) of the current or most recent user speech segment.
+        """Voiced duration (s) of the current or most recent user speech segment.
 
-        Returns None when no speech start has been tracked (e.g. VAD produced no
-        events for this segment), meaning the duration is unknown.
+        Prefers the VAD-measured ``speech_duration`` (same metric
+        ``on_vad_inference_done`` uses for ``interruption.min_duration``). Falls
+        back to wall-clock elapsed when VAD has not reported a duration for this
+        segment (e.g. STT-only turn detection). Returns None when no speech start
+        has been tracked.
         """
+        if self._vad_speech_duration is not None:
+            return self._vad_speech_duration
+
         if self._speech_start_time is None:
             return None
 
@@ -1030,6 +1040,7 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._vad_speech_duration = None
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._last_emitted_prediction = None
@@ -1394,6 +1405,7 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
+            self._vad_speech_duration = ev.speech_duration
             self._cancel_transcription_timeout()
 
             with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
@@ -1414,6 +1426,7 @@ class AudioRecognition:
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
+            self._vad_speech_duration = ev.speech_duration
 
             # for metrics, get the "earliest" signal of speech as possible
             if ev.raw_accumulated_speech > 0.0:
@@ -1442,6 +1455,9 @@ class AudioRecognition:
             self._speaking = False
             speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             self._last_speaking_time = speech_end_time
+            # keep the final voiced duration so a late STT final still sees the
+            # same metric the VAD path used for min_duration
+            self._vad_speech_duration = ev.speech_duration
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
             if self._stt_pipeline is not None and vad_speech_started:
