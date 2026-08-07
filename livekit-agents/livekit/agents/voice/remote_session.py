@@ -363,6 +363,7 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
         "interruption": str(dict(opts.interruption)),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
+        "user_away_on": str(opts.user_away_on),
         "transcription_timeout": str(opts.transcription_timeout),
         "preemptive_generation": str(dict(opts.preemptive_generation)),
         "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
