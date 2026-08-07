@@ -117,7 +117,6 @@ typing = [
     { name = "types-grpcio", specifier = ">=1.0.0.20260607" },
     { name = "types-grpcio-status", specifier = ">=1.0.0.20260408" },
     { name = "types-gunicorn", specifier = ">=26.0.0.20260518" },
-    { name = "types-nanoid", specifier = ">=2.0.0.20260508" },
     { name = "types-openpyxl", specifier = ">=3.1.5.20260518" },
     { name = "types-pexpect", specifier = ">=4.9.0.20260518" },
     { name = "types-psutil", specifier = ">=7.2.2.20260518" },
@@ -5623,15 +5622,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/74/1c/a01ec531454c9b1904ac5164bc6fd1c5dfebe97b7976c8cb2135b90625ec/types_gunicorn-26.0.0.20260518.tar.gz", hash = "sha256:40d40019cd1798924f19c62b5fe96bc5a63a2051278706d788c39805fabdb306", size = 34157, upload-time = "2026-05-18T06:07:57.858Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/1a/07fa198168b4023286692d3df4db3232eb94c6815b516e5c5488abd15f71/types_gunicorn-26.0.0.20260518-py3-none-any.whl", hash = "sha256:5b5e1d9d43a1c56e90a380694106a9eba295d4d99e64abbdcbedee44c2c6dc50", size = 52182, upload-time = "2026-05-18T06:07:57.022Z" },
-]
-
-[[package]]
-name = "types-nanoid"
-version = "2.0.0.20260508"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6b/9a/a9719ba0866c76c378d9ced7c59f76d98da987e8c971f2102aefbefd694b/types_nanoid-2.0.0.20260508.tar.gz", hash = "sha256:4ab493a2bc6dea7aa3c9671e2cb32ed0ed8f6419250a98ec533d49bc619302d7", size = 7351, upload-time = "2026-05-08T04:48:54.25Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/18/5a305d16ca4d43ce04c63a2c89b2da14de3b555f546d7f31b167a7f2ed55/types_nanoid-2.0.0.20260508-py3-none-any.whl", hash = "sha256:d6d3098c075ac1ba8e9e010e20605ffadf7a3870022eb19517868dc7566579c9", size = 8604, upload-time = "2026-05-08T04:48:53.257Z" },
 ]
 
 [[package]]

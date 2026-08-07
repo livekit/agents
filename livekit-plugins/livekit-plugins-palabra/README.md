@@ -20,7 +20,11 @@ Set the API key in your `.env` file:
 PALABRA_API_KEY=<your_palabra_api_key>
 ```
 
+
+
 ## Usage
+
+
 
 ### Speech-to-Text (STT)
 
@@ -36,6 +40,8 @@ session = AgentSession(
 )
 ```
 
+
+
 ### Live translation
 
 Palabra STT can translate speech on the fly. With `translate_languages` set, each emitted `SpeechData` maps as: `language`/`text` = the translation; `source_languages`/`source_texts` = the original speech. Final transcripts arrive already in the target language, so a translating agent works without an LLM in the loop:
@@ -43,6 +49,8 @@ Palabra STT can translate speech on the fly. With `translate_languages` set, eac
 ```python
 stt = palabra.STT(translate_languages=["es"])
 ```
+
+
 
 ### Text-to-Speech (TTS)
 
@@ -69,3 +77,4 @@ The TTS streams over one persistent WebSocket session: text chunks coming from t
 - [Palabra realtime TTS API](https://platform.palabra.ai/docs/text-to-speech/realtime-tts)
 - [Palabra platform](https://platform.palabra.ai) — API keys and usage
 - [palabra-ai Python SDK](https://pypi.org/project/palabra-ai/) — the transport this plugin builds on
+

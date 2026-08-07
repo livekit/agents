@@ -40,7 +40,6 @@ from livekit.plugins import (
     lmnt,
     mistralai,
     neuphonic,
-    palabra,
     resemble,
     rime,
     speechify,
@@ -252,13 +251,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": palabra.TTS(),
-            "proxy-upstream": "stream.palabra.ai:443",
-        },
-        id="palabra",
     ),
     pytest.param(
         lambda: {
@@ -517,13 +509,6 @@ STREAM_TTS = [
             "proxy-upstream": "api.inworld.ai:443",
         },
         id="inworld-stream-adapter",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": tts.StreamAdapter(tts=palabra.TTS()),
-            "proxy-upstream": "stream.palabra.ai:443",
-        },
-        id="palabra-stream-adapter",
     ),
     pytest.param(
         lambda: {

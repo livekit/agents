@@ -9,7 +9,7 @@ description = "LiveKit Agents plugin for Palabra realtime STT and TTS."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
-authors = [{ name = "Palabra", email = "dev@palabra.ai" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "livekit", "palabra", "stt", "tts"]
 classifiers = [
     "Intended Audience :: Developers",

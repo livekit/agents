@@ -263,7 +263,6 @@ class SpeechStream(stt.RecognizeStream):
                 text=ev.text,
                 start_time=(ev.start_time or 0.0) + offset,
                 end_time=(ev.end_time or 0.0) + offset,
-                confidence=1.0,
             )
             if ev.is_translation:
                 source = utterances[ev.transcription_id].source

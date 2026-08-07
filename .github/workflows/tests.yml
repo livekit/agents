@@ -106,7 +106,6 @@ jobs:
             groq,
             openai,
             inworld,
-            palabra,
           ]
 
     runs-on: ubuntu-latest
@@ -141,7 +140,6 @@ jobs:
           FAL_KEY: ${{ secrets.FAL_KEY }}
           PLAYHT_API_KEY: ${{ secrets.PLAYHT_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          PALABRA_API_KEY: ${{ secrets.PALABRA_API_KEY }}
           PLAYHT_USER_ID: ${{ secrets.PLAYHT_USER_ID }}
           RIME_API_KEY: ${{ secrets.RIME_API_KEY }}
           SPEECHMATICS_API_KEY: ${{ secrets.SPEECHMATICS_API_KEY }}
