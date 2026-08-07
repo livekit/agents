@@ -303,7 +303,7 @@ class JobContext:
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
-        if (recording_enabled(report.recording_options) or has_evals) and obs_url:
+        if (recording_enabled(report.options.recording_options) or has_evals) and obs_url:
             try:
                 await _upload_session_report(
                     agent_name=self._info.job.agent_name,
@@ -311,7 +311,7 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
-                    metadata=self._otel_metadata(report.recording_options),
+                    metadata=self._otel_metadata(report.options.recording_options),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
@@ -379,7 +379,6 @@ class JobContext:
             )
 
         sr = SessionReport(
-            recording_options=session._recording_options,
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,

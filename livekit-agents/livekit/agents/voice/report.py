@@ -7,13 +7,12 @@ from pathlib import Path
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
-from .agent_session import AgentSessionOptions, RecordingOptions
+from .agent_session import AgentSessionOptions
 from .events import AgentEvent
 
 
 @dataclass
 class SessionReport:
-    recording_options: RecordingOptions
     job_id: str
     room_id: str
     room: str
@@ -64,6 +63,7 @@ class SessionReport:
                 "user_away_timeout": self.options.user_away_timeout,
                 "min_consecutive_speech_delay": self.options.min_consecutive_speech_delay,
                 "preemptive_generation": dict(self.options.preemptive_generation),
+                "recording_options": dict(self.options.recording_options),
             },
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
