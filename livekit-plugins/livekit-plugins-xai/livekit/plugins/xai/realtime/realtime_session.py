@@ -156,7 +156,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
     def _discard_abandoned_response(self) -> None:
         generation = self._current_generation
-        if generation is None or self._response_spoke or isinstance(generation, _DiscardedGeneration):
+        if (
+            generation is None
+            or self._response_spoke
+            or isinstance(generation, _DiscardedGeneration)
+        ):
             return
         logger.debug("discarding the response xAI left in flight")
         self._close_current_generation()
@@ -166,9 +170,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super().interrupt()
         self._discard_abandoned_response()
 
-    def say(
-        self, text: str | AsyncIterable[str]
-    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Speak scripted text via xAI ``force_message`` (no ``response.create``)."""
         event_id = utils.shortuuid("say_")
         fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
