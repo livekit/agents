@@ -21,7 +21,6 @@ from .realtime_session import RealtimeSession
 
 XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
 
-# docs recommend grok-voice-latest; it currently resolves to think-fast-2.0
 XAI_DEFAULT_MODEL: GrokRealtimeModels = "grok-voice-latest"
 
 XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
