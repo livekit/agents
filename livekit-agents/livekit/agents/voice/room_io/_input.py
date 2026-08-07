@@ -118,10 +118,11 @@ class _ParticipantInputStream(Generic[T], ABC):
                 self._on_track_available(publication.track, publication, participant)
 
     async def aclose(self) -> None:
-        if self._stream:
-            await self._stream.aclose()
-            self._stream = None
+        stream = self._stream
+        self._stream = None
         self._publication = None
+        if stream:
+            await stream.aclose()
         if self._processor:
             self._processor._close()
             self._processor = None
@@ -331,18 +332,32 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
-        await super()._forward_task(old_task, stream, publication, participant)
-
-        # push a silent frame to flush the stt final result if any
         silent_samples = int(self._sample_rate * 0.5)
-        await self._data_ch.send(
-            rtc.AudioFrame(
-                b"\x00\x00" * silent_samples,
-                sample_rate=self._sample_rate,
-                num_channels=self._num_channels,
-                samples_per_channel=silent_samples,
+        while True:
+            await super()._forward_task(None, stream, publication, participant)
+
+            # push a silent frame to flush the stt final result if any
+            await self._data_ch.send(
+                rtc.AudioFrame(
+                    b"\x00\x00" * silent_samples,
+                    sample_rate=self._sample_rate,
+                    num_channels=self._num_channels,
+                    samples_per_channel=silent_samples,
+                )
             )
-        )
+
+            if self._stream is not stream or self._publication is not publication:
+                return
+
+            # An RTC stream may reach EOS while its track remains subscribed.
+            track = publication.track
+            self._close_stream()
+            if track is None or not publication.subscribed:
+                return
+
+            stream = self._create_stream(track, participant)
+            self._stream = stream
+            self._publication = publication
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
