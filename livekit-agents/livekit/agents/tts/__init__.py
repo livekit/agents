@@ -1,3 +1,4 @@
+from ._provider_format import strip_expr_markup
 from .fallback_adapter import (
     AvailabilityChangedEvent,
     FallbackAdapter,
@@ -33,6 +34,7 @@ __all__ = [
     "AudioEmitter",
     "TTSError",
     "SentenceStreamPacer",
+    "strip_expr_markup",
 ]
 
 

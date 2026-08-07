@@ -201,6 +201,15 @@ class SpeechSteeringOptions(TypedDict, total=False):
     and a ``NonverbalOptions`` dict toggles per category (omitted categories
     stay enabled)."""
     pace: Literal["slow", "normal", "fast"]
+    delivery_guidance: bool | str
+    """The provider's delivery-guidance layer of the markup instructions — how
+    to use the markup well (tag placement, label phrasing, pacing punctuation).
+    On by default; ``False`` drops it, and a string replaces it with your own
+    rules."""
+    delivery_style: bool | str
+    """The provider's delivery style guide layer — which labels to reach for,
+    when, and how to vary them. On by default; ``False`` drops it, and a string
+    replaces it with your own speaking style."""
 
 
 DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(disfluencies=True)
@@ -219,6 +228,12 @@ class ExpressiveOptions(TypedDict, total=False):
 
     Any explicit template overrides the default; unset parts fall back to the
     provider-agnostic default.
+
+    ``{tts.markup.llm_instructions}`` renders the provider's markup guide as steered:
+    ``speech_steering``'s ``delivery_guidance`` / ``delivery_style`` keys drop
+    (``False``) or replace (a string) those layers, so ``{"speech_steering":
+    {"delivery_style": "Delivery style: ..."}}`` keeps the provider's tag syntax and
+    usage guidance while supplying its own speaking style.
     """
 
     speech_steering: SpeechSteeringOptions

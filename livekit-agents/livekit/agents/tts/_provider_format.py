@@ -199,10 +199,13 @@ def _fishaudio_break_to_bracket(match: re.Match[str]) -> str:
 # LLM is taught — llm_instructions() uses it; the provider-native tag tables remain
 # solely so hallucinated native markup is still stripped/converted instead of leaking.
 
-_EXPR_PREAMBLE = """\
+_EXPR_PREAMBLE_SYNTAX = """\
 You control speech delivery with a single XML marker tag: <expr/>. Every marker has a \
 type attribute. Use only the marker types listed below, and where a type lists a label \
-vocabulary, only those labels. Use the markers often and diversify them so the voice \
+vocabulary, only those labels."""
+
+_EXPR_PREAMBLE_GUIDANCE = """\
+Use the markers often and diversify them so the voice \
 never sounds flat while ensuring the markers are appropriate for the moment. Write the \
 words themselves the way people talk: use contractions ("I'm", "you're", "don't") — \
 spelled-out forms like "I am" or "do not" sound stiff when spoken.
@@ -217,6 +220,8 @@ moment is professional, high-stakes, or emotionally heavy — bad news, an emerg
 real distress — keep delivery composed and restrained. When the moment is casual, \
 playful, or celebratory, let it loosen and brighten. A serious turn in an otherwise \
 casual conversation still gets a composed reply."""
+
+_EXPR_PREAMBLE = _EXPR_PREAMBLE_SYNTAX + " " + _EXPR_PREAMBLE_GUIDANCE
 
 _CARTESIA_EXPR_LLM_INSTRUCTIONS = (
     _EXPR_PREAMBLE
@@ -260,6 +265,10 @@ _INWORLD_EXAMPLES = [
     '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
     '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
     '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
+]
+
+# Demonstrate the delivery style guide's palette, not just the tag format; omitted together with it.
+_INWORLD_STYLE_EXAMPLES = [
     '<expr type="expression" label="warm and welcoming"/> Welcome to the hotel. <expr type="expression" label="upbeat, warm questioning"/> How can I help you today?',  # noqa: E501
     '<expr type="expression" label="easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
 ]
@@ -275,25 +284,11 @@ def _numbered_sections(sections: list[str]) -> str:
     return "\n\n".join(f"{i}. {section}" for i, section in enumerate(sections, 1))
 
 
-def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
-    sections = [
-        """Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
-   <expr type="expression" label="DESCRIPTION"/>
-   The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
-in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
-"drop to a whisper", "speak slowly and clearly, patient and reassuring".
-   Match the expression tag's energy to the sentence's punctuation. An exclamation \
-needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
-label flattens the "!". Never lead an exclamatory sentence with a calm tag.
-   Put each question in its own sentence — don't comma-splice it onto a statement. \
-Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
-how can I help you today?", so the question carries its own delivery tag instead of \
-inheriting the statement's.
-   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
-questioning" steers far more reliably than "rising tone".
-   Use at most two adjectives per tag, and make sure they align — with the mood of \
-the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
-and muddy the delivery.
+# The delivery style guide: which labels to reach for, when, and how to vary them —
+# the speaking character, as opposed to the tag dialect and its usage mechanics.
+# Steering's delivery_style key drops or replaces it. Written as section-1
+# continuation lines (3-space indent).
+_INWORLD_DELIVERY_STYLE = """\
    Don't open a turn with a "slow" tag. The first expression colors the whole turn, \
 and a slow lead flattens questions and drags the energy down. Keep the pace neutral \
 by default and reserve slow, clearly-enunciated delivery for the specific line that \
@@ -311,24 +306,69 @@ and inviting" / "gently curious, welcoming"
      empathy / a problem or bad news: "soft, with genuine care" / \
 "sincere and concerned" / "gentle and steady"
      reading back a total, date, or code: "slow and clearly enunciated\""""
-    ]
+
+
+# The delivery guidance: how labels steer this model well — tested defaults.
+# Same continuation-line format as _INWORLD_DELIVERY_STYLE.
+_INWORLD_DELIVERY_GUIDANCE = """\
+   Match the expression tag's energy to the sentence's punctuation. An exclamation \
+needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
+label flattens the "!". Never lead an exclamatory sentence with a calm tag.
+   Put each question in its own sentence — don't comma-splice it onto a statement. \
+Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
+how can I help you today?", so the question carries its own delivery tag instead of \
+inheriting the statement's.
+   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
+questioning" steers far more reliably than "rising tone".
+   Use at most two adjectives per tag, and make sure they align — with the mood of \
+the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
+and muddy the delivery."""
+
+
+def _inworld_expr_llm_instructions(
+    sounds: list[str], guidance: bool | str = True, style: bool | str = True
+) -> str:
+    """*guidance* and *style* follow the steering contract: ``True`` keeps the
+    provider default (spliced through the sections below), ``False`` drops the
+    layer, and a string drops the default and lands as its own block after the
+    sections."""
+    delivery = "Delivery - controls how a sentence sounds. Self-closing"
+    if guidance is True:
+        delivery += "; place before EVERY sentence"
+    delivery += """.
+   <expr type="expression" label="DESCRIPTION"/>
+   The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
+in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
+"drop to a whisper", "speak slowly and clearly, patient and reassuring"."""
+    if guidance is True:
+        delivery += "\n" + _INWORLD_DELIVERY_GUIDANCE
+    if style is True:
+        delivery += "\n" + _INWORLD_DELIVERY_STYLE
+    sections = [delivery]
     if sounds:
-        fits = " (a clear-throat when shifting to a new step or topic, for example)"
         section = f"""Sounds - a non-verbal sound between sentences. Self-closing.
    <expr type="sound" label="{sounds[0]}"/>
-   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Labels are a fixed vocabulary: {", ".join(sounds)}."""
+        if guidance is True:
+            fits = (
+                " (a clear-throat when shifting to a new step or topic, for example)"
+                if style is True and "clear throat" in sounds
+                else ""
+            )
+            section += f"""
    Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
-one only where it genuinely fits{fits if "clear throat" in sounds else ""}. An enabled \
+one only where it genuinely fits{fits}. An enabled \
 sound gets over-used otherwise."""
-        if "breathe" in sounds:
-            section += """
+            if "breathe" in sounds:
+                section += """
    Use the "breathe" sound only for a real, gentle breath, never as filler — on this \
 model it easily reads as a weary or impatient sigh, which sounds wrong in a support \
 setting."""
         sections.append(section)
-    sections.append(
-        """Pauses - insert silence when appropriate. Self-closing.
-   <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
+    pauses = """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s)."""
+    if guidance is True:
+        pauses += """
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
 right next to one — pick one or the other.
    Use only periods, commas, question marks, exclamation points, and ellipses for \
@@ -338,15 +378,23 @@ them as separate sentences or commas.
 tag — a fresh one, not necessarily the same as before (a break is often where the mood \
 shifts). A break resets delivery to neutral, so an untagged sentence after a break is \
 spoken flat."""
-    )
+    sections.append(pauses)
 
+    preamble = _EXPR_PREAMBLE_SYNTAX
+    if guidance is True:
+        preamble += " " + _EXPR_PREAMBLE_GUIDANCE
     parts = [
-        _EXPR_PREAMBLE,
+        preamble,
         _numbered_sections(sections),
         "There is no wrapping prosody marker for this voice — put pace, pitch, and volume in "
         "the expression label instead.",
     ]
-    if examples := _sound_examples(_INWORLD_EXAMPLES, sounds, _INWORLD_SOUNDS):
+    if isinstance(guidance, str) and guidance:
+        parts.append(guidance)
+    if isinstance(style, str) and style:
+        parts.append(style)
+    pool = _INWORLD_EXAMPLES + (_INWORLD_STYLE_EXAMPLES if style is True else [])
+    if examples := _sound_examples(pool, sounds, _INWORLD_SOUNDS):
         parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
     return "\n\n".join(parts)
 
@@ -866,11 +914,19 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
     the LLM is ever taught. When *steering* disables a non-verbal sound, its labels
     (and any example demonstrating them) are omitted from the block entirely rather
     than advertised and then revoked.
+
+    Steering's ``delivery_guidance`` / ``delivery_style`` keys drop (``False``) or
+    replace (a string) those layers of the block, down to the bare tag syntax; a
+    provider whose builder doesn't separate a layer keeps it regardless.
     """
     if provider == "cartesia":
         return _CARTESIA_EXPR_LLM_INSTRUCTIONS
     if provider == "inworld":
-        return _inworld_expr_llm_instructions(_allowed_sounds(provider, steering))
+        return _inworld_expr_llm_instructions(
+            _allowed_sounds(provider, steering),
+            guidance=steering.get("delivery_guidance", True) if steering else True,
+            style=steering.get("delivery_style", True) if steering else True,
+        )
     if provider == "xai":
         return _xai_expr_llm_instructions(
             _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)

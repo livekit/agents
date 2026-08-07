@@ -31,6 +31,7 @@ from .events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
+from .generation import EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID
 from .keyterm_detection import (
     KeytermDetectionOptions,
     KeytermsOptions,
@@ -48,6 +49,7 @@ from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID",
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",
