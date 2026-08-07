@@ -195,10 +195,16 @@ class TTS(tts.TTS):
 
     async def _ensure_session(self, timeout: float) -> TtsSession:
         # Caller must hold `self._send_lock`.
+        if self._closed:
+            raise APIConnectionError("palabra tts is closed", retryable=False)
         if self._opts_dirty and self._active_streams_cnt == 0:
             await self._reset_session()
             self._opts_dirty = False
-        if self._tts_session is not None and not _session_alive(self._tts_session):
+        if self._tts_session is not None and (
+            not _session_alive(self._tts_session)
+            or self._reader_task is None
+            or self._reader_task.done()
+        ):
             await self._reset_session()
         if self._tts_session is None:
             session = self._new_tts()

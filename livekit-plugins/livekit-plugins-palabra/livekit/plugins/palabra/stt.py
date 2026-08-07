@@ -97,6 +97,8 @@ class STT(stt.STT):
             translate_languages: Target language(s) for live translation. When set, the
                 emitted ``SpeechData`` maps as ``language``/``text`` = the translation and
                 ``source_languages``/``source_texts`` = the original speech.
+                When several target languages are requested, only the first translation
+                to finalize is emitted; multi-target aggregation is planned.
             filler_filter: Drop filler words ("uh", "um") from transcripts.
                 Unset by default, so the server default is used.
             sample_rate: Input sample rate in Hz sent to the server; room audio is
