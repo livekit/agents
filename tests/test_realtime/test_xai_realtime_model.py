@@ -440,9 +440,9 @@ async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
     assert not generation._done_fut.done()
 
 
-async def test_cancelling_say_clears_pending_bookkeeping() -> None:
-    # AgentActivity cancels the say() future on interrupt; leftovers would keep
-    # has_active_generation true and mis-tag the next response.created
+async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
+    # Cancel must leave the say id taggable so a late response.created hits
+    # discard-by-id; clearing the deque early lets cancelled speech play.
     from collections import deque
 
     session, _ = _make_session()
@@ -456,14 +456,47 @@ async def test_cancelling_say_clears_pending_bookkeeping() -> None:
     assert session._response_created_futures
     # allow the background send task to queue force_message + pending say id
     await asyncio.sleep(0)
-    assert list(session._pending_say_event_ids)
+    pending_before = list(session._pending_say_event_ids)
+    assert pending_before
+    say_id = pending_before[0]
     fut.cancel()
     await asyncio.sleep(0)
 
+    assert list(session._pending_say_event_ids) == [say_id]
+    assert session._response_created_futures == {}
+    assert say_id in session._discarded_event_ids
+    assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+
+    # late server announcement must be tagged then discarded, not spoken
+    _response_created(session)
+    assert isinstance(session._current_generation, _DiscardedGeneration)
+    assert list(session._pending_say_event_ids) == []
+    assert say_id not in session._discarded_event_ids
+
+
+async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    async def slow_chunks() -> object:
+        await asyncio.sleep(0.05)
+        yield "too late"
+
+    fut = session.say(slow_chunks())  # type: ignore[arg-type]
+    fut.cancel()
+    await asyncio.sleep(0)
+    # let the send task observe the cancelled future and exit without tagging
+    await asyncio.sleep(0.06)
+
     assert list(session._pending_say_event_ids) == []
     assert session._response_created_futures == {}
-    assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
-    assert session._discarded_event_ids
+    assert not session._discarded_event_ids
 
 
 def test_pending_say_ids_are_consumed_fifo() -> None:

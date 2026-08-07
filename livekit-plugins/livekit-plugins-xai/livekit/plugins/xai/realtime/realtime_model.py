@@ -276,32 +276,77 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._response_created_futures[event_id] = fut
         # armed only after force_message is sent (covers server RTT, not text collection)
         timeout_handle: list[asyncio.TimerHandle | None] = [None]
+        stale_handle: list[asyncio.TimerHandle | None] = [None]
+        force_message_sent = False
+        discard_marked = False
 
-        def _clear_pending() -> None:
+        def _detach_future() -> None:
             self._response_created_futures.pop(event_id, None)
+
+        def _drop_pending_tag() -> None:
             try:
                 self._pending_say_event_ids.remove(event_id)
             except ValueError:
                 pass
 
+        def _ensure_pending_tag() -> None:
+            # keep the id taggable so response.created can resolve or hit discard-by-id
+            if event_id not in self._pending_say_event_ids:
+                self._pending_say_event_ids.append(event_id)
+
+        def _schedule_stale_discard_cleanup() -> None:
+            # if the server never emits response.created, drop the tag so it cannot
+            # steal a later unrelated reply
+            if stale_handle[0] is not None:
+                return
+
+            def _cleanup() -> None:
+                if event_id in self._discarded_event_ids:
+                    _drop_pending_tag()
+                    self._discarded_event_ids.discard(event_id)
+
+            stale_handle[0] = asyncio.get_event_loop().call_later(10.0, _cleanup)
+
+        def _mark_discarded() -> None:
+            nonlocal discard_marked
+            if discard_marked:
+                return
+            discard_marked = True
+            self.send_event(ResponseCancelEvent(type="response.cancel"))
+            if not force_message_sent:
+                return
+            # leave the id in the pending deque so a late response.created is tagged
+            # and then dropped via the base discard-by-id path
+            self._discarded_event_ids.add(event_id)
+            _ensure_pending_tag()
+            _schedule_stale_discard_cleanup()
+
         def _on_timeout() -> None:
-            _clear_pending()
+            _detach_future()
+            self._discarded_event_ids.add(event_id)
+            # id is already in _pending_say_event_ids (timeout is armed after enqueue)
+            _schedule_stale_discard_cleanup()
             if not fut.done():
-                self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("say timed out."))
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
             if timeout_handle[0] is not None:
                 timeout_handle[0].cancel()
-            _clear_pending()
+            _detach_future()
             if f.cancelled():
-                # force_message may already be in flight; cancel server-side and discard by id
-                self.send_event(ResponseCancelEvent(type="response.cancel"))
-                self._discarded_event_ids.add(event_id)
+                _mark_discarded()
+            elif f.exception() is not None:
+                # timeout already kept the tag + discarded id; send failures drop the tag
+                if event_id not in self._discarded_event_ids:
+                    _drop_pending_tag()
+            else:
+                # success: _handle_response_created already consumed the tag
+                _drop_pending_tag()
 
         fut.add_done_callback(_on_fut_done)
 
         async def _send() -> None:
+            nonlocal force_message_sent
             full_text = text if isinstance(text, str) else "".join([c async for c in text])
             if fut.done():
                 return
@@ -316,19 +361,21 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     },
                 }
             )
+            force_message_sent = True
             if fut.done():
-                self.send_event(ResponseCancelEvent(type="response.cancel"))
-                self._discarded_event_ids.add(event_id)
+                # cancelled during send: still need the tag for discard-by-id
+                _mark_discarded()
                 return
             # only tag response.created after the force_message is on the wire (FIFO)
-            self._pending_say_event_ids.append(event_id)
+            _ensure_pending_tag()
             timeout_handle[0] = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
         task = asyncio.create_task(_send(), name="xai-say")
 
         def _on_send_done(t: asyncio.Task[None]) -> None:
             if not t.cancelled() and (exc := t.exception()) is not None and not fut.done():
-                _clear_pending()
+                _detach_future()
+                _drop_pending_tag()
                 fut.set_exception(exc)
 
         task.add_done_callback(_on_send_done)
