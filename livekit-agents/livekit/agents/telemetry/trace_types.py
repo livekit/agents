@@ -33,6 +33,7 @@ ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
 # llm node
 ATTR_CHAT_CTX = "lk.chat_ctx"
 ATTR_FUNCTION_TOOLS = "lk.function_tools"
+ATTR_FUNCTION_TOOL_DEFINITIONS = "lk.function_tool_definitions"
 ATTR_PROVIDER_TOOLS = "lk.provider_tools"
 ATTR_TOOL_SETS = "lk.tool_sets"
 ATTR_RESPONSE_TEXT = "lk.response.text"
