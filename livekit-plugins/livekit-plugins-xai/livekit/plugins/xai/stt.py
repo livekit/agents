@@ -49,6 +49,47 @@ from .types import STTLanguages
 SAMPLE_RATE = 16000
 XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/stt"
 XAI_REST_URL = "https://api.x.ai/v1/stt"
+_MAX_KEYTERMS = 100
+_MAX_KEYTERM_LENGTH = 50
+
+
+def _validate_user_keyterms(keyterms: list[str]) -> list[str]:
+    unique = list(dict.fromkeys(keyterms))
+    if len(unique) > _MAX_KEYTERMS:
+        raise ValueError(f"xAI supports at most {_MAX_KEYTERMS} keyterms")
+
+    if any(len(term) > _MAX_KEYTERM_LENGTH for term in unique):
+        raise ValueError(f"xAI keyterms must contain at most {_MAX_KEYTERM_LENGTH} characters each")
+    return unique
+
+
+def _merge_keyterms(user_keyterms: list[str], session_keyterms: list[str]) -> list[str]:
+    seen = set(user_keyterms)
+    valid_session_keyterms: list[str] = []
+    invalid_count = 0
+    for term in session_keyterms:
+        if len(term) > _MAX_KEYTERM_LENGTH:
+            invalid_count += 1
+        elif term not in seen:
+            seen.add(term)
+            valid_session_keyterms.append(term)
+
+    if invalid_count:
+        logger.warning(
+            "ignored %d xAI session keyterms longer than %d characters",
+            invalid_count,
+            _MAX_KEYTERM_LENGTH,
+        )
+
+    remaining = _MAX_KEYTERMS - len(user_keyterms)
+    if len(valid_session_keyterms) > remaining:
+        logger.warning(
+            "ignored %d xAI session keyterms beyond the %d-term limit",
+            len(valid_session_keyterms) - remaining,
+            _MAX_KEYTERMS,
+        )
+
+    return [*user_keyterms, *valid_session_keyterms[:remaining]]
 
 
 @dataclass
@@ -96,7 +137,8 @@ class STT(stt.STT):
             http_session: Optional aiohttp ClientSession to use for requests.
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is available, more than 100 user keyterms are provided,
+                or any user keyterm exceeds 50 characters.
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -109,6 +151,7 @@ class STT(stt.STT):
                 interim_results=enable_interim_results,
                 diarization=enable_diarization,
                 aligned_transcript="word",
+                keyterms=True,
             )
         )
 
@@ -117,6 +160,7 @@ class STT(stt.STT):
             raise ValueError("xAI API key is required")
         self._api_key = xai_api_key
 
+        user_keyterms = _validate_user_keyterms(keyterm) if is_given(keyterm) else []
         self._opts = STTOptions(
             enable_interim_results=enable_interim_results,
             sample_rate=sample_rate,
@@ -126,8 +170,12 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             smart_turn=smart_turn,
             smart_turn_timeout=smart_turn_timeout,
-            keyterm=keyterm,
+            keyterm=user_keyterms,
         )
+        # User keyterms remain separate from framework-managed session keyterms so either
+        # source can be updated without discarding the other.
+        self._user_keyterms = user_keyterms
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -244,6 +292,8 @@ class STT(stt.STT):
             self._opts.smart_turn_timeout = smart_turn_timeout
 
         if is_given(keyterm):
+            self._user_keyterms = _validate_user_keyterms(keyterm)
+            keyterm = _merge_keyterms(self._user_keyterms, self._session_keyterms)
             self._opts.keyterm = keyterm
 
         for stream in self._streams:
@@ -258,6 +308,23 @@ class STT(stt.STT):
                 smart_turn_timeout=smart_turn_timeout,
                 keyterm=keyterm,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+
+        self._session_keyterms = list(keyterms)
+        merged = _merge_keyterms(self._user_keyterms, self._session_keyterms)
+        if merged == self._opts.keyterm:
+            return
+
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # Reconnecting mid-utterance would discard audio/transcript state.
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -284,6 +351,8 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
         self._server_ready = asyncio.Event()
+        # Session keyterms received during speech are applied when the utterance ends.
+        self._pending_keyterm: list[str] | None = None
 
     def update_options(
         self,
@@ -323,9 +392,15 @@ class SpeechStream(stt.RecognizeStream):
             self._opts.smart_turn_timeout = smart_turn_timeout
 
         if is_given(keyterm):
-            self._opts.keyterm = keyterm
+            self._opts.keyterm = list(keyterm)
+            self._pending_keyterm = None
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -517,6 +592,7 @@ class SpeechStream(stt.RecognizeStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
+                    self._on_end_of_speech()
             else:
                 if self._opts.enable_interim_results:
                     self._event_ch.send_nowait(
@@ -551,6 +627,7 @@ class SpeechStream(stt.RecognizeStream):
             if self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
 
         elif msg_type == "error":
             logger.error("xAI STT error: %s", data.get("message", "unknown error"))
