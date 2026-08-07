@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Any
 
@@ -40,13 +41,14 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
     _pending_transcription: ConversationItemInputAudioTranscriptionCompletedEvent | None = None
     _response_spoke: bool = False
-    _pending_say_event_id: str | None = None
+    # instance attribute; annotated here so __new__ test doubles can assign it
+    _pending_say_event_ids: deque[str]
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._xai_model: RealtimeModel = realtime_model
         self._session_connected_at: float = 0.0
-        self._pending_say_event_id = None
+        self._pending_say_event_ids = deque()
         self.on("openai_server_event_received", self._on_xai_server_event)
 
     async def _run_ws(self, ws_conn: Any) -> None:
@@ -153,12 +155,15 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         event_id = utils.shortuuid("say_")
         fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
         self._response_created_futures[event_id] = fut
-        self._pending_say_event_id = event_id
+        # armed only after force_message is sent (covers server RTT, not text collection)
+        timeout_handle: list[asyncio.TimerHandle | None] = [None]
 
         def _clear_pending() -> None:
             self._response_created_futures.pop(event_id, None)
-            if self._pending_say_event_id == event_id:
-                self._pending_say_event_id = None
+            try:
+                self._pending_say_event_ids.remove(event_id)
+            except ValueError:
+                pass
 
         def _on_timeout() -> None:
             _clear_pending()
@@ -166,10 +171,9 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("say timed out."))
 
-        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
-
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            handle.cancel()
+            if timeout_handle[0] is not None:
+                timeout_handle[0].cancel()
             _clear_pending()
             if f.cancelled():
                 # force_message may already be in flight; cancel server-side and discard by id
@@ -180,6 +184,8 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
         async def _send() -> None:
             full_text = text if isinstance(text, str) else "".join([c async for c in text])
+            if fut.done():
+                return
             self.send_event(
                 {
                     "type": "conversation.item.create",
@@ -191,6 +197,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     },
                 }
             )
+            if fut.done():
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+                self._discarded_event_ids.add(event_id)
+                return
+            # only tag response.created after the force_message is on the wire (FIFO)
+            self._pending_say_event_ids.append(event_id)
+            timeout_handle[0] = asyncio.get_event_loop().call_later(10.0, _on_timeout)
 
         task = asyncio.create_task(_send(), name="xai-say")
 
@@ -203,15 +216,14 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         return fut
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
-        # force_message omits client_event_id; attach the pending say id
-        if self._pending_say_event_id and not (
+        # force_message omits client_event_id; attach the oldest post-send say id
+        if self._pending_say_event_ids and not (
             isinstance(event.response.metadata, dict)
             and event.response.metadata.get("client_event_id")
         ):
             if not isinstance(event.response.metadata, dict):
                 event.response.metadata = {}
-            event.response.metadata["client_event_id"] = self._pending_say_event_id
-            self._pending_say_event_id = None
+            event.response.metadata["client_event_id"] = self._pending_say_event_ids.popleft()
 
         self._discard_abandoned_response()
         self._close_current_generation()

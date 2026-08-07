@@ -79,12 +79,15 @@ def test_transcription_updated_emits_non_final() -> None:
 
 def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionCompleted]]:
     # no network or model is needed, and a discarded generation skips the base bookkeeping
+    from collections import deque
+
     session = RealtimeSession.__new__(RealtimeSession)
     session._remote_chat_ctx = RemoteChatContext()  # type: ignore[attr-defined]
     session._current_generation = _DiscardedGeneration()  # type: ignore[attr-defined]
     session._opts = SimpleNamespace(modalities=["audio", "text"])  # type: ignore[assignment]
     session._item_create_future = {}  # type: ignore[attr-defined]
     session._msg_ch = utils.aio.Chan()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
     session._reset_input_turn_state()
 
     emitted: list[llm.InputTranscriptionCompleted] = []
@@ -440,20 +443,47 @@ async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
 async def test_cancelling_say_clears_pending_bookkeeping() -> None:
     # AgentActivity cancels the say() future on interrupt; leftovers would keep
     # has_active_generation true and mis-tag the next response.created
+    from collections import deque
+
     session, _ = _make_session()
     session._response_created_futures = {}  # type: ignore[attr-defined]
     session._discarded_event_ids = set()  # type: ignore[attr-defined]
-    session._pending_say_event_id = None
+    session._pending_say_event_ids = deque()
     sent: list[object] = []
     session.send_event = sent.append  # type: ignore[method-assign]
 
     fut = session.say("hello from force message")
-    assert session._pending_say_event_id is not None
     assert session._response_created_futures
+    # allow the background send task to queue force_message + pending say id
+    await asyncio.sleep(0)
+    assert list(session._pending_say_event_ids)
     fut.cancel()
     await asyncio.sleep(0)
 
-    assert session._pending_say_event_id is None
+    assert list(session._pending_say_event_ids) == []
     assert session._response_created_futures == {}
     assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
     assert session._discarded_event_ids
+
+
+def test_pending_say_ids_are_consumed_fifo() -> None:
+    from collections import deque
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._pending_say_event_ids = deque(["say_first", "say_second"])
+    tagged: list[str] = []
+    for _ in range(2):
+        assert session._pending_say_event_ids
+        event = ResponseCreatedEvent.construct(
+            type="response.created",
+            event_id="evt",
+            response={"id": "resp", "object": "realtime.response", "output": [], "metadata": None},
+        )
+        # mirror the tagging branch in _handle_response_created
+        if not isinstance(event.response.metadata, dict):
+            event.response.metadata = {}
+        event.response.metadata["client_event_id"] = session._pending_say_event_ids.popleft()
+        tagged.append(event.response.metadata["client_event_id"])
+
+    assert tagged == ["say_first", "say_second"]
+    assert list(session._pending_say_event_ids) == []
