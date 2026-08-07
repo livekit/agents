@@ -2856,12 +2856,16 @@ class AgentActivity(RecognitionHooks):
                     text_source = timed_texts
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                    audio_output=audio_output,
+                    tts_output=tts_gen_data.audio_ch,
+                    prepare_playout=lambda: self._prepare_audio_playout(speech_handle),
                 )
             else:
                 # use the provided audio
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=audio
+                    audio_output=audio_output,
+                    tts_output=audio,
+                    prepare_playout=lambda: self._prepare_audio_playout(speech_handle),
                 )
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
@@ -3369,6 +3373,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                prepare_playout=lambda: self._prepare_audio_playout(speech_handle),
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -3921,6 +3926,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                prepare_playout=lambda: self._prepare_audio_playout(speech_handle),
             )
             return _MsgOutput(msg=msg, out=out)
 
@@ -4277,6 +4283,27 @@ class AgentActivity(RecognitionHooks):
             and self._session.output.audio
             and self._session.output.audio.can_pause
         )
+
+    def _prepare_audio_playout(self, speech_handle: SpeechHandle) -> None:
+        """Reconcile the output pause state immediately before forwarding audio."""
+        audio_output = self._session.output.audio
+        if (
+            self._pause_enabled()
+            and not speech_handle.interrupted
+            and speech_handle.allow_interruptions
+        ):
+            assert audio_output is not None
+            if self._paused_speech and self._paused_speech.handle is speech_handle:
+                audio_output.pause()
+                return
+
+            if self._session.agent_state != "speaking" and not self._user_silence_event.is_set():
+                self._update_paused_speech(speech_handle, timeout=0)
+                audio_output.pause()
+                return
+
+        if audio_output is not None:
+            audio_output.resume()
 
     def _cancel_false_interruption_timer(self) -> None:
         if self._false_interruption_timer is not None:
