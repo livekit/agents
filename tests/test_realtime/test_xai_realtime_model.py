@@ -435,3 +435,25 @@ async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
     _speech_started(session, "item_1")
 
     assert not generation._done_fut.done()
+
+
+async def test_cancelling_say_clears_pending_bookkeeping() -> None:
+    # AgentActivity cancels the say() future on interrupt; leftovers would keep
+    # has_active_generation true and mis-tag the next response.created
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_id = None
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    fut = session.say("hello from force message")
+    assert session._pending_say_event_id is not None
+    assert session._response_created_futures
+    fut.cancel()
+    await asyncio.sleep(0)
+
+    assert session._pending_say_event_id is None
+    assert session._response_created_futures == {}
+    assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+    assert session._discarded_event_ids

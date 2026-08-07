@@ -12,12 +12,10 @@ from openai.types.realtime import (
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
-    RealtimeAudioConfig,
-    RealtimeAudioConfigInput,
-    RealtimeAudioConfigOutput,
     RealtimeConversationItemFunctionCall,
     RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
+    ResponseCancelEvent,
     ResponseCreatedEvent,
     ResponseTextDeltaEvent,
 )
@@ -31,6 +29,7 @@ from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
 
 from ..log import logger
 from ..tools import XAITool
+from ._session_update import lift_xai_session_fields
 
 if TYPE_CHECKING:
     from .realtime_model import RealtimeModel
@@ -99,28 +98,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
     ) -> SessionUpdateEvent | dict[str, Any]:
-        # xAI expects voice/turn_detection as top-level session fields
-        audio = session.audio
-        if isinstance(audio, RealtimeAudioConfig):
-            output = audio.output
-            if isinstance(output, RealtimeAudioConfigOutput) and "voice" in output.model_fields_set:
-                session.voice = output.voice  # type: ignore[attr-defined]
-                output.model_fields_set.discard("voice")
-            audio_input = audio.input
-            if (
-                isinstance(audio_input, RealtimeAudioConfigInput)
-                and "turn_detection" in audio_input.model_fields_set
-            ):
-                session.turn_detection = audio_input.turn_detection  # type: ignore[attr-defined]
-                audio_input.model_fields_set.discard("turn_detection")
-            out_set = isinstance(output, RealtimeAudioConfigOutput) and bool(
-                output.model_fields_set
-            )
-            in_set = isinstance(audio_input, RealtimeAudioConfigInput) and bool(
-                audio_input.model_fields_set
-            )
-            if not out_set and not in_set:
-                session.model_fields_set.discard("audio")
+        lift_xai_session_fields(session)
         return super()._wrap_session_update(event_id=event_id, session=session)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
@@ -189,7 +167,16 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 fut.set_exception(llm.RealtimeError("say timed out."))
 
         handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
-        fut.add_done_callback(lambda _: handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            handle.cancel()
+            _clear_pending()
+            if f.cancelled():
+                # force_message may already be in flight; cancel server-side and discard by id
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+                self._discarded_event_ids.add(event_id)
+
+        fut.add_done_callback(_on_fut_done)
 
         async def _send() -> None:
             full_text = text if isinstance(text, str) else "".join([c async for c in text])
@@ -216,14 +203,15 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         return fut
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
-        # force_message responses omit client_event_id; attach the pending say id
-        if self._pending_say_event_id:
-            meta = event.response.metadata
-            if not (isinstance(meta, dict) and meta.get("client_event_id")):
-                if not isinstance(event.response.metadata, dict):
-                    event.response.metadata = {}
-                event.response.metadata["client_event_id"] = self._pending_say_event_id
-                self._pending_say_event_id = None
+        # force_message omits client_event_id; attach the pending say id
+        if self._pending_say_event_id and not (
+            isinstance(event.response.metadata, dict)
+            and event.response.metadata.get("client_event_id")
+        ):
+            if not isinstance(event.response.metadata, dict):
+                event.response.metadata = {}
+            event.response.metadata["client_event_id"] = self._pending_say_event_id
+            self._pending_say_event_id = None
 
         self._discard_abandoned_response()
         self._close_current_generation()
