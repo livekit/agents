@@ -22,12 +22,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [healthcare, survey, frontdesk, drive-thru, inference, avatar, hotel_receptionist]
+        example: [healthcare, survey, frontdesk, drive_thru, inference, avatar, hotel_receptionist, expressive_agent]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ inputs.ref || github.ref }}
-          # Fetch Git-LFS assets (e.g. examples/drive-thru/bg_noise.mp3) so the
+          # Fetch Git-LFS assets (e.g. examples/drive_thru/bg_noise.mp3) so the
           # real binaries — not pointer files — get uploaded as the build context
           # and copied into the image via `COPY . .`. This checkout authenticates
           # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike uv's anonymous
@@ -78,9 +78,12 @@ jobs:
           # Build the agent against the code at the ref we're deploying,
           # not the latest release on PyPI. Without this, a branch deploy
           # would silently run against the published livekit-agents instead
-          # of the branch's own SDK changes. Mirror the checkout ref above,
-          # using ref_name so it's a plain branch/tag git can resolve.
-          DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
+          # of the branch's own SDK changes.
+          #
+          # Defaults to the commit sha, not the branch name: the ref lands in
+          # the uv git source, so a branch name keeps the same `uv sync` layer
+          # cache key across pushes and the deploy quietly reships stale code.
+          DEPLOY_REF: ${{ inputs.ref || github.sha }}
         run: |
           python3 .github/pin_example_to_ref.py \
             "examples/${{ matrix.example }}" --ref "$DEPLOY_REF"

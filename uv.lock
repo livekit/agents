@@ -14,6 +14,7 @@ members = [
     "livekit-agents",
     "livekit-example-avatar",
     "livekit-example-drive-thru",
+    "livekit-example-expressive-agent",
     "livekit-example-frontdesk",
     "livekit-example-healthcare",
     "livekit-example-homepage",
@@ -2354,7 +2355,7 @@ requires-dist = [
 [[package]]
 name = "livekit-example-drive-thru"
 version = "0"
-source = { virtual = "examples/drive-thru" }
+source = { virtual = "examples/drive_thru" }
 dependencies = [
     { name = "livekit-agents" },
     { name = "livekit-plugins-silero" },
@@ -2369,6 +2370,21 @@ requires-dist = [
     { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+
+[[package]]
+name = "livekit-example-expressive-agent"
+version = "0"
+source = { virtual = "examples/expressive_agent" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
