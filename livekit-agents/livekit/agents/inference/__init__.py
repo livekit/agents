@@ -9,6 +9,7 @@ from .interruption import (
 )
 from .llm import LLM, LLMModels, LLMStream
 from .stt import STT, STTModels
+from .sts import STS, STSModels
 from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
 
@@ -31,6 +32,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "STT",
+    "STS",
     "TTS",
     "LLM",
     "VAD",
@@ -38,6 +40,7 @@ __all__ = [
     "LemonSliceOptions",
     "LLMStream",
     "STTModels",
+    "STSModels",
     "TTSModels",
     "LLMModels",
     "VADModels",
