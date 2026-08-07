@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -22,8 +25,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
+    "grpcio>=1.51.1",
     "livekit-agents>=1.6.8",
-    "nvidia-riva-client",
+    "nvidia-riva-client>=2.16,<2.27",
 ]
 
 [project.optional-dependencies]

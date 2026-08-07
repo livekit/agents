@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for base STT `RecognizeStream` fields (start_time, etc.)."""
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -30,13 +33,18 @@ class _DummyStream(RecognizeStream):
         *,
         stt: STT,
         fail_first_run: bool = False,
+        error: APIConnectionError | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        super().__init__(stt=stt, conn_options=conn_options)
         self._fail_first_run = fail_first_run
+        self._error = error
         self._run_count = 0
 
     async def _run(self) -> None:
         self._run_count += 1
+        if self._error is not None:
+            raise self._error
         if self._fail_first_run and self._run_count == 1:
             raise APIConnectionError("fake failure to trigger retry")
         # emit a final and exit so _main_task can complete normally
@@ -49,11 +57,19 @@ class _DummyStream(RecognizeStream):
 
 
 class _DummySTT(STT):
-    def __init__(self) -> None:
+    def __init__(self, error: APIConnectionError | None = None) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
+        self.error = error
+        self.recognize_count = 0
 
     async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
-        raise NotImplementedError
+        self.recognize_count += 1
+        if self.error is not None:
+            raise self.error
+        return SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(language="", text="hello")],
+        )
 
     def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _DummyStream:
         return _DummyStream(stt=self)
@@ -114,4 +130,28 @@ async def test_start_time_reseeded_on_retry() -> None:
     # And it should be a recent wall-clock value.
     assert time.time() - stream.start_time < 5.0
 
+    await stream.aclose()
+
+
+async def test_batch_recognize_does_not_retry_non_retryable_api_error() -> None:
+    stt = _DummySTT(error=APIConnectionError("invalid request", retryable=False))
+
+    with pytest.raises(APIConnectionError, match="invalid request"):
+        await stt.recognize([], conn_options=APIConnectOptions(max_retry=3))
+
+    assert stt.recognize_count == 1
+
+
+async def test_recognize_stream_does_not_retry_non_retryable_api_error() -> None:
+    stt = _DummySTT()
+    stream = _DummyStream(
+        stt=stt,
+        error=APIConnectionError("invalid request", retryable=False),
+        conn_options=APIConnectOptions(max_retry=3),
+    )
+
+    with pytest.raises(APIConnectionError, match="invalid request"):
+        await stream._task
+
+    assert stream._run_count == 1
     await stream.aclose()
