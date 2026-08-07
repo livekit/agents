@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -7,7 +8,7 @@ from contextlib import asynccontextmanager
 import pytest
 from google.genai import types
 
-from livekit.agents import utils
+from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
 pytestmark = pytest.mark.unit
@@ -130,3 +131,98 @@ async def test_session_close_releases_the_genai_client(
         monkeypatch.setattr(session._client.aio, "aclose", _spy)
 
     assert closed
+
+
+async def test_aborted_turn_fails_generate_reply_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn the server rejects never creates a generation (#6708).
+
+    ``generate_reply``'s future is only ever resolved by ``generation_created``, so an
+    abort left the caller waiting out the full 5s timeout for an outcome the server had
+    already reported in ~250ms.
+    """
+    async with _make_session(monkeypatch) as session:
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                turn_complete=True,
+                turn_complete_reason=types.TurnCompleteReason.MALFORMED_FUNCTION_CALL,
+            )
+        )
+
+        assert fut.done(), "the caller is still waiting on a turn the server already ended"
+        with pytest.raises(llm.RealtimeError, match="MALFORMED_FUNCTION_CALL"):
+            fut.result()
+
+
+async def test_turn_without_a_reason_still_fails_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert fut.done()
+        with pytest.raises(llm.RealtimeError):
+            fut.result()
+
+
+async def test_content_without_turn_complete_leaves_the_caller_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # only the end of a turn settles it; a stray frame must not fail a live request
+    async with _make_session(monkeypatch) as session:
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(types.LiveServerContent(interrupted=True))
+
+        assert not fut.done()
+        fut.cancel()
+
+
+async def test_abort_after_an_earlier_reply_still_fails_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # _current_generation is never cleared, so from the second turn on the "no
+    # generation" branch is unreachable - the abort has to be caught on turn_complete
+    # itself or the fix only ever works for the first reply of a call
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._current_generation is not None
+
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                turn_complete=True,
+                turn_complete_reason=types.TurnCompleteReason.MALFORMED_FUNCTION_CALL,
+            )
+        )
+
+        assert fut.done(), "an abort mid-conversation still stranded the caller"
+        with pytest.raises(llm.RealtimeError, match="MALFORMED_FUNCTION_CALL"):
+            fut.result()
+
+
+async def test_tool_rejection_drain_leaves_the_reply_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a rejected tool call turn also ends with turn_complete, but the model answers
+    # afterwards and the pending request is deliberately bound to that reply
+    async with _make_session(monkeypatch) as session:
+        session._rejected_tool_calls = 1
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        session._pending_generation_fut = fut
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert not fut.done(), "failed a reply that was still coming"
+        fut.cancel()
