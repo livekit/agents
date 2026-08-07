@@ -22,12 +22,35 @@ class Userdata:
     # instead of re-verifying into a confusing "already cancelled" dead end.
     last_cancel_message: str = ""
     caller_turns_at_last_cancel: int = -1
+    # The last document re-send (what was sent + the caller-turn count when it went out) -
+    # so a re-invoked resend with no caller input since relays "it's sent" instead of
+    # emailing the same document twice.
+    last_resend_message: str = ""
+    caller_turns_at_last_resend: int = -1
+    # The last completed booking modification's outcome, and the caller-turn count when
+    # it finished - so a re-invoked modification (no caller input since) relays that
+    # outcome instead of re-opening the flow on a booking that was just updated.
+    last_modification_message: str = ""
+    caller_turns_at_last_modification: int = -1
     verified_booking: RoomBooking | None = None
     # The most recent completed room booking, and the caller-turn count at the moment
     # it completed - together they catch a model that re-runs the booking flow with no
     # caller input since, which would silently double-book the guest.
     last_room_booking: RoomBooking | None = None
     caller_turns_at_last_booking: int = 0
+    # Whether a room-booking flow is currently awaiting its inline BookRoomTask.
+    # Parallel inline AgentTasks are unsupported (the second activation orphans the
+    # first call's future and wedges the session), so a second start_room_booking
+    # while one is in flight must bounce with a ToolError instead of running.
+    room_booking_in_flight: bool = False
+    # Whether the pre-hangup policy audit already handed the agent its one nudge -
+    # after that, say_goodbye_and_close_call always closes, so the agent can never
+    # get stuck unable to hang up.
+    end_call_nudged: bool = False
+    # Whether the farewell was already delivered on this call - repeat close attempts
+    # (the caller answered the goodbye, the model called the tool again) must not
+    # produce a "Goodbye!" / "Take care!" / "Goodbye!" loop.
+    goodbye_said: bool = False
 
 
 def _speak_code(code: str) -> str:

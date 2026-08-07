@@ -75,7 +75,14 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their address.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's address. First scan the conversation - if an address was already "
+                "given earlier, record it with update_address and ask a short confirmation "
+                "question rather than collecting it from scratch. Only ask fresh when the "
+                "conversation has no address yet."
+            )
+        )
 
     def _build_update_address_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -130,9 +137,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        # The field-by-field readback is mandatory: a fluent one-line recital lets a
+        # misheard field pass as the caller's own wording, so enumerating the fields is
+        # what gives the user a chance to catch a transcription error.
         return (
             f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"Repeat the address field by field: {address_fields}\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 

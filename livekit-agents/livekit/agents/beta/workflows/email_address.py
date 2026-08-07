@@ -76,7 +76,14 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's email address. First scan the conversation - if an address was "
+                "already given earlier, record it with update_email_address and ask a short "
+                "confirmation question rather than collecting it from scratch. Only ask fresh "
+                "when the conversation has no address yet."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -113,9 +120,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        # The spelled readback is mandatory: speaking the address as words renders
+        # homophone transcription errors (sofia/sofya) inaudible, so letter names are
+        # the only channel that can surface them to the user.
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"Repeat the email character by character: {separated_email}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 

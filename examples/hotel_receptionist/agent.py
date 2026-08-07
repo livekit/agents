@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from collections import deque
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from benchmark import build_expected, diff_databases
+from capabilities import CAPABILITIES, render
 from common import Userdata
 from dotenv import load_dotenv
 from fake_data.seed import build_seed_bytes
@@ -14,7 +17,7 @@ from hotel_db import (
     TODAY,
     HotelDB,
 )
-from instructions import build_instructions
+from persona_core import CORE_INSTRUCTIONS
 from policies import build_lookup_policy_tool
 from run_artifacts import dump_run_artifacts
 from tools_restaurant import RestaurantToolsMixin
@@ -27,20 +30,13 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    MetricsCollectedEvent,
     SimulationContext,
+    ToolError,
     cli,
+    function_tool,
     inference,
-)
-from livekit.agents.evals import (
-    JudgeGroup,
-    accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
-    handoff_judge,
-    relevancy_judge,
-    safety_judge,
-    task_completion_judge,
-    tool_use_judge,
+    llm,
 )
 
 load_dotenv(".env.local")
@@ -48,9 +44,67 @@ load_dotenv(".env.local")
 logger = logging.getLogger("hotel-receptionist")
 
 
+def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
+    """Return configured state statements; an explicit empty list means unchanged state."""
+    if "expected_state" not in userdata:
+        return None
+    expected_state = userdata["expected_state"]
+    if expected_state is None:
+        return []
+    if not isinstance(expected_state, list):
+        raise TypeError("expected_state must be a list of SQL statements")
+    statements: list[str] = []
+    for statement in expected_state:
+        if not isinstance(statement, str):
+            raise TypeError("expected_state must be a list of SQL statements")
+        statements.append(statement)
+    return statements
+
+
+def _tag_work_activity(ctx: JobContext, *, state_changes: list[str], served_reads: bool) -> None:
+    """Record whether deterministic app activity was observed, without judging outcome."""
+    if state_changes or served_reads:
+        ctx.tagger.add("work:observed")
+    else:
+        ctx.tagger.add("work:none")
+
+
 class HotelReceptionistAgent(RoomToolsMixin, RestaurantToolsMixin, ServicesToolsMixin, Agent):
     def __init__(self) -> None:
-        super().__init__(instructions=build_instructions(), tools=[build_lookup_policy_tool()])
+        super().__init__(instructions=CORE_INSTRUCTIONS, tools=[build_lookup_policy_tool()])
+
+        # Agent.__init__ collects every mixin tool. Hold them in a registry keyed by
+        # name and expose only the resident pair, so the re-sent prefix carries the
+        # router rather than 35 schemas; load_capability switches the rest on.
+        self._registry = {tool.info.name: tool for tool in self._tools}
+        self._loaded: set[str] = set()
+        self._tools = self._visible_tools()
+        self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+
+    def _visible_tools(self) -> list[llm.Tool | llm.Toolset]:
+        # Returns rather than assigns self._tools: update_tools() diffs against the
+        # current list to emit the AgentConfigUpdate that records the switch, so
+        # assigning first would make every capability load invisible.
+        resident = ["load_capability", "say_goodbye_and_close_call"]
+        names = dict.fromkeys(
+            resident + [name for area in self._loaded for name in CAPABILITIES[area].tools]
+        )
+        return [self._registry[name] for name in names if name in self._registry]
+
+    @function_tool
+    async def load_capability(self, area: str) -> str:
+        """Switch on the tools and procedure for one area of the job. Call this as soon as
+        the caller names what they need, before promising anything in that area.
+
+        Args:
+            area: One of rooms, billing, restaurant, concierge, guest_services, groups,
+                emergency, transfer, policy.
+        """
+        if area not in CAPABILITIES:
+            raise ToolError(f"unknown area {area!r} - valid areas: {', '.join(CAPABILITIES)}")
+        self._loaded.add(area)
+        await self.update_tools(self._visible_tools())
+        return render(area)
 
     async def on_enter(self) -> None:
         # The caller may have already said what they want before we speak -
@@ -70,27 +124,32 @@ _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    # Grade the run on final DB state: build the scenario's `expected_state` on a
-    # fresh seed, then diff it against the agent's DB. The diff compares
-    # agent-decided facts only (room type, dates, extras, status), so minted
-    # codes / order / which-king don't matter and the agent need not reproduce the
-    # statements — while collateral damage still surfaces.
-    expected_state = ctx.userdata().get("expected_state") or []
-    if not expected_state:
-        return
+    db_diffs: list[str] = []
+    expected_state = _expected_state_statements(ctx.userdata())
+    if expected_state is not None:
+        # Grade the run on final DB state: build the scenario's `expected_state` on a
+        # fresh seed, then diff it against the agent's DB. The diff compares
+        # agent-decided facts only (room type, dates, extras, status), so minted
+        # codes / order / which-king don't matter and the agent need not reproduce the
+        # statements — while collateral damage still surfaces.
+        session = ctx.job_context.primary_session
+        expected = await build_expected(_SEED_DB_BYTES, expected_state)
+        try:
+            db_diffs = diff_databases(expected.connection, session.userdata.db.connection)
+        finally:
+            await expected.aclose()
 
-    session = ctx.job_context.primary_session
-    expected = await build_expected(_SEED_DB_BYTES, expected_state)
-    try:
-        diffs = diff_databases(expected.connection, session.userdata.db.connection)
-    finally:
-        await expected.aclose()
-
-    # Veto the run if the final DB state diverged. The effective result is the AND of
-    # this check and the simulator's conversation judgment, so a mismatch fails a run
-    # the simulator passed; a match simply leaves the simulator's verdict to stand.
-    if diffs:
-        ctx.fail(reason="final DB diverges from expected: " + " | ".join(diffs[:8]))
+    # The session outcome is the simulator's conversation judgment AND the optional
+    # DB-state check. In particular, conversation-only scenarios must not be failed
+    # merely because they correctly completed without a tool call or state change.
+    if db_diffs:
+        reason = "final DB diverges from expected: " + " | ".join(db_diffs[:8])
+        ctx.fail(reason=reason)
+        ctx.job_context.tagger.fail(reason=reason)
+    elif ctx.simulator_verdict.success:
+        ctx.job_context.tagger.success(reason=ctx.simulator_verdict.reason)
+    else:
+        ctx.job_context.tagger.fail(reason=ctx.simulator_verdict.reason)
 
 
 async def on_session_end(ctx: JobContext) -> None:
@@ -103,43 +162,7 @@ async def on_session_end(ctx: JobContext) -> None:
     if len(chat.items) < 3:
         return
 
-    judges = JudgeGroup(
-        llm="openai/gpt-4.1-mini",
-        judges=[
-            task_completion_judge(),
-            accuracy_judge(),
-            tool_use_judge(),
-            handoff_judge(),
-            safety_judge(),
-            relevancy_judge(),
-            coherence_judge(),
-            conciseness_judge(),
-        ],
-    )
-    await judges.evaluate(report.chat_history)
-
     userdata = ctx.primary_session.userdata
-
-    db_diffs: list[str] = []
-    try:
-        sim_ctx = ctx.simulation_context()
-        if sim_ctx is None:
-            logger.info(
-                "local expected-state diff skipped: no simulation context "
-                "(job/room metadata carried no SimulationDispatch)"
-            )
-        expected_state = (sim_ctx.userdata().get("expected_state") if sim_ctx else None) or []
-        if sim_ctx is not None and not expected_state:
-            logger.info("local expected-state diff skipped: scenario has no expected_state")
-        if expected_state:
-            logger.info("running local expected-state diff (%d statement(s))", len(expected_state))
-            expected = await build_expected(_SEED_DB_BYTES, expected_state)
-            try:
-                db_diffs = diff_databases(expected.connection, userdata.db.connection)
-            finally:
-                await expected.aclose()
-    except Exception:
-        logger.exception("error running local expected-state diff")
 
     # "Did the call do real work?" is a DB question, not per-tool bookkeeping:
     # compare the final DB against the untouched seed. Any change in the
@@ -179,16 +202,10 @@ async def on_session_end(ctx: JobContext) -> None:
         for item in report.chat_history.items
     )
 
-    if db_diffs:
-        ctx.tagger.fail(reason="final DB diverges from expected: " + " | ".join(db_diffs[:8]))
-    elif state_changes or served_reads:
-        ctx.tagger.success()
-    else:
-        ctx.tagger.fail(
-            reason="The call accomplished nothing: no state was changed (booking, "
-            "cancellation, modification, dispute, followup, message, wake-up call...) "
-            "and no information was looked up for the caller."
-        )
+    # This is useful activity metadata, not an outcome judgment. Simulations set
+    # lk.success/lk.fail from their actual verdict in on_simulation_end; production
+    # sessions may set an outcome through app-specific instrumentation.
+    _tag_work_activity(ctx, state_changes=state_changes, served_reads=served_reads)
 
     logger.info("session tags: %s", ctx.tagger.tags)
 
@@ -221,8 +238,39 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("inworld/inworld-tts-2"),
-        max_tool_steps=5,
+        # A dense caller turn legitimately chains several recording tools before the
+        # reply (set_stay + choose_room + a dialog + confirm_booking); at 5 the cap
+        # was hit mid-booking-flow and the closing confirm_booking got suppressed,
+        # leaving the task wedged with nothing written.
+        max_tool_steps=8,
     )
+
+    # Token-usage instrumentation: the inference gateway enforces a per-minute LLM
+    # token quota project-wide, so log every LLM request's token counts plus a
+    # rolling 60s total to see exactly what consumes the budget.
+    llm_events: deque[tuple[float, int]] = deque()
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent) -> None:
+        m = ev.metrics
+        if m.type != "llm_metrics":
+            return
+        now = time.monotonic()
+        llm_events.append((now, m.total_tokens))
+        while llm_events and now - llm_events[0][0] > 60:
+            llm_events.popleft()
+        window_tokens = sum(t for _, t in llm_events)
+        logger.info(
+            "LLM usage: prompt=%d (cached=%d) completion=%d total=%d ttft=%.2fs "
+            "| last-60s (this session, agent LLM only): %d tokens across %d requests",
+            m.prompt_tokens,
+            m.prompt_cached_tokens,
+            m.completion_tokens,
+            m.total_tokens,
+            m.ttft,
+            window_tokens,
+            len(llm_events),
+        )
 
     await session.start(agent=HotelReceptionistAgent(), room=ctx.room)
 

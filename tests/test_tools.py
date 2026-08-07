@@ -841,6 +841,9 @@ class TestDiscriminatedUnionSchema:
         item = schema["properties"]["item"]
         assert "anyOf" in item, f"item should have anyOf: {json.dumps(item, indent=2)}"
         assert len(item["anyOf"]) == 2, f"item should have 2 variants: {json.dumps(item, indent=2)}"
+        # the keyword is inert rather than unsupported: providers ignore it, and the
+        # per-variant tag const is what makes the branches mutually exclusive
+        assert item["discriminator"]["propertyName"] == "vehicle"
 
     def test_nested_discriminated_union_uses_anyof_not_oneof(self):
         """Nested discriminated unions should also convert oneOf to anyOf."""

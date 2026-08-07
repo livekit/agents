@@ -8,7 +8,7 @@ from typing import Annotated
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from book_restaurant import BookRestaurantTask
+from book_restaurant import BookRestaurantTask, RestaurantReservationNotCreatedError
 from common import Userdata, _speak_code
 from context import speech_only
 from hotel_db import (
@@ -49,9 +49,18 @@ class RestaurantToolsMixin:
     @function_tool
     async def start_restaurant_booking(self, ctx: RunContext[Userdata]) -> str | None:
         """Start the restaurant-reservation flow. Call it the moment the caller wants a table - the flow collects date, party size, time, name, and phone itself. Its return is the FINAL result of the reservation: relay it and move on - nothing further to confirm or call afterwards."""
-        reservation = await BookRestaurantTask(
-            db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
-        )
+        try:
+            reservation = await BookRestaurantTask(
+                db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx)
+            )
+        except RestaurantReservationNotCreatedError:
+            return (
+                "No reservation was created because a phone number is required. "
+                "| tell the caller the table is not reserved; do not use success wording. "
+                "If they ask to hold the table or make an exception without a number: say "
+                "no table is held and invite them to call back with one - do not offer to "
+                "connect or transfer them to the restaurant."
+            )
         return (
             f"You're set for {speak_time(reservation.time)} on "
             f"{reservation.date.strftime('%A, %B %-d')} for "
@@ -69,7 +78,8 @@ class RestaurantToolsMixin:
     ) -> str:
         """Read-only lookup of a confirmed restaurant reservation. Use this when the caller wants
         to check or recall their reservation details (date, time, party size, notes) without
-        changing or cancelling it.
+        changing or cancelling it - and before a modification that keeps some details "the
+        same", so you know the current values being kept.
 
         Args:
             last_name: caller's last name.
@@ -126,14 +136,15 @@ class RestaurantToolsMixin:
         """Move an existing confirmed restaurant reservation to a new date/time (and
         optionally a new party size), keeping the same confirmation code. Restaurants
         verify with last name + confirmation code (no card, no email). Read the new
-        details back to the caller before calling this.
+        details back to the caller before calling this, and relay the party size from
+        this tool's return when confirming - it's how a wrong count gets caught.
 
         Args:
             last_name: caller's last name.
             confirmation_code: confirmation code like 'RES-X9Y2'.
             new_date: the new date, in ISO YYYY-MM-DD format (e.g. "2026-01-20").
             new_time: the new time, in 24-hour HH:MM format (e.g. "18:00").
-            new_party_size: new number of guests; omit to keep the current party size.
+            new_party_size: new number of guests, ONLY when the caller states the new number. "Keep it the same" means OMIT this parameter - the reservation keeps its current size when omitted. Never fill it with a number the caller didn't say.
         """
         if new_date < TODAY:
             raise ToolError("the new date can't be in the past")
@@ -163,5 +174,7 @@ class RestaurantToolsMixin:
             f"Done - your reservation is now {speak_time(updated.time)} on "
             f"{updated.date.strftime('%A, %B %-d')} for "
             f"{updated.party_size} guest{'s' if updated.party_size != 1 else ''}, "
-            f"under confirmation code {_speak_code(updated.code)}."
+            f"under confirmation code {_speak_code(updated.code)}. "
+            "| confirm the new date, time, AND the party size above to the caller - if the "
+            "party size isn't what they expect, this is their chance to catch it."
         )

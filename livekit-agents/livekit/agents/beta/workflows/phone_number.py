@@ -59,6 +59,16 @@ class GetPhoneNumberResult:
     phone_number: str
 
 
+class PhoneNumberCaptureDeclinedError(ToolError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"couldn't get the phone number: {reason}")
+        self._reason = reason
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
 class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
     def __init__(
         self,
@@ -111,7 +121,14 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their phone number.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's phone number. First scan the conversation - if a number was "
+                "already given earlier, record it with update_phone_number and ask a short "
+                "confirmation question rather than collecting it from scratch. Only ask fresh "
+                "when the conversation has no number yet."
+            )
+        )
 
     def _build_update_phone_number_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -179,7 +196,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             reason: A short explanation of why the user declined to provide the phone number
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the phone number: {reason}"))
+            self.complete(PhoneNumberCaptureDeclinedError(reason))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
