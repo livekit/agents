@@ -930,3 +930,80 @@ async def test_refused_turn_does_not_contaminate_the_next_one():
         # The contaminated socket must be discarded rather than reused.
         assert srv.sessions == 2, srv.sessions
         await tts.aclose()
+
+
+async def test_failed_cancel_stays_a_cancellation():
+    """A barge-in whose cleanup fails must not come back as a retryable error.
+
+    `cancel_and_drain` can time out or raise. If that exception escapes instead of
+    the original `CancelledError`, the framework sees a retryable API error and
+    replays the buffered text: the caller hears the interrupted sentence a second
+    time, and when the cancel came from `aclose()` before `end_input()`, the replay
+    waits forever on an input channel nothing will close.
+    """
+    from livekit.plugins.bland import TTS
+
+    async with _WSServer(acknowledge_cancel=False) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        # Retries enabled, unlike the sibling test above — that is what makes a
+        # swallowed cancellation observable.
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=3, timeout=0.05))
+        stream.push_text("hello")
+        await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
+
+        # Must return: a cancellation that turned into a retry would hang here.
+        await asyncio.wait_for(stream.aclose(), timeout=5)
+        await tts.aclose()
+
+    # The interrupted text must not be spoken again.
+    assert [m["text"] for m in srv.of_type("speak")] == ["hello"]
+
+
+def test_streaming_can_be_disabled():
+    from livekit.plugins.bland import TTS
+
+    tts = TTS(api_key="k", streaming=False)
+
+    assert tts.capabilities.streaming is False
+    # No pooled session, so no concurrency slot is held for a pipeline that only
+    # ever synthesizes complete strings.
+    assert tts._pool is None
+
+
+def test_disabled_streaming_refuses_to_open_a_stream():
+    from livekit.plugins.bland import TTS
+
+    tts = TTS(api_key="k", streaming=False)
+
+    with pytest.raises(RuntimeError, match="streaming is disabled"):
+        tts.stream()
+
+
+def test_disabled_streaming_leaves_the_http_path_alone():
+    from livekit.plugins.bland import TTS
+    from livekit.plugins.bland.tts import ChunkedStream
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    tts = TTS(api_key="k", streaming=False)
+    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
+        assert isinstance(tts.synthesize("hello"), ChunkedStream)
+
+
+async def test_disabled_streaming_teardown_is_a_noop():
+    from livekit.plugins.bland import TTS
+
+    tts = TTS(api_key="k", streaming=False)
+    tts.prewarm()  # nothing to warm
+    await tts.aclose()
+
+
+def test_streaming_is_on_by_default():
+    from livekit.plugins.bland import TTS
+
+    tts = TTS(api_key="k")
+    assert tts.capabilities.streaming is True
+    assert tts._pool is not None

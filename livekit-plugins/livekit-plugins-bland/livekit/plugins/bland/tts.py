@@ -94,6 +94,7 @@ class TTS(tts.TTS):
         stability: NotGivenOr[float] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: str = DEFAULT_BASE_URL,
+        streaming: bool = True,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create a new instance of the Bland TTS.
@@ -108,13 +109,19 @@ class TTS(tts.TTS):
             stability: 0.0-1.0. Higher is more consistent between renders.
             api_key: Bland API key. Falls back to the ``BLAND_API_KEY`` environment variable.
             base_url: Override the Bland API base URL.
+            streaming: Stream text into one realtime WebSocket session, which is what a
+                voice agent wants: audio starts before the sentence is finished, and a
+                barge-in cancels the turn in place. Set False to synthesize each
+                utterance with a single HTTP request instead — no session is held open,
+                and no concurrency slot with it, which suits a pipeline that speaks
+                rarely. ``synthesize()`` uses HTTP either way.
             http_session: Optional ``aiohttp.ClientSession`` to reuse.
         """
         if sample_rate not in SAMPLE_RATES:
             raise ValueError(f"sample_rate must be one of {SAMPLE_RATES}, got {sample_rate}")
 
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=streaming),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -136,11 +143,17 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=_MAX_SESSION_DURATION,
-            mark_refreshed_on_get=True,
+        # No pool when streaming is off: nothing would ever check a socket out of it,
+        # and an open session holds a concurrency slot for as long as it lives.
+        self._pool = (
+            utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+                connect_cb=self._connect_ws,
+                close_cb=self._close_ws,
+                max_session_duration=_MAX_SESSION_DURATION,
+                mark_refreshed_on_get=True,
+            )
+            if streaming
+            else None
         )
 
     @property
@@ -239,7 +252,8 @@ class TTS(tts.TTS):
         if changed:
             # `init` fixes the voice and controls for the life of a session, so a pooled
             # socket would keep serving the old ones.
-            self._pool.invalidate()
+            if self._pool is not None:
+                self._pool.invalidate()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -249,19 +263,26 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
+        if self._pool is None:
+            raise RuntimeError(
+                "streaming is disabled on this Bland TTS instance; construct it with "
+                "`streaming=True`, or wrap it in a `tts.StreamAdapter`"
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        if self._pool is not None:
+            self._pool.prewarm()
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        if self._pool is not None:
+            await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -329,6 +350,10 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
+        # `TTS.stream()` refuses to build one of these without a pool, so this is
+        # always present — bound once here rather than re-narrowed at each use.
+        assert tts._pool is not None
+        self._pool = tts._pool
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -450,9 +475,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cancelled: asyncio.CancelledError | None = None
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
+            async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._pool.last_acquire_time
+                self._connection_reused = self._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -480,12 +505,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 cancel_and_drain(ws),
                                 timeout=min(self._conn_options.timeout, 2.0),
                             )
-                        except BaseException:
+                        except asyncio.CancelledError:
                             try:
                                 await ws.close()
                             except Exception:
                                 pass
                             raise
+                        except BaseException as drain_error:
+                            # Tidying up failed, but this is still a cancellation, and
+                            # it has to leave as one. Letting the drain's own error
+                            # escape would turn a barge-in into a retryable API error:
+                            # the framework replays the buffered text, so the caller
+                            # hears the interrupted sentence a second time — and when
+                            # the cancel came from `aclose()` before `end_input()`, the
+                            # replay waits forever on an input channel nothing will
+                            # close, with the one cancellation already spent.
+                            logger.debug(
+                                "Bland cancel handshake failed",
+                                extra={"error": str(drain_error)},
+                            )
+                            try:
+                                await ws.close()
+                            except Exception:
+                                pass
+                            raise e from drain_error
                     # Exit the pool context normally so this clean, drained session is
                     # returned for the next turn, then preserve caller cancellation.
                     cancelled = e
