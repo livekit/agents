@@ -625,9 +625,18 @@ class AudioRecognition:
         that starts right before the agent's reply launches would otherwise
         sample "listening" at onset, then commit mid-reply and interrupt the
         very speech it acknowledged.
+
+        Only an ENTIRELY backchannel turn is dropped: once real words have
+        accumulated for the turn, a trailing "yes"/"right" chunk is part of
+        the sentence ("Wait, is that right? ... Yes.") and deleting it would
+        change the meaning of the committed turn. (The interruption gate is
+        already consistent with this — it judges the accumulated
+        ``_current_transcript``, not the chunk.)
         """
         backchannel_phrases = self._session.options.interruption.get("backchannel_phrases")
         if not backchannel_phrases:
+            return False
+        if self._audio_transcript:
             return False
         if not (self._speech_overlapped_agent or self._agent_mid_utterance):
             return False

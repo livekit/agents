@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,7 @@ from livekit.agents import (
     AgentSession,
     UserInputTranscribedEvent,
 )
+from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.backchannel import is_backchannel_only
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
@@ -117,6 +120,60 @@ def test_blank_phrase_entries_are_ignored() -> None:
     assert not is_backchannel_only("so my question is", ["", "...", "—", "okay"])
     assert is_backchannel_only("okay", ["", "...", "okay"])
     assert not is_backchannel_only("anything", ["", "..."])
+
+
+# endregion
+
+# region drop decision
+
+
+def _make_recognition(
+    *,
+    audio_transcript: str = "",
+    overlapped: bool = True,
+    agent_speaking: bool = True,
+    agent_state: str = "speaking",
+    phrases: Sequence[str] | None = DEFAULT_BACKCHANNEL_PHRASES,
+) -> AudioRecognition:
+    ar = object.__new__(AudioRecognition)
+    ar._session = SimpleNamespace(  # type: ignore[assignment]
+        options=SimpleNamespace(interruption={"backchannel_phrases": phrases}),
+        agent_state=agent_state,
+    )
+    ar._speech_overlapped_agent = overlapped
+    ar._agent_speaking = agent_speaking
+    ar._audio_transcript = audio_transcript
+    return ar
+
+
+def test_drop_decision() -> None:
+    # entirely-backchannel utterance over agent speech → dropped
+    assert _make_recognition()._should_drop_backchannel_final("Okay, thank you.")
+
+    # overlap sampled at onset only (final landed after agent went quiet) → still dropped
+    assert _make_recognition(
+        agent_speaking=False, agent_state="listening"
+    )._should_drop_backchannel_final("Okay.")
+
+    # overlap live at final only (utterance started right before the reply launched)
+    assert _make_recognition(overlapped=False)._should_drop_backchannel_final("Okay.")
+
+    # real words already accumulated for the turn: a trailing backchannel chunk
+    # is part of the sentence ("Wait, is that right? ... Yes.") — never dropped
+    assert not _make_recognition(
+        audio_transcript="Wait, is that right?"
+    )._should_drop_backchannel_final("Yes.")
+
+    # agent idle and listening at both boundaries → a real answer, never dropped
+    assert not _make_recognition(
+        overlapped=False, agent_speaking=False, agent_state="listening"
+    )._should_drop_backchannel_final("Okay.")
+
+    # feature off
+    assert not _make_recognition(phrases=None)._should_drop_backchannel_final("Okay.")
+
+    # real speech never dropped
+    assert not _make_recognition()._should_drop_backchannel_final("Okay, but wait.")
 
 
 # endregion
