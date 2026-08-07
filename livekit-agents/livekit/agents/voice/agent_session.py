@@ -238,8 +238,9 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
 # Activity signal for pausing/refreshing ``user_away_timeout``:
 # - presence: cancel while user or agent is speaking (VAD/STT speech-started);
 #   transcript-less flips keep the existing deadline (#6030).
-# - conversation: cancel only while the agent is active; ignore user VAD speaking
-#   (preferred for noisy telephony / turn_detection="stt").
+# - conversation: cancel only while the agent is active; ignore user VAD speaking;
+#   final transcripts still refresh the deadline mid-utterance (preferred for
+#   noisy telephony / turn_detection="stt").
 UserAwayOn = Literal["presence", "conversation"]
 
 
@@ -484,8 +485,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 (default) pauses while the user or agent is speaking; transcript-less
                 user speaking↔listening flips keep the existing deadline so noise
                 cannot defer "away". ``"conversation"`` ignores user VAD speaking and
-                only pauses while the agent is active — preferred for noisy telephony
-                / ``turn_detection="stt"`` (#6030).
+                only pauses while the agent is active; final user transcripts still
+                refresh the deadline mid-utterance so a long answer cannot trip
+                "away" before end-of-speech — preferred for noisy telephony /
+                ``turn_detection="stt"`` (#6030).
             transcription_timeout (float, optional): If set, emit a
                 ``user_transcription_timeout`` event when VAD detects user speech
                 during the user's turn but no non-empty final transcript arrives
@@ -2065,6 +2068,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # mark activity even while VAD still reports speaking — EOS uses this
             # to refresh the away deadline instead of a stale remaining=0 window
             self._user_away_speech_had_transcript = True
+
+            # conversation mode keeps the countdown running during user speaking;
+            # a final transcript proves presence, so push the deadline mid-utterance
+            # rather than letting a long answer trip "away" before EOS.
+            if (
+                self._opts.user_away_on == "conversation"
+                and self.user_state == "speaking"
+                and self._agent_state == "listening"
+            ):
+                self._set_user_away_timer(reset=True)
 
         if ev.is_final and self.user_state != "speaking":
             if self.user_state == "away":

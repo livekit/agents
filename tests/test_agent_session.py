@@ -1493,6 +1493,43 @@ async def test_conversation_rearms_away_after_agent_while_user_speaking() -> Non
         await _close_test_session(session)
 
 
+async def test_conversation_final_transcript_refreshes_away_during_speech() -> None:
+    """Conversation mode must not mark the user away mid-utterance after a final."""
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": 0.3, "user_away_on": "conversation"},
+    )
+    try:
+        session._agent_state = "listening"
+        session._user_state = "listening"
+        session._set_user_away_timer(reset=True)
+        deadline0 = session._user_away_deadline
+        assert deadline0 is not None
+
+        session._update_user_state("speaking")
+        assert session._user_away_timer is not None
+
+        # speak past the original deadline; a final proves presence mid-utterance
+        await asyncio.sleep(0.2)
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="still here talking", is_final=True)
+        )
+        deadline1 = session._user_away_deadline
+        assert deadline1 is not None
+        assert deadline1 > deadline0
+        assert session.user_state == "speaking"
+
+        # would have fired on the stale deadline if the final did not refresh
+        await asyncio.sleep(0.2)
+        assert session.user_state == "speaking"
+
+        # without further transcripts, away still fires after a full window
+        await asyncio.sleep(0.25)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
 async def test_presence_does_not_arm_away_while_user_speaking_after_agent() -> None:
     """Presence mode still requires user listening before arming after agent speech."""
     session = create_session(
