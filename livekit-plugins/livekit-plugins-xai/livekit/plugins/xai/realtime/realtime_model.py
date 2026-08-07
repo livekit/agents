@@ -7,13 +7,19 @@ from openai.types.beta.realtime.session import TurnDetection
 from openai.types.realtime import (
     AudioTranscription,
     ConversationItemAdded,
+    ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
+    InputAudioBufferSpeechStartedEvent,
     RealtimeAudioConfig,
     RealtimeAudioConfigInput,
     RealtimeAudioConfigOutput,
     RealtimeConversationItemFunctionCall,
     RealtimeSessionCreateRequest,
+    ResponseAudioDeltaEvent,
+    ResponseCreatedEvent,
+    ResponseTextDeltaEvent,
 )
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from openai.types.realtime.session_update_event import SessionUpdateEvent
@@ -29,6 +35,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
+from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
 
 from ..log import logger
 from ..tools import XAITool
@@ -100,6 +107,10 @@ class RealtimeModel(openai.realtime.RealtimeModel):
 class RealtimeSession(openai.realtime.RealtimeSession):
     """xAI Realtime Session that supports xAI built-in tools."""
 
+    # the base __init__ resets the input turn state before the subclass body runs
+    _pending_transcription: ConversationItemInputAudioTranscriptionCompletedEvent | None = None
+    _response_spoke: bool = False
+
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._xai_model: RealtimeModel = realtime_model
@@ -109,7 +120,16 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._session_connected_at = time.time()
         await super()._run_ws(ws_conn)
 
+    def _reset_input_turn_state(self) -> None:
+        # a reconnect voids every item id, so deliver the held transcript first
+        self._flush_input_transcription()
+        super()._reset_input_turn_state()
+        self._response_spoke = False
+
     async def aclose(self) -> None:
+        # nothing else ends the turn now, and the transcript must not go with the session
+        self._flush_input_transcription()
+
         # emit session duration metrics before closing (for xAI's per-minute billing)
         if self._session_connected_at > 0:
             session_duration = time.time() - self._session_connected_at
@@ -182,9 +202,75 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
         super()._handle_function_call(item)
 
+    def _create_update_chat_ctx_events(
+        self, chat_ctx: llm.ChatContext
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        # stand the mirror's item in for a held turn, or the diff drops it and moves the reply
+        # ahead of it
+        pending = self._pending_transcription
+        node = self._remote_chat_ctx.get(pending.item_id) if pending else None
+        if node is not None and chat_ctx.get_by_id(node.item.id) is None:
+            chat_ctx = chat_ctx.copy()
+            index, previous = 0, node._prev
+            while previous is not None:
+                if (at := chat_ctx.index_by_id(previous.item.id)) is not None:
+                    index = at + 1
+                    break
+                previous = previous._prev
+            chat_ctx.items.insert(index, node.item.model_copy())
+
+        return super()._create_update_chat_ctx_events(chat_ctx)
+
+    def _discard_abandoned_response(self) -> None:
+        """Drop a response that xAI killed before it spoke, which nothing else reports."""
+        generation = self._current_generation
+        if (
+            generation is None
+            or self._response_spoke
+            or isinstance(generation, _DiscardedGeneration)
+        ):
+            return
+
+        logger.debug("discarding the response xAI left in flight")
+        self._close_current_generation()
+        # anything still in flight for it must not land on the response that follows
+        self._current_generation = _DiscardedGeneration()
+
+    def interrupt(self) -> None:
+        # the cancel names no response, so whichever one was in flight is over either way
+        super().interrupt()
+        self._discard_abandoned_response()
+
+    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        # a response that finished clears itself, so anything left here was abandoned
+        self._discard_abandoned_response()
+        self._close_current_generation()
+        self._response_spoke = False
+        super()._handle_response_created(event)
+
+    def _handle_input_audio_buffer_speech_started(
+        self, event: InputAudioBufferSpeechStartedEvent
+    ) -> None:
+        # xAI reuses the item across a pause, so a different id means the held turn is over
+        if self._pending_transcription and self._pending_transcription.item_id != event.item_id:
+            self._flush_input_transcription()
+
+        # the turn began at its first speech segment, so a resumed one must not restamp it
+        started_at = self._input_speech_started_at.get(event.item_id)
+        super()._handle_input_audio_buffer_speech_started(event)
+        if started_at is not None:
+            self._input_speech_started_at[event.item_id] = started_at
+
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
-        # xAI's `conversation.item.added` event always has the previous_item_id as None
-        # replace it with the last item in the remote chat context
+        # xAI omits previous_item_id, or names an item it never announced, so append rather
+        # than lose the item and every later one anchored to it
+        if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
+            logger.warning(
+                "xAI anchored an item to one it never announced, appending it instead",
+                extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
+            )
+            event.previous_item_id = None
+
         if event.previous_item_id is None:
             event.previous_item_id = (
                 self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
@@ -203,30 +289,47 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _handle_conversion_item_input_audio_transcription_completed(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
-        # Unlike OpenAI, xAI streams partial transcripts through this same event,
-        # distinguishing them with a `status` field ("in_progress" for partials,
-        # "completed" for the final transcript). The OpenAI base handler ignores
-        # `status` and always emits is_final=True, so every partial would be
-        # surfaced as a final transcription (and a duplicate conversation item).
-        # Emit interim updates for in-progress transcripts and only delegate to the
-        # base handler for the final one.
-        if getattr(event, "status", None) == "in_progress":
-            self.emit(
-                "input_audio_transcription_completed",
-                llm.InputTranscriptionCompleted(
-                    item_id=event.item_id,
-                    transcript=event.transcript,
-                    is_final=False,
-                ),
-            )
+        # xAI re-transcribes the whole item at every commit, and the item outlives a pause,
+        # so only the last commit of a turn carries its final
+        if getattr(event, "status", None) != "in_progress":
+            if self._pending_transcription and self._pending_transcription.item_id != event.item_id:
+                self._flush_input_transcription()
+            self._pending_transcription = event
+
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=event.transcript,
+                is_final=False,
+            ),
+        )
+
+    def _flush_input_transcription(self) -> None:
+        """Deliver the held transcript as the single final of its item."""
+        if (event := self._pending_transcription) is None:
             return
 
-        # audio transcription is included when the item is added
-        # clear the content before appending the transcript to avoid duplicates
-        if remote_item := self._remote_chat_ctx.get(event.item_id):
-            if (
-                remote_item.item.type == "message"
-                and remote_item.item.raw_text_content == event.transcript
-            ):
-                remote_item.item.content.clear()
+        self._pending_transcription = None
+
+        # the transcript covers the item from the start, so it replaces the mirrored text
+        if (remote_item := self._remote_chat_ctx.get(event.item_id)) and (
+            remote_item.item.type == "message"
+        ):
+            remote_item.item.content = [
+                content for content in remote_item.item.content if not isinstance(content, str)
+            ]
         super()._handle_conversion_item_input_audio_transcription_completed(event)
+
+    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        # xAI drops a response the user talks over without a word, so its first output is the
+        # only proof that the turn ended
+        self._response_spoke = True
+        self._flush_input_transcription()
+        super()._handle_response_audio_delta(event)
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        # the same boundary, for a response that answers in text
+        self._response_spoke = True
+        self._flush_input_transcription()
+        super()._handle_response_text_delta(event)

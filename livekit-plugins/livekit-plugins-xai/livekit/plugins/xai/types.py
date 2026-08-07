@@ -58,8 +58,9 @@ GrokVoices = Literal[
 ]
 
 GrokRealtimeModels = Literal[
-    "grok-voice-think-fast-1.0",
     "grok-voice-fast-1.0",
+    "grok-voice-think-fast-1.0",
+    "grok-voice-think-fast-2.0",
 ]
 
 TTSLanguages = Literal[
