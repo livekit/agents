@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession
+from livekit.agents.job import _serialize_session_report
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -135,6 +137,18 @@ def _make_mock_http() -> MagicMock:
     mock_post_cm.__aenter__.return_value = mock_resp
     mock_http.post.return_value = mock_post_cm
     return mock_http
+
+
+def test_serialize_session_report_handles_non_json_event_values() -> None:
+    class NonSerializable:
+        pass
+
+    report = MagicMock()
+    report.to_dict.return_value = {"events": [{"interruption_detector": NonSerializable()}]}
+
+    payload = json.loads(_serialize_session_report(report))
+
+    assert "NonSerializable" in payload["events"][0]["interruption_detector"]
 
 
 def _observability_endpoint_arg(func: Any) -> dict[str, str]:
