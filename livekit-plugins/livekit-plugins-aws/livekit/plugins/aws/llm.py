@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
+from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -119,6 +120,9 @@ class LLM(llm.LLM):
             cache_system=cache_system,
             cache_tools=cache_tools,
         )
+        # set once Bedrock rejects the temperature parameter for this model
+        # (newer models discontinue it); later requests then omit it entirely
+        self._temperature_rejected = False
 
     @property
     def model(self) -> str:
@@ -197,7 +201,7 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
         temperature = temperature if is_given(temperature) else self._opts.temperature
-        if is_given(temperature):
+        if is_given(temperature) and not self._temperature_rejected:
             inference_config["temperature"] = temperature
         if is_given(self._opts.top_p):
             inference_config["topP"] = self._opts.top_p
@@ -260,10 +264,49 @@ class LLMStream(llm.LLMStream):
                         self._event_ch.send_nowait(chat_chunk)
 
         except Exception as e:
+            if self._maybe_strip_rejected_temperature(e):
+                # the request was modified so an immediate retry can succeed
+                raise APIStatusError(
+                    f"aws bedrock llm: model rejected the temperature parameter: {e}",
+                    status_code=400,
+                    retryable=True,
+                ) from e
             raise APIConnectionError(
                 f"aws bedrock llm: error generating content: {e}",
                 retryable=retryable,
             ) from e
+
+    def _maybe_strip_rejected_temperature(self, e: Exception) -> bool:
+        """Drop ``temperature`` from the request when Bedrock rejected it.
+
+        Bedrock has discontinued the temperature parameter for some newer models
+        and fails the whole request with a ValidationException when it is sent.
+        The stream's request options are mutated so the framework's retry runs
+        without the parameter, and the parent LLM stops sending it altogether.
+        """
+        inference_config = self._opts.get("inferenceConfig")
+        if (
+            not isinstance(e, ClientError)
+            or not inference_config
+            or "temperature" not in inference_config
+        ):
+            return False
+        error = e.response.get("Error", {})
+        if error.get("Code") != "ValidationException":
+            return False
+        message = error.get("Message", "")
+        if "temperature" not in message.lower():
+            return False
+
+        del inference_config["temperature"]
+        self._llm._temperature_rejected = True
+        logger.warning(
+            "aws bedrock llm: model %s rejected the temperature parameter; retrying without "
+            "it and omitting it for subsequent requests (%s)",
+            self._opts.get("modelId"),
+            message,
+        )
+        return True
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
