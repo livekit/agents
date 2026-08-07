@@ -127,7 +127,7 @@ class TestXaiDialect:
         assert instr is not None
         # this branch instructs the unified expr dialect; convert_markup lowers it to
         # xAI's native syntax (see tests/test_expr_markup.py)
-        assert '<expr type="sound" label="laugh"/>' in instr
+        assert '<expr type="sound" label="breath"/>' in instr
         assert '<expr type="prosody" label="' in instr
 
     def test_strip_removes_inline_keeps_wrapping_inner(self) -> None:

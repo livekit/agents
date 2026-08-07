@@ -286,11 +286,13 @@ Examples:
 _INWORLD_SOUNDS = ["laugh", "sigh", "breathe", "clear throat", "cough", "yawn"]
 
 _INWORLD_EXAMPLES = [
-    '<expr type="expression" label="say playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="speak with bright energy"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
-    '<expr type="expression" label="sound concerned"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak calmly"/> Lemme see what I can do.',  # noqa: E501
-    '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, gently"/> I know it\'s been a rough week.',  # noqa: E501
-    '<expr type="expression" label="warm and welcoming"/> Welcome to the hotel. <expr type="expression" label="upbeat, warm questioning"/> How can I help you today?',  # noqa: E501
-    '<expr type="expression" label="easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
+    '<expr type="expression" label="say really playfully"/> Okay okay, why did the burger go to the gym? <expr type="break" label="500ms"/> <expr type="expression" label="really bright, a little fast"/> Because it wanted better buns! <expr type="sound" label="laugh"/>',  # noqa: E501
+    '<expr type="expression" label="a little sheepish, apologetic"/> Ah man, yeah that\'s on us. <expr type="expression" label="speak really calmly"/> Lemme see what I can do.',  # noqa: E501
+    '<expr type="sound" label="sigh"/> <expr type="expression" label="speak softly, almost a whisper"/> I know it\'s been a rough week.',  # noqa: E501
+    '<expr type="expression" label="really amiable and welcoming"/> Welcome to the hotel. <expr type="expression" label="gently inquisitive, slightly fast"/> How can I help you today?',  # noqa: E501
+    '<expr type="expression" label="gently easygoing and reassuring"/> That\'s all set. <expr type="break" label="300ms"/> <expr type="expression" label="slow and really clearly enunciated"/> Your confirmation code is B 4 J 7.',  # noqa: E501
+    # persona carried into the tags: casual words, casual labels
+    '<expr type="expression" label="really chill, a little fast"/> Yeah, of course! <expr type="expression" label="casual, almost fast"/> Gimme one sec, pulling it up now.',  # noqa: E501
 ]
 
 
@@ -309,8 +311,9 @@ def _inworld_expr_llm_instructions(sounds: list[str]) -> str:
         """Delivery - controls how a sentence sounds. Self-closing; place before EVERY sentence.
    <expr type="expression" label="DESCRIPTION"/>
    The label is free-form: describe vocal quality, pitch, volume, pace, and intonation \
-in plain English — "say playfully", "speak with warm surprise", "sound concerned", \
-"drop to a whisper", "speak slowly and clearly, patient and reassuring".
+in plain English — "say really playfully", "slightly surprised, amiable", "sound a little \
+concerned", "drop to almost a whisper", "speak really slowly and clearly, patient and \
+reassuring".
    Match the expression tag's energy to the sentence's punctuation. An exclamation \
 needs a bright or upbeat label (e.g. "bright, upbeat energy"); a calm or reassuring \
 label flattens the "!". Never lead an exclamatory sentence with a calm tag.
@@ -318,28 +321,40 @@ label flattens the "!". Never lead an exclamatory sentence with a calm tag.
 Write "Welcome to the hotel. How can I help you today?", not "Welcome to the hotel, \
 how can I help you today?", so the question carries its own delivery tag instead of \
 inheriting the statement's.
-   Name a mood or speaking style, not a mechanical pitch contour. "upbeat, warm \
-questioning" steers far more reliably than "rising tone".
+   Never put "questioning" in a tag — describe the mood alone and let the question \
+mark carry the intonation.
+   Name a mood or speaking style, not a mechanical pitch contour. "gently upbeat, \
+amiable" steers far more reliably than "rising tone".
    Use at most two adjectives per tag, and make sure they align — with the mood of \
 the sentence and with each other. Clashing descriptors ("calm, excited") cancel out \
 and muddy the delivery.
+   Put a degree modifier in EVERY tag — "a little", "almost", "slightly", "gently", \
+"really" — to set the exact strength of the feeling: "a little amused" or "almost a \
+whisper" lands truer than "amused" or "whisper", and "really excited" turns the \
+delivery up when the moment truly peaks. Most moments call for a shade, not the \
+extreme — default to the softeners and save "really" for true peaks.
+   Carry your persona into the tags — the labels should sound like the character, \
+not generic stage directions. An amiable, casual persona tags with "really relaxed \
+and amiable" or "casual, a little playful"; a formal concierge tags the same \
+sentence "gently courteous, composed". Delivery that contradicts who you are reads \
+as a different speaker.
    Don't open a turn with a "slow" tag. The first expression colors the whole turn, \
 and a slow lead flattens questions and drags the energy down. Keep the pace neutral \
 by default and reserve slow, clearly-enunciated delivery for the specific line that \
 needs it (a total, date, address, or confirmation code).
    Rotate expression labels — don't reuse the same one two turns in a row, and vary \
 the descriptor. A starting palette:
-     greeting / warm open: "bright, genuine warmth" / "warm and welcoming" / \
-"cheerful, glad you called"
-     asking a question: "upbeat, warm questioning" / "warm and curious" / "bright \
-and inviting" / "gently curious, welcoming"
-     good news / exclamation: "bright, upbeat energy" / "delighted and warm" / \
-"pleased and bright"
-     reassuring / taking a request in stride: "calm and confident" / \
-"easygoing and reassuring" / "warm and grounded"
-     empathy / a problem or bad news: "soft, with genuine care" / \
-"sincere and concerned" / "gentle and steady"
-     reading back a total, date, or code: "slow and clearly enunciated\""""
+     greeting / amiable open: "really amiable and welcoming" / "gently bright, \
+heartfelt" / "cheerful, really glad you called"
+     asking a question: "gently upbeat and amiable" / "really open and inquisitive" / \
+"gently inquisitive, attentive"
+     good news / exclamation: "really bright, upbeat energy" / "really delighted and \
+glad" / "gently pleased and bright"
+     reassuring / taking a request in stride: "really calm and confident" / \
+"gently easygoing and reassuring" / "really relaxed and grounded"
+     empathy / a problem or bad news: "really soft, with tender care" / \
+"gently concerned, caring" / "almost a murmur, gentle and steady"
+     reading back a total, date, or code: "slow and really clearly enunciated\""""
     ]
     if sounds:
         fits = " (a clear-throat when shifting to a new step or topic, for example)"
@@ -360,9 +375,6 @@ setting."""
    <expr type="break" label="500ms"/> or <expr type="break" label="1s"/> (max 10s).
    A period or an ellipsis (...) already creates a pause, so don't put a break marker \
 right next to one — pick one or the other.
-   Use only periods, commas, question marks, exclamation points, and ellipses for \
-pacing. Avoid semicolons and dashes; the model doesn't pace them reliably. Rewrite \
-them as separate sentences or commas.
    After any <expr type="break"/>, give the sentence that follows its own expression \
 tag — a fresh one, not necessarily the same as before (a break is often where the mood \
 shifts). A break resets delivery to neutral, so an untagged sentence after a break is \
@@ -374,19 +386,32 @@ spoken flat."""
         _numbered_sections(sections),
         "There is no wrapping prosody marker for this voice — put pace, pitch, and volume in "
         "the expression label instead.",
+        """Write for the EAR, not the page: no em or en dashes anywhere in spoken text — \
+use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
+semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
+sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — delivery descriptions and sound names steer the voice and are never \
+translated.""",
     ]
+    if "laugh" in sounds:
+        parts.append(
+            "Laughter belongs only in genuinely playful or celebratory beats, never at "
+            "a serious moment."
+        )
     if examples := _sound_examples(_INWORLD_EXAMPLES, sounds, _INWORLD_SOUNDS):
         parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
     return "\n\n".join(parts)
 
 
 _XAI_EXAMPLES = [
-    'So I walked in and <expr type="break" label="500ms"/> there it was! <expr type="sound" label="laugh"/> <expr type="prosody" label="whisper">It was a secret the whole time.</expr>',  # noqa: E501
-    '<expr type="prosody" label="build-intensity">This is going to be so good</expr> — <expr type="prosody" label="loud">I can\'t wait!</expr> <expr type="sound" label="chuckle"/>',  # noqa: E501
+    'So I walked in and <expr type="break" label="500ms"/> <expr type="sound" label="inhale"/> there it was! <expr type="prosody" label="whisper">It was a secret the whole time.</expr>',  # noqa: E501
+    '<expr type="prosody" label="build-intensity">This is going to be so good.</expr> <expr type="prosody" label="loud">I can\'t wait!</expr>',  # noqa: E501
     '<expr type="prosody" label="soft">Hey.</expr> <expr type="sound" label="sigh"/> <expr type="prosody" label="lower-pitch">I know it\'s been a rough week.</expr> I\'m right here.',  # noqa: E501
-    '<expr type="prosody" label="laugh-speak">You did not just say that</expr> <expr type="sound" label="giggle"/> okay, <expr type="prosody" label="fast">tell me everything.</expr>',  # noqa: E501
-    # sound-free, so at least one example survives any steering filter
-    '<expr type="prosody" label="emphasis">Everything</expr> is confirmed for Thursday. <expr type="break" label="500ms"/> <expr type="prosody" label="slow">Is there anything else I can help you with?</expr>',  # noqa: E501
+    '<expr type="prosody" label="higher-pitch">You did not just say that</expr> okay, <expr type="prosody" label="fast">tell me everything.</expr>',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter; the break lands
+    # mid-sentence before the key detail, never beside sentence punctuation
+    '<expr type="prosody" label="emphasis">Everything</expr> is confirmed for <expr type="break" label="500ms"/> Thursday the <expr type="prosody" label="emphasis">ninth</expr>. <expr type="prosody" label="slow">Is there anything else I can help you with?</expr>',  # noqa: E501
 ]
 
 
@@ -396,17 +421,31 @@ def _xai_expr_llm_instructions(sounds: list[str], prosody: list[str]) -> str:
         sections.append(
             f"""Sounds - a non-verbal vocalization at the exact point where it happens. Self-closing.
    <expr type="sound" label="{sounds[0]}"/>
-   Labels are a fixed vocabulary: {", ".join(sounds)}."""
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits. An enabled sound gets over-used otherwise."""
         )
     sections.append(
-        """Pauses - insert a beat. Self-closing.
-   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause"""  # noqa: E501
+        """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> a brief pause    <expr type="break" label="1s"/> a longer, dramatic pause
+   NEVER place a break next to a period, question mark, exclamation point, or ellipsis \
+— sentence punctuation already pauses, and a break beside it double-pauses. Most \
+replies need no break markers at all; reserve them for a deliberate mid-sentence beat \
+before a key detail (a date, a name, a number)."""  # noqa: E501
+    )
+    tones = [p for p in prosody if p != "emphasis"]
+    sections.append(
+        f"""Prosody - wraps a span delivered in a distinct style, to shape HOW it's said.
+   <expr type="prosody" label="STYLE">the words it affects</expr>
+   Labels are a fixed vocabulary: {", ".join(tones)}.
+   Use one only where the moment clearly calls for it — most sentences need none. \
+Never nest one prosody marker inside another, and always close it with </expr>."""
     )
     sections.append(
-        f"""Prosody - wraps the exact words it affects to shape HOW they're said.
-   <expr type="prosody" label="STYLE">the words it affects</expr>
-   Labels are a fixed vocabulary: {", ".join(prosody)}.
-   Never nest one prosody marker inside another, and always close it with </expr>."""
+        """Emphasis - stresses exactly the ONE word it wraps.
+   Are you <expr type="prosody" label="emphasis">sure</expr> you want to do this?
+   Wrap a single word, never a phrase, and never write it in all-caps — caps are read \
+out as individual letters. Never nest it, and always close it with </expr>."""
     )
 
     parts = [
@@ -415,19 +454,34 @@ def _xai_expr_llm_instructions(sounds: list[str], prosody: list[str]) -> str:
         "This voice has no free-form delivery descriptions — shape delivery entirely through "
         + ("prosody markers, sounds, pauses" if sounds else "prosody markers, pauses")
         + ", punctuation, and word choice.",
-        """To stress a word, wrap it in <expr type="prosody" label="emphasis">...</expr> — do NOT \
-write it in all-caps, which is read out as individual letters. Punctuation still shapes \
-delivery — commas and periods create natural pauses, so reach for a break marker only \
-when you want a beat beyond what the punctuation gives.""",
-        """ALWAYS wrap numbers, dates, times, amounts, addresses, and names of specific things in \
-<expr type="prosody" label="emphasis">...</expr> so they stand out to the listener — this is \
-the one marker that is mandatory, not optional. When the detail is dense or easy to mishear, \
-wrap it in <expr type="prosody" label="slow">...</expr> instead, and read codes or reference \
-numbers character by character, spelled out with spaces, so each one lands.""",
-        """VERY IMPORTANT: Always put <expr type="break" label="750ms"/> right before any number, \
-code of any kind, or address — people naturally take a beat before saying one, and it cues \
-the listener to catch what comes next.""",
+        """Write for the EAR, not the page: no em or en dashes anywhere in spoken text — \
+use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
+semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
+sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — labels are a fixed vocabulary, never translated.""",
+        """Key details deserve care: stress the load-bearing word of a date, amount, or \
+name with the emphasis marker, and wrap a dense or easy-to-mishear span in \
+<expr type="prosody" label="slow">...</expr>. Read codes and reference numbers \
+character by character, spelled out with spaces, so each one lands.""",
     ]
+
+    # Vocabulary-specific register guidance on top of the preamble's neutral rule,
+    # mentioning only concepts this steering leaves enabled (whisper/soft/loud are
+    # neutral delivery controls, never filtered).
+    register = [
+        "Whisper and soft belong to gentle or conspiratorial beats; loud only to "
+        "genuinely high-energy ones."
+    ]
+    if any(s in sounds for s in ("laugh", "chuckle", "giggle")):
+        register.append(
+            "Laughter is RARE: a laugh, chuckle, or giggle belongs only where something "
+            "is genuinely funny — friendliness, agreement, or mild amusement is not a "
+            "reason, and never laugh at your own lines. Most replies have no laughter "
+            "at all."
+        )
+    parts.append(" ".join(register))
+
     if examples := _sound_examples(_XAI_EXAMPLES, sounds + prosody, _XAI_INLINE + _XAI_WRAPPING):
         parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
     return "\n\n".join(parts)
@@ -659,11 +713,16 @@ _SOUND_USAGE_HINTS: dict[str, str] = {
     "chuckling": "a chuckle at something subtly humorous",
     "giggle": "a chuckle at something subtly humorous",
     "sigh": "a sigh when commiserating",
+    "sighing": "a sigh when commiserating",
     "inhale": "a sharp inhale before a big reveal",
+    "gasping": "a gasp at a sudden shock or reveal",
     "lip-smack": "a lip-smack or tongue-click as a tiny beat of thought",
     "tongue-click": "a lip-smack or tongue-click as a tiny beat of thought",
     "tsk": "a tsk for mock-disapproval",
     "clear throat": "a clear-throat when shifting to a new step or topic",
+    "groaning": "a groan at a groan-worthy pun or an unwelcome chore",
+    "yawning": "a yawn when tiredness itself is the topic",
+    "sobbing": "a sob reserved for real heartbreak",
 }
 
 
