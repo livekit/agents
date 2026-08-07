@@ -2255,6 +2255,15 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        if self.llm.stateful:
+            # e.g. a LangGraph adapter whose chat() runs graph nodes/tools:
+            # a discarded speculative run would still commit their side effects
+            logger.debug(
+                "preemptive generation skipped: %s declares chat() stateful",
+                type(self.llm).__name__,
+            )
+            return
+
         self._cancel_preemptive_generation()
 
         if (

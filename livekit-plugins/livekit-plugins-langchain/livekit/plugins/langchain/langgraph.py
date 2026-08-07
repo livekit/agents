@@ -44,7 +44,25 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
         context: ContextT | None = None,
         subgraphs: bool = False,
         stream_mode: StreamMode | list[StreamMode] = "messages",
+        stateful: bool = True,
     ) -> None:
+        """Adapt a LangGraph graph to the LiveKit LLM interface.
+
+        Args:
+            graph: The compiled LangGraph graph to run for each turn.
+            config: Optional RunnableConfig forwarded to ``graph.astream``.
+            context: Optional context forwarded to ``graph.astream``.
+            subgraphs: Whether to stream from subgraphs as well.
+            stream_mode: LangGraph stream mode(s); only ``messages`` and
+                ``custom`` are supported.
+            stateful: Whether running the graph mutates state that outlives the
+                call. Unlike a plain LLM call, a graph turn can execute tools
+                and write checkpoints with no rollback if the result is
+                discarded, so this defaults to ``True`` and the session keeps
+                speculative runs (preemptive generation) away from it. Set to
+                ``False`` only if every node in the graph is side-effect-free
+                or idempotent per turn.
+        """
         super().__init__()
         modes = {stream_mode} if isinstance(stream_mode, str) else set(stream_mode)
         unsupported = modes - _SUPPORTED_MODES
@@ -57,6 +75,11 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
         self._context = context
         self._subgraphs = subgraphs
         self._stream_mode = stream_mode
+        self._stateful = stateful
+
+    @property
+    def stateful(self) -> bool:
+        return self._stateful
 
     @property
     def model(self) -> str:

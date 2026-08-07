@@ -88,6 +88,12 @@ class FallbackAdapter(
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def stateful(self) -> bool:
+        # a chat() may run on any wrapped instance, so the wrapper carries the
+        # state of the most constrained one
+        return any(inst.stateful for inst in self._llm_instances)
+
     def chat(
         self,
         *,
@@ -233,10 +239,33 @@ class FallbackLLMStream(LLMStream):
             )
             raise
 
+    def _mark_available(self, llm: LLM, llm_status: _LLMStatus) -> None:
+        """Report a healthy instance, announcing only an actual transition."""
+        if llm_status.available:
+            return
+
+        llm_status.available = True
+        logger.info(f"llm.FallbackAdapter, {llm.label} recovered")
+        self._fallback_adapter.emit(
+            "llm_availability_changed",
+            AvailabilityChangedEvent(llm=llm, available=True),
+        )
+
     def _try_recovery(self, llm: LLM) -> None:
         llm_status = self._fallback_adapter._status[
             self._fallback_adapter._llm_instances.index(llm)
         ]
+        if llm.stateful:
+            # a recovery probe runs a full chat() and throws every chunk away;
+            # for a stateful instance that commits the side effects of a real
+            # turn just to test availability. It is retried on real traffic
+            # instead (see _run), so it can still come back.
+            logger.debug(
+                "%s declares chat() stateful, skipping the recovery probe",
+                llm.label,
+            )
+            return
+
         if llm_status.recovering_task is None or llm_status.recovering_task.done():
 
             async def _recover_llm_task(llm: LLM) -> None:
@@ -244,12 +273,7 @@ class FallbackLLMStream(LLMStream):
                     async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass
 
-                    llm_status.available = True
-                    logger.info(f"llm.FallbackAdapter, {llm.label} recovered")
-                    self._fallback_adapter.emit(
-                        "llm_availability_changed",
-                        AvailabilityChangedEvent(llm=llm, available=True),
-                    )
+                    self._mark_available(llm, llm_status)
                 except Exception:
                     return
 
@@ -264,7 +288,10 @@ class FallbackLLMStream(LLMStream):
 
         for i, llm in enumerate(self._fallback_adapter._llm_instances):
             llm_status = self._fallback_adapter._status[i]
-            if llm_status.available or all_failed:
+            # a stateful instance gets no background probe to mark it healthy
+            # again, so it is retried here instead - otherwise one failure
+            # would drop it (often the primary) for the rest of the process
+            if llm_status.available or all_failed or llm.stateful:
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
@@ -277,6 +304,10 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
+                    # a completed request is proof of life. Stateful instances
+                    # get no background probe to clear the flag, and for the
+                    # rest this converges the status one request sooner
+                    self._mark_available(llm, llm_status)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
                     if llm_status.available:
