@@ -140,6 +140,7 @@ class FakeActions:
         transcript: str,
         *,
         stt_delay: float = 0.2,
+        interim_interval: float | None = None,
         final: bool = True,
     ) -> None:
         self._items.append(
@@ -148,6 +149,7 @@ class FakeActions:
                 end_time=end_time,
                 transcript=transcript,
                 stt_delay=stt_delay,
+                interim_interval=interim_interval,
                 final=final,
             )
         )
