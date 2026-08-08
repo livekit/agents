@@ -2040,6 +2040,8 @@ class AgentActivity(RecognitionHooks):
                 assert (timeout := interruption_options["false_interruption_timeout"]) is not None
                 assert (audio_output := self._session.output.audio) is not None
 
+                # `_prepare_audio_playout` preserves this pause until EOS or turn commit
+                # resolves it.
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
@@ -2085,8 +2087,8 @@ class AgentActivity(RecognitionHooks):
             and current_speech.allow_interruptions
             and (self._paused_speech is None or self._paused_speech.handle is not current_speech)
         ):
-            # pause the audio output if agent is not speaking (in thinking state);
-            # resume immediately when user stops speaking, the timeout will be updated by _interrupt_by_audio_activity
+            # If SOS precedes `current_speech`, `_prepare_audio_playout` applies this pause
+            # at launch.
             assert (audio_output := self._session.output.audio) is not None
 
             self._update_paused_speech(current_speech, timeout=0)
@@ -4294,10 +4296,13 @@ class AgentActivity(RecognitionHooks):
         ):
             assert audio_output is not None
             if self._paused_speech and self._paused_speech.handle is speech_handle:
+                # Preserve the pause from `on_start_of_speech` or
+                # `_interrupt_by_audio_activity`.
                 audio_output.pause()
                 return
 
             if self._session.agent_state != "speaking" and not self._user_silence_event.is_set():
+                # SOS preceded this handle, so apply the same pause at launch.
                 self._update_paused_speech(speech_handle, timeout=0)
                 audio_output.pause()
                 return
