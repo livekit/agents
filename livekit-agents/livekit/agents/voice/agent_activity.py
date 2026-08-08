@@ -2040,8 +2040,8 @@ class AgentActivity(RecognitionHooks):
                 assert (timeout := interruption_options["false_interruption_timeout"]) is not None
                 assert (audio_output := self._session.output.audio) is not None
 
-                # `_prepare_audio_playout` preserves this pause until EOS or turn commit
-                # resolves it.
+                # EOS arms false-interruption resume. A final transcript or a
+                # replying turn commit interrupts the paused handle.
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
@@ -2087,8 +2087,8 @@ class AgentActivity(RecognitionHooks):
             and current_speech.allow_interruptions
             and (self._paused_speech is None or self._paused_speech.handle is not current_speech)
         ):
-            # If SOS precedes `current_speech`, `_prepare_audio_playout` applies this pause
-            # at launch.
+            # EOS arms false-interruption resume. A final transcript or a
+            # replying turn commit interrupts the paused handle.
             assert (audio_output := self._session.output.audio) is not None
 
             self._update_paused_speech(current_speech, timeout=0)
@@ -4287,33 +4287,36 @@ class AgentActivity(RecognitionHooks):
         )
 
     def _prepare_audio_playout(self, speech_handle: SpeechHandle) -> None:
-        """Reconcile the output pause state immediately before forwarding audio."""
+        """Preserve, apply, or release a speech pause before forwarding audio."""
         audio_output = self._session.output.audio
-        if (
+        pause_is_allowed = (
             self._pause_enabled()
             and not speech_handle.interrupted
             and speech_handle.allow_interruptions
-        ):
-            assert audio_output is not None
-            if self._paused_speech and self._paused_speech.handle is speech_handle:
-                # Preserve the pause from `on_start_of_speech` or
-                # `_interrupt_by_audio_activity`.
-                audio_output.pause()
-                return
-
-            if self._session.agent_state != "speaking" and not self._user_silence_event.is_set():
-                # SOS preceded this handle, so apply the same pause at launch.
-                self._update_paused_speech(speech_handle, timeout=0)
-                audio_output.pause()
-                return
-
-        if (
-            not speech_handle.allow_interruptions
-            and self._paused_speech
+        )
+        pause_is_valid = (
+            self._paused_speech is not None
             and self._paused_speech.handle is speech_handle
-        ):
+            and pause_is_allowed
+        )
+        if pause_is_valid:
+            # An SOS path already paused this handle.
+            return
+
+        if self._paused_speech is not None:
             self._cancel_false_interruption_timer()
             self._paused_speech = None
+
+        if (
+            pause_is_allowed
+            and self._session.agent_state != "speaking"
+            and not self._user_silence_event.is_set()
+        ):
+            assert audio_output is not None
+            # SOS arrived before this handle became current.
+            self._update_paused_speech(speech_handle, timeout=0)
+            audio_output.pause()
+            return
 
         if audio_output is not None:
             audio_output.resume()
@@ -4400,6 +4403,12 @@ class AgentActivity(RecognitionHooks):
     async def _cancel_speech_pause(
         self, old_task: asyncio.Task[None] | None = None, *, interrupt: bool = True
     ) -> None:
+        """Clear a speech pause and optionally interrupt its handle.
+
+        Final STT transcripts and committed turns that generate replies use
+        ``interrupt=True``. Activity shutdown uses ``interrupt=False`` because the
+        scheduling task owns the speech.
+        """
         if old_task is not None:
             try:
                 await old_task

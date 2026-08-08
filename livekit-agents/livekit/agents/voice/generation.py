@@ -521,8 +521,7 @@ async def _audio_forwarding_task(
 
     cancelled = False
     try:
-        # A paused output continues to buffer frames. After EOS, the activity resumes it
-        # for a false interruption or interrupts the speech for a committed user turn.
+        # Reconcile any SOS pause before forwarding audio.
         prepare_playout()
 
         async for frame in tts_output:
