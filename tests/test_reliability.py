@@ -7,6 +7,8 @@ from livekit.agents.evals import (
 )
 from livekit.agents.evals.judge import JudgmentResult
 
+pytestmark = pytest.mark.evals
+
 
 def test_reliability_trace_defaults():
     trace = ReliabilityTrace(session_id="test-1")
