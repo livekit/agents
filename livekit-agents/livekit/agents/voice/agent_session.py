@@ -207,7 +207,7 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
+    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``.
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
@@ -381,6 +381,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
+        expressive: bool | ExpressiveOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -459,6 +460,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
+            expressive (bool | ExpressiveOptions, optional): Let the LLM steer how the
+                agent sounds. When enabled, the provider's markup guide is injected into
+                the LLM prompt so it can emit inline delivery tags (emotion, pacing,
+                non-verbal sounds), which are rendered by the TTS and stripped from the
+                transcript. Pass an :class:`ExpressiveOptions` dict to steer or override
+                the injected instructions. Requires ``livekit.agents.inference.TTS`` with
+                a model that declares a markup dialect; it stays off otherwise.
+                Default ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -572,8 +581,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
-        # expressive mode is not publicly exposed; the pipeline stays disabled
-        self._expressive: bool | ExpressiveOptions = False
+        self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -679,6 +687,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
+        # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
+        self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -817,6 +827,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -831,6 +842,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -844,6 +856,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -857,6 +870,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
             room: The room to use for input and output
+            session_host: Whether a `RemoteSession` can drive and observe this session
+                over the room. Defaults to True, or False when another session in the
+                same job is already the primary. Set False when the room already has
+                its agent and this session is only a participant in it, such as a
+                client talking to that agent. Ignored under the console subcommand,
+                where hosting is how the console reaches the session at all.
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
@@ -897,6 +916,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             self._recording_options = _resolve_recording_options(False)
 
                 job_ctx.init_recording(self._recording_options)
+
+            # hosting needs the primary designation as before, and the caller's consent
+            hosting = is_primary and (session_host if is_given(session_host) else True)
 
             # Under a text simulation the simulated user interacts over text
             # streams only: disable audio I/O here, and STT/TTS/VAD via
@@ -982,7 +1004,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                if is_primary:
+                if hosting:
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
@@ -1604,21 +1626,44 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 continue
 
     @asynccontextmanager
-    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+    async def _wait_for_idle_and_hold(
+        self, *, run_state: RunResult | None = None
+    ) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit.
+
+        ``run_state`` is the run that owns the turn of the caller. That run is guarded for
+        the whole scope, since reaching idle is itself what completes the run: without the
+        guard, whatever the scope does next lands after ``run()`` returned and goes
+        unrecorded. A caller whose turn already ended guards nothing, so background work
+        cannot hold a later run open.
+        """
         from .agent_activity import _IdleHoldContextVar
 
-        activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
-        token = _IdleHoldContextVar.set(True)
+        # registered before the wait below, which is what lets the run complete
+        guard: asyncio.Future[None] | None = None
+        if run_state is not None and run_state is self._global_run_state and not run_state.done():
+            guard = asyncio.get_running_loop().create_future()
+            run_state._watch_handle(guard)
+            self._foreground_guards.add(guard)
+
         try:
-            yield activity
+            activity = await self.wait_for_idle()
+            self._idle_holds += 1
+            self._idle_released.clear()
+            token = _IdleHoldContextVar.set(True)
+            try:
+                yield activity
+            finally:
+                _IdleHoldContextVar.reset(token)
+                self._idle_holds -= 1
+                if self._idle_holds == 0:
+                    self._idle_released.set()
         finally:
-            _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            if guard is not None:
+                self._foreground_guards.discard(guard)
+                # the run re-checks from the done callback; releasing here rather than on
+                # the way out of the inner block covers a floor that never arrives
+                guard.set_result(None)
 
     async def _update_activity(
         self,

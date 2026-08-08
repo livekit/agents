@@ -14,7 +14,7 @@ version: 1
 # each example's livekit.toml from this subdomain + the per-example
 # agent_id below before invoking `lk agent deploy`.
 project:
-  subdomain: examples-wfxyig8v
+  subdomain: demo-agents-omk31qjj
 
 examples:
   frontdesk:
@@ -22,7 +22,7 @@ examples:
     description: A receptionist agent wired up to a live calendar. Answers questions about availability, books appointments in real time, and confirms back to the caller.
     # brand palette — indigo-500
     accent: "#1F44F9"
-    agent_id: CA_9TqkLsnwhjmE
+    agent_id: CA_y5MnZwagLJMp
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/frontdesk"
     tags: [tools, scheduling]
@@ -51,7 +51,7 @@ examples:
     description: A medical front-desk agent that handles intake, authenticates returning patients, books appointments, and hands the conversation off to a human when it needs to.
     # LiveKit brand palette (raw-colors.ts) — green-500
     accent: "#009E4F"
-    agent_id: CA_uFGnwowV2PMS
+    agent_id: CA_6xRtj8dRsa6j
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/healthcare"
     tags: [multi-agent, scheduling]
@@ -77,7 +77,7 @@ examples:
     description: A structured interview agent that walks candidates through a software engineer screening flow, captures answers as they go, and writes a graded summary to disk.
     # brand palette — amber-500
     accent: "#EF8B01"
-    agent_id: CA_APDyCSXwMUNS
+    agent_id: CA_jWtLpVb87Xwx
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/survey"
     tags: [multi-agent]
@@ -98,14 +98,14 @@ examples:
         010000000000
         000000000000
 
-  drive-thru:
+  drive_thru:
     title: Drive Thru
     description: A drive-thru ordering agent that takes the order over voice, builds a structured cart with dynamically-generated tools per menu item, and reads back the total.
     # brand palette — red-500
     accent: "#FA4C39"
-    agent_id: CA_cn3jfgKTxXDL
+    agent_id: CA_F8gohFoh4BMw
     entry: agent.py
-    github: "https://github.com/livekit/agents/tree/main/examples/drive-thru"
+    github: "https://github.com/livekit/agents/tree/main/examples/drive_thru"
     tags: [tools]
     icon:
       # Side-view car: cabin pillars in accent, windshield + side
@@ -144,7 +144,7 @@ examples:
     description: A voice agent powered end-to-end by LiveKit Inference. Pick the STT, LLM, and TTS provider live to hear how each one feels in the same conversation.
     # brand palette — purple-500
     accent: "#9B5CFF"
-    agent_id: CA_K9e3yQ3RPNKQ
+    agent_id: CA_vW8xVewx3AgJ
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/inference"
     tags: [inference]
@@ -299,7 +299,7 @@ examples:
     description: A hotel front-desk agent that books rooms and restaurant reservations, modifies and verifies existing bookings, and confirms guest details — all backed by a live database.
     # brand palette — teal-500
     accent: "#14B8A6"
-    agent_id: CA_ZVVNHj3sPjJ5
+    agent_id: CA_4svEd8aaowSr
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/hotel_receptionist"
     tags: [multi-agent, tools]
@@ -326,7 +326,7 @@ examples:
     description: Talk to a LemonSlice avatar. Pick anyone from the dropdown to swap who you're chatting with, from Leila to a Pixar fox.
     # LemonSlice brand \u2014 yellow-500 from the LK palette.
     accent: "#F9E71F"
-    agent_id: CA_dzjZwsBsRKzZ
+    agent_id: CA_hj4mhpfNt47i
     entry: agent.py
     github: "https://github.com/livekit/agents/tree/main/examples/avatar"
     tags: [avatar, video, multi-persona]
@@ -371,3 +371,30 @@ examples:
           - { value: shopping_assistant, label: Shopping Assistant }
           - { value: cat_girl, label: Cat Girl }
           - { value: mr_fox, label: Mr Fox }
+
+  expressive_agent:
+    title: Expressive
+    description: A free-form companion agent running Expressive Mode. Tell it good news or bad news and hear the delivery change — emotion, pacing, and non-verbal sounds, all chosen from context.
+    # brand palette — cyan-500
+    accent: "#1FD5F9"
+    agent_id: CA_LdKBYTBXNNt9
+    entry: agent.py
+    github: "https://github.com/livekit/agents/tree/main/examples/expressive_agent"
+    tags: [expressive, inference]
+    icon:
+      # Sound wave rising then falling, with the tall centre bars in the
+      # highlight tone: quiet, loud, quiet — the shape of a spoken phrase.
+      size: 12
+      pixels: |
+        000000000000
+        000000000000
+        000001100000
+        000012210000
+        000122221000
+        001222222100
+        001222222100
+        000122221000
+        000012210000
+        000001100000
+        000000000000
+        000000000000

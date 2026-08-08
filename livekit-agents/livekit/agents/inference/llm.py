@@ -31,6 +31,7 @@ from ._utils import (
     HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
+    extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -487,6 +488,8 @@ class LLMStream(llm.LLMStream):
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
+            if e.status_code == 429:
+                self._log_rate_limited(e)
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
@@ -496,6 +499,16 @@ class LLMStream(llm.LLMStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
+
+    def _log_rate_limited(self, e: openai.APIStatusError) -> None:
+        """Log the gateway's quota snapshot when a request is rejected with 429.
+
+        The gateway stamps X-LiveKit-Inference-{RPM,TPM,Credits}-{Limit,Used}
+        on rejections so customers can see which limit they hit and by how much.
+        """
+        extra: dict[str, Any] = {"model": self._model, "request_id": e.request_id}
+        extra.update(extract_quota_usage(e.response.headers))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
 
     def _parse_choice(
         self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter

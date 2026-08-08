@@ -1407,12 +1407,49 @@ class TestHasCancellableTool:
         assert has_cancellable_tool([mock_tool_1, ts]) is True
 
 
+@function_tool(
+    raw_schema={
+        "name": "_key_probe",
+        "description": "Argument sink for key-derivation tests.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+)
+async def _key_probe(raw_arguments: dict[str, object]) -> str:
+    return ""
+
+
+def _key(
+    name: str, args: dict[str, Any] | None = None, *, fnc: Any = _key_probe
+) -> tuple[str, str | None]:
+    """Derive a duplicate key the same way the executor does, so these tests can't
+    drift from production canonicalization. ``args=None`` → name-scoped key.
+
+    Defaults to a raw tool, whose arguments are keyed as sent; pass ``fnc`` to key
+    against a typed tool's validated arguments.
+    """
+    from livekit.agents.voice.tool_executor import _duplicate_key
+
+    return _duplicate_key(
+        fnc=fnc,
+        fnc_name=name,
+        scope="name_and_args" if args is not None else "name",
+        raw_arguments=args or {},
+    )
+
+
 def _register_fake(
-    executor, call_id: str, name: str, *, allow_cancellation: bool, allow_interruptions: bool = True
+    executor,
+    call_id: str,
+    name: str,
+    *,
+    allow_cancellation: bool,
+    allow_interruptions: bool = True,
+    args: dict[str, Any] | None = None,
 ):
     """Stub a _RunningTask into the executor so policy methods can be tested
     without choreographing real execute() lifetimes. Caller must clean up the
-    returned task via _cleanup_fakes."""
+    returned task via _cleanup_fakes. ``args`` registers the task under an
+    argument-scoped key, mirroring scope="name_and_args"."""
     import asyncio as _asyncio
 
     from livekit.agents.voice.tool_executor import _RunningTask
@@ -1430,6 +1467,7 @@ def _register_fake(
         exe_task=exe_task,
         executor=executor,
         allow_cancellation=allow_cancellation,
+        duplicate_key=_key(name, args),
     )
     return exe_task
 
@@ -1455,7 +1493,7 @@ class TestCheckDuplicate:
         try:
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="allow", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="allow", confirm_duplicate=None
                 )
                 is None
             )
@@ -1470,7 +1508,7 @@ class TestCheckDuplicate:
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
         try:
             result = await executor._check_duplicate(
-                "tool_x", on_duplicate="reject", confirm_duplicate=None
+                _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
             )
             assert isinstance(result, str) and "already running" in result
         finally:
@@ -1484,13 +1522,13 @@ class TestCheckDuplicate:
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
         try:
             result = await executor._check_duplicate(
-                "tool_x", on_duplicate="confirm", confirm_duplicate=False
+                _key("tool_x"), on_duplicate="confirm", confirm_duplicate=False
             )
             assert isinstance(result, str) and "confirm duplicate" in result.lower()
             # with confirm=True, the policy lets the new call through
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="confirm", confirm_duplicate=True
+                    _key("tool_x"), on_duplicate="confirm", confirm_duplicate=True
                 )
                 is None
             )
@@ -1506,7 +1544,7 @@ class TestCheckDuplicate:
         try:
             assert (
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="replace", confirm_duplicate=None
                 )
                 is None
             )
@@ -1525,9 +1563,128 @@ class TestCheckDuplicate:
         try:
             with pytest.raises(ToolError, match="not cancellable"):
                 await executor._check_duplicate(
-                    "tool_x", on_duplicate="replace", confirm_duplicate=None
+                    _key("tool_x"), on_duplicate="replace", confirm_duplicate=None
                 )
             assert not t.cancelled()  # the running tool was left alone
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_rejects_same_args(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"})
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x", {"order_id": "5"}), on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_allows_different_args(self):
+        """The whole point: a concurrent call of the same tool with different
+        arguments is not a duplicate."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"})
+        try:
+            for mode in ("reject", "replace", "confirm"):
+                assert (
+                    await executor._check_duplicate(
+                        _key("tool_x", {"order_id": "7"}),
+                        on_duplicate=mode,
+                        confirm_duplicate=False,
+                    )
+                    is None
+                )
+            assert not t.cancelled()  # replace left the unrelated call alone
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_args_scope_is_key_order_insensitive(self):
+        """Providers don't guarantee argument emission order; the same arguments
+        must produce the same key regardless."""
+        assert _key("tool_x", {"a": 1, "b": {"c": 2, "d": 3}}) == _key(
+            "tool_x", {"b": {"d": 3, "c": 2}, "a": 1}
+        )
+
+    def test_args_scope_never_collides_across_tools(self):
+        assert _key("tool_x", {"order_id": "5"}) != _key("tool_y", {"order_id": "5"})
+
+    def test_args_scope_keys_on_validated_arguments(self):
+        """Arguments are compared post-validation, so how the LLM spelled an optional
+        parameter doesn't split one call into two. Keying on the raw arguments made
+        every pair below distinct."""
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def check_order(order_id: str, qty: float = 1.0, locale: str | None = None) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+                qty: how many
+                locale: optional locale
+            """
+            return "done"
+
+        def key(args: dict[str, Any]) -> tuple[str, str | None]:
+            return _key("check_order", args, fnc=check_order)
+
+        # an omitted optional parameter carries its default, so these are one call
+        assert key({"order_id": "5"}) == key({"order_id": "5", "locale": None})
+        assert key({"order_id": "5"}) == key({"order_id": "5", "qty": 1.0})
+        # ...as are equal numbers spelled differently for a float parameter
+        assert key({"order_id": "5", "qty": 1}) == key({"order_id": "5", "qty": 1.0})
+        # genuinely different arguments stay distinct
+        assert key({"order_id": "5"}) != key({"order_id": "6"})
+        # invalid arguments fail open here rather than raising — the call itself is what
+        # reports the error to the LLM
+        assert key({"order_id": "5", "qty": "nope"})[1] is not None
+        # raw tools have no per-parameter schema, so their arguments are keyed as sent
+        assert _key("raw", {"order_id": "5"}) != _key("raw", {"order_id": "5", "qty": 1})
+
+    @pytest.mark.asyncio
+    async def test_args_scope_replace_cancels_only_matching_call(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        same = _register_fake(
+            executor, "a", "tool_x", allow_cancellation=True, args={"order_id": "5"}
+        )
+        other = _register_fake(
+            executor, "b", "tool_x", allow_cancellation=True, args={"order_id": "7"}
+        )
+        try:
+            assert (
+                await executor._check_duplicate(
+                    _key("tool_x", {"order_id": "5"}),
+                    on_duplicate="replace",
+                    confirm_duplicate=None,
+                )
+                is None
+            )
+            assert same.cancelled() or same.done()
+            assert not other.cancelled()
+        finally:
+            await _cleanup_fakes(same, other)
+
+    @pytest.mark.asyncio
+    async def test_name_scope_ignores_args(self):
+        """Default scope is unchanged: any in-flight call of the tool collides."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
         finally:
             await _cleanup_fakes(t)
 
@@ -1543,7 +1700,9 @@ class TestCheckDuplicate:
         try:
             await executor._duplicate_check_lock.acquire()
             pending = _asyncio.create_task(
-                executor._check_duplicate("tool_x", on_duplicate="reject", confirm_duplicate=None)
+                executor._check_duplicate(
+                    _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
+                )
             )
             await _asyncio.sleep(0)
             assert not pending.done()  # blocked on the lock
@@ -1552,6 +1711,100 @@ class TestCheckDuplicate:
             assert isinstance(result, str) and "already running" in result
         finally:
             await _cleanup_fakes(t)
+
+
+class TestDuplicateScopeThroughExecute:
+    """scope="name_and_args" driven through execute(), where the key derivation
+    order relative to the CONFIRM_DUPLICATE_PARAM pop matters."""
+
+    @pytest.mark.asyncio
+    async def test_confirm_param_excluded_from_key(self, _clear_running_tasks):
+        """The confirm flag is harness state, not a tool argument. Were the key
+        derived before the pop, a re-call carrying the flag would key differently
+        from the call it confirms and the guard would silently never match."""
+        import asyncio as _asyncio
+
+        from livekit.agents.llm.tool_context import CONFIRM_DUPLICATE_PARAM
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = _asyncio.Event()
+
+        @function_tool(on_duplicate="confirm", duplicate_scope="name_and_args")
+        async def check_order(order_id: str) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+            """
+            await gate.wait()
+            return "done"
+
+        executor = _ToolExecutor()
+        first = _asyncio.create_task(
+            executor.execute(
+                tool=check_order,
+                run_ctx=_make_run_context(call_id="c1", name="check_order"),
+                raw_arguments={"order_id": "5"},
+            )
+        )
+        try:
+            await _asyncio.sleep(0)  # let the first call register
+            assert "c1" in executor._running_tasks
+
+            # identical args with the confirm flag present-but-false is still a
+            # duplicate. wait_for so a regression fails instead of hanging on the gate.
+            blocked = await _asyncio.wait_for(
+                executor.execute(
+                    tool=check_order,
+                    run_ctx=_make_run_context(call_id="c2", name="check_order"),
+                    raw_arguments={"order_id": "5", CONFIRM_DUPLICATE_PARAM: False},
+                ),
+                timeout=5,
+            )
+            assert isinstance(blocked, str) and "already running" in blocked
+            assert "c2" not in executor._running_tasks
+        finally:
+            gate.set()
+            await _asyncio.gather(first, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_different_args_run_concurrently(self, _clear_running_tasks):
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = _asyncio.Event()
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def check_order(order_id: str) -> str:
+            """Check an order.
+
+            Args:
+                order_id: the order to check
+            """
+            await gate.wait()
+            return f"done {order_id}"
+
+        executor = _ToolExecutor()
+        calls = [
+            _asyncio.create_task(
+                executor.execute(
+                    tool=check_order,
+                    run_ctx=_make_run_context(call_id=cid, name="check_order"),
+                    raw_arguments={"order_id": oid},
+                )
+            )
+            for cid, oid in (("c1", "5"), ("c2", "7"))
+        ]
+        try:
+            await _asyncio.sleep(0)
+            # both admitted — neither was treated as a duplicate of the other
+            assert set(executor._running_tasks) == {"c1", "c2"}
+            gate.set()
+            assert sorted(await _asyncio.gather(*calls)) == ["done 5", "done 7"]
+        finally:
+            gate.set()
+            await _asyncio.gather(*calls, return_exceptions=True)
 
 
 class TestCancelAll:
