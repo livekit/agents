@@ -88,6 +88,7 @@ def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionComplet
     session._item_create_future = {}  # type: ignore[attr-defined]
     session._msg_ch = utils.aio.Chan()  # type: ignore[attr-defined]
     session._pending_say_event_ids = deque()
+    session._say_tasks = set()
     session._reset_input_turn_state()
 
     emitted: list[llm.InputTranscriptionCompleted] = []
@@ -454,13 +455,16 @@ async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
 
     fut = session.say("hello from force message")
     assert session._response_created_futures
+    assert session._say_tasks  # strong ref so the send task is not GC'd
     # allow the background send task to queue force_message + pending say id
     await asyncio.sleep(0)
     pending_before = list(session._pending_say_event_ids)
     assert pending_before
     say_id = pending_before[0]
+    say_tasks = list(session._say_tasks)
     fut.cancel()
-    await asyncio.sleep(0)
+    if say_tasks:
+        await asyncio.wait(say_tasks)
 
     assert list(session._pending_say_event_ids) == [say_id]
     assert session._response_created_futures == {}
@@ -491,16 +495,17 @@ async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
         yield "too late"
 
     fut = session.say(slow_chunks())  # type: ignore[arg-type]
+    say_tasks = list(session._say_tasks)
     fut.cancel()
-    await asyncio.sleep(0)
-    # let the send task observe the cancelled future and exit without tagging
-    await asyncio.sleep(0.06)
+    if say_tasks:
+        await asyncio.wait(say_tasks)
 
     assert list(session._pending_say_event_ids) == []
     assert session._response_created_futures == {}
     assert not session._discarded_event_ids
     assert not any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
     assert sent == []
+    assert not session._say_tasks
 
 
 def test_pending_say_ids_are_consumed_fifo() -> None:
