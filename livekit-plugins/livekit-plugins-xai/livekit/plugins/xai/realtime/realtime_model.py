@@ -312,9 +312,10 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             if discard_marked:
                 return
             discard_marked = True
-            self.send_event(ResponseCancelEvent(type="response.cancel"))
             if not force_message_sent:
+                # nothing was sent; a bare cancel would kill an unrelated in-flight response
                 return
+            self.send_event(ResponseCancelEvent(type="response.cancel"))
             # leave the id in the pending deque so a late response.created is tagged
             # and then dropped via the base discard-by-id path
             self._discarded_event_ids.add(event_id)

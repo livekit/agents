@@ -475,6 +475,8 @@ async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
 
 
 async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
+    # cancel before force_message must be local-only — a bare response.cancel
+    # would silence an unrelated in-flight reply
     from collections import deque
 
     session, _ = _make_session()
@@ -497,6 +499,8 @@ async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
     assert list(session._pending_say_event_ids) == []
     assert session._response_created_futures == {}
     assert not session._discarded_event_ids
+    assert not any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+    assert sent == []
 
 
 def test_pending_say_ids_are_consumed_fifo() -> None:
