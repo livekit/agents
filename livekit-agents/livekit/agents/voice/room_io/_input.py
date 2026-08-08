@@ -45,7 +45,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._participant_identity: str | None = None
         self._attached = True
 
-        self._forward_atask: asyncio.Task[None] | None = None
+        self._forward_atask: asyncio.Task[tuple[bool, bool]] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
@@ -118,10 +118,11 @@ class _ParticipantInputStream(Generic[T], ABC):
                 self._on_track_available(publication.track, publication, participant)
 
     async def aclose(self) -> None:
-        if self._stream:
-            await self._stream.aclose()
-            self._stream = None
+        stream = self._stream
+        self._stream = None
         self._publication = None
+        if stream:
+            await stream.aclose()
         if self._processor:
             self._processor._close()
             self._processor = None
@@ -135,11 +136,11 @@ class _ParticipantInputStream(Generic[T], ABC):
     @log_exceptions(logger=logger)
     async def _forward_task(
         self,
-        old_task: asyncio.Task[None] | None,
+        old_task: asyncio.Task[tuple[bool, bool]] | None,
         stream: rtc.VideoStream | rtc.AudioStream,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
-    ) -> None:
+    ) -> tuple[bool, bool]:
         if old_task:
             await aio.cancel_and_wait(old_task)
 
@@ -148,15 +149,20 @@ class _ParticipantInputStream(Generic[T], ABC):
             "source": rtc.TrackSource.Name(publication.source),
         }
         logger.debug("start reading stream", extra=extra)
+        received_frame = False
+        forwarded_frame = False
         async for event in stream:
+            received_frame = True
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
+            forwarded_frame = True
             frame = cast(T, event.frame)
             self._process_frame(frame)
             await self._data_ch.send(frame)
 
         logger.debug("stream closed", extra=extra)
+        return received_frame, forwarded_frame
 
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
@@ -290,11 +296,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     @override
     async def _forward_task(
         self,
-        old_task: asyncio.Task[None] | None,
+        old_task: asyncio.Task[tuple[bool, bool]] | None,
         stream: rtc.AudioStream,  # type: ignore[override]
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
-    ) -> None:
+    ) -> tuple[bool, bool]:
         if old_task:
             await aio.cancel_and_wait(old_task)
 
@@ -331,18 +337,45 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
-        await super()._forward_task(old_task, stream, publication, participant)
-
-        # push a silent frame to flush the stt final result if any
+        first_stream = True
+        allow_empty_reattach = True
         silent_samples = int(self._sample_rate * 0.5)
-        await self._data_ch.send(
-            rtc.AudioFrame(
-                b"\x00\x00" * silent_samples,
-                sample_rate=self._sample_rate,
-                num_channels=self._num_channels,
-                samples_per_channel=silent_samples,
+        while True:
+            received_frame, forwarded_frame = await super()._forward_task(
+                None, stream, publication, participant
             )
-        )
+
+            # push a silent frame to flush the stt final result if any
+            if first_stream or forwarded_frame:
+                await self._data_ch.send(
+                    rtc.AudioFrame(
+                        b"\x00\x00" * silent_samples,
+                        sample_rate=self._sample_rate,
+                        num_channels=self._num_channels,
+                        samples_per_channel=silent_samples,
+                    )
+                )
+            first_stream = False
+
+            if self._stream is not stream or self._publication is not publication:
+                return received_frame, forwarded_frame
+
+            # An RTC stream may reach EOS while its track remains subscribed.
+            track = publication.track
+            self._close_stream()
+            if track is None or not publication.subscribed:
+                return received_frame, forwarded_frame
+            if not received_frame and not allow_empty_reattach:
+                logger.warning(
+                    "replacement audio stream closed before receiving frames; not reattaching",
+                    extra={"participant": participant.identity, "track_id": track.sid},
+                )
+                return received_frame, forwarded_frame
+
+            stream = self._create_stream(track, participant)
+            self._stream = stream
+            self._publication = publication
+            allow_empty_reattach = received_frame
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
