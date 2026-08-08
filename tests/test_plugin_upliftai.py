@@ -213,6 +213,41 @@ async def test_interruption_cancels_inflight_requests() -> None:
     # deterministic relative to drain state)
 
 
+async def test_disconnect_closes_half_open_socket() -> None:
+    """A connect() cancelled mid-handshake leaves the socket open with
+    ``connected`` still False; disconnect() must close it regardless."""
+    from livekit.agents import tokenize
+    from livekit.plugins.upliftai.tts import VoiceSettings, WebSocketClient, _TTSOptions
+
+    opts = _TTSOptions(
+        base_url="wss://example.invalid",
+        api_key="fake-key",
+        voice_settings=VoiceSettings(),
+        word_tokenizer=tokenize.basic.WordTokenizer(ignore_punctuation=False),
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        phrase_replacement_config_id=None,
+        min_chunk_len=20,
+        max_chunk_len=200,
+    )
+    client = WebSocketClient(opts)
+
+    class StubSio:
+        disconnected = False
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    stub = StubSio()
+    client.sio = stub  # type: ignore[assignment]
+    client.connected = False  # half-open: socket exists, ready never arrived
+
+    await client.disconnect()
+
+    assert stub.disconnected, "half-open socket must be closed on disconnect"
+    assert client.sio is None
+
+
 def _make_mp3(freq: float, secs: float = 0.5) -> bytes:
     """Encode a sine tone as a complete standalone MP3 file."""
     buf = io.BytesIO()
