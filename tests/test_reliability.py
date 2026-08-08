@@ -7,7 +7,7 @@ from livekit.agents.evals import (
 )
 from livekit.agents.evals.judge import JudgmentResult
 
-pytestmark = pytest.mark.evals
+pytestmark = pytest.mark.unit
 
 
 def test_reliability_trace_defaults():
@@ -170,3 +170,84 @@ async def test_reliability_observer_flush_with_null_reporter():
     observer.mark_complete()
     await observer.flush()
     assert observer.trace.session_complete is True
+
+
+def test_reliability_trace_turn_handling_zero_turns_completed():
+    """A completed session with no turns should not score 0.0 on turn handling."""
+    trace = ReliabilityTrace(session_id="silent", turn_count=0, session_complete=True)
+    assert trace.turn_handling_score == 1.0
+
+
+def test_reliability_trace_turn_handling_zero_turns_incomplete():
+    """An incomplete session with no turns should be penalized but not zero."""
+    trace = ReliabilityTrace(session_id="silent-aborted", turn_count=0, session_complete=False)
+    assert trace.turn_handling_score == 0.75
+
+
+def test_reliability_observer_record_tool_call_success():
+    observer = ReliabilityObserver(session_id="obs-tool-ok")
+    observer.record_tool_call(success=True)
+    observer.record_tool_call(success=True)
+    assert observer.trace.tool_calls == 2
+    assert observer.trace.tool_failures == 0
+    assert observer.trace.tool_reliability == 1.0
+
+
+def test_reliability_observer_record_tool_call_failure_lowers_score():
+    observer = ReliabilityObserver(session_id="obs-tool-fail")
+    observer.record_tool_call(success=True)
+    observer.record_tool_call(success=False, error="timeout")
+    assert observer.trace.tool_calls == 2
+    assert observer.trace.tool_failures == 1
+    assert observer.trace.tool_reliability == 0.5
+    assert observer.trace.tool_errors == ["timeout"]
+    assert observer.trace.provider_errors == []
+
+
+def test_reliability_observer_record_tool_error_convenience():
+    observer = ReliabilityObserver(session_id="obs-tool-err")
+    observer.record_tool_error("connection refused")
+    assert observer.trace.tool_calls == 1
+    assert observer.trace.tool_failures == 1
+    assert observer.trace.tool_reliability == 0.0
+    assert observer.trace.tool_errors == ["connection refused"]
+
+
+def test_reliability_observer_provider_errors_separate_from_tool_errors():
+    observer = ReliabilityObserver(session_id="obs-sep")
+    observer.record_provider_error("STT connection lost")
+    observer.record_tool_error("tool timeout")
+    assert observer.trace.provider_errors == ["STT connection lost"]
+    assert observer.trace.tool_errors == ["tool timeout"]
+    assert observer.trace.tool_calls == 1
+    assert observer.trace.tool_failures == 1
+
+
+def test_reliability_trace_to_dict_raw_facts_on_opt_in():
+    trace = ReliabilityTrace(
+        session_id="test-raw",
+        turn_count=2,
+        transcript_integrity=0.9,
+        tool_reliability=0.75,
+        tool_calls=4,
+        tool_failures=1,
+        response_latency_ms=[800, 3000],
+        provider_errors=["STT error"],
+        tool_errors=["tool timeout"],
+    )
+    d = trace.to_dict(include_transcript=True)
+    assert d["transcript_exported"] is True
+    assert "raw" in d
+    assert d["raw"]["response_latency_ms"] == [800, 3000]
+    assert d["raw"]["transcript_integrity"] == 0.9
+    assert d["raw"]["tool_calls"] == 4
+    assert d["raw"]["tool_failures"] == 1
+    assert d["raw"]["provider_errors"] == ["STT error"]
+    assert d["raw"]["tool_errors"] == ["tool timeout"]
+
+
+def test_reliability_trace_to_dict_no_raw_when_not_opted_in():
+    trace = ReliabilityTrace(session_id="test-no-raw", response_latency_ms=[800])
+    d = trace.to_dict(include_transcript=False)
+    assert d["transcript_exported"] is False
+    assert "raw" not in d

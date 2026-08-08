@@ -32,7 +32,17 @@ class ReliabilityTrace:
     """Fraction of turns with complete, non-empty transcripts (0.0 to 1.0)."""
 
     tool_reliability: float = 1.0
-    """Fraction of tool calls that succeeded without errors (0.0 to 1.0)."""
+    """Fraction of tool calls that succeeded without errors (0.0 to 1.0).
+
+    Derived from tool_calls and tool_failures when record_tool_call() is used.
+    Can be set directly for custom scoring.
+    """
+
+    tool_calls: int = 0
+    """Total number of tool calls observed."""
+
+    tool_failures: int = 0
+    """Number of tool calls that failed."""
 
     response_latency_ms: list[float] = field(default_factory=list)
     """Per-turn response latency in milliseconds."""
@@ -41,7 +51,10 @@ class ReliabilityTrace:
     """Number of times the user interrupted the agent."""
 
     provider_errors: list[str] = field(default_factory=list)
-    """Provider error messages observed during the session."""
+    """Provider error messages (STT/LLM/TTS) observed during the session."""
+
+    tool_errors: list[str] = field(default_factory=list)
+    """Tool execution error messages observed during the session."""
 
     session_complete: bool = False
     """Whether the session completed normally (vs. crashed/timed out)."""
@@ -56,7 +69,9 @@ class ReliabilityTrace:
         Penalizes interruptions and incomplete sessions.
         """
         if self.turn_count == 0:
-            return 0.0
+            # No turns observed: no evidence of bad turn handling.
+            # Penalize only if the session did not complete normally.
+            return 1.0 if self.session_complete else 0.75
         penalty = (self.interruptions / self.turn_count) * 0.5
         if not self.session_complete:
             penalty += 0.25
@@ -106,8 +121,10 @@ class ReliabilityTrace:
         """Serialize to a provider-neutral dict for external scoring.
 
         Args:
-            include_transcript: If False (default), only metadata is included.
-                Set to True to opt-in to exporting transcript content.
+            include_transcript: If False (default), only metadata and scores
+                are included. Set to True to opt-in to exporting raw observed
+                facts (response latency samples, tool call counts, error
+                messages) so external scorers can recompute or debug.
         """
         d: dict[str, Any] = {
             "session_id": self.session_id,
@@ -117,7 +134,6 @@ class ReliabilityTrace:
             "turn_count": self.turn_count,
             "interruptions": self.interruptions,
             "session_complete": self.session_complete,
-            "provider_errors": self.provider_errors,
             "scores": {
                 "turn_handling": self.turn_handling_score,
                 "transcript_integrity": self.transcript_integrity_score,
@@ -140,6 +156,15 @@ class ReliabilityTrace:
             }
         if include_transcript:
             d["transcript_exported"] = True
+            d["raw"] = {
+                "response_latency_ms": self.response_latency_ms,
+                "transcript_integrity": self.transcript_integrity,
+                "tool_reliability": self.tool_reliability,
+                "tool_calls": self.tool_calls,
+                "tool_failures": self.tool_failures,
+                "provider_errors": self.provider_errors,
+                "tool_errors": self.tool_errors,
+            }
         else:
             d["transcript_exported"] = False
         return d
@@ -202,8 +227,17 @@ class ReliabilityObserver:
             observer.attach(session)
             await session.start(agent=MyAgent(), room=ctx.room)
             # ... session runs ...
-            # observer.flush() is called automatically on shutdown
+            # Call flush() in your shutdown handler:
+            ctx.add_shutdown_callback(observer.flush)
         ```
+
+    Note:
+        attach() stores the session reference but does not automatically
+        wire up event listeners or shutdown callbacks. Integrations are
+        responsible for calling record_turn(), record_interruption(),
+        record_tool_call(), and flush() from their own event handlers and
+        shutdown callbacks. This keeps the observer dependent only on the
+        public event surface and avoids coupling to internal session state.
     """
 
     def __init__(
@@ -234,18 +268,19 @@ class ReliabilityObserver:
         return self._trace
 
     def attach(self, session: Any) -> None:
-        """Attach observers to an AgentSession before session.start().
+        """Attach to an AgentSession before session.start().
 
-        This is the encouraged integration pattern: attach before start
-        so the full session lifecycle is captured. Uses public event
-        listeners, not internal hooks.
+        Stores the session reference for the observer. Does NOT automatically
+        wire up event listeners or shutdown callbacks. Integrations must call
+        record_turn(), record_interruption(), record_tool_call(), and flush()
+        from their own event handlers and shutdown callbacks.
+
+        This intentionally avoids internal/private session attributes so
+        external integrations depend only on the public event surface.
 
         Args:
             session: The AgentSession to observe.
         """
-        # Use public event hooks where available.
-        # This intentionally avoids internal/private session attributes
-        # so external integrations depend only on the public event surface.
         self._session = session
 
     def record_turn(self, *, latency_ms: float | None = None) -> None:
@@ -258,11 +293,28 @@ class ReliabilityObserver:
         """Record a user interruption."""
         self._trace.interruptions += 1
 
+    def record_tool_call(self, *, success: bool = True, error: str | None = None) -> None:
+        """Record a tool call and its outcome.
+
+        Updates tool_calls and tool_failures counters and recomputes
+        tool_reliability from those counters.
+        """
+        self._trace.tool_calls += 1
+        if not success:
+            self._trace.tool_failures += 1
+            if error:
+                self._trace.tool_errors.append(error)
+        if self._trace.tool_calls > 0:
+            self._trace.tool_reliability = (
+                self._trace.tool_calls - self._trace.tool_failures
+            ) / self._trace.tool_calls
+
     def record_tool_error(self, error: str) -> None:
-        """Record a tool execution error."""
-        self._trace.provider_errors.append(error)
-        # Recompute tool reliability based on errors vs. total tool calls.
-        # This is a simple heuristic; integrations can override trace fields directly.
+        """Record a tool execution error.
+
+        Convenience method equivalent to record_tool_call(success=False, error=error).
+        """
+        self.record_tool_call(success=False, error=error)
 
     def record_provider_error(self, error: str) -> None:
         """Record a provider-level error (STT/LLM/TTS)."""
@@ -280,8 +332,9 @@ class ReliabilityObserver:
     async def flush(self) -> None:
         """Flush the trace to the reporter. Idempotent.
 
-        Called automatically during session shutdown if attached via
-        register_shutdown_callback. Safe to call multiple times.
+        Integrations should call this from their shutdown callback, e.g.:
+            ctx.add_shutdown_callback(observer.flush)
+        Safe to call multiple times.
         """
         if self._flushed:
             return
