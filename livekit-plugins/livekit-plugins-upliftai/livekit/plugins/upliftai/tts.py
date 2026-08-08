@@ -416,9 +416,16 @@ class WebSocketClient:
 
     async def disconnect(self) -> None:
         """Disconnect from service"""
-        if self.sio and self.connected:
-            await self.sio.disconnect()
-            self.connected = False
+        # close unconditionally, not only when the ready handshake completed: a
+        # connect() cancelled mid-handshake leaves an open socket with
+        # self.connected still False, which must not survive shutdown
+        self.connected = False
+        if self.sio is not None:
+            try:
+                await self.sio.disconnect()
+            except Exception as e:
+                logger.warning(f"Error closing TTS WebSocket: {e}")
+            self.sio = None
 
     async def _on_connect(self) -> None:
         """Handle connection"""
