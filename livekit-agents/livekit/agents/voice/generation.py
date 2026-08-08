@@ -495,6 +495,7 @@ def perform_audio_forwarding(
     *,
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
+    hold_playout: Callable[[], bool] | None = None,
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
     # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
@@ -502,7 +503,9 @@ def perform_audio_forwarding(
     out.first_frame_fut.add_done_callback(
         lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
     )
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+    task = asyncio.create_task(
+        _audio_forwarding_task(audio_output, tts_output, out, hold_playout=hold_playout)
+    )
     return task, out
 
 
@@ -511,12 +514,18 @@ async def _audio_forwarding_task(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    hold_playout: Callable[[], bool] | None = None,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
     cancelled = False
     try:
-        audio_output.resume()
+        # this resume() clears a pause left over from an earlier speech; when the
+        # caller reports the output must stay held right now (e.g. the user is
+        # speaking at this very moment), skip it — the pause/false-interruption
+        # machinery owns the release.
+        if hold_playout is None or not hold_playout():
+            audio_output.resume()
 
         async for frame in tts_output:
             out.audio.append(frame)
@@ -588,6 +597,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    hold_playout: Callable[[], bool] | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -602,7 +612,7 @@ async def forward_generation(
         audio_out: _AudioOutput | None = None
         if audio_output is not None and audio_source is not None:
             forward_audio_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=audio_source
+                audio_output=audio_output, tts_output=audio_source, hold_playout=hold_playout
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))

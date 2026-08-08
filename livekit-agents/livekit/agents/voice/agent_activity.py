@@ -2853,12 +2853,16 @@ class AgentActivity(RecognitionHooks):
                     text_source = timed_texts
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                    audio_output=audio_output,
+                    tts_output=tts_gen_data.audio_ch,
+                    hold_playout=lambda: self._hold_playout_if_user_speaking(speech_handle),
                 )
             else:
                 # use the provided audio
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=audio
+                    audio_output=audio_output,
+                    tts_output=audio,
+                    hold_playout=lambda: self._hold_playout_if_user_speaking(speech_handle),
                 )
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
@@ -3366,6 +3370,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                hold_playout=lambda: self._hold_playout_if_user_speaking(speech_handle),
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -4274,6 +4279,43 @@ class AgentActivity(RecognitionHooks):
             and self._session.output.audio
             and self._session.output.audio.can_pause
         )
+
+    def _hold_playout_if_user_speaking(self, speech_handle: SpeechHandle) -> bool:
+        """Level-triggered pre-playout hold, checked when audio forwarding starts.
+
+        The ``on_start_of_speech`` hold is edge-triggered: it can only pause a
+        speech that already exists when the user's onset arrives, and even a
+        hold it did place was released by ``_audio_forwarding_task``'s
+        unconditional ``resume()`` once the reply's TTS started streaming. A
+        user who starts speaking inside the reply's generation window (after
+        the turn commit, before the first TTS frame) therefore got the reply
+        launched into their speech. Re-checking the user state at the moment
+        audio forwarding starts closes that window.
+
+        Returns True when playout must stay held. Release is the existing
+        machinery, both directions: the user's end of speech arms the false
+        interruption timer (timeout 0 → immediate resume, unless an
+        interruption updated it), and a committed user turn interrupts the
+        paused speech so the superseding reply is generated instead.
+        """
+        if (
+            self._session.agent_state != "speaking"
+            and self._session.user_state == "speaking"
+            and self._pause_enabled()
+            and not speech_handle.interrupted
+            and speech_handle.allow_interruptions
+        ):
+            assert (audio_output := self._session.output.audio) is not None
+
+            # don't downgrade a timeout already recorded for this handle
+            # (_interrupt_by_audio_activity may have upgraded it to
+            # false_interruption_timeout); only place a fresh hold
+            if self._paused_speech is None or self._paused_speech.handle is not speech_handle:
+                self._update_paused_speech(speech_handle, timeout=0)
+            audio_output.pause()
+            return True
+
+        return False
 
     def _cancel_false_interruption_timer(self) -> None:
         if self._false_interruption_timer is not None:
