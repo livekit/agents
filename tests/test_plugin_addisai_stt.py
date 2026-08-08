@@ -25,7 +25,7 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, stt
 from livekit.plugins import addisai
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.plugin("addisai")
 
 
 def _audio_frame() -> rtc.AudioFrame:

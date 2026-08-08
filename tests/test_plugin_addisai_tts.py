@@ -25,7 +25,7 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions
 from livekit.plugins import addisai
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.plugin("addisai")
 
 
 def _wav_audio() -> bytes:
