@@ -478,6 +478,32 @@ async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
     assert say_id not in session._discarded_event_ids
 
 
+async def test_cancelling_say_task_resolves_future() -> None:
+    # aclose cancels _say_task after force_message; fut must be cancelled too
+    # or AgentActivity awaits say() forever
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    session.send_event = lambda *_: None  # type: ignore[method-assign]
+
+    fut = session.say("still speaking")
+    await asyncio.sleep(0)
+    assert not fut.done()
+    say_tasks = list(session._say_tasks)
+    assert say_tasks
+
+    for task in say_tasks:
+        task.cancel()
+    await asyncio.gather(*say_tasks, return_exceptions=True)
+
+    assert fut.cancelled()
+    assert session._response_created_futures == {}
+    assert not session._say_tasks
+
+
 async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
     # cancel before force_message must be local-only — a bare response.cancel
     # would silence an unrelated in-flight reply

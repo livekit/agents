@@ -341,10 +341,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 # success or send-path exception: tag already consumed on success
                 self._drop_pending_say_tag(event_id)
         except asyncio.CancelledError:
+            # aclose() cancels _say_task; always resolve fut so callers do not hang
             self._response_created_futures.pop(event_id, None)
             if force_message_sent:
                 self._discard_say(event_id)
-            elif not fut.done():
+            if not fut.done():
                 fut.cancel()
             raise
         except Exception as exc:
