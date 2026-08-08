@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
@@ -16,8 +17,15 @@ from openai.types.realtime import (
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     RealtimeErrorEvent,
+    ResponseAudioDeltaEvent,
+    ResponseAudioDoneEvent,
+    ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
     ResponseDoneEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+    ResponseTextDoneEvent,
 )
 from pydantic import BaseModel, ConfigDict
 
@@ -51,7 +59,21 @@ _DEFAULT_TURN_DETECTION = {
 
 # Server close codes that a reconnect cannot fix:
 # 3000 = invalid API key / ephemeral key.
-_NON_RETRYABLE_CLOSE_CODES = frozenset({3000})
+# 4429 = billing entitlement refused (insufficient_quota / monthly_cap_reached /
+# contract_ended / no_billing_account); permanent for the account, not a
+# transient rate limit.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({3000, 4429})
+
+# Error codes/types the server returns for expected client/server races that do
+# not indicate a real problem (e.g. response.cancel arriving after the response
+# already finished). These must not surface as user-facing recoverable errors,
+# mirroring the OpenAI base's own "Cancellation failed" message swallow.
+_BOSON_NONFATAL_ERROR_CODES = frozenset({"response_not_active", "response_id_mismatch"})
+_BOSON_NONFATAL_ERROR_TYPES = frozenset({"voice_output_task_ongoing", "invalid_previous_item_id"})
+
+# Roles the server's conversation store cannot hold; see
+# _livekit_item_to_boson_item and _create_update_chat_ctx_events.
+_UNSUPPORTED_ITEM_ROLES = frozenset({"system", "developer"})
 
 
 @dataclass
@@ -69,6 +91,7 @@ class _BosonOptions:
     input_audio_transcription: NotGivenOr[dict[str, Any]]
     noise_reduction: dict[str, Any] | None
     output_modalities: list[Literal["text", "audio"]]
+    truncation: Literal["auto", "disabled"]
 
 
 class RealtimeModel(openai_rt.RealtimeModel):
@@ -77,25 +100,25 @@ class RealtimeModel(openai_rt.RealtimeModel):
         *,
         url: str,
         api_key: str | None = None,
-        model: str = "boson-realtime",
+        model: str = "higgs-realtime",
         voice: str = "default",
         instructions: str = "You are a helpful AI assistant",
-        modalities: list[Literal["text", "audio"]] | None = None,
+        output_modalities: list[Literal["text", "audio"]] | None = None,
         temperature: float = 0.7,
         max_output_tokens: int | Literal["inf"] = "inf",
         tool_choice: llm.ToolChoice | None = "auto",
         speed: float = 1.0,
-        turn_detection: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[dict[str, Any] | None | Literal[False]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
         input_audio_transcription_model: str = "",
         input_audio_transcription_language: str | None = None,
-        input_audio_transcription_prompt: str | None = None,
         input_audio_noise_reduction: NotGivenOr[str | dict[str, Any] | None] = NOT_GIVEN,
+        truncation: Literal["auto", "disabled"] = "auto",
         query_params: dict[str, str] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        output_modalities = _resolve_output_modalities(modalities)
+        resolved_output_modalities = _resolve_output_modalities(output_modalities)
         turn_detection_config = (
             dict(_DEFAULT_TURN_DETECTION)
             if not is_given(turn_detection)
@@ -105,7 +128,6 @@ class RealtimeModel(openai_rt.RealtimeModel):
             input_audio_transcription=input_audio_transcription,
             model=input_audio_transcription_model,
             language=input_audio_transcription_language,
-            prompt=input_audio_transcription_prompt,
         )
         noise_reduction_config = _build_noise_reduction(input_audio_noise_reduction)
 
@@ -116,7 +138,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
             base_url=url,
             model=model,
             voice=voice,
-            modalities=list(output_modalities),
+            modalities=list(resolved_output_modalities),
             tool_choice=tool_choice,
             input_audio_transcription=None,
             turn_detection=None,
@@ -141,7 +163,8 @@ class RealtimeModel(openai_rt.RealtimeModel):
             turn_detection=turn_detection_config,
             input_audio_transcription=input_audio_transcription_config,
             noise_reduction=noise_reduction_config,
-            output_modalities=output_modalities,
+            output_modalities=resolved_output_modalities,
+            truncation=truncation,
         )
         self._capabilities.turn_detection = turn_detection_config is not None
         self._capabilities.user_transcription = _input_audio_transcription_enabled(
@@ -151,10 +174,21 @@ class RealtimeModel(openai_rt.RealtimeModel):
         # auto-generates a response for it, so the framework must send
         # response.create after posting tool outputs, like OpenAI.
         self._capabilities.auto_tool_reply_generation = False
-        self._capabilities.audio_output = "audio" in output_modalities
+        self._capabilities.audio_output = "audio" in resolved_output_modalities
         # mutable_chat_context stays True (base default): the server preserves
         # client-supplied item ids, so items are addressable for the base
         # diff/create/delete chat-context synchronization.
+        #
+        # Unlike OpenAI, Boson has no per-response override: setting any of
+        # instructions/tool_choice/tools in response.create switches that turn
+        # to an isolated, history-less conversation context instead of
+        # continuing the real one, and the override itself is not applied.
+        # Override the OpenAI base's per_response_tool_choice=True so the
+        # framework scopes tool_choice/tools at the session level around
+        # generate_reply() instead; RealtimeSession.generate_reply() does the
+        # same for instructions, which the framework passes unconditionally
+        # regardless of this capability.
+        self._capabilities.per_response_tool_choice = False
 
     @property
     def model(self) -> str:
@@ -185,7 +219,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
-        _ = (tracing, truncation, reasoning)
+        _ = (tracing, reasoning)
         next_max_output_tokens = (
             max_output_tokens if is_given(max_output_tokens) else max_response_output_tokens
         )
@@ -216,6 +250,12 @@ class RealtimeModel(openai_rt.RealtimeModel):
             )
         if is_given(input_audio_noise_reduction):
             self._boson_opts.noise_reduction = _build_noise_reduction(input_audio_noise_reduction)
+        # Unlike turn_detection/noise_reduction, `truncation` does not accept
+        # `null` on the wire: sending one is rejected hard enough to end the
+        # whole session, not just the one request. Guard against `None` the
+        # same way max_output_tokens guards its own non-nullable field.
+        if is_given(truncation) and truncation is not None:
+            self._boson_opts.truncation = truncation
 
         for session in self._sessions:
             boson_session = cast(RealtimeSession, session)
@@ -229,6 +269,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
                 turn_detection=turn_detection,
                 input_audio_transcription=input_audio_transcription,
                 input_audio_noise_reduction=input_audio_noise_reduction,
+                truncation=truncation,
             )
 
 
@@ -239,11 +280,30 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._closed = False
         self._suppress_next_response_cancel = False
         self._video_unsupported_warned = False
+        self._system_item_unsupported_warned = False
         self._current_response_id: str | None = None
-        # Responses discarded while another generation was streaming; their
-        # terminal events must not close the active generation (the base
-        # generation slot and handlers are not response-id aware).
-        self._boson_discarded_response_ids: set[str] = set()
+        # Serializes generate_reply() calls that scope instructions/tool_choice/
+        # tools at the session level (see generate_reply), so overlapping scoped
+        # calls can't stomp on each other's restore value. The tasks it spawns
+        # are tracked so aclose() can cancel any still in flight.
+        self._scoped_override_lock = asyncio.Lock()
+        self._scoped_override_tasks = utils.aio.TaskSet()
+        # Set by _handle_error on invalid_previous_item_id, read (and cleared)
+        # by update_chat_ctx() right after its base call returns; see there.
+        # _chat_ctx_sync_lock keeps that clear/read pair atomic against a
+        # concurrent update_chat_ctx() — the base's own lock is taken further
+        # in and so does not cover it.
+        self._chat_ctx_sync_error: llm.RealtimeError | None = None
+        self._chat_ctx_sync_lock = asyncio.Lock()
+        # item_id -> the previous_item_id its pending conversation.item.create
+        # was chained to, for every create currently (or recently) in flight.
+        # Lets an invalid_previous_item_id error (which names the missing
+        # previous_item_id but not the rejected item) be matched back to the
+        # specific pending item(s) that referenced it, instead of failing
+        # every _item_create_future/_item_delete_future indiscriminately —
+        # that would misattribute the error to an unrelated, still-live
+        # update_chat_ctx() call. Pruned in _create_update_chat_ctx_events.
+        self._pending_item_create_previous_ids: dict[str, str | None] = {}
         # Server-assigned session id (from session.created), kept for logging.
         # The server does not persist sessions: every connection is a fresh
         # session, so reconnection replays the local chat context instead.
@@ -351,13 +411,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
 
     def _on_session_reconnected(self, _event: llm.RealtimeSessionReconnectedEvent) -> None:
-        # Per-connection state the base _reconnect doesn't know about. Response
-        # ids discarded on the old connection will never see their
-        # response.done, so drop them with it.
+        # Per-connection state the base _reconnect doesn't know about. No
+        # response from the old connection can be "current" on the new one.
         self._pushed_duration_s = 0.0
         self._current_response_id = None
         self._suppress_next_response_cancel = False
-        self._boson_discarded_response_ids.clear()
         logger.info("reconnected to Boson realtime session", extra={"session_id": self._session_id})
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
@@ -413,6 +471,16 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # partial merge), so a tools-only update must carry the whole config.
         return self._build_session_update_event("tools_update_", tools=tools)
 
+    def _warn_unsupported_item_role_once(self) -> None:
+        if self._system_item_unsupported_warned:
+            return
+        self._system_item_unsupported_warned = True
+        logger.warning(
+            "Boson realtime API only stores assistant/user conversation items; "
+            "system/developer chat items are dropped from update_chat_ctx() syncing. "
+            "Use session-level instructions for persistent directives."
+        )
+
     def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
@@ -433,9 +501,28 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # it when it already exists remotely (e.g. an audio item whose
         # transcription is still pending) instead of deleting it, and filters
         # it out otherwise.
+        #
+        # Opportunistically prune _pending_item_create_previous_ids: any item
+        # no longer in _item_create_future has already resolved one way or
+        # another (echoed, explicitly failed, or timed out and cleaned up by
+        # the base class), so its previous_item_id mapping is stale.
+        for item_id in list(self._pending_item_create_previous_ids):
+            if item_id not in self._item_create_future:
+                del self._pending_item_create_previous_ids[item_id]
+
+        # Items with a role the server cannot store are dropped here, before
+        # the diff runs, not further down while walking its output: an
+        # unsupported item never reaches _remote_chat_ctx, so leaving it in
+        # the diff input makes every sync see it as "not remote yet". At the
+        # head of the context that reads as an insert-before-everything and
+        # triggers the full rebuild below — repeatedly, on every single sync,
+        # for an item that is never sent either way.
         sanitized: list[llm.ChatItem] = []
         for item in chat_ctx.items:
             if item.type == "message":
+                if item.role in _UNSUPPORTED_ITEM_ROLES:
+                    self._warn_unsupported_item_role_once()
+                    continue
                 text = _text_from_content(item.content)
                 sanitized.append(
                     llm.ChatMessage(id=item.id, role=item.role, content=[text] if text else [])
@@ -444,31 +531,48 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 sanitized.append(item)
         boson_ctx = llm.ChatContext(sanitized)
 
+        base_events = super()._create_update_chat_ctx_events(boson_ctx)
+        remote_items = self._remote_chat_ctx.to_chat_ctx().items
+        if remote_items and any(
+            isinstance(ev, ConversationItemCreateEvent) and ev.previous_item_id == "root"
+            for ev in base_events
+        ):
+            # "root" means the target context's first item isn't remote yet —
+            # not "the remote context is empty" (e.g. a caller prepending a
+            # summary ahead of turns the server still has). The server has no
+            # insert-at-head primitive (previous_item_id=None always means
+            # append-at-tail), so mapping "root" -> None here would silently
+            # append the new item after the existing ones instead, misordering
+            # the conversation. Rebuild the remote conversation from scratch in
+            # the target order rather than guess at a partial reorder.
+            return self._rebuild_chat_ctx_events(boson_ctx, remote_items)
+
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
         # Safety net: a create the conversion still cannot express is not sent;
         # remap a previous_item_id pointing at it to its own predecessor.
         dropped: dict[str, str | None] = {}
-        for ev in super()._create_update_chat_ctx_events(boson_ctx):
+        for ev in base_events:
             if not isinstance(ev, ConversationItemCreateEvent):
                 events.append(ev)
                 continue
             assert ev.item.id is not None
             previous_item_id = ev.previous_item_id
             if previous_item_id == "root":
-                # The server cannot express insert-at-head; None appends at the
-                # tail, which is correct for the replay/append cases that
-                # produce it (the remote context is empty or being extended).
+                # The remote context is empty (checked above), so appending at
+                # the tail is equivalent to inserting at the head.
                 previous_item_id = None
             elif previous_item_id is not None and previous_item_id in dropped:
                 previous_item_id = dropped[previous_item_id]
             chat_item = boson_ctx.get_by_id(ev.item.id)
             payload = _livekit_item_to_boson_item(chat_item) if chat_item is not None else None
             if payload is None:
-                # The server skips items without text content instead of
-                # storing them, so their conversation.item.added echo would
-                # never resolve the create future.
+                # The server skips items without text content (or a role it
+                # can't store) instead of storing them, so their
+                # conversation.item.added echo would never resolve the
+                # create future.
                 dropped[ev.item.id] = previous_item_id
                 continue
+            self._pending_item_create_previous_ids[ev.item.id] = previous_item_id
             events.append(
                 _BosonConversationItemCreateEvent(
                     type="conversation.item.create",
@@ -477,6 +581,36 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     item=_BosonConversationItem(**payload),
                 )
             )
+        return events
+
+    def _rebuild_chat_ctx_events(
+        self, boson_ctx: llm.ChatContext, remote_items: list[llm.ChatItem]
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = [
+            ConversationItemDeleteEvent(
+                type="conversation.item.delete",
+                item_id=remote_item.id,
+                event_id=utils.shortuuid("chat_ctx_delete_"),
+            )
+            for remote_item in remote_items
+        ]
+        previous_item_id: str | None = None
+        for item in boson_ctx.items:
+            payload = _livekit_item_to_boson_item(item)
+            if payload is None:
+                # Not addressable on the wire (unsupported role, no text,
+                # etc.); skip without advancing previous_item_id to it.
+                continue
+            self._pending_item_create_previous_ids[item.id] = previous_item_id
+            events.append(
+                _BosonConversationItemCreateEvent(
+                    type="conversation.item.create",
+                    event_id=utils.shortuuid("chat_ctx_create_"),
+                    previous_item_id=previous_item_id,
+                    item=_BosonConversationItem(**payload),
+                )
+            )
+            previous_item_id = item.id
         return events
 
     def _build_session_update_event(
@@ -510,6 +644,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             "tool_choice": _tool_choice_to_boson(self._boson_opts.tool_choice),
             "temperature": self._boson_opts.temperature,
             "max_output_tokens": self._boson_opts.max_output_tokens,
+            "truncation": self._boson_opts.truncation,
         }
         return {
             "type": "session.update",
@@ -520,6 +655,25 @@ class RealtimeSession(openai_rt.RealtimeSession):
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
         self.send_event(self._build_session_update_event("instructions_update_"))
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        # _chat_ctx_sync_error is a single session-level slot, but the clear
+        # and the read below straddle an await. The base serializes its own
+        # body on _update_chat_ctx_lock, which it takes *inside* that await —
+        # so a second caller can still run the clear while this one is parked
+        # in there. Since the base gathers the item futures with
+        # return_exceptions=True, that slot is the only channel a per-item
+        # failure has: losing it means reporting success for a sync that
+        # actually failed. Hold our own lock across the whole pair.
+        async with self._chat_ctx_sync_lock:
+            self._chat_ctx_sync_error = None
+            await super().update_chat_ctx(chat_ctx)
+            if (sync_error := self._chat_ctx_sync_error) is not None:
+                # _handle_error recorded and raised this early instead of
+                # letting the base class's own 5s timeout produce a generic
+                # message.
+                self._chat_ctx_sync_error = None
+                raise sync_error
 
     def update_options(
         self,
@@ -537,7 +691,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
-        _ = (tracing, truncation, reasoning)
+        _ = (tracing, reasoning)
         next_max_output_tokens = (
             max_output_tokens if is_given(max_output_tokens) else max_response_output_tokens
         )
@@ -564,7 +718,106 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
         if is_given(input_audio_noise_reduction):
             self._boson_opts.noise_reduction = _build_noise_reduction(input_audio_noise_reduction)
+        # Unlike turn_detection/noise_reduction, `truncation` does not accept
+        # `null` on the wire: sending one is rejected hard enough to end the
+        # whole session, not just the one request. Guard against `None` the
+        # same way max_output_tokens guards its own non-nullable field.
+        if is_given(truncation) and truncation is not None:
+            self._boson_opts.truncation = truncation
         self.send_event(self._build_session_update_event("options_update_"))
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if not is_given(instructions) and not is_given(tool_choice) and not is_given(tools):
+            return super().generate_reply()
+
+        # Boson has no per-response override: setting any of instructions/
+        # tool_choice/tools in response.create switches that turn to an
+        # isolated, history-less conversation context instead of continuing
+        # the real one, and the override itself is not applied either.
+        # Emulate a per-turn override by scoping it at the session level
+        # instead: swap in the
+        # override(s), issue response.create with none of them so the server
+        # uses the real conversation, then restore. This also covers a caller
+        # going through this session directly, not just the framework's own
+        # per_response_tool_choice=False path (which only scopes tool_choice/
+        # tools, not instructions).
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+
+        async def _run() -> None:
+            try:
+                result = await self._generate_reply_with_scoped_overrides(
+                    instructions=instructions, tool_choice=tool_choice, tools=tools
+                )
+            except asyncio.CancelledError:
+                if not fut.done():
+                    fut.cancel()
+                raise
+            except Exception as exc:  # noqa: BLE001 - propagate to the caller's future
+                if not fut.done():
+                    fut.set_exception(exc)
+            else:
+                if not fut.done():
+                    fut.set_result(result)
+
+        task = self._scoped_override_tasks.create_task(
+            _run(), name="RealtimeSession._generate_reply_with_scoped_overrides"
+        )
+        fut.add_done_callback(lambda f: task.cancel() if f.cancelled() else None)
+        return fut
+
+    async def _generate_reply_with_scoped_overrides(
+        self,
+        *,
+        instructions: NotGivenOr[str],
+        tool_choice: NotGivenOr[llm.ToolChoice],
+        tools: NotGivenOr[list[llm.Tool]],
+    ) -> llm.GenerationCreatedEvent:
+        async with self._scoped_override_lock:
+            # self._instructions is only set once update_instructions() has
+            # been called at least once; until then the effective wire value
+            # is _boson_opts.instructions (see _build_session_update_event).
+            # Mirror that same fallback here so "original" reflects what the
+            # server actually has, not the un-set Python attribute.
+            original_instructions = self._instructions or self._boson_opts.instructions
+            original_tool_choice = self._boson_opts.tool_choice
+            original_tools = self._tools.flatten()
+
+            # The swap-in lives inside the try too: update_tools() awaits the
+            # base class's own lock, a genuine suspension point where
+            # cancellation (e.g. aclose() cancelling this task) can land. If
+            # the swap-in were outside the try, a cancellation there would
+            # skip the finally entirely and leave instructions/tool_choice
+            # permanently on the scoped value. Restoring a value whose
+            # swap-in never actually ran (e.g. tools, if cancelled while
+            # still waiting on the lock) is a safe, if slightly redundant,
+            # no-op — it just resends the unchanged original.
+            try:
+                if is_given(instructions):
+                    combined = (
+                        f"{original_instructions}\n{instructions}"
+                        if original_instructions
+                        else instructions
+                    )
+                    await self.update_instructions(combined)
+                if is_given(tool_choice):
+                    self.update_options(tool_choice=tool_choice)
+                if is_given(tools):
+                    await self.update_tools(tools)
+
+                return await super().generate_reply()
+            finally:
+                if is_given(instructions):
+                    await self.update_instructions(original_instructions)
+                if is_given(tool_choice):
+                    self.update_options(tool_choice=original_tool_choice)
+                if is_given(tools):
+                    await self.update_tools(original_tools)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._video_unsupported_warned:
@@ -591,6 +844,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._closed = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
+        if self._scoped_override_tasks.tasks:
+            await utils.aio.cancel_and_wait(*self._scoped_override_tasks.tasks)
         # Cancel instead of the base's await: the main task may be sleeping in a
         # retry backoff or mid-connect, which close should not wait out.
         await utils.aio.cancel_and_wait(self._main_atask)
@@ -598,7 +853,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def _handle_input_audio_buffer_speech_started(
         self, _: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        self._suppress_next_response_cancel = _turn_detection_interrupts_response(
+        self._suppress_next_response_cancel = _server_vad_auto_interrupts_response(
             self._boson_opts.turn_detection
         )
         try:
@@ -619,6 +874,39 @@ class RealtimeSession(openai_rt.RealtimeSession):
             ),
         )
 
+    def _is_stale_response_scoped_event(self, response_id: str | None) -> bool:
+        """Whether a response-scoped event belongs to a response this session
+        has no generation for anymore.
+
+        Two responses can overlap on the wire: a new response's
+        response.created may be observed before the previous response's
+        terminal event, and trailing events for the older response can keep
+        arriving after it. ``_current_response_id`` is updated the moment a
+        new response is accepted (see ``_handle_response_created``), so a
+        response-scoped event whose id doesn't match it, no matter how late,
+        belongs to an already-superseded response and must not touch
+        ``_current_generation``.
+
+        What occupies the generation slot decides the rest:
+
+        * a real ``_ResponseGeneration`` — only its own response's events may
+          reach the base handlers, per the id check above.
+        * the base's discard placeholder (``_DiscardedGeneration``) — let
+          everything through. Every base handler no-ops on the placeholder,
+          and it is that response's own response.done reaching the base that
+          clears it; filtering here would strand the placeholder in the slot.
+        * ``None`` — nothing is streaming, so nothing can be attached to
+          anything. This must be treated as stale rather than passed through:
+          every response-scoped base handler except response.done asserts on
+          a missing generation, so a late event let through here raises (the
+          base's recv loop catches and logs it) instead of being dropped.
+        """
+        if isinstance(self._current_generation, openai_rt._DiscardedGeneration):
+            return False
+        if self._current_generation is None:
+            return True
+        return response_id is not None and response_id != self._current_response_id
+
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         client_event_id: str | None = None
         if isinstance(event.response.metadata, dict):
@@ -626,15 +914,15 @@ class RealtimeSession(openai_rt.RealtimeSession):
         if client_event_id and client_event_id in self._discarded_event_ids:
             # A response that timed out or was interrupted before the server
             # created it. The base handler cancels it and parks a discard
-            # marker in the generation slot so its trailing events are skipped.
-            # When a legitimate generation is already streaming, keep it in the
-            # slot instead, and remember the stale response id so its
-            # response.done doesn't close the active generation.
+            # marker in the generation slot so its trailing events are
+            # skipped. When a legitimate generation is already streaming,
+            # keep it in the slot instead. Its id is never assigned to
+            # _current_response_id, so every later event for this discarded
+            # response fails _is_stale_response_scoped_event and is dropped —
+            # no separate bookkeeping needed.
             active = self._current_generation
             super()._handle_response_created(event)
             if isinstance(active, openai_rt._ResponseGeneration):
-                if event.response.id is not None:
-                    self._boson_discarded_response_ids.add(event.response.id)
                 self._current_generation = active
             return
 
@@ -643,13 +931,49 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._current_response_id = event.response.id
         super()._handle_response_created(event)
 
+    def _handle_response_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_output_item_added(event)
+
+    def _handle_response_content_part_added(self, event: ResponseContentPartAddedEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_content_part_added(event)
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_text_delta(event)
+
+    def _handle_response_text_done(self, event: ResponseTextDoneEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_text_done(event)
+
+    def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
+        # Unlike its siblings, the base dispatches this one as a raw dict.
+        if self._is_stale_response_scoped_event(event.get("response_id")):
+            return
+        super()._handle_response_audio_transcript_delta(event)
+
+    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_audio_delta(event)
+
+    def _handle_response_audio_done(self, event: ResponseAudioDoneEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_audio_done(event)
+
+    def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if self._is_stale_response_scoped_event(event.response_id):
+            return
+        super()._handle_response_output_item_done(event)
+
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
-        response_id = event.response.id
-        if response_id is not None and response_id in self._boson_discarded_response_ids:
-            # Terminal event of a response discarded while another generation
-            # was streaming; it must not close the active generation or clear
-            # the response id that interrupt() targets.
-            self._boson_discarded_response_ids.discard(response_id)
+        if self._is_stale_response_scoped_event(event.response.id):
             return
         super()._handle_response_done(event)
         self._current_response_id = None
@@ -662,9 +986,83 @@ class RealtimeSession(openai_rt.RealtimeSession):
             event.error if isinstance(event.error, dict) else event.error.model_dump()
         )
         event_id = error.get("event_id") or event.event_id
+
+        if error.get("code") in _BOSON_NONFATAL_ERROR_CODES or (
+            error.get("type") in _BOSON_NONFATAL_ERROR_TYPES
+        ):
+            # Expected client/server races (e.g. response.cancel arriving after
+            # the response already finished, or conversation.item.create racing
+            # item order during chat-ctx replay) — not a real failure. Mirrors
+            # the OpenAI base's own "Cancellation failed" message swallow.
+            # Only fail a future this error specifically names; unlike the
+            # fallback below, never blanket-fail every pending future for an
+            # error that cannot be correlated to one.
+            logger.debug(
+                "Ignoring non-fatal Boson realtime error",
+                extra={"error": error, "event_id": event_id},
+            )
+            if event_id and event_id in self._response_created_futures:
+                self._fail_response_created_futures(
+                    llm.RealtimeError(_format_error_message(error, event_id)), event_id=event_id
+                )
+            if error.get("type") == "invalid_previous_item_id":
+                # This error carries no event_id, and names the missing
+                # previous_item_id, not the rejected item's own id — the
+                # server never echoes either the client's event_id or the new
+                # item's id for it. Without failing anything, the item's
+                # _item_create_future would sit until update_chat_ctx()'s own
+                # 5s timeout, surfacing a generic "timed out" instead of this
+                # actionable message. But this can arrive after its own
+                # update_chat_ctx() call already gave up and returned (its
+                # future cleaned up by the base class's timeout handler)
+                # while a *different*, unrelated update_chat_ctx() call is now
+                # in flight — failing "whatever's currently pending" would
+                # misattribute this error to that unrelated call. Match by
+                # the previous_item_id every pending create actually used
+                # instead, and only fail (and only let update_chat_ctx()
+                # re-raise for) the one(s) that really referenced it.
+                # The id is only recoverable by parsing the message, so a
+                # wording change makes it unrecoverable. Bail out rather than
+                # correlate on the parse failure itself: `None` is a real
+                # previous_item_id (it means append-at-tail), so letting it
+                # into the match below would pin this error on whichever
+                # append happened to be pending. Giving up here degrades to
+                # the base class's timeout, which is merely less specific.
+                missing_previous_item_id = _extract_missing_previous_item_id(
+                    error.get("message") or ""
+                )
+                if missing_previous_item_id is None:
+                    logger.warning(
+                        "Could not determine which conversation item an "
+                        "invalid_previous_item_id error refers to; "
+                        "update_chat_ctx() will report it as a timeout instead.",
+                        extra={"error": error},
+                    )
+                    return
+                sync_error = llm.RealtimeError(_format_error_message(error, event_id))
+                for item_id, previous_item_id in list(
+                    self._pending_item_create_previous_ids.items()
+                ):
+                    if previous_item_id != missing_previous_item_id:
+                        continue
+                    fut = self._item_create_future.get(item_id)
+                    if fut is not None and not fut.done():
+                        fut.set_exception(sync_error)
+                        self._chat_ctx_sync_error = sync_error
+                    self._pending_item_create_previous_ids.pop(item_id, None)
+            return
+
         realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
         self._emit_error(realtime_error, recoverable=True)
-        self._fail_response_created_futures(realtime_error, event_id=event_id)
+        # Only fail the future this error specifically names. An error whose
+        # event_id can't be correlated to a pending generate_reply() could
+        # belong to a wholly unrelated client operation (e.g. a
+        # conversation.item.create failure with its own event_id), so it must
+        # not blanket-fail every other in-flight generate_reply() call; the
+        # blanket-fail path below is reserved for genuine whole-session
+        # failure (see _main_task), where every pending future really is done.
+        if event_id and event_id in self._response_created_futures:
+            self._fail_response_created_futures(realtime_error, event_id=event_id)
 
     def _fail_response_created_futures(
         self, error: Exception, *, event_id: str | None = None
@@ -706,7 +1104,10 @@ def _set_message_text(message: llm.ChatMessage, text: str) -> None:
 
 
 def _copy_dict_or_none(value: Any | None) -> dict[str, Any] | None:
-    if value is None:
+    # `False` disables turn detection the same way `None` does (matches the
+    # README and Boson's Pipecat client); `dict(False)` would otherwise raise
+    # TypeError since bool isn't iterable.
+    if value is None or value is False:
         return None
     return dict(value)
 
@@ -716,7 +1117,9 @@ def _normalize_input_audio_transcription(
 ) -> NotGivenOr[dict[str, Any]]:
     if value is None:
         return NOT_GIVEN
-    return dict(value)
+    transcription = dict(value)
+    transcription.pop("prompt", None)
+    return transcription
 
 
 def _build_input_audio_transcription(
@@ -724,9 +1127,8 @@ def _build_input_audio_transcription(
     input_audio_transcription: NotGivenOr[dict[str, Any] | None],
     model: str,
     language: str | None,
-    prompt: str | None,
 ) -> NotGivenOr[dict[str, Any]]:
-    has_convenience_options = bool(model) or language is not None or prompt is not None
+    has_convenience_options = bool(model) or language is not None
     if not has_convenience_options and (
         not is_given(input_audio_transcription) or input_audio_transcription is None
     ):
@@ -737,12 +1139,13 @@ def _build_input_audio_transcription(
         if is_given(input_audio_transcription) and input_audio_transcription is not None
         else {}
     )
+    # A transcription `prompt` is not part of the supported wire config; drop
+    # it even if the caller passed it through a raw transcription dict.
+    transcription.pop("prompt", None)
     if model:
         transcription["model"] = model
     if language is not None:
         transcription["language"] = language
-    if prompt is not None:
-        transcription["prompt"] = prompt
     return transcription
 
 
@@ -759,21 +1162,21 @@ def _input_audio_transcription_enabled(transcription: NotGivenOr[dict[str, Any]]
 
 
 def _resolve_output_modalities(
-    modalities: list[Literal["text", "audio"]] | None,
+    output_modalities: list[Literal["text", "audio"]] | None,
 ) -> list[Literal["text", "audio"]]:
-    """Validate ``modalities`` to exactly ``["text"]`` or ``["audio"]``.
+    """Validate ``output_modalities`` to exactly ``["text"]`` or ``["audio"]``.
 
     The server rejects mixed (``["text", "audio"]``) and empty lists — output is
     single-modality. ``None`` defaults to ``["audio"]``.
     """
-    if modalities is None:
+    if output_modalities is None:
         return ["audio"]
-    if len(modalities) != 1 or modalities[0] not in ("text", "audio"):
+    if len(output_modalities) != 1 or output_modalities[0] not in ("text", "audio"):
         raise ValueError(
-            "modalities must be exactly one of ['text'] or ['audio'] "
-            f"(got {modalities!r}); mixed and empty lists are not supported."
+            "output_modalities must be exactly one of ['text'] or ['audio'] "
+            f"(got {output_modalities!r}); mixed and empty lists are not supported."
         )
-    return list(modalities)
+    return list(output_modalities)
 
 
 def _build_noise_reduction(value: NotGivenOr[Any | None]) -> dict[str, Any] | None:
@@ -790,10 +1193,17 @@ def _build_noise_reduction(value: NotGivenOr[Any | None]) -> dict[str, Any] | No
     return dict(value)
 
 
-def _turn_detection_interrupts_response(turn_detection: dict[str, Any] | None) -> bool:
-    if not turn_detection:
-        return False
-    return turn_detection.get("interrupt_response") is not False
+def _server_vad_auto_interrupts_response(turn_detection: dict[str, Any] | None) -> bool:
+    """Whether server VAD will auto-cancel the active response on speech start.
+
+    The wire ``interrupt_response`` field does not currently change Higgs
+    Realtime's actual behavior: with server VAD enabled the server always
+    cancels the active response when it detects speech, regardless of what the
+    client sends for this field. So the client's own duplicate-cancel
+    suppression must key off whether server VAD is enabled at all, not off the
+    (currently inert) ``interrupt_response`` value.
+    """
+    return turn_detection is not None
 
 
 def _tools_to_boson(tools: list[llm.Tool]) -> list[dict[str, Any]]:
@@ -840,16 +1250,21 @@ class _BosonConversationItemCreateEvent(ConversationItemCreateEvent):
 
 def _livekit_item_to_boson_item(item: llm.ChatItem) -> dict[str, Any] | None:
     if item.type == "message":
-        role = "system" if item.role == "developer" else item.role
+        if item.role in _UNSUPPORTED_ITEM_ROLES:
+            # Conversation items only accept role "assistant" or "user", so a
+            # system/developer item can never be synced as one. Drop it
+            # instead of sending a create that would be rejected; use
+            # session-level instructions for persistent directives.
+            return None
         content_text = _text_from_content(item.content)
         if not content_text:
             return None
-        content_type = "text" if role == "assistant" else "input_text"
+        content_type = "text" if item.role == "assistant" else "input_text"
         return {
             "id": item.id,
             "object": "realtime.item",
             "type": "message",
-            "role": role,
+            "role": item.role,
             "content": [{"type": content_type, "text": content_text}],
         }
     if item.type == "function_call":
@@ -882,6 +1297,16 @@ def _text_from_content(content: list[llm.ChatContent]) -> str:
         elif isinstance(part, llm.AudioContent) and part.transcript:
             parts.append(part.transcript)
     return "\n".join(parts)
+
+
+_MISSING_PREVIOUS_ITEM_ID_RE = re.compile(r"previous_item_id '(.*?)' not found")
+
+
+def _extract_missing_previous_item_id(message: str) -> str | None:
+    """Pull the missing previous_item_id out of an invalid_previous_item_id
+    error message (the server has no other way to report which id it was)."""
+    match = _MISSING_PREVIOUS_ITEM_ID_RE.search(message)
+    return match.group(1) if match else None
 
 
 def _format_error_message(error: dict[str, Any], event_id: str | None) -> str:
