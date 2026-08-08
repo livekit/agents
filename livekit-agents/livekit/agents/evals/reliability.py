@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from ..job import JobContext
 from ..log import logger
 from .evaluation import EvaluationResult
-from .judge import JudgmentResult
 
 
 @dataclass
@@ -178,7 +175,9 @@ class _NullReporter:
         return "null"
 
     async def report(self, trace: ReliabilityTrace) -> None:
-        logger.debug(f"Reliability trace for session {trace.session_id}: score={trace.overall_score:.3f}")
+        logger.debug(
+            f"Reliability trace for session {trace.session_id}: score={trace.overall_score:.3f}"
+        )
 
 
 class ReliabilityObserver:
