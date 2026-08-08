@@ -177,10 +177,19 @@ class ConnectionPool(Generic[T]):
             return
 
         async def _prewarm_impl() -> None:
-            async with self._connect_lock:
-                if not self._connections:
-                    conn = await self._connect(timeout=self._connect_timeout)
-                    self._available.add(conn)
+            try:
+                async with self._connect_lock:
+                    if not self._connections:
+                        conn = await self._connect(timeout=self._connect_timeout)
+                        self._available.add(conn)
+            except Exception as e:
+                # Swallow the error so asyncio does not log an unretrieved task
+                # exception. Log only the exception type: str(e) / repr(e) can
+                # embed request headers or URL credentials (?api_key=, &jwt_token=).
+                logger.warning(
+                    "failed to prewarm connection pool",
+                    extra={"exception_type": type(e).__name__},
+                )
 
         task = asyncio.create_task(_prewarm_impl())
         self._prewarm_task = weakref.ref(task)
