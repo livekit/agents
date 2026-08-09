@@ -178,6 +178,7 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
         if not self._started:
             return
 

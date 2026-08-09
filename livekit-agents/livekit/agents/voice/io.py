@@ -379,6 +379,8 @@ class _AudioSinkProxy(AudioOutput):
         self._capturing = False
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self._capturing = False
         self.next_in_chain.clear_buffer()
 
 

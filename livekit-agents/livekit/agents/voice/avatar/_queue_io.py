@@ -61,6 +61,8 @@ class QueueAudioOutput(
 
     def clear_buffer(self) -> None:
         """Clear the audio buffer"""
+        super().clear_buffer()
+        self._capturing = False
         while True:
             try:
                 self._data_ch.recv_nowait()

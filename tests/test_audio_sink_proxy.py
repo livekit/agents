@@ -56,6 +56,7 @@ class _PassthroughWrapper(AudioOutput):
         self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
         assert self.next_in_chain is not None
         self.next_in_chain.clear_buffer()
 
@@ -75,7 +76,7 @@ class _TrackingSink(AudioOutput):
         super().flush()
 
     def clear_buffer(self) -> None:
-        pass
+        super().clear_buffer()
 
     def on_attached(self) -> None:
         self.attached_calls += 1
@@ -84,6 +85,29 @@ class _TrackingSink(AudioOutput):
     def on_detached(self) -> None:
         self.detached_calls += 1
         super().on_detached()
+
+
+class _ImmediatePlaybackSink(AudioOutput):
+    def __init__(self) -> None:
+        super().__init__(label="ImmediateSink", capabilities=AudioOutputCapabilities(pause=True))
+        self._pushed_duration = 0.0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        self._pushed_duration += frame.duration
+
+    def flush(self) -> None:
+        super().flush()
+        self.on_playback_finished(
+            playback_position=self._pushed_duration,
+            interrupted=False,
+        )
+        self._pushed_duration = 0.0
+
+    def clear_buffer(self) -> None:
+        super().clear_buffer()
+        self.on_playback_finished(playback_position=0.0, interrupted=True)
+        self._pushed_duration = 0.0
 
 
 # ---------- auto-wrap ----------
@@ -163,6 +187,32 @@ async def test_proxy_accepts_wrapper_chain_as_inner() -> None:
 
     assert len(received) == 1
     assert received[0].playback_position == 1.0
+
+
+@pytest.mark.asyncio
+async def test_clear_before_flush_resets_each_wrapper_segment() -> None:
+    leaf = _ImmediatePlaybackSink()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackFinishedEvent] = []
+    wrapper.on("playback_finished", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=0.01))
+    wrapper.clear_buffer()
+    interrupted = await wrapper.wait_for_playout()
+
+    await wrapper.capture_frame(_silence(duration_s=0.02))
+    wrapper.flush()
+    finished = await wrapper.wait_for_playout()
+
+    assert interrupted.interrupted
+    assert not finished.interrupted
+    assert finished.playback_position == pytest.approx(0.02)
+    assert [event.interrupted for event in received] == [True, False]
+    assert not proxy._capturing
+    assert proxy._pushed_duration == pytest.approx(0.02)
 
 
 # ---------- swap routing ----------
