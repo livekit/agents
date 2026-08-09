@@ -133,11 +133,17 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        super().clear_buffer()
         self._audio_bstream.clear()
 
         if not self._pushed_duration:
+            if self._pending_playback_count:
+                self.on_playback_finished(playback_position=0, interrupted=True)
             return
+
         self._interrupted_event.set()
+        if not self._flush_task or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def pause(self) -> None:
         super().pause()
