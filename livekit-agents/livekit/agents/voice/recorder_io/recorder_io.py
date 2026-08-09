@@ -544,11 +544,26 @@ class RecorderAudioOutput(io.AudioOutput):
         if self.__recording_io.recording:
             self.__acc_frames.append(frame)
 
-        if self.__started_time is None:
-            self.__started_time = time.time()
+        if self.__started_time is None or self._last_speech_start_time is None:
+            capture_time = time.time()
 
-        if self._last_speech_start_time is None:
-            self._last_speech_start_time = time.time()
+            if self.__started_time is None:
+                self.__started_time = capture_time
+
+            if self._last_speech_start_time is None:
+                # exclude pauses from before this segment.
+                self.__pause_wall_times = [
+                    (max(start, capture_time), end)
+                    for start, end in self.__pause_wall_times
+                    if end > capture_time
+                ]
+                # a pause cannot start before the segment
+                if self.__current_pause_start is not None:
+                    self.__current_pause_start = max(
+                        self.__current_pause_start,
+                        capture_time,
+                    )
+                self._last_speech_start_time = capture_time
 
     def flush(self) -> None:
         super().flush()

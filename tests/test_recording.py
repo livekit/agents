@@ -19,7 +19,7 @@ from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.recorder_io.recorder_io import _split_frame
+from livekit.agents.voice.recorder_io.recorder_io import RecorderAudioOutput, _split_frame
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -600,7 +600,94 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Group 5: _split_frame (encode-path helper)
+# Group 5: RecorderAudioOutput pause alignment
+# ---------------------------------------------------------------------------
+
+
+async def test_recorder_output_drops_pauses_before_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+        now = 10.5
+        output.resume()
+
+        now = 11.0
+        await output.capture_frame(frame)
+        output.flush()
+
+        now = 11.02
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(
+        frame.samples_per_channel, abs=1
+    )
+
+
+async def test_recorder_output_clips_a_pause_that_overlaps_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+
+        now = 10.5
+        await output.capture_frame(frame)
+
+        now = 10.7
+        output.resume()
+        output.flush()
+
+        now = 10.72
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(10560, abs=1)
+
+
+async def test_recorder_output_keeps_trailing_silence_for_a_midsegment_pause() -> None:
+    frame = rtc.AudioFrame(bytes(4800 * 2), 48000, 1, 4800)  # 100ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        await output.capture_frame(frame)
+
+        now = 10.05
+        output.pause()
+        output.flush()
+
+        now = 10.2
+        output.on_playback_finished(playback_position=0.05, interrupted=True)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(9600, abs=1)
+
+
+# ---------------------------------------------------------------------------
+# Group 6: _split_frame (encode-path helper)
 # ---------------------------------------------------------------------------
 
 

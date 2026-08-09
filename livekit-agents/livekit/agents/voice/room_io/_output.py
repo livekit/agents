@@ -66,6 +66,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._pushed_duration: float = 0.0
         self._source_pushed_duration: float = 0.0
         self._source_discarded_duration: float = 0.0
+        self._interruption_generation = 0
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
@@ -174,6 +175,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         )
 
         if interrupted:
+            self._interruption_generation += 1
             queued_duration = self._audio_source.queued_duration
             while not self._audio_buf.empty():
                 self._audio_buf.recv_nowait()
@@ -193,12 +195,16 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
+            interruption_generation = self._interruption_generation
             self._forwarding_idle.clear()
             try:
                 if not self._playback_enabled.is_set():
                     self._source_discarded_duration += self._audio_source.queued_duration
                     self._audio_source.clear_queue()
                     await self._playback_enabled.wait()
+                    # drop a paused frame when its original segment was interrupted.
+                    if interruption_generation != self._interruption_generation:
+                        continue
                     # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
                     # discarded mid-stream audio instead of only correcting playback duration.
                     # TODO(long): ignore frames from previous syllable
