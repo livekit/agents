@@ -56,8 +56,6 @@ class _PassthroughWrapper(AudioOutput):
         self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        if self._supports_clear_buffer_without_flush:
-            self._finish_capture_segment()
         assert self.next_in_chain is not None
         self.next_in_chain.clear_buffer()
 
@@ -86,33 +84,6 @@ class _TrackingSink(AudioOutput):
     def on_detached(self) -> None:
         self.detached_calls += 1
         super().on_detached()
-
-
-class _ImmediatePlaybackSink(AudioOutput):
-    def __init__(self) -> None:
-        super().__init__(label="ImmediateSink", capabilities=AudioOutputCapabilities(pause=True))
-        self._pushed_duration = 0.0
-
-    @property
-    def _supports_clear_buffer_without_flush(self) -> bool:
-        return True
-
-    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        await super().capture_frame(frame)
-        self._pushed_duration += frame.duration
-
-    def flush(self) -> None:
-        super().flush()
-        self.on_playback_finished(
-            playback_position=self._pushed_duration,
-            interrupted=False,
-        )
-        self._pushed_duration = 0.0
-
-    def clear_buffer(self) -> None:
-        self._finish_capture_segment()
-        self.on_playback_finished(playback_position=0.0, interrupted=True)
-        self._pushed_duration = 0.0
 
 
 # ---------- auto-wrap ----------
@@ -194,50 +165,6 @@ async def test_proxy_accepts_wrapper_chain_as_inner() -> None:
     assert received[0].playback_position == 1.0
 
 
-@pytest.mark.asyncio
-async def test_clear_before_flush_resets_each_wrapper_segment() -> None:
-    leaf = _ImmediatePlaybackSink()
-    wrapper = _PassthroughWrapper(next_in_chain=leaf)
-    proxy = wrapper.next_in_chain
-    assert isinstance(proxy, _AudioSinkProxy)
-
-    received: list[PlaybackFinishedEvent] = []
-    wrapper.on("playback_finished", received.append)
-
-    await wrapper.capture_frame(_silence(duration_s=0.01))
-    wrapper.clear_buffer()
-    interrupted = await wrapper.wait_for_playout()
-
-    await wrapper.capture_frame(_silence(duration_s=0.02))
-    wrapper.flush()
-    finished = await wrapper.wait_for_playout()
-
-    assert interrupted.interrupted
-    assert not finished.interrupted
-    assert finished.playback_position == pytest.approx(0.02)
-    assert [event.interrupted for event in received] == [True, False]
-    assert not proxy._capturing
-    assert proxy._pushed_duration == pytest.approx(0.02)
-
-
-@pytest.mark.asyncio
-async def test_clear_keeps_wrappers_open_when_leaf_cannot_finish_segment() -> None:
-    leaf = _TrackingSink()
-    wrapper = _PassthroughWrapper(next_in_chain=leaf)
-
-    await wrapper.capture_frame(_silence(duration_s=0.01))
-    wrapper.clear_buffer()
-
-    await wrapper.capture_frame(_silence(duration_s=0.02))
-    wrapper.flush()
-    leaf.on_playback_finished(playback_position=0.02, interrupted=False)
-
-    finished = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=0.5)
-
-    assert not finished.interrupted
-    assert finished.playback_position == pytest.approx(0.02)
-
-
 # ---------- swap routing ----------
 
 
@@ -289,9 +216,15 @@ class _ClearCountingSink(FakeAudioOutput):
     def __init__(self) -> None:
         super().__init__()
         self.clear_calls = 0
+        self.calls: list[str] = []
+
+    def flush(self) -> None:
+        self.calls.append("flush")
+        super().flush()
 
     def clear_buffer(self) -> None:
         self.clear_calls += 1
+        self.calls.append("clear_buffer")
         super().clear_buffer()
 
 
@@ -349,7 +282,7 @@ def test_idle_swap_does_not_clear_old_sink() -> None:
 
 @pytest.mark.asyncio
 async def test_swap_mid_capture_segment_finishes_on_new_leaf() -> None:
-    leaf_a = FakeAudioOutput()
+    leaf_a = _ClearCountingSink()
     leaf_b = FakeAudioOutput()
     wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
     proxy = wrapper.next_in_chain
@@ -364,6 +297,7 @@ async def test_swap_mid_capture_segment_finishes_on_new_leaf() -> None:
 
     # no synthesized event: the segment continues on leaf_b, which reports it
     assert received == []
+    assert leaf_a.calls == ["flush", "clear_buffer"]
 
     await wrapper.capture_frame(_silence(duration_s=0.05))
     wrapper.flush()

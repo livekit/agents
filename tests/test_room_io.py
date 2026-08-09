@@ -634,52 +634,6 @@ async def test_audio_output_drops_a_paused_frame_from_an_interrupted_segment() -
 
 
 @pytest.mark.asyncio
-async def test_audio_output_clear_before_flush_does_not_interrupt_next_segment() -> None:
-    """Clearing without a flush finishes the old segment before the next segment starts."""
-    interrupted_frame = rtc.AudioFrame(b"\x01\x00" * 960, 48000, 1, 960)  # 20ms
-    next_frame = rtc.AudioFrame(b"\x02\x00" * 1920, 48000, 1, 1920)  # 40ms
-
-    with patch("livekit.rtc.AudioSource", _BlockingAudioSource):
-        output = _ParticipantAudioOutput(
-            _FakeRoom(),
-            sample_rate=48000,
-            num_channels=1,
-            track_publish_options=rtc.TrackPublishOptions(),
-        )
-    output._subscribed_fut.set_result(None)  # skip track publish/subscription
-    forward_task = asyncio.create_task(output._forward_audio())
-
-    finished: list[PlaybackFinishedEvent] = []
-    output.on("playback_finished", finished.append)
-
-    try:
-        await output.capture_frame(interrupted_frame)
-        await asyncio.wait_for(output._audio_source.capture_started.wait(), timeout=1.0)
-
-        output.clear_buffer()
-        interrupted = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
-        output._audio_source.capture_allowed.set()
-        await asyncio.wait_for(output._forwarding_idle.wait(), timeout=1.0)
-
-        await output.capture_frame(next_frame)
-        output.flush()
-        assert output._flush_task is not None
-        output._audio_source.playout_allowed.set()
-        await output._flush_task
-    finally:
-        await utils.aio.cancel_and_wait(forward_task)
-
-    assert interrupted.interrupted
-    assert interrupted.playback_position == 0
-    assert len(finished) == 2
-    assert not finished[1].interrupted
-    assert finished[1].playback_position == pytest.approx(next_frame.duration)
-    assert b"".join(bytes(f.data) for f in output._audio_source.captured) == (
-        bytes(interrupted_frame.data) + bytes(next_frame.data)
-    )
-
-
-@pytest.mark.asyncio
 async def test_audio_output_clear_finishes_all_empty_segments() -> None:
     empty_frame = rtc.AudioFrame(b"", 48000, 1, 0)
 

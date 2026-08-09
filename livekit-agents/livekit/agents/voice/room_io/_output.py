@@ -90,10 +90,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
-    @property
-    def _supports_clear_buffer_without_flush(self) -> bool:
-        return True
-
     async def start(self) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
         await self._publish_track()
@@ -137,7 +133,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
-        self._finish_capture_segment()
         self._audio_bstream.clear()
 
         if not self._pushed_duration:
@@ -146,8 +141,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
             return
 
         self._interrupted_event.set()
-        if not self._flush_task or self._flush_task.done():
-            self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def pause(self) -> None:
         super().pause()
