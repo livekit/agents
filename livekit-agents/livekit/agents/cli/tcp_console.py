@@ -133,7 +133,6 @@ class TcpAudioOutput(io.AudioOutput):
             self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
         msg = agent_pb.AgentSessionMessage(
             audio_playback_clear=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackClear()
         )

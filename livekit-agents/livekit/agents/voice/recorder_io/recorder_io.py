@@ -572,7 +572,7 @@ class RecorderAudioOutput(io.AudioOutput):
             self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        self._finish_capture_segment()
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
 

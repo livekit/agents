@@ -262,12 +262,14 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
     @abstractmethod
     def flush(self) -> None:
         """Flush any buffered audio, marking the current playback/segment as complete"""
+        self._finish_capture_segment()
+
+    def _finish_capture_segment(self) -> None:
         self.__capturing = False
 
     @abstractmethod
     def clear_buffer(self) -> None:
         """Clear the buffer, stopping playback immediately"""
-        self.__capturing = False
 
     def on_attached(self) -> None:
         if self.next_in_chain:
@@ -379,7 +381,7 @@ class _AudioSinkProxy(AudioOutput):
         self._capturing = False
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        self._finish_capture_segment()
         self._capturing = False
         self.next_in_chain.clear_buffer()
 

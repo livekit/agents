@@ -130,7 +130,7 @@ class FakeAudioOutput(AudioOutput):
         self._schedule_flush_completion()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        self._finish_capture_segment()
         if not self._pushed_duration:
             return
 

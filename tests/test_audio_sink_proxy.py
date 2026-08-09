@@ -56,7 +56,7 @@ class _PassthroughWrapper(AudioOutput):
         self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        self._finish_capture_segment()
         assert self.next_in_chain is not None
         self.next_in_chain.clear_buffer()
 
@@ -76,7 +76,7 @@ class _TrackingSink(AudioOutput):
         super().flush()
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        pass
 
     def on_attached(self) -> None:
         self.attached_calls += 1
@@ -105,7 +105,7 @@ class _ImmediatePlaybackSink(AudioOutput):
         self._pushed_duration = 0.0
 
     def clear_buffer(self) -> None:
-        super().clear_buffer()
+        self._finish_capture_segment()
         self.on_playback_finished(playback_position=0.0, interrupted=True)
         self._pushed_duration = 0.0
 
