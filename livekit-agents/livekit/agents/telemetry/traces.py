@@ -49,7 +49,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
-from .._proto import _build_proto_chat_item
+from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -453,8 +453,8 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:
-    return MessageToDict(_build_proto_chat_item(item), preserving_proto_field_name=True)
+def _chat_item_span_attribute(item: ChatItem) -> dict:
+    return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
 
 
 async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
@@ -542,7 +542,7 @@ async def _upload_session_report(
 
     if recording_options["transcript"]:
         for item in report.chat_history.items:
-            item_log = _to_proto_chat_item(item)
+            item_log = _chat_item_span_attribute(item)
             severity: SeverityNumber = SeverityNumber.UNSPECIFIED
             severity_text: str = "unspecified"
 
