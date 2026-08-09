@@ -228,14 +228,12 @@ class TTS(tts.TTS):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            # Do not chain the aiohttp error: RequestInfo embeds auth headers and
-            # can leak API keys via Task/exception repr in logs (see #6739).
+            # authentication headers can appear in RequestInfo.
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            # Do not chain the cause: some transport errors embed auth headers or
-            # URL credentials that would leak via __cause__ / traceback (see #6739).
+            # transport errors can contain credentials in URLs.
             raise APIConnectionError(type(e).__name__) from None
 
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
