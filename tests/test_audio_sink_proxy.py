@@ -56,7 +56,8 @@ class _PassthroughWrapper(AudioOutput):
         self.next_in_chain.flush()
 
     def clear_buffer(self) -> None:
-        self._finish_capture_segment()
+        if self._supports_clear_buffer_without_flush:
+            self._finish_capture_segment()
         assert self.next_in_chain is not None
         self.next_in_chain.clear_buffer()
 
@@ -91,6 +92,10 @@ class _ImmediatePlaybackSink(AudioOutput):
     def __init__(self) -> None:
         super().__init__(label="ImmediateSink", capabilities=AudioOutputCapabilities(pause=True))
         self._pushed_duration = 0.0
+
+    @property
+    def _supports_clear_buffer_without_flush(self) -> bool:
+        return True
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
@@ -213,6 +218,24 @@ async def test_clear_before_flush_resets_each_wrapper_segment() -> None:
     assert [event.interrupted for event in received] == [True, False]
     assert not proxy._capturing
     assert proxy._pushed_duration == pytest.approx(0.02)
+
+
+@pytest.mark.asyncio
+async def test_clear_keeps_wrappers_open_when_leaf_cannot_finish_segment() -> None:
+    leaf = _TrackingSink()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf)
+
+    await wrapper.capture_frame(_silence(duration_s=0.01))
+    wrapper.clear_buffer()
+
+    await wrapper.capture_frame(_silence(duration_s=0.02))
+    wrapper.flush()
+    leaf.on_playback_finished(playback_position=0.02, interrupted=False)
+
+    finished = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=0.5)
+
+    assert not finished.interrupted
+    assert finished.playback_position == pytest.approx(0.02)
 
 
 # ---------- swap routing ----------

@@ -252,6 +252,11 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
     def can_pause(self) -> bool:
         return self._capabilities.pause and (not self.next_in_chain or self.next_in_chain.can_pause)
 
+    @property
+    def _supports_clear_buffer_without_flush(self) -> bool:
+        """Whether clear_buffer reports playback_finished without a prior flush."""
+        return bool(self.next_in_chain and self.next_in_chain._supports_clear_buffer_without_flush)
+
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture an audio frame for playback, frames can be pushed faster than real-time"""
@@ -381,8 +386,9 @@ class _AudioSinkProxy(AudioOutput):
         self._capturing = False
 
     def clear_buffer(self) -> None:
-        self._finish_capture_segment()
-        self._capturing = False
+        if self._supports_clear_buffer_without_flush:
+            self._finish_capture_segment()
+            self._capturing = False
         self.next_in_chain.clear_buffer()
 
 

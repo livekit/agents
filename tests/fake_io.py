@@ -55,6 +55,10 @@ class FakeAudioOutput(AudioOutput):
         self._paused_at: float | None = None
         self._total_paused = 0.0
 
+    @property
+    def _supports_clear_buffer_without_flush(self) -> bool:
+        return True
+
     def _played_duration(self) -> float:
         if self._started_at is None:
             return 0.0

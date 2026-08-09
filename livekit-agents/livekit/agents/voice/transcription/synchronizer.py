@@ -674,7 +674,8 @@ class _SyncedAudioOutput(io.AudioOutput):
         self._synchronizer._impl.end_audio_input()
 
     def clear_buffer(self) -> None:
-        self._finish_capture_segment()
+        if self._supports_clear_buffer_without_flush:
+            self._finish_capture_segment()
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
 
