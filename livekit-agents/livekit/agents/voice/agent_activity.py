@@ -1596,7 +1596,9 @@ class AgentActivity(RecognitionHooks):
 
         return interrupted_speeches
 
-    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(
+        self, *, force: bool = False, omit_rt_interrupt: bool = False
+    ) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
         Returns:
@@ -1617,7 +1619,7 @@ class AgentActivity(RecognitionHooks):
             speech.interrupt(force=force)
             interrupted_speeches.append(speech)
 
-        if self._rt_session is not None:
+        if self._rt_session is not None and not omit_rt_interrupt:
             self._rt_session.interrupt()
 
         if not interrupted_speeches:
@@ -1899,7 +1901,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
         try:
-            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
+            self.interrupt(
+                omit_rt_interrupt=True
+            )  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
             # only out of sync when the server cancelled its own response, with client-side turn
             # taking an uninterruptible speech is expected
