@@ -99,8 +99,6 @@ async def test_get_expired():
 
 @pytest.mark.asyncio
 async def test_prewarm_failure_does_not_leak_api_key_in_logs(caplog):
-    """Prewarm must swallow connect failures so asyncio never logs an unretrieved
-    task whose exception repr embeds auth headers (livekit/agents#6739)."""
     secret = "cartesia-secret-api-key-do-not-log"
 
     async def failing_connect(timeout: float):
@@ -124,7 +122,6 @@ async def test_prewarm_failure_does_not_leak_api_key_in_logs(caplog):
 
 @pytest.mark.asyncio
 async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
-    """str(exception) can embed ?api_key= / &jwt_token=; logs must not include them."""
     secret_key = "url-secret-api-key-do-not-log"
     secret_jwt = "url-secret-jwt-token-do-not-log"
 
