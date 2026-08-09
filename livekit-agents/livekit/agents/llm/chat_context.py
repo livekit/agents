@@ -905,7 +905,7 @@ class ChatContext:
         return cls(items)
 
     def to_proto(self) -> agent_pb.ChatContext:
-        from ..voice.remote_session import _chat_item_to_proto
+        from .._proto import _chat_item_to_proto
 
         return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
 

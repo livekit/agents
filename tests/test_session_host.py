@@ -6,6 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from livekit.agents._proto import (
+    _chat_item_to_proto,
+    _metrics_to_proto,
+    _session_usage_to_proto,
+)
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
 from livekit.agents.metrics import (
     AgentSessionUsage,
@@ -26,9 +31,6 @@ from livekit.agents.voice.remote_session import (
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
-    _chat_item_to_proto,
-    _metrics_to_proto,
-    _session_usage_to_proto,
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
