@@ -1811,6 +1811,48 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
     assert agent_state_events[3].new_state == "listening"
 
 
+async def test_preemptive_generation_skipped_for_stateful_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # an LLM that declares chat() stateful (e.g. the LangGraph adapter, whose
+    # graph turns execute tools with side effects) must not be called
+    # preemptively: latency matches the disabled path
+    from .fake_llm import FakeLLM
+
+    monkeypatch.setattr(FakeLLM, "stateful", property(lambda self: True))
+
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
+    actions.add_llm("I'm doing great, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(3.0, ttfb=0.3)
+
+    session = create_session(
+        actions,
+        speed_factor=speed,
+        turn_handling={"preemptive_generation": {"preemptive_tts": True}},
+    )
+    agent = MyAgent()
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    t_user_stop_speaking = user_state_events[1].created_at
+    t_agent_start_speaking = agent_state_events[2].created_at
+    # 0.5 (endpointing) + 0.3 (llm) + 0.3 (tts ttfb) — the preemptive path
+    # would have been 0.7; the declaration must fully disable it
+    check_timestamp(
+        t_agent_start_speaking - t_user_stop_speaking,
+        t_target=1.1,
+        speed_factor=speed,
+        max_abs_diff=0.2,
+    )
+
+
 @pytest.mark.parametrize(
     "session_preemptive, agent_preemptive, expected_latency",
     [

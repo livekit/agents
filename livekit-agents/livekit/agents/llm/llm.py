@@ -132,6 +132,23 @@ class LLM(
         """
         return "unknown"
 
+    @property
+    def stateful(self) -> bool:
+        """Whether ``chat()`` mutates state that outlives the call.
+
+        A stateless ``chat()`` is a pure request/response: discarding its
+        result leaves nothing behind. An implementation is stateful when a call
+        has effects that a discarded result does not undo — a LangGraph adapter
+        running the graph's own tools and checkpoints, or a provider that keeps
+        the conversation server-side.
+
+        The session avoids running a stateful ``chat()`` when the result may be
+        thrown away; today that means skipping preemptive generation, which
+        calls the LLM before the user's turn is committed and drops the run
+        when the final context differs.
+        """
+        return False
+
     @abstractmethod
     def chat(
         self,
