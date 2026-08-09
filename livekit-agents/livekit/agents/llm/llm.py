@@ -81,6 +81,15 @@ class ChatChunk(BaseModel):
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
 
+    def carries_generation(self) -> bool:
+        """Whether this chunk delivered generation the caller can see.
+
+        Token counts and provider metadata (a gateway deployment stamp, a thought
+        signature) reach the caller without being output: they neither start the
+        clock on time-to-first-token nor give a retry anything to duplicate.
+        """
+        return bool(self.delta and (self.delta.content or self.delta.tool_calls))
+
 
 class LLMError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -465,12 +465,7 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            # only generation makes a retry duplicate what the caller
-                            # already saw; provider metadata (a gateway deployment
-                            # stamp, a thought signature) is not output
-                            if chat_chunk.delta and (
-                                chat_chunk.delta.content or chat_chunk.delta.tool_calls
-                            ):
+                            if chat_chunk.carries_generation():
                                 retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
