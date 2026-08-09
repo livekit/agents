@@ -396,10 +396,12 @@ class _QueuedAudioSource(_FakeAudioSource):
         super().__init__(*args, **kwargs)
         self.clear_count = 0
         self.played_duration = 0.0
+        self.frame_queued = asyncio.Event()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
         self.queued_duration += frame.duration
+        self.frame_queued.set()
 
     async def wait_for_playout(self) -> None:
         await asyncio.sleep(0)
@@ -552,6 +554,37 @@ async def test_audio_output_excludes_discarded_audio_after_resume() -> None:
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(output._audio_source.played_duration)
+
+
+@pytest.mark.asyncio
+async def test_audio_output_finishes_playout_when_paused_after_forwarding_drains() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+
+    with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
+        output = _ParticipantAudioOutput(
+            _FakeRoom(),
+            sample_rate=48000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(),
+        )
+    output._subscribed_fut.set_result(None)  # skip track publish/subscription
+    forward_task = asyncio.create_task(output._forward_audio())
+
+    try:
+        await output.capture_frame(frame)
+        await asyncio.wait_for(output._audio_source.frame_queued.wait(), timeout=1.0)
+
+        output.flush()
+        output.pause()
+        finished = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    finally:
+        output.resume()
+        if output._flush_task is not None and not output._flush_task.done():
+            await output._flush_task
+        await utils.aio.cancel_and_wait(forward_task)
+
+    assert not finished.interrupted
+    assert finished.playback_position == pytest.approx(frame.duration)
 
 
 @pytest.mark.asyncio

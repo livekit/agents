@@ -153,11 +153,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         async def _wait_buffered_audio() -> None:
             while True:
-                await self._playback_enabled.wait()
                 await self._forwarding_idle.wait()
-                # The forwarder may have acquired another frame before this task resumes.
-                if self._forwarding_idle.is_set() and self._audio_buf.empty():
+                if self._audio_buf.empty():
                     break
+
+                await self._playback_enabled.wait()
                 await asyncio.sleep(0)
 
             await self._audio_source.wait_for_playout()
