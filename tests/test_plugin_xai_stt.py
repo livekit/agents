@@ -124,6 +124,8 @@ def test_session_keyterms_respect_provider_limits(caplog: pytest.LogCaptureFixtu
 
     assert len(instance._opts.keyterm) == 100
     assert instance._opts.keyterm[0] == "user"
-    assert instance._opts.keyterm[-1] == "session-98"
+    # the two oldest session terms are evicted, the newest survive
+    assert instance._opts.keyterm[1] == "session-2"
+    assert instance._opts.keyterm[-1] == "session-100"
     assert "longer than 50 characters" in caplog.text
     assert "beyond the 100-term limit" in caplog.text

@@ -81,15 +81,17 @@ def _merge_keyterms(user_keyterms: list[str], session_keyterms: list[str]) -> li
             _MAX_KEYTERM_LENGTH,
         )
 
-    remaining = _MAX_KEYTERMS - len(user_keyterms)
-    if len(valid_session_keyterms) > remaining:
+    # session keyterms arrive oldest-first, so the tail holds the freshest detections
+    overflow = len(valid_session_keyterms) - (_MAX_KEYTERMS - len(user_keyterms))
+    if overflow > 0:
         logger.warning(
-            "ignored %d xAI session keyterms beyond the %d-term limit",
-            len(valid_session_keyterms) - remaining,
+            "dropped the %d oldest xAI session keyterms beyond the %d-term limit",
+            overflow,
             _MAX_KEYTERMS,
         )
+        valid_session_keyterms = valid_session_keyterms[overflow:]
 
-    return [*user_keyterms, *valid_session_keyterms[:remaining]]
+    return [*user_keyterms, *valid_session_keyterms]
 
 
 @dataclass
