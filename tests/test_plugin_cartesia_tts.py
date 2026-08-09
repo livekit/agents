@@ -1,5 +1,3 @@
-"""Cartesia TTS websocket connect must not leak API keys via exception repr."""
-
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -55,7 +53,6 @@ async def test_connect_ws_redacts_api_key_from_handshake_error():
 
 @pytest.mark.asyncio
 async def test_connect_ws_generic_error_does_not_chain_cause():
-    """Generic connect failures must not chain __cause__ (may embed auth headers)."""
     from livekit.plugins.cartesia import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
