@@ -114,6 +114,19 @@ def test_validates_user_keyterm_limits() -> None:
         STT(api_key="test-key", keyterm=["x" * 51])
 
 
+def test_rejected_keyterms_leave_other_options_untouched() -> None:
+    from livekit.plugins.xai import STT
+
+    instance = STT(api_key="test-key", language="en")
+    stream = _add_fake_stream(instance)
+
+    with pytest.raises(ValueError, match="at most 50 characters"):
+        instance.update_options(language="fr", keyterm=["x" * 51])
+
+    assert instance._opts.language == "en"
+    assert stream.updated_keyterms == []
+
+
 def test_session_keyterms_respect_provider_limits(caplog: pytest.LogCaptureFixture) -> None:
     from livekit.plugins.xai import STT
 

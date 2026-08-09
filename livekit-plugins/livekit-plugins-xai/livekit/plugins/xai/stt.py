@@ -269,6 +269,13 @@ class STT(stt.STT):
         smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        # keyterms are validated before anything is mutated so a rejected list
+        # cannot leave the options partially updated
+        if is_given(keyterm):
+            self._user_keyterms = _validate_user_keyterms(keyterm)
+            keyterm = _merge_keyterms(self._user_keyterms, self._session_keyterms)
+            self._opts.keyterm = keyterm
+
         if is_given(interim_results):
             self._opts.enable_interim_results = interim_results
 
@@ -292,11 +299,6 @@ class STT(stt.STT):
 
         if is_given(smart_turn_timeout):
             self._opts.smart_turn_timeout = smart_turn_timeout
-
-        if is_given(keyterm):
-            self._user_keyterms = _validate_user_keyterms(keyterm)
-            keyterm = _merge_keyterms(self._user_keyterms, self._session_keyterms)
-            self._opts.keyterm = keyterm
 
         for stream in self._streams:
             stream.update_options(
