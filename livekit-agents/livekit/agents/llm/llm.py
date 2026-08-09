@@ -337,12 +337,16 @@ class LLMStream(ABC):
         response_content = ""
         tool_calls: list[FunctionToolCall] = []
         completion_start_time: str | None = None
+        received_chunk = False
 
         async for ev in event_aiter:
+            received_chunk = True
             request_id = ev.id
             if request_id and request_id not in self._provider_request_ids:
                 self._provider_request_ids.append(request_id)
-            if ttft == -1.0:
+            # measured against generation, not the first chunk: a retry that follows a
+            # contentless chunk would otherwise latch the clock on the failed attempt
+            if ttft == -1.0 and ev.carries_generation():
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 
@@ -357,8 +361,9 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        # if generation is aborted before any tokens are received, it doesn't make sense to report -1 ttft
-        if self._current_attempt_has_error or ttft < 0:
+        # a request that never yielded a chunk has nothing to report; one that yielded
+        # only metadata still carries token counts, and reports ttft as -1
+        if self._current_attempt_has_error or not received_chunk:
             return
 
         metrics = LLMMetrics(
