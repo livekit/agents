@@ -328,10 +328,7 @@ class STT(stt.STT):
         # format matches. A sample-rate / channel change would garble the
         # concatenated PCM under the current segment's WAV header.
         if pending.pcm:
-            if (
-                pending.sample_rate != sample_rate
-                or pending.num_channels != num_channels
-            ):
+            if pending.sample_rate != sample_rate or pending.num_channels != num_channels:
                 logger.info(
                     "[%s] Dropping pending PCM on format change "
                     "(pending=%dHz/%dch, current=%dHz/%dch, %d bytes discarded)",
