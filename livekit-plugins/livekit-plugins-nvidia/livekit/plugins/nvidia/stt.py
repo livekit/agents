@@ -9,7 +9,7 @@ import threading
 from collections import Counter
 from collections.abc import Generator
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import grpc
@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 EndpointingMode = Literal["low_latency"]
 InferenceMode = Literal["auto", "streaming", "offline"]
+
+_MAX_REPLAY_AUDIO_SECONDS = 30
+_PCM_BYTES_PER_SAMPLE = 2
 
 
 @dataclass(frozen=True)
@@ -364,6 +367,37 @@ class _RecognitionAttempt:
     thread: threading.Thread | None = None
     input_closed: bool = False
     final_transcript_emitted: bool = False
+    replay_audio: list[bytes] = field(default_factory=list)
+    replay_audio_bytes: int = 0
+    replay_enabled: bool = True
+    replay_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def buffer_for_replay(self, audio: bytes, *, max_bytes: int) -> None:
+        with self.replay_lock:
+            if not self.replay_enabled:
+                return
+
+            self.final_transcript_emitted = False
+            if self.replay_audio_bytes + len(audio) > max_bytes:
+                self.replay_audio.clear()
+                self.replay_audio_bytes = 0
+                self.replay_enabled = False
+                return
+
+            self.replay_audio.append(audio)
+            self.replay_audio_bytes += len(audio)
+
+    def mark_final_transcript(self) -> None:
+        with self.replay_lock:
+            self.final_transcript_emitted = True
+            self.replay_audio.clear()
+            self.replay_audio_bytes = 0
+            self.replay_enabled = True
+
+    def replay_snapshot(self) -> tuple[list[bytes] | None, bool]:
+        with self.replay_lock:
+            audio = list(self.replay_audio) if self.replay_enabled else None
+            return audio, self.final_transcript_emitted
 
 
 class SpeechStream(stt.SpeechStream):
@@ -380,8 +414,10 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         config = self._create_streaming_config()
         event_loop = asyncio.get_running_loop()
-        active_audio: list[bytes] = []
         active_attempt: _RecognitionAttempt | None = None
+        max_replay_bytes = (
+            self._stt._opts.sample_rate * _PCM_BYTES_PER_SAMPLE * _MAX_REPLAY_AUDIO_SECONDS
+        )
 
         try:
             async for data in self._input_ch:
@@ -392,16 +428,14 @@ class SpeechStream(stt.SpeechStream):
 
                     if active_attempt is None:
                         active_attempt = self._start_recognition_attempt(config, event_loop)
-                    active_audio.append(audio_bytes)
+                    active_attempt.buffer_for_replay(audio_bytes, max_bytes=max_replay_bytes)
                     active_attempt.audio_queue.put(audio_bytes)
                 elif isinstance(data, self._FlushSentinel) and active_attempt is not None:
                     await self._finish_recognition_segment(
                         config=config,
-                        audio=active_audio,
                         attempt=active_attempt,
                         event_loop=event_loop,
                     )
-                    active_audio = []
                     active_attempt = None
         finally:
             if active_attempt is not None:
@@ -433,7 +467,6 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         config: riva.client.StreamingRecognitionConfig,
-        audio: list[bytes],
         attempt: _RecognitionAttempt,
         event_loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -446,7 +479,8 @@ class SpeechStream(stt.SpeechStream):
                     await current_attempt.done_fut
                     break
                 except APIError as e:
-                    if current_attempt.final_transcript_emitted:
+                    replay_audio, final_transcript_emitted = current_attempt.replay_snapshot()
+                    if final_transcript_emitted and not replay_audio:
                         logger.warning(
                             "NVIDIA Speech stream failed after a final transcript; "
                             "not replaying audio"
@@ -459,10 +493,24 @@ class SpeechStream(stt.SpeechStream):
                             f"NVIDIA Speech streaming STT failed after {retry_count + 1} attempts",
                             retryable=False,
                         ) from e
+                    if replay_audio is None:
+                        raise APIConnectionError(
+                            "NVIDIA Speech streaming STT failed after the retry buffer "
+                            "exceeded 30 seconds",
+                            retryable=False,
+                        ) from e
 
                     await asyncio.sleep(self._conn_options._interval_for_retry(retry_count))
                     current_attempt = self._start_recognition_attempt(config, event_loop)
-                    for audio_chunk in audio:
+                    for audio_chunk in replay_audio:
+                        current_attempt.buffer_for_replay(
+                            audio_chunk,
+                            max_bytes=(
+                                self._stt._opts.sample_rate
+                                * _PCM_BYTES_PER_SAMPLE
+                                * _MAX_REPLAY_AUDIO_SECONDS
+                            ),
+                        )
                         current_attempt.audio_queue.put(audio_chunk)
                 finally:
                     await self._join_attempt(attempt_to_join)
@@ -519,7 +567,7 @@ class SpeechStream(stt.SpeechStream):
 
             for response in response_generator:
                 if self._handle_response(response, event_loop=event_loop):
-                    attempt.final_transcript_emitted = True
+                    attempt.mark_final_transcript()
 
         except Exception as e:
             error = e

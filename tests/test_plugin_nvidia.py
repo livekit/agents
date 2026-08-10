@@ -3,6 +3,7 @@
 
 import asyncio
 import inspect
+import queue
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -352,6 +353,78 @@ async def test_stt_replays_segment_after_retryable_backend_failure(
 
     expected_audio = [_audio_frame(3).data.tobytes()]
     assert calls == [expected_audio, expected_audio]
+    await stream.aclose()
+
+
+async def test_stt_retry_buffer_is_bounded_and_resets_after_final() -> None:
+    attempt = nvidia_stt._RecognitionAttempt(
+        audio_queue=queue.Queue(),
+        done_fut=asyncio.get_running_loop().create_future(),
+    )
+
+    attempt.buffer_for_replay(b"1234", max_bytes=5)
+    assert attempt.replay_snapshot() == ([b"1234"], False)
+
+    attempt.buffer_for_replay(b"67", max_bytes=5)
+    assert attempt.replay_snapshot() == (None, False)
+    assert attempt.replay_audio_bytes == 0
+
+    attempt.buffer_for_replay(b"ignored", max_bytes=5)
+    assert attempt.replay_snapshot() == (None, False)
+
+    attempt.mark_final_transcript()
+    assert attempt.replay_snapshot() == ([], True)
+
+    attempt.buffer_for_replay(b"89", max_bytes=5)
+    assert attempt.replay_snapshot() == ([b"89"], False)
+
+
+async def test_stt_stream_bounds_replay_without_flush(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = nvidia_stt.STT(api_key="test-key")
+    consumed = 0
+    audio_consumed = threading.Event()
+    attempts: list[nvidia_stt._RecognitionAttempt] = []
+
+    class DrainingASRService:
+        def streaming_response_generator(self, audio_generator, config):
+            nonlocal consumed
+            for _ in audio_generator:
+                consumed += 1
+                if consumed == 101:
+                    audio_consumed.set()
+            return iter(())
+
+    original_start_attempt = nvidia_stt.SpeechStream._start_recognition_attempt
+
+    def capture_attempt(self, config, event_loop):
+        attempt = original_start_attempt(self, config, event_loop)
+        attempts.append(attempt)
+        return attempt
+
+    monkeypatch.setattr(service, "_ensure_asr_service", lambda: DrainingASRService())
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_create_streaming_config",
+        lambda self: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_start_recognition_attempt",
+        capture_attempt,
+    )
+    monkeypatch.setattr(nvidia_stt, "_MAX_REPLAY_AUDIO_SECONDS", 1)
+
+    stream = service.stream()
+    for _ in range(101):
+        stream.push_frame(_audio_frame())
+
+    assert await asyncio.to_thread(audio_consumed.wait, 1.0)
+    assert attempts[0].replay_snapshot() == (None, False)
+
+    stream.end_input()
+    await asyncio.wait_for(stream._task, timeout=2.0)
     await stream.aclose()
 
 
