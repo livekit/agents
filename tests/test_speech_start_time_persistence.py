@@ -64,6 +64,9 @@ class TestUserTurnStartPersistence:
         audio_recognition._last_speaking_time = None
         audio_recognition._transcription_timeout_handle = None
         audio_recognition._turn_speech_duration = 0.0
+        audio_recognition._vad_speech_duration = None
+        audio_recognition._turn_detector_prediction_fut = None
+        audio_recognition._turn_detector_flushed = False
 
         # collaborators
         audio_recognition._hooks = MagicMock()
@@ -180,3 +183,36 @@ class TestUserTurnStartPersistence:
         # _speech_start_time should now reflect the second burst's start, not the first
         assert audio_recognition._speech_start_time is not None
         assert audio_recognition._speech_start_time > first_burst_speech_start
+
+    @pytest.mark.asyncio
+    async def test_vad_speech_duration_survives_post_eos_zero_inference(self):
+        """Silero zeros pub_speech_duration after EOS; keep the segment final.
+
+        Late STT finals use ``current_speech_duration`` for
+        ``interruption.min_duration``. If a post-EOS INFERENCE_DONE with
+        ``speech_duration=0`` overwrites the EOS value, a real interrupt is
+        blocked as "too short".
+        """
+        audio_recognition = self._create_audio_recognition()
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.1)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(
+                VADEventType.INFERENCE_DONE,
+                speech_duration=0.55,
+            )
+        )
+        assert audio_recognition.current_speech_duration == pytest.approx(0.55)
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=0.6, silence_duration=0.5)
+        )
+        assert audio_recognition.current_speech_duration == pytest.approx(0.6)
+
+        # Silero-style post-EOS inference with zeroed duration
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.0)
+        )
+        assert audio_recognition.current_speech_duration == pytest.approx(0.6)

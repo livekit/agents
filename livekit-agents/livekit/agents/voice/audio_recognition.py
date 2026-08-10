@@ -1446,7 +1446,11 @@ class AudioRecognition:
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
-            self._vad_speech_duration = ev.speech_duration
+            # Silero resets pub_speech_duration to 0 after END_OF_SPEECH; do not
+            # clobber the segment's final voiced duration with that zero or a late
+            # STT final will look "too short" for interruption.min_duration.
+            if self._speaking or ev.speech_duration > 0.0:
+                self._vad_speech_duration = ev.speech_duration
 
             # for metrics, get the "earliest" signal of speech as possible
             if ev.raw_accumulated_speech > 0.0:
