@@ -254,7 +254,9 @@ async def test_stt_empty_buffer_returns_empty_event() -> None:
     event = await stt._recognize_impl([], conn_options=APIConnectOptions(max_retry=0))
 
     assert event.type == SpeechEventType.FINAL_TRANSCRIPT
-    assert event.alternatives == []
+    assert len(event.alternatives) == 1
+    assert event.alternatives[0].text == ""
+    assert event.alternatives[0].confidence == 0.0
     await stt.aclose()
 
 

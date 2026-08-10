@@ -355,10 +355,15 @@ class STT(stt.STT):
 
         if len(pcm_data) == 0:
             logger.warning("[%s] Empty audio buffer received, skipping", request_id)
+            # Keep alternatives shape consistent with every other return path
+            # (callers often index alternatives[0] unconditionally).
+            _lang = language if isinstance(language, str) else self._language
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
-                alternatives=[],
+                alternatives=[
+                    stt.SpeechData(text="", language=LanguageCode(_lang), confidence=0.0)
+                ],
             )
 
         lang = language if isinstance(language, str) else self._language
