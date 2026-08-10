@@ -630,12 +630,16 @@ class AudioRecognition:
             return
         await self._user_silence_ev.wait()
 
-    def _transcript_flush_start(self, *, now: float) -> float:
+    def _transcript_flush_start(
+        self, *, now: float, vad_speech_started_at: float | None = None
+    ) -> float:
         """Return the earliest event creation time retained during a flush."""
         end_boundary = self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
         flush_start = now - end_boundary
-        if self._active_vad_speech_started_at is not None:
-            flush_start = min(flush_start, self._active_vad_speech_started_at)
+        if vad_speech_started_at is None:
+            vad_speech_started_at = self._active_vad_speech_started_at
+        if vad_speech_started_at is not None:
+            flush_start = min(flush_start, vad_speech_started_at)
         if self._agent_speech_started_at is not None:
             flush_start = max(flush_start, self._agent_speech_started_at)
         return flush_start
@@ -645,8 +649,6 @@ class AudioRecognition:
             self._transcript_buffer.popleft()
 
     def _hold_stt_event(self, ev: stt.SpeechEvent) -> None:
-        flush_start = self._transcript_flush_start(now=ev.created_at)
-        self._trim_held_transcripts(flush_start=flush_start)
         self._transcript_buffer.append(ev)
 
     def _flush_held_transcripts(
@@ -1332,9 +1334,6 @@ class AudioRecognition:
                 self._hooks.on_end_of_speech(ev)
 
             self._active_vad_speech_started_at = None
-            if self._agent_speaking:
-                flush_start = self._transcript_flush_start(now=time.time())
-                self._trim_held_transcripts(flush_start=flush_start)
             self._vad_speech_started = False
             self._speaking = False
             speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
@@ -1359,6 +1358,10 @@ class AudioRecognition:
     async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
         self._overlap_open = False
+
+        if not ev.is_interruption and self._agent_speaking:
+            flush_start = self._transcript_flush_start(now=ev.detected_at)
+            self._trim_held_transcripts(flush_start=flush_start)
 
         if self._backchannel_boundary_active and not ev.is_interruption:
             logger.trace(

@@ -69,9 +69,20 @@ def test_adaptive_verdict_flushes_before_normal_interruption_thresholds() -> Non
     activity._audio_recognition._flush_held_transcripts.side_effect = _flush
     activity._paused_speech = None
 
-    activity.on_interruption(MagicMock(spec=OverlappingSpeechEvent))
+    event = OverlappingSpeechEvent(
+        is_interruption=True,
+        detected_at=7.0,
+        overlap_started_at=5.0,
+    )
+    activity.on_interruption(event)
 
     assert calls == ["flush", "restore", "interrupt"]
+    assert (
+        activity._audio_recognition._transcript_flush_start.call_args.kwargs[
+            "vad_speech_started_at"
+        ]
+        == event.overlap_started_at
+    )
     activity._interrupt_by_audio_activity.assert_called_once_with()  # type: ignore[attr-defined]
     activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
 
@@ -85,7 +96,7 @@ def test_adaptive_verdict_does_not_end_agent_when_min_words_rejects() -> None:
     activity._audio_recognition = MagicMock()
     activity._paused_speech = None
 
-    activity.on_interruption(MagicMock(spec=OverlappingSpeechEvent))
+    activity.on_interruption(OverlappingSpeechEvent(is_interruption=True))
 
     activity._audio_recognition._flush_held_transcripts.assert_called_once()
     activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
@@ -262,6 +273,7 @@ async def test_backchannel_confirmed_noop_when_barge_in_disabled(
 
 def _recognition_for_overlap(*, speaking: bool = False) -> AudioRecognition:
     ar = AudioRecognition.__new__(AudioRecognition)
+    ar._agent_speaking = False
     ar._backchannel_boundary_timer = None
     ar._overlap_in_current_turn = True
     ar._turn_backchannel_over_agent = False
@@ -287,6 +299,27 @@ async def test_user_ended_overlap_latches_backchannel() -> None:
     ar = _recognition_for_overlap()
     await ar._on_overlap_speech_event(_overlap_event(is_interruption=False, agent_ended=False))
     assert ar._turn_backchannel_over_agent is True
+
+
+async def test_false_verdict_trims_finished_backchannel() -> None:
+    ar = _recognition_for_overlap()
+    old_event = MagicMock(created_at=8.0)
+    recent_event = MagicMock(created_at=9.5)
+    ar._agent_speaking = True
+    ar._agent_speech_started_at = None
+    ar._active_vad_speech_started_at = None
+    ar._backchannel_boundary = (0.0, 1.0)
+    ar._transcript_buffer = deque([old_event, recent_event])
+
+    await ar._on_overlap_speech_event(
+        OverlappingSpeechEvent(
+            is_interruption=False,
+            agent_ended=False,
+            detected_at=10.0,
+        )
+    )
+
+    assert list(ar._transcript_buffer) == [recent_event]
 
 
 async def test_confirmed_backchannel_between_segments_clears_audio() -> None:

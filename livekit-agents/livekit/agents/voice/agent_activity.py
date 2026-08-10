@@ -2261,7 +2261,10 @@ class AgentActivity(RecognitionHooks):
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         now = time.time()
         if self._audio_recognition:
-            flush_start = self._audio_recognition._transcript_flush_start(now=now)
+            flush_start = self._audio_recognition._transcript_flush_start(
+                now=now,
+                vad_speech_started_at=ev.overlap_started_at,
+            )
             self._audio_recognition._flush_held_transcripts(flush_start=flush_start)
 
         # apply the normal interruption thresholds after held transcripts are processed
