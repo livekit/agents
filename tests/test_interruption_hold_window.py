@@ -60,7 +60,26 @@ def test_active_vad_utterance_extends_past_end_boundary() -> None:
     recognition._hold_stt_event(_event("utterance start", created_at=5.0))
     recognition._hold_stt_event(_event("utterance end", created_at=9.5))
 
-    assert recognition._transcript_flush_start(now=10.0) == 5.0
+    flush_start = recognition._transcript_flush_start(now=10.0)
+    recognition._flush_held_transcripts(flush_start=flush_start)
+
+    emitted = [
+        call.args[0].alternatives[0].text
+        for call in recognition._process_stt_event.call_args_list  # type: ignore[attr-defined]
+    ]
+    assert flush_start == 5.0
+    assert emitted == ["utterance start", "utterance end"]
+
+
+def test_events_remain_held_until_overlap_verdict() -> None:
+    recognition = _make_recognition(vad_sos=5.0, end_boundary=1.0)
+
+    recognition._hold_stt_event(_event("utterance start", created_at=5.0))
+
+    # the true verdict can already be queued when VAD EOS clears the active utterance
+    recognition._active_vad_speech_started_at = None
+    recognition._hold_stt_event(_event("utterance end", created_at=7.0))
+
     assert _held_text(recognition) == ["utterance start", "utterance end"]
 
 
