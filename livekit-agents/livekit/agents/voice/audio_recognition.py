@@ -1359,15 +1359,15 @@ class AudioRecognition:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
         self._overlap_open = False
 
-        if not ev.is_interruption and self._agent_speaking:
-            flush_start = self._transcript_flush_start(now=ev.detected_at)
-            self._trim_held_transcripts(flush_start=flush_start)
-
         if self._backchannel_boundary_active and not ev.is_interruption:
             logger.trace(
                 "ignoring backchannel event during backchannel boundary cooldown, falling back to vad"
             )
             return
+
+        if not ev.is_interruption and self._agent_speaking:
+            flush_start = self._transcript_flush_start(now=ev.detected_at)
+            self._trim_held_transcripts(flush_start=flush_start)
 
         # only honor the verdict while this turn's overlap is unresolved so a late verdict
         # can't leak into the next turn; an interruption supersedes a prior backchannel

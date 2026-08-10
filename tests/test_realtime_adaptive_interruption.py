@@ -322,6 +322,28 @@ async def test_false_verdict_trims_finished_backchannel() -> None:
     assert list(ar._transcript_buffer) == [recent_event]
 
 
+async def test_boundary_fallback_preserves_held_transcripts() -> None:
+    ar = _recognition_for_overlap()
+    early_event = MagicMock(created_at=9.0)
+    recent_event = MagicMock(created_at=9.75)
+    ar._agent_speaking = True
+    ar._agent_speech_started_at = 9.0
+    ar._active_vad_speech_started_at = None
+    ar._backchannel_boundary = (3.0, 0.5)
+    ar._backchannel_boundary_timer = MagicMock()
+    ar._transcript_buffer = deque([early_event, recent_event])
+
+    await ar._on_overlap_speech_event(
+        OverlappingSpeechEvent(
+            is_interruption=False,
+            agent_ended=False,
+            detected_at=10.0,
+        )
+    )
+
+    assert list(ar._transcript_buffer) == [early_event, recent_event]
+
+
 async def test_confirmed_backchannel_between_segments_clears_audio() -> None:
     # confirmed between segments (user silent) — cleared so it can't prefix the next turn
     ar = _recognition_for_overlap(speaking=False)
