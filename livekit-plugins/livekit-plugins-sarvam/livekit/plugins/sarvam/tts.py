@@ -99,6 +99,13 @@ _CODEC_TO_MIME: dict[str, str] = {
 
 _TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
+# 32000 / 44100 / 48000 Hz are documented as REST-only; the WebSocket endpoint
+# is capped at 24 kHz. bulbul:v3 / v3-beta reject the higher rates with an error
+# frame, so streaming is restricted to STREAMING_SAMPLE_RATES for every model.
+# See https://docs.sarvam.ai/api/getting-started/models/bulbul
+ALLOWED_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000, 32000, 44100, 48000})
+STREAMING_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000})
+
 
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
@@ -322,7 +329,8 @@ class SarvamTTSOptions:
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or
+            48000). 32000 and above are REST-only; stream() requires 24000 or below.
         enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
@@ -365,7 +373,8 @@ class TTS(tts.TTS):
         target_language_code: BCP-47 language code for supported Indian languages
         model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
-        speech_sample_rate: Audio sample rate in Hz
+        speech_sample_rate: Audio sample rate in Hz. Streaming only accepts 8000, 16000,
+            22050 or 24000; 32000, 44100 and 48000 are REST-only.
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
         pace: Speech rate multiplier (0.3 to 3.0)
@@ -455,9 +464,20 @@ class TTS(tts.TTS):
             raise ValueError("min_buffer_size must be between 30 and 200")
         if not 50 <= max_chunk_length <= 500:
             raise ValueError("max_chunk_length must be between 50 and 500")
-        if speech_sample_rate not in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+        if speech_sample_rate not in ALLOWED_SAMPLE_RATES:
             raise ValueError(
-                "Sample rate must be one of 8000, 16000, 22050, 24000, 32000, 44100, or 48000 Hz"
+                "Sample rate must be one of "
+                f"{', '.join(str(r) for r in sorted(ALLOWED_SAMPLE_RATES))} Hz"
+            )
+        if speech_sample_rate not in STREAMING_SAMPLE_RATES:
+            # Valid for synthesize() but not for stream(); an AgentSession always
+            # streams, so warn now and fail with a clear error in SynthesizeStream
+            # rather than surfacing an opaque server error frame mid-session.
+            logger.warning(
+                "speech_sample_rate %d Hz is only supported over the REST endpoint; "
+                "streaming (stream()) supports %s Hz and will raise if used.",
+                speech_sample_rate,
+                ", ".join(str(r) for r in sorted(STREAMING_SAMPLE_RATES)),
             )
         if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
             raise ValueError(
@@ -900,6 +920,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if self._opts.speech_sample_rate not in STREAMING_SAMPLE_RATES:
+            raise ValueError(
+                f"speech_sample_rate {self._opts.speech_sample_rate} Hz is not supported over "
+                "the streaming (WebSocket) endpoint; use one of "
+                f"{', '.join(str(r) for r in sorted(STREAMING_SAMPLE_RATES))} Hz, "
+                "or call synthesize() instead."
+            )
+
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id

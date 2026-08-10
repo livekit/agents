@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 from livekit.plugins.sarvam.tts import (
+    ALLOWED_SAMPLE_RATES,
     MODEL_SPEAKER_COMPATIBILITY,
+    STREAMING_SAMPLE_RATES,
     TTS,
     compatible_speakers,
     validate_model_speaker_compatibility,
@@ -48,3 +50,29 @@ def test_v2_speaker_rejected_on_v3() -> None:
 def test_compatible_speakers_is_sorted_and_empty_for_unknown_model() -> None:
     assert compatible_speakers("bulbul:v2") == sorted(V2_SPEAKERS)
     assert compatible_speakers("bulbul:v9") == []
+
+
+def test_streaming_sample_rates_are_a_documented_subset() -> None:
+    assert STREAMING_SAMPLE_RATES == {8000, 16000, 22050, 24000}
+    assert STREAMING_SAMPLE_RATES < ALLOWED_SAMPLE_RATES
+    assert ALLOWED_SAMPLE_RATES - STREAMING_SAMPLE_RATES == {32000, 44100, 48000}
+
+
+@pytest.mark.parametrize("rate", [32000, 44100, 48000])
+def test_high_rates_construct_but_reject_streaming(rate: int) -> None:
+    tts = TTS(model="bulbul:v3", speech_sample_rate=rate, api_key=API_KEY)
+    assert tts.sample_rate == rate  # synthesize() still works at this rate
+    assert rate not in STREAMING_SAMPLE_RATES
+
+
+@pytest.mark.parametrize("rate", [32000, 44100, 48000])
+def test_rest_only_rates_construct_on_v2_too(rate: int) -> None:
+    # REST-only rates are valid for synthesize() on every model; stream() rejects them.
+    tts = TTS(model="bulbul:v2", speaker="anushka", speech_sample_rate=rate, api_key=API_KEY)
+    assert tts.sample_rate == rate
+    assert rate not in STREAMING_SAMPLE_RATES
+
+
+def test_unsupported_sample_rate_still_rejected() -> None:
+    with pytest.raises(ValueError, match="Sample rate must be one of"):
+        TTS(speech_sample_rate=12345, api_key=API_KEY)
