@@ -3147,7 +3147,12 @@ class AgentActivity(RecognitionHooks):
                     # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
                     # a single handoff instead of discarding it (livekit/agents#5990).
 
-                new_agent_task = sanitized_out.agent_task
+                # Only a tool that actually returned an AgentTask may set the target.
+                # Assigning unconditionally let a later non-handoff tool (agent_task is
+                # None) overwrite an earlier handoff, so whether the switch happened
+                # depended on the order the LLM emitted the calls in.
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -3753,7 +3758,12 @@ class AgentActivity(RecognitionHooks):
                     # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
                     # a single handoff instead of discarding it (livekit/agents#5990).
 
-                new_agent_task = sanitized_out.agent_task
+                # Only a tool that actually returned an AgentTask may set the target.
+                # Assigning unconditionally let a later non-handoff tool (agent_task is
+                # None) overwrite an earlier handoff, so whether the switch happened
+                # depended on the order the LLM emitted the calls in.
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
