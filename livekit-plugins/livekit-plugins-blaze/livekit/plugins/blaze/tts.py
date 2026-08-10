@@ -818,6 +818,9 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                 # Safe private reconnect: input channel already
                                 # drained; resend the buffered (already
                                 # normalized) queries without re-normalizing.
+                                # Race resend against reader so a mid-resend
+                                # failure aborts immediately instead of
+                                # finishing the full query list first.
                                 logger.warning(
                                     "[%s] TTS WS reconnect attempt %d/%d — resending %d query(ies)",
                                     request_id,
@@ -825,8 +828,25 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                     max_ws_attempts,
                                     len(sent_queries),
                                 )
-                                for query in sent_queries:
-                                    await ws.send(json.dumps({"query": query}))
+
+                                async def _resend_queries() -> None:
+                                    for query in sent_queries:
+                                        await ws.send(json.dumps({"query": query}))
+
+                                resend_t = asyncio.create_task(_resend_queries())
+                                try:
+                                    done, _ = await asyncio.wait(
+                                        {resend_t, reader_task},
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+                                    if reader_task in done:
+                                        await utils.aio.gracefully_cancel(resend_t)
+                                        # Propagate reader error / early completion.
+                                        seg_count, _ = await reader_task
+                                    else:
+                                        await resend_t
+                                finally:
+                                    await utils.aio.gracefully_cancel(resend_t)
                             elif not input_done:
                                 input_started = True
                                 sent_tok = tts_cfg._sentence_tokenizer.stream()
@@ -853,19 +873,47 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                                 input_t = asyncio.create_task(_input_task())
                                 send_t = asyncio.create_task(_token_send_task())
+                                # Drain input while racing the audio reader so a
+                                # mid-turn WS error/timeout aborts the text pump
+                                # immediately (instead of waiting for end_input).
+                                drain_t = asyncio.gather(input_t, send_t)
                                 try:
-                                    await asyncio.gather(input_t, send_t)
-                                    # Only mark complete after a successful drain.
-                                    input_done = True
+                                    done, _ = await asyncio.wait(
+                                        {drain_t, reader_task},
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+                                    if reader_task in done:
+                                        # Reader failed or finished early —
+                                        # stop pumping text and surface the error.
+                                        await utils.aio.gracefully_cancel(input_t, send_t)
+                                        if not drain_t.done():
+                                            drain_t.cancel()
+                                            try:
+                                                await drain_t
+                                            except (
+                                                asyncio.CancelledError,
+                                                Exception,
+                                            ):
+                                                pass
+                                        seg_count, _ = await reader_task
+                                    else:
+                                        await drain_t
+                                        # Only mark complete after a successful drain.
+                                        input_done = True
                                 finally:
                                     await utils.aio.gracefully_cancel(input_t, send_t)
                                     await sent_tok.aclose()
 
-                            # Close the single speech session
-                            await ws.send(json.dumps({"event": "speech-end"}))
-
-                            # Wait for all audio to arrive
-                            seg_count, _ = await reader_task
+                            # Close the single speech session (if reader still
+                            # waiting for speech-end / remaining audio).
+                            if not reader_task.done():
+                                await ws.send(json.dumps({"event": "speech-end"}))
+                                # Wait for all audio to arrive
+                                seg_count, _ = await reader_task
+                            else:
+                                # Reader already finished (e.g. error path above
+                                # already awaited it, or server closed early).
+                                seg_count, _ = await reader_task
                         finally:
                             # Always cancel and await reader_task to prevent
                             # "Task destroyed but pending" / exception-not-retrieved.

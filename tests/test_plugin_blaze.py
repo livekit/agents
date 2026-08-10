@@ -396,14 +396,19 @@ def test_stt_default_models() -> None:
 
 
 def test_ws_base_url_upgrades_remote_http_to_wss() -> None:
-    """Auth tokens ride on the first WS frame — remote http:// must become wss://."""
+    """Auth tokens ride on the first WS frame — non-loopback http:// → wss://."""
     from livekit.plugins.blaze._utils import ws_base_url
 
     assert ws_base_url("https://api.blaze.vn") == "wss://api.blaze.vn"
     assert ws_base_url("http://api.blaze.vn") == "wss://api.blaze.vn"
     assert ws_base_url("http://localhost:8080") == "ws://localhost:8080"
     assert ws_base_url("http://127.0.0.1") == "ws://127.0.0.1"
+    assert ws_base_url("http://[::1]") == "ws://[::1]"
+    assert ws_base_url("http://[::1]:8080/v1") == "ws://[::1]:8080/v1"
     assert ws_base_url("api.example.com") == "wss://api.example.com"
+    # mDNS / LAN .local hosts are NOT loopback — must not send bearer over ws://
+    assert ws_base_url("http://blaze-gw.local") == "wss://blaze-gw.local"
+    assert ws_base_url("ws://blaze-gw.local/v1") == "wss://blaze-gw.local/v1"
 
     remote = STT(config=BlazeConfig(api_url="http://api.example.com", api_token="tok"))
     assert remote._ws_url == "wss://api.example.com/v1/stt/realtime"

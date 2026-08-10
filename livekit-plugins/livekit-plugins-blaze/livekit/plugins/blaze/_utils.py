@@ -22,12 +22,36 @@ def effective_connect_timeout(
     return conn_options.timeout
 
 
+def _host_from_authority(authority: str) -> str:
+    """Extract hostname from ``host``, ``host:port``, or ``[IPv6]:port``."""
+    authority = authority.split("/")[0]
+    if "@" in authority:
+        authority = authority.rsplit("@", 1)[-1]
+    if authority.startswith("["):
+        end = authority.find("]")
+        if end != -1:
+            return authority[1:end]
+    # IPv4 or hostname — strip :port (not valid bare IPv6 without brackets)
+    return authority.split(":")[0]
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True for hosts safe to use plaintext ``ws://`` (token on first frame).
+
+    Only true loopback addresses qualify. mDNS / LAN names ending in
+    ``.local`` are *not* treated as local — the bearer token must not cross
+    the network in cleartext.
+    """
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
 def ws_base_url(api_url: str) -> str:
     """Convert an HTTP(S) API base URL to a WebSocket base URL.
 
-    Auth tokens are sent on the first STT/TTS WS message, so remote endpoints
-    always use ``wss://`` (even if ``BLAZE_API_URL`` is ``http://``). Local
-    development hosts keep ``ws://``.
+    Auth tokens are sent on the first STT/TTS WS message, so non-loopback
+    endpoints always use ``wss://`` (even if ``BLAZE_API_URL`` is ``http://``).
+    Only true loopback hosts (``localhost`` / ``127.0.0.1`` / ``::1``) keep
+    plaintext ``ws://`` for local development.
     """
     base = api_url.strip().rstrip("/")
     if base.startswith("https://"):
@@ -35,14 +59,13 @@ def ws_base_url(api_url: str) -> str:
     if base.startswith("wss://"):
         return base
     if base.startswith("ws://"):
-        host = base[len("ws://") :].split("/")[0].split(":")[0]
-        if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        rest = base[len("ws://") :]
+        if _is_loopback_host(_host_from_authority(rest)):
             return base
-        return "wss://" + base[len("ws://") :]
+        return "wss://" + rest
     if base.startswith("http://"):
         rest = base[len("http://") :]
-        host = rest.split("/")[0].split(":")[0]
-        if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        if _is_loopback_host(_host_from_authority(rest)):
             return "ws://" + rest
         return "wss://" + rest
     # No scheme — assume HTTPS/WSS
