@@ -140,6 +140,21 @@ async def test_playout_launch_releases_pause_when_pause_is_disabled(
     assert agent_activity._paused_speech is None
 
 
+async def test_playout_launch_releases_pause_when_audio_output_is_disabled(
+    activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    agent_activity, audio_output = activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._update_paused_speech(speech_handle, timeout=2.0)
+    audio_output.pause()
+    agent_activity._session.output.set_audio_enabled(False)
+
+    agent_activity._reconcile_playout_pause(speech_handle)
+
+    assert audio_output._paused_at is None
+    assert agent_activity._paused_speech is None
+
+
 async def test_audio_forwarding_reconciles_playout_pause_before_first_frame() -> None:
     order: list[str] = []
     audio_output = MagicMock()

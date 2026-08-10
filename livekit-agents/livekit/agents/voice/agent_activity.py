@@ -4282,6 +4282,7 @@ class AgentActivity(RecognitionHooks):
         return bool(
             interruption_options["resume_false_interruption"]
             and interruption_options["false_interruption_timeout"] is not None
+            and self._session.output.audio_enabled
             and self._session.output.audio
             and self._session.output.audio.can_pause
         )
