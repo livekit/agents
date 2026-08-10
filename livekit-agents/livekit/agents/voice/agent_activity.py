@@ -1930,6 +1930,8 @@ class AgentActivity(RecognitionHooks):
 
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         self._interruption_detected = ev.is_interruption
+        if ev.is_interruption:
+            self._interruption_by_audio_activity_enabled = False
         self._session.emit("overlapping_speech", ev)
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
@@ -2025,23 +2027,28 @@ class AgentActivity(RecognitionHooks):
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(self) -> bool:
-        """Interrupt the current speech or generation from detected audio activity.
-
-        Returns whether the current speech was paused or interrupted.
-        """
+    def _interrupt_by_audio_activity(self) -> None:
+        """Interrupt the current speech or generation from detected audio activity."""
         if not self._interruption_by_audio_activity_enabled:
-            return False
+            return
 
         if self._session._aec_warmup_remaining > 0 and self._session._aec_warmup_timer is not None:
             # disable interruption from audio activity while aec warmup is active
-            return False
+            return
 
         if self._rt_turn_detection_enabled:
             # ignore if realtime model has turn detection enabled
-            return False
+            return
 
         interruption_options = self._session.options.interruption
+        if self._audio_recognition is not None:
+            # suppress re-entry while released events run their transcript hooks
+            self._interruption_by_audio_activity_enabled = False
+            try:
+                self._audio_recognition._release_transcripts_for_audio_activity()
+            finally:
+                self._interruption_by_audio_activity_enabled = True
+
         if (
             self.stt is not None
             and interruption_options["min_words"] > 0
@@ -2051,7 +2058,7 @@ class AgentActivity(RecognitionHooks):
 
             # TODO(long): better word splitting for multi-language
             if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
-                return False
+                return
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
@@ -2094,10 +2101,6 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
-
-            return True
-
-        return False
 
     # region recognition hooks
 
@@ -2204,20 +2207,9 @@ class AgentActivity(RecognitionHooks):
         ):
             self._rt_session.clear_audio()
 
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        now = time.time()
-        if self._audio_recognition:
-            flush_start = self._audio_recognition._transcript_flush_start(
-                now=now,
-                vad_speech_started_at=ev.overlap_started_at,
-            )
-            self._audio_recognition._flush_held_transcripts(flush_start=flush_start)
-
-        # apply the normal interruption thresholds after held transcripts are processed
+    def on_interruption(self, _ev: inference.OverlappingSpeechEvent) -> None:
         self._restore_interruption_by_audio_activity()
-        interrupted = self._interrupt_by_audio_activity()
-        if interrupted and self._audio_recognition:
-            self._audio_recognition._on_end_of_agent_speech(ended_at=now)
+        self._interrupt_by_audio_activity()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:

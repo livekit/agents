@@ -1763,7 +1763,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
         await _close_test_session(session)
 
 
-async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+async def test_drain_transcript_gate_emits_buffered_events() -> None:
     actions = FakeActions()
     session = create_session(actions)
     hooks = _TestRecognitionHooks()
@@ -1782,7 +1782,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
     )
 
     try:
-        recognition._flush_held_transcripts(force=True)
+        recognition._drain_transcript_gate()
 
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
@@ -1790,7 +1790,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
-async def test_held_final_transcript_cancels_timeout_only_after_flush() -> None:
+async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
     session = create_session(FakeActions())
     hooks = _TestRecognitionHooks()
     recognition = AudioRecognition(
@@ -1803,9 +1803,7 @@ async def test_held_final_transcript_cancels_timeout_only_after_flush() -> None:
         interruption_detection=None,
         turn_detection="manual",
     )
-    recognition._interruption_enabled = True
-    recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
-    recognition._agent_speaking = True
+    recognition._transcript_gate_active = True
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
@@ -1813,12 +1811,12 @@ async def test_held_final_transcript_cancels_timeout_only_after_flush() -> None:
     try:
         await recognition._on_stt_event(event)
 
-        assert not timeout_handle.cancelled()
-        assert not recognition._turn_transcript_received
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
         assert list(recognition._transcript_buffer) == [event]
         assert hooks.final_transcripts == []
 
-        recognition._flush_held_transcripts(force=True)
+        recognition._drain_transcript_gate()
 
         assert timeout_handle.cancelled()
         assert recognition._turn_transcript_received
@@ -1826,7 +1824,50 @@ async def test_held_final_transcript_cancels_timeout_only_after_flush() -> None:
         assert recognition._current_transcript == "held transcript"
     finally:
         timeout_handle.cancel()
-        recognition._interruption_ch.close()
+        await _close_test_session(session)
+
+
+async def test_true_verdict_releases_late_transcripts() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    recognition._transcript_gate_active = True
+    recognition._agent_speaking = True
+    recognition._agent_speech_started_at = time.time() - 1.0
+    overlap_started_at = time.time() - 0.5
+    recognition._transcript_buffer.append(
+        _final_transcript_event(
+            text="already held",
+            start_time=0.0,
+            end_time=0.0,
+            created_at=overlap_started_at,
+        )
+    )
+
+    try:
+        await recognition._on_overlap_speech_event(
+            inference.OverlappingSpeechEvent(
+                is_interruption=True,
+                overlap_started_at=overlap_started_at,
+            )
+        )
+        await recognition._on_stt_event(
+            _final_transcript_event(text="arrived later", start_time=0.0, end_time=0.0)
+        )
+
+        assert hooks.final_transcripts == ["already held", "arrived later"]
+        assert len(hooks.interruptions) == 1
+        assert not recognition._transcript_buffer
+    finally:
         await _close_test_session(session)
 
 
