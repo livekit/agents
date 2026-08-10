@@ -324,15 +324,35 @@ class STT(stt.STT):
                 pending.empty_count = 0
         pending.last_recognize_time = now
 
-        # Prepend any buffered PCM from previous empty segments
+        # Prepend any buffered PCM from previous empty segments — only when
+        # format matches. A sample-rate / channel change would garble the
+        # concatenated PCM under the current segment's WAV header.
         if pending.pcm:
-            logger.info(
-                "[%s] Prepending %d bytes pending PCM to %d bytes new segment",
-                request_id,
-                len(pending.pcm),
-                len(segment_pcm),
-            )
-            pcm_data = pending.pcm + segment_pcm
+            if (
+                pending.sample_rate != sample_rate
+                or pending.num_channels != num_channels
+            ):
+                logger.info(
+                    "[%s] Dropping pending PCM on format change "
+                    "(pending=%dHz/%dch, current=%dHz/%dch, %d bytes discarded)",
+                    request_id,
+                    pending.sample_rate,
+                    pending.num_channels,
+                    sample_rate,
+                    num_channels,
+                    len(pending.pcm),
+                )
+                pending.pcm = b""
+                pending.empty_count = 0
+                pcm_data = segment_pcm
+            else:
+                logger.info(
+                    "[%s] Prepending %d bytes pending PCM to %d bytes new segment",
+                    request_id,
+                    len(pending.pcm),
+                    len(segment_pcm),
+                )
+                pcm_data = pending.pcm + segment_pcm
         else:
             pcm_data = segment_pcm
 
@@ -413,8 +433,11 @@ class STT(stt.STT):
             if sample_rate and bytes_per_sample
             else 0.0
         )
+        pending_bytes_per_sample = 2 * pending.num_channels  # rate at capture time
         pending_duration = (
-            len(pending.pcm) / (sample_rate * bytes_per_sample) if pending.pcm else 0.0
+            len(pending.pcm) / (pending.sample_rate * pending_bytes_per_sample)
+            if pending.pcm and pending.sample_rate and pending_bytes_per_sample
+            else 0.0
         )
 
         if not text.strip():

@@ -426,6 +426,41 @@ async def test_stt_clears_stale_pending_buffer_after_idle_gap(
 
 
 @pytest.mark.asyncio
+async def test_stt_drops_pending_pcm_on_sample_rate_mismatch() -> None:
+    """Do not prepend pending PCM captured at a different sample rate."""
+    uploaded: list[int] = []
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        # Multipart body length is a proxy for whether pending was prepended.
+        body = req.read()
+        uploaded.append(len(body))
+        return httpx.Response(200, json={"transcription": "ok", "confidence": 1.0})
+
+    stt = _make_stt(responder)
+    # Seed a large pending buffer recorded at 16 kHz mono.
+    pending_pcm = b"\x01\x00" * 4000
+    stt._pending_pcm = pending_pcm
+    stt._pending_empty_count = 1
+    # Access the pending dataclass to set format metadata.
+    pending = stt._recognize_pending()
+    pending.sample_rate = 16000
+    pending.num_channels = 1
+    pending.last_recognize_time = time.monotonic()
+
+    frame_48k = _pcm_frame(samples=200, sample_rate=48000, byte_val=0x22)
+    event = await stt._recognize_impl(frame_48k, conn_options=APIConnectOptions(max_retry=0))
+
+    assert event.alternatives[0].text == "ok"
+    assert stt._pending_pcm == b""
+    assert stt._pending_empty_count == 0
+    assert len(uploaded) == 1
+    # Body must be far smaller than if 4000 pending samples had been prepended.
+    # A pure 200-sample frame WAV is well under 2KB; prepended would be much larger.
+    assert uploaded[0] < 4000
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stt_raises_api_status_error_on_http_failure() -> None:
     from livekit.agents import APIStatusError
 
