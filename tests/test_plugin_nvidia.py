@@ -756,3 +756,18 @@ def test_nvidia_provider_cancellation_is_not_graceful_499() -> None:
 
     assert isinstance(mapped, APIConnectionError)
     assert mapped.retryable is True
+
+
+def test_nvidia_aborted_stt_request_remains_retryable() -> None:
+    class AbortedRpcError(nvidia_stt.grpc.RpcError):
+        def code(self):
+            return nvidia_stt.grpc.StatusCode.ABORTED
+
+        def details(self):
+            return "provider aborted request"
+
+    mapped = nvidia_stt._to_stt_api_error(AbortedRpcError(), operation="NVIDIA Speech STT request")
+
+    assert isinstance(mapped, APIStatusError)
+    assert mapped.status_code == 503
+    assert mapped.retryable is True
