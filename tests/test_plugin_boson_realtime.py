@@ -575,6 +575,40 @@ async def test_boson_realtime_tool_choice_uses_boson_shape(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_unsupported_tool_type_warns_once(monkeypatch):
+    # A tool the wire has no shape for is left out of session.update. Doing that
+    # silently means a tool the caller registered never reaches the model and
+    # leaves no trace anywhere; the framework gaining a new tool kind is exactly
+    # when that would happen.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    class _UnknownTool:
+        pass
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        realtime.realtime_model.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg))
+    )
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
+        event = await session._msg_ch.recv()
+        assert event["session"]["tools"] == []
+        assert len(warnings) == 1
+
+        # Warned once per session, not once per session.update.
+        session.update_options(voice="coral")
+        await session._msg_ch.recv()
+        assert len(warnings) == 1
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_raw_function_tool_schema_uses_boson_shape(monkeypatch):
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 

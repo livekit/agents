@@ -277,6 +277,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._suppress_next_response_cancel = False
         self._video_unsupported_warned = False
         self._system_item_unsupported_warned = False
+        self._unsupported_tool_type_warned = False
         self._per_response_tools_warned = False
         self._current_response_id: str | None = None
         # Set by _handle_error on invalid_previous_item_id, read (and cleared)
@@ -464,6 +465,16 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # partial merge), so a tools-only update must carry the whole config.
         return self._build_session_update_event("tools_update_", tools=tools)
 
+    def _warn_unsupported_tool_type_once(self, dropped: int) -> None:
+        if self._unsupported_tool_type_warned:
+            return
+        self._unsupported_tool_type_warned = True
+        logger.warning(
+            "%d tool(s) were dropped from the Boson realtime session: only function tools "
+            "are supported on the wire. The model will not see them.",
+            dropped,
+        )
+
     def _warn_unsupported_item_role_once(self) -> None:
         if self._system_item_unsupported_warned:
             return
@@ -627,7 +638,9 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 "input": audio_input,
                 "output": audio_output,
             },
-            "tools": _tools_to_boson(tools if tools is not None else self._tools.flatten()),
+            "tools": self._tools_to_boson_warning_on_drop(
+                tools if tools is not None else self._tools.flatten()
+            ),
             "tool_choice": _tool_choice_to_boson(self._boson_opts.tool_choice),
             "temperature": self._boson_opts.temperature,
             "max_output_tokens": self._boson_opts.max_output_tokens,
@@ -638,6 +651,20 @@ class RealtimeSession(openai_rt.RealtimeSession):
             "event_id": utils.shortuuid(event_prefix),
             "session": payload,
         }
+
+    def _tools_to_boson_warning_on_drop(self, tools: list[llm.Tool]) -> list[dict[str, Any]]:
+        """Convert tools for the wire, warning once if any were dropped.
+
+        _tools_to_boson emits one entry per tool it can express, so a shorter
+        result means something was silently left out -- a tool type the wire
+        has no shape for. Counting rather than re-testing the types keeps the
+        two from drifting apart. Silence here would be the worst outcome: a
+        tool the caller registered simply never reaches the model.
+        """
+        converted = _tools_to_boson(tools)
+        if len(converted) < len(tools):
+            self._warn_unsupported_tool_type_once(len(tools) - len(converted))
+        return converted
 
     async def update_instructions(self, instructions: str) -> None:
         # Both copies: _boson_opts feeds the wire, the base's own feeds the
