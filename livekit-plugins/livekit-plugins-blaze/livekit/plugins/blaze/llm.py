@@ -386,6 +386,12 @@ class LLMStream(llm.LLMStream):
                         logger.warning("[%s] Failed to parse data: %s", request_id, data_str[:100])
                         continue
 
+                    if not isinstance(data, dict):
+                        logger.warning(
+                            "[%s] Ignoring non-object SSE payload: %s", request_id, data_str[:100]
+                        )
+                        continue
+
                     # Handle tool calls
                     tool_calls = self._extract_tool_calls(data)
                     if tool_calls:

@@ -797,6 +797,61 @@ async def test_llm_run_posts_messages_as_json_array() -> None:
         await llm_inst.aclose()
 
 
+@pytest.mark.asyncio
+async def test_llm_run_ignores_non_object_sse_payloads() -> None:
+    """Non-dict SSE JSON (keepalive string/number/list) must not abort the stream."""
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="ping")
+
+    class _StreamResponse:
+        status_code = 200
+
+        async def aiter_lines(self):
+            yield 'data: {"content": "Hello"}'
+            yield 'data: "keepalive"'
+            yield "data: 0"
+            yield "data: [1, 2]"
+            yield 'data: {"content": " world"}'
+            yield "data: [DONE]"
+
+        async def aread(self) -> bytes:
+            return b""
+
+    class _StreamCM:
+        async def __aenter__(self) -> _StreamResponse:
+            return _StreamResponse()
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    def stream_mock(
+        method: str,
+        url: str,
+        *,
+        json: list | dict | None = None,
+        headers: dict | None = None,
+        timeout: object = None,
+    ) -> _StreamCM:
+        return _StreamCM()
+
+    llm_inst = _make_llm()
+    llm_inst._client.stream = stream_mock  # type: ignore[method-assign]
+    stream = LLMStream(
+        llm_inst,
+        chat_ctx=chat_ctx,
+        tools=[],
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+
+    try:
+        chunks = [chunk async for chunk in stream]
+        contents = [c.delta.content for c in chunks if c.delta and c.delta.content]
+        assert contents == ["Hello", " world"]
+    finally:
+        await stream.aclose()
+        await llm_inst.aclose()
+
+
 def test_convert_messages_maps_assistant_and_strips_img_tags() -> None:
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="assistant", content="Hello <img>chart</img> world.")
