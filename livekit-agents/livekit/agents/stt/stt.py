@@ -122,6 +122,8 @@ class SpeechEvent:
     speech_start_time: float | None = None
     """server-reported wall-clock time of speech onset, when the provider sends
     a separate speech-start signal carrying onset timing."""
+    created_at: float = field(default_factory=lambda: time.time())
+    """Wall-clock time when this event was created."""
 
 
 @dataclass
