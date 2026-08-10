@@ -45,7 +45,7 @@ async def test_playout_launch_preserves_existing_pause(
     audio_output.pause()
     paused_at = audio_output._paused_at
 
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert paused_at is not None
     assert audio_output._paused_at == paused_at
@@ -61,7 +61,7 @@ async def test_playout_launch_pauses_when_sos_precedes_current_speech(
     speech_handle = SpeechHandle.create()
     agent_activity._user_silence_event.clear()
 
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert audio_output._paused_at is not None
     assert agent_activity._paused_speech is not None
@@ -76,7 +76,7 @@ async def test_playout_launch_resumes_when_user_is_silent(
     speech_handle = SpeechHandle.create()
     assert agent_activity._user_silence_event.is_set()
 
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert audio_output._paused_at is None
     assert agent_activity._paused_speech is None
@@ -94,7 +94,7 @@ async def test_playout_launch_releases_pause_when_interruptions_are_disabled(
     agent_activity._false_interruption_pending = True
 
     speech_handle.allow_interruptions = False
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert audio_output._paused_at is None
     assert agent_activity._paused_speech is None
@@ -103,7 +103,7 @@ async def test_playout_launch_releases_pause_when_interruptions_are_disabled(
     assert agent_activity._false_interruption_pending is False
 
     speech_handle.allow_interruptions = True
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
     await agent_activity._cancel_speech_pause()
 
     assert audio_output._paused_at is None
@@ -119,7 +119,7 @@ async def test_playout_launch_releases_pause_for_interrupted_speech(
     audio_output.pause()
 
     speech_handle.interrupt()
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert audio_output._paused_at is None
     assert agent_activity._paused_speech is None
@@ -134,13 +134,13 @@ async def test_playout_launch_releases_pause_when_pause_is_disabled(
     audio_output.pause()
     agent_activity._session.options.interruption["resume_false_interruption"] = False
 
-    agent_activity._prepare_audio_playout(speech_handle)
+    agent_activity._reconcile_playout_pause(speech_handle)
 
     assert audio_output._paused_at is None
     assert agent_activity._paused_speech is None
 
 
-async def test_audio_forwarding_prepares_playout_before_first_frame() -> None:
+async def test_audio_forwarding_reconciles_playout_pause_before_first_frame() -> None:
     order: list[str] = []
     audio_output = MagicMock()
     audio_output.sample_rate = None
@@ -157,8 +157,8 @@ async def test_audio_forwarding_prepares_playout_before_first_frame() -> None:
         audio_output,
         _frames(),
         out,
-        prepare_playout=lambda: order.append("prepare"),
+        reconcile_playout_pause=lambda: order.append("reconcile"),
     )
 
-    assert order == ["prepare", "frame", "flush"]
+    assert order == ["reconcile", "frame", "flush"]
     audio_output.resume.assert_not_called()
