@@ -141,15 +141,20 @@ class TTS(tts.TTS):
         )
 
         self._owns_client = client is None
+        resolved_key = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Speechify API key is required, either as the api_key argument "
+                "or via the SPEECHIFY_API_KEY environment variable"
+            )
+        self._api_key = resolved_key
+        self._base_url = base_url if is_given(base_url) else "https://api.sws.speechify.com"
+
         if client is not None:
             self._client = client
+            # Extract the httpx client from the SDK client for direct streaming calls
+            self._httpx_client = client._client
         else:
-            resolved_key = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
-            if not resolved_key:
-                raise ValueError(
-                    "Speechify API key is required, either as the api_key argument "
-                    "or via the SPEECHIFY_API_KEY environment variable"
-                )
             # Fixed httpx.AsyncClient default header so every request the SDK
             # issues is attributed to this integration, regardless of call site.
             # Timeout/limits mirror the openai plugin's owned-client defaults —
@@ -163,7 +168,7 @@ class TTS(tts.TTS):
             )
             self._client = AsyncSpeechify(
                 token=resolved_key,
-                base_url=base_url if is_given(base_url) else None,
+                base_url=self._base_url,
                 httpx_client=self._httpx_client,
             )
 
@@ -273,117 +278,29 @@ def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
     return out
 
 
-def _timed_transcript_from_marks(speech_marks: list[dict], offset: float) -> list[TimedString]:
-    """Convert speech marks from /v1/audio/stream/with-timestamps to TimedString."""
-    out: list[TimedString] = []
-    for mark in speech_marks:
-        if mark.get("type") != "word":
-            continue
-        value = mark.get("value")
-        start = mark.get("start")
-        if value is None or start is None:
-            continue
-        end = mark.get("end")
-        out.append(
-            TimedString(
-                text=value,
-                start_time=start / 1000 + offset,
-                end_time=(end / 1000 + offset) if end is not None else NOT_GIVEN,
-            )
-        )
-    return out
-
-
 async def _stream_with_timestamps(
     *,
     text: str,
     opts: _TTSOptions,
     timeout: float,
     client: httpx.AsyncClient,
+    api_key: str,
+    base_url: str,
 ) -> tuple[bytes, list[dict]]:
     """Call /v1/audio/stream/with-timestamps and parse SSE response."""
-    url = "https://api.sws.speechify.com/v1/audio/stream/with-timestamps"
-    
+    url = f"{base_url}/v1/audio/stream/with-timestamps"
+
     request_body = {
         "input": text,
         "voice_id": opts.voice_id,
         "output_format": f"pcm_{SAMPLE_RATE}",
     }
-    
+
     if is_given(opts.model):
         request_body["model"] = opts.model
     if is_given(opts.language):
         request_body["language"] = opts.language
-    
-    options: dict[str, bool] = {}
-    if is_given(opts.loudness_normalization):
-        options["loudness_normalization"] = opts.loudness_normalization
-    if is_given(opts.text_normalization):
-        options["text_normalization"] = opts.text_normalization
-    if options:
-        request_body["options"] = options
-    
-    headers = {
-        "Content-Type": "application/json",
-        CALLER_HEADER: "livekit",
-    }
-    
-    audio_chunks: list[bytes] = []
-    all_speech_marks: list[dict] = []
-    
-    async with client.stream("POST", url, headers=headers, json=request_body, timeout=timeout) as response:
-        response.raise_for_status()
-        
-        event_type = None
-        async for line in response.aiter_lines():
-            line = line.strip()
-            
-            if not line:
-                continue
-            
-            if line.startswith("event:"):
-                event_type = line[6:].strip()
-            elif line.startswith("data:"):
-                data_str = line[5:].strip()
-                
-                try:
-                    parsed = json.loads(data_str)
-                    
-                    if event_type == "speech.chunk":
-                        if "audio" in parsed:
-                            audio_b64 = parsed["audio"]
-                            audio_bytes = base64.b64decode(audio_b64)
-                            audio_chunks.append(audio_bytes)
-                        
-                        if "speech_marks" in parsed:
-                            all_speech_marks.extend(parsed["speech_marks"])
-                except json.JSONDecodeError:
-                    pass
-    
-    return b"".join(audio_chunks), all_speech_marks
 
-
-async def _stream_with_timestamps(
-    *,
-    text: str,
-    opts: _TTSOptions,
-    timeout: float,
-    client: httpx.AsyncClient,
-) -> tuple[bytes, list[dict]]:
-    """Call /v1/audio/stream/with-timestamps and parse SSE response."""
-    url = "https://api.sws.speechify.com/v1/audio/stream/with-timestamps"
-    
-    request_body = {
-        "input": text,
-        "voice_id": opts.voice_id,
-        "output_format": f"pcm_{SAMPLE_RATE}",
-    }
-    
-    if is_given(opts.model):
-        request_body["model"] = opts.model
-    if is_given(opts.language):
-        request_body["language"] = opts.language
-    
     options = {}
     if is_given(opts.loudness_normalization):
         options["loudness_normalization"] = opts.loudness_normalization
@@ -391,53 +308,51 @@ async def _stream_with_timestamps(
         options["text_normalization"] = opts.text_normalization
     if options:
         request_body["options"] = options
-    
+
     headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
         CALLER_HEADER: "livekit",
     }
-    
+
     audio_chunks = []
     all_speech_marks = []
-    
+
     try:
         async with client.stream(
-            "POST",
-            url,
-            json=request_body,
-            headers=headers,
-            timeout=timeout,
+            "POST", url, json=request_body, headers=headers, timeout=timeout
         ) as response:
             response.raise_for_status()
-            
+
             event_type = None
             async for line in response.aiter_lines():
                 line = line.strip()
-                
+
                 if not line:
                     continue
-                
+
                 if line.startswith("event:"):
                     event_type = line[6:].strip()
                 elif line.startswith("data:"):
                     data_str = line[5:].strip()
-                    
+
                     try:
                         parsed = json.loads(data_str)
-                        
+
                         if event_type == "speech.chunk":
                             if "audio" in parsed:
                                 audio_b64 = parsed["audio"]
                                 audio_bytes = base64.b64decode(audio_b64)
                                 audio_chunks.append(audio_bytes)
-                            
+
                             if "speech_marks" in parsed:
                                 all_speech_marks.extend(parsed["speech_marks"])
                     except json.JSONDecodeError:
                         pass
-        
+
         audio_bytes = b"".join(audio_chunks)
         return audio_bytes, all_speech_marks
-        
+
     except httpx.TimeoutException:
         raise APITimeoutError() from None
     except httpx.HTTPStatusError as e:
@@ -455,17 +370,17 @@ def _timed_transcript_from_marks(speech_marks: list[dict], offset: float) -> lis
     """Convert API speech marks to TimedString segments."""
     if not speech_marks:
         return []
-    
+
     out: list[TimedString] = []
     for mark in speech_marks:
         if mark.get("type") != "word":
             continue
-        
+
         value = mark.get("value")
         start = mark.get("start")
         if value is None or start is None:
             continue
-        
+
         end = mark.get("end")
         out.append(
             TimedString(
@@ -519,6 +434,8 @@ class ChunkedStream(tts.ChunkedStream):
                 opts=self._opts,
                 timeout=self._conn_options.timeout,
                 client=self._tts._httpx_client,
+                api_key=self._tts._api_key,
+                base_url=self._tts._base_url,
             )
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
@@ -573,6 +490,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     opts=self._opts,
                     timeout=self._conn_options.timeout,
                     client=self._tts._httpx_client,
+                    api_key=self._tts._api_key,
+                    base_url=self._tts._base_url,
                 )
                 timed = _timed_transcript_from_marks(speech_marks, offset)
                 if timed:
