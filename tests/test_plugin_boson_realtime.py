@@ -763,12 +763,12 @@ async def test_boson_realtime_capabilities_disable_per_response_tool_choice(monk
 
 
 @pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_instructions_scoped_via_session_update(monkeypatch):
-    # Boson has no per-response instructions override: sending it inside
-    # response.create makes the server discard the real conversation history
-    # for that turn. generate_reply(instructions=...) must scope it at the
-    # session level instead — a session.update before response.create that
-    # carries no override fields — then restore the original afterwards.
+async def test_boson_realtime_generate_reply_instructions_ride_in_response_create(monkeypatch):
+    # The server applies a per-response `instructions` to that turn alone: it
+    # replaces the system prompt for the turn while the turn still answers from
+    # the real conversation. So the override goes in response.create, and the
+    # session config around it is left untouched — no scoping session.update
+    # before it, none after.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
     model = realtime.RealtimeModel(
@@ -782,13 +782,11 @@ async def test_boson_realtime_generate_reply_instructions_scoped_via_session_upd
 
         generation_fut = session.generate_reply(instructions="Greet the user.")
 
-        scoped_update = await session._msg_ch.recv()
-        assert scoped_update["type"] == "session.update"
-        assert scoped_update["session"]["instructions"] == "Base instructions.\nGreet the user."
-
         response_create = await session._msg_ch.recv()
         assert response_create["type"] == "response.create"
-        assert response_create["response"].get("instructions") is None
+        # Since the server replaces the whole prompt, the event has to carry the
+        # session instructions too, not just the per-turn addition.
+        assert response_create["response"]["instructions"] == "Base instructions.\nGreet the user."
 
         _server_event(
             session,
@@ -803,242 +801,82 @@ async def test_boson_realtime_generate_reply_instructions_scoped_via_session_upd
         )
         await generation_fut
 
-        restore_update = await session._msg_ch.recv()
-        assert restore_update["type"] == "session.update"
-        assert restore_update["session"]["instructions"] == "Base instructions."
+        # Nothing to restore: the session was never reconfigured.
+        assert session._msg_ch.empty()
+        assert session._instructions == "Base instructions."
     finally:
         await session.aclose()
         await model.aclose()
 
 
 @pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_tool_choice_scoped_via_session_update(monkeypatch):
+async def test_boson_realtime_generate_reply_instructions_carry_configured_prompt(monkeypatch):
+    # The base only prefixes the session instructions when its own
+    # `_instructions` is already set, which it leaves unset until the first
+    # update_instructions(). Unset here would send the per-turn text alone, and
+    # the server would replace the whole prompt with it — silently dropping the
+    # configured instructions for that turn.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        instructions="Configured at construction.",
+    )
     session = model.session()
     try:
         await session._msg_ch.recv()  # initial session.update
 
-        generation_fut = session.generate_reply(tool_choice="none")
+        # No update_instructions() call anywhere before this.
+        session.generate_reply(instructions="Greet the user.")
 
-        scoped_update = await session._msg_ch.recv()
-        assert scoped_update["type"] == "session.update"
-        assert scoped_update["session"]["tool_choice"] == "none"
+        response_create = await session._msg_ch.recv()
+        assert (
+            response_create["response"]["instructions"]
+            == "Configured at construction.\nGreet the user."
+        )
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_generate_reply_ignores_per_response_tools(monkeypatch):
+    # The server accepts per-response tools/tool_choice and ignores them, so
+    # forwarding them would look like they applied. The framework scopes them at
+    # the session level instead (per_response_tool_choice is False); a caller
+    # reaching this session directly gets a warning and no wire change.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    async def _tool() -> str:
+        return "ok"
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        realtime.realtime_model.logger, "warning", lambda msg, *a, **k: warnings.append(msg)
+    )
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        session.generate_reply(
+            tool_choice="none",
+            tools=[llm.function_tool(_tool, name="lookup_policy", description="Lookup.")],
+        )
 
         response_create = await session._msg_ch.recv()
         assert response_create["type"] == "response.create"
         assert "tool_choice" not in response_create["response"]
-
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        restore_update = await session._msg_ch.recv()
-        assert restore_update["type"] == "session.update"
-        assert restore_update["session"]["tool_choice"] == "auto"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_tools_emits_followup_session_update(monkeypatch):
-    # Scope of this test is the client side of the exchange only: which events
-    # generate_reply(tools=...) puts on the wire, in what order, carrying what.
-    # It asserts nothing about the session state the peer ends up in — that is
-    # not observable from here and is not what this test is for.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    async def lookup_policy():
-        return "ok"
-
-    tool = llm.function_tool(
-        lookup_policy,
-        raw_schema={
-            "name": "lookup_policy",
-            "description": "Lookup a policy.",
-            "parameters": {"type": "object", "properties": {}},
-            "meta": {"provider": "test"},
-        },
-    )
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        generation_fut = session.generate_reply(tools=[tool])
-
-        scoped_update = await session._msg_ch.recv()
-        assert scoped_update["type"] == "session.update"
-        assert scoped_update["session"]["tools"] == [
-            {
-                "type": "function",
-                "name": "lookup_policy",
-                "description": "Lookup a policy.",
-                "parameters": {"type": "object", "properties": {}},
-            }
-        ]
-
-        response_create = await session._msg_ch.recv()
-        assert response_create["type"] == "response.create"
         assert "tools" not in response_create["response"]
+        # No session.update either — the session config is untouched.
+        assert session._msg_ch.empty()
+        assert len(warnings) == 1
 
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        # A follow-up session.update goes out once the response is created,
-        # carrying the tools that were configured before the override.
-        followup_update = await session._msg_ch.recv()
-        assert followup_update["type"] == "session.update"
-        assert followup_update["session"]["tools"] == []
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_scoped_overrides_are_serialized(monkeypatch):
-    # Two overlapping scoped generate_reply() calls must not race: the second
-    # must not swap in its override until the first has fully restored,
-    # otherwise the first's restore could stomp the second's override, or the
-    # second could capture the first's temporary value as "original".
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        instructions="Base instructions.",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        first_fut = session.generate_reply(instructions="First.")
-        second_fut = session.generate_reply(instructions="Second.")
-
-        # The first call's scoped update and response.create go out; the
-        # second is blocked on the lock until the first fully restores (the
-        # recv() ordering below is the actual proof of serialization).
-        first_scoped = await session._msg_ch.recv()
-        assert first_scoped["session"]["instructions"] == "Base instructions.\nFirst."
-
-        first_response_create = await session._msg_ch.recv()
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": first_response_create["event_id"]},
-                },
-            },
-        )
-        await first_fut
-
-        first_restore = await session._msg_ch.recv()
-        assert first_restore["session"]["instructions"] == "Base instructions."
-
-        # The second call's scoped update carries the true original, not
-        # whatever the first call happened to leave in place mid-flight.
-        second_scoped = await session._msg_ch.recv()
-        assert second_scoped["session"]["instructions"] == "Base instructions.\nSecond."
-
-        second_response_create = await session._msg_ch.recv()
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_2",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": second_response_create["event_id"]},
-                },
-            },
-        )
-        await second_fut
-
-        second_restore = await session._msg_ch.recv()
-        assert second_restore["session"]["instructions"] == "Base instructions."
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_restores_on_cancel_during_swap_in(monkeypatch):
-    # update_tools() awaits the base class's own lock — a genuine suspension
-    # point. If generate_reply() is cancelled while still stuck there mid
-    # swap-in (e.g. aclose() cancelling it), the restore must still run, not
-    # be skipped because the swap-in lived outside the try/finally.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    async def lookup_policy():
-        return "ok"
-
-    tool = llm.function_tool(
-        lookup_policy,
-        raw_schema={
-            "name": "lookup_policy",
-            "description": "Lookup a policy.",
-            "parameters": {"type": "object", "properties": {}},
-            "meta": {"provider": "test"},
-        },
-    )
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        instructions="Base instructions.",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        # Hold the base class's tools lock so update_tools() inside the
-        # scoped call blocks mid swap-in, after instructions already went out.
-        await session._update_fnc_ctx_lock.acquire()
-        try:
-            generation_fut = session.generate_reply(instructions="Scoped!", tools=[tool])
-
-            scoped_update = await session._msg_ch.recv()
-            assert scoped_update["session"]["instructions"] == "Base instructions.\nScoped!"
-            assert session._instructions == "Base instructions.\nScoped!"
-            assert session._msg_ch.empty()
-
-            generation_fut.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await generation_fut
-        finally:
-            session._update_fnc_ctx_lock.release()
-
-        # The restore must still happen even though cancellation landed
-        # mid-swap-in, before generate_reply() itself was ever called.
-        restore_update = await asyncio.wait_for(session._msg_ch.recv(), timeout=1.0)
-        assert restore_update["type"] == "session.update"
-        assert restore_update["session"]["instructions"] == "Base instructions."
-        assert session._instructions == "Base instructions."
+        # Warned once per session, not once per call.
+        session.generate_reply(tool_choice="none")
+        await session._msg_ch.recv()
+        assert len(warnings) == 1
     finally:
         await session.aclose()
         await model.aclose()

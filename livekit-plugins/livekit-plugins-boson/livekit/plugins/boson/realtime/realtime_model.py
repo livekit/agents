@@ -179,15 +179,12 @@ class RealtimeModel(openai_rt.RealtimeModel):
         # client-supplied item ids, so items are addressable for the base
         # diff/create/delete chat-context synchronization.
         #
-        # Unlike OpenAI, Boson has no per-response override: setting any of
-        # instructions/tool_choice/tools in response.create switches that turn
-        # to an isolated, history-less conversation context instead of
-        # continuing the real one, and the override itself is not applied.
-        # Override the OpenAI base's per_response_tool_choice=True so the
-        # framework scopes tool_choice/tools at the session level around
-        # generate_reply() instead; RealtimeSession.generate_reply() does the
-        # same for instructions, which the framework passes unconditionally
-        # regardless of this capability.
+        # The server applies a per-response `instructions` to that turn alone,
+        # but not per-response `tools`/`tool_choice` — those are accepted and
+        # ignored. Override the OpenAI base's per_response_tool_choice=True so
+        # the framework scopes them at the session level around
+        # generate_reply() instead of putting them in response.create, where
+        # they would be silently dropped.
         self._capabilities.per_response_tool_choice = False
 
     @property
@@ -281,13 +278,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._suppress_next_response_cancel = False
         self._video_unsupported_warned = False
         self._system_item_unsupported_warned = False
+        self._per_response_tools_warned = False
         self._current_response_id: str | None = None
-        # Serializes generate_reply() calls that scope instructions/tool_choice/
-        # tools at the session level (see generate_reply), so overlapping scoped
-        # calls can't stomp on each other's restore value. The tasks it spawns
-        # are tracked so aclose() can cancel any still in flight.
-        self._scoped_override_lock = asyncio.Lock()
-        self._scoped_override_tasks = utils.aio.TaskSet()
         # Set by _handle_error on invalid_previous_item_id, read (and cleared)
         # by update_chat_ctx() right after its base call returns; see there.
         # _chat_ctx_sync_lock keeps that clear/read pair atomic against a
@@ -314,6 +306,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # the server just ended.
         self._server_terminal_reason: str | None = None
         super().__init__(realtime_model)
+        # The base leaves its own copy of the instructions None until
+        # update_instructions() is first called, and only prefixes a
+        # per-response `instructions` with it when it is truthy. Since the
+        # server replaces the whole system prompt with whatever response.create
+        # carries, an un-set value there would drop the configured instructions
+        # for that turn. Seed it from the session config, and keep the two in
+        # sync in update_instructions. Assigned after super().__init__, which
+        # sets it to None — and which has already sent the first session.update
+        # by then, hence _build_session_update_event reading _boson_opts rather
+        # than this.
+        self._instructions = self._boson_opts.instructions
         # The base recv loop dispatches OpenAI event types to _handle_* methods
         # and re-emits every raw event on this hook; Boson-specific events are
         # handled off it instead of forking the whole dispatch.
@@ -634,7 +637,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
         payload: dict[str, Any] = {
             "type": "realtime",
             "model": self._boson_opts.model,
-            "instructions": self._instructions or self._boson_opts.instructions,
+            # The session-level value, which update_instructions keeps in sync
+            # with the base's own copy. Read from here rather than that copy
+            # because the base sends the first session.update from inside its
+            # own __init__, before the copy can be seeded.
+            "instructions": self._boson_opts.instructions,
             "output_modalities": list(self._boson_opts.output_modalities),
             "audio": {
                 "input": audio_input,
@@ -653,6 +660,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
         }
 
     async def update_instructions(self, instructions: str) -> None:
+        # Both copies: _boson_opts feeds the wire, the base's own feeds the
+        # per-response prefix in generate_reply. See __init__ on why there are
+        # two.
+        self._boson_opts.instructions = instructions
         self._instructions = instructions
         self.send_event(self._build_session_update_event("instructions_update_"))
 
@@ -733,91 +744,30 @@ class RealtimeSession(openai_rt.RealtimeSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
-        if not is_given(instructions) and not is_given(tool_choice) and not is_given(tools):
-            return super().generate_reply()
+        # `instructions` rides in response.create: the server scopes it to that
+        # turn, replacing the session prompt for it alone while the turn still
+        # answers from the real conversation. The base builds that event,
+        # prefixing the session instructions (see __init__ on why they are
+        # always set).
+        #
+        # `tools`/`tool_choice` are not scoped per response by the server — it
+        # accepts and ignores them — so they must not be forwarded. The
+        # framework already scopes them at the session level around this call
+        # (capabilities.per_response_tool_choice is False) and passes them here
+        # only when a caller reaches this session directly.
+        if is_given(tools) or is_given(tool_choice):
+            self._warn_per_response_tools_unsupported_once()
+        return super().generate_reply(instructions=instructions)
 
-        # Boson has no per-response override: setting any of instructions/
-        # tool_choice/tools in response.create switches that turn to an
-        # isolated, history-less conversation context instead of continuing
-        # the real one, and the override itself is not applied either.
-        # Emulate a per-turn override by scoping it at the session level
-        # instead: swap in the
-        # override(s), issue response.create with none of them so the server
-        # uses the real conversation, then restore. This also covers a caller
-        # going through this session directly, not just the framework's own
-        # per_response_tool_choice=False path (which only scopes tool_choice/
-        # tools, not instructions).
-        fut = asyncio.Future[llm.GenerationCreatedEvent]()
-
-        async def _run() -> None:
-            try:
-                result = await self._generate_reply_with_scoped_overrides(
-                    instructions=instructions, tool_choice=tool_choice, tools=tools
-                )
-            except asyncio.CancelledError:
-                if not fut.done():
-                    fut.cancel()
-                raise
-            except Exception as exc:  # noqa: BLE001 - propagate to the caller's future
-                if not fut.done():
-                    fut.set_exception(exc)
-            else:
-                if not fut.done():
-                    fut.set_result(result)
-
-        task = self._scoped_override_tasks.create_task(
-            _run(), name="RealtimeSession._generate_reply_with_scoped_overrides"
+    def _warn_per_response_tools_unsupported_once(self) -> None:
+        if self._per_response_tools_warned:
+            return
+        self._per_response_tools_warned = True
+        logger.warning(
+            "Boson realtime API does not apply per-response tools/tool_choice; "
+            "they are ignored by generate_reply(). Use update_tools() / "
+            "update_options(tool_choice=...) to scope them yourself."
         )
-        fut.add_done_callback(lambda f: task.cancel() if f.cancelled() else None)
-        return fut
-
-    async def _generate_reply_with_scoped_overrides(
-        self,
-        *,
-        instructions: NotGivenOr[str],
-        tool_choice: NotGivenOr[llm.ToolChoice],
-        tools: NotGivenOr[list[llm.Tool]],
-    ) -> llm.GenerationCreatedEvent:
-        async with self._scoped_override_lock:
-            # self._instructions is only set once update_instructions() has
-            # been called at least once; until then the effective wire value
-            # is _boson_opts.instructions (see _build_session_update_event).
-            # Mirror that same fallback here so "original" reflects what the
-            # server actually has, not the un-set Python attribute.
-            original_instructions = self._instructions or self._boson_opts.instructions
-            original_tool_choice = self._boson_opts.tool_choice
-            original_tools = self._tools.flatten()
-
-            # The swap-in lives inside the try too: update_tools() awaits the
-            # base class's own lock, a genuine suspension point where
-            # cancellation (e.g. aclose() cancelling this task) can land. If
-            # the swap-in were outside the try, a cancellation there would
-            # skip the finally entirely and leave instructions/tool_choice
-            # permanently on the scoped value. Restoring a value whose
-            # swap-in never actually ran (e.g. tools, if cancelled while
-            # still waiting on the lock) is a safe, if slightly redundant,
-            # no-op — it just resends the unchanged original.
-            try:
-                if is_given(instructions):
-                    combined = (
-                        f"{original_instructions}\n{instructions}"
-                        if original_instructions
-                        else instructions
-                    )
-                    await self.update_instructions(combined)
-                if is_given(tool_choice):
-                    self.update_options(tool_choice=tool_choice)
-                if is_given(tools):
-                    await self.update_tools(tools)
-
-                return await super().generate_reply()
-            finally:
-                if is_given(instructions):
-                    await self.update_instructions(original_instructions)
-                if is_given(tool_choice):
-                    self.update_options(tool_choice=original_tool_choice)
-                if is_given(tools):
-                    await self.update_tools(original_tools)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._video_unsupported_warned:
@@ -844,8 +794,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self._closed = True
         self._close_current_generation("session closed")
         self._msg_ch.close()
-        if self._scoped_override_tasks.tasks:
-            await utils.aio.cancel_and_wait(*self._scoped_override_tasks.tasks)
         # Cancel instead of the base's await: the main task may be sleeping in a
         # retry backoff or mid-connect, which close should not wait out.
         await utils.aio.cancel_and_wait(self._main_atask)
