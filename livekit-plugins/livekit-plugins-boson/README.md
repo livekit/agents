@@ -125,6 +125,10 @@ When Boson returns a `function_call` item, LiveKit Agents executes the Python
 tool locally and the plugin sends the result back as a
 `function_call_output` conversation item.
 
+Only function tools have a shape on the wire. A tool of any other kind is left
+out of `session.update` — the model never sees it — and the plugin logs a
+warning once per session saying how many were dropped.
+
 The plugin does not retry a WebSocket close that a reconnect cannot fix: an
 invalid API key (close code 3000) or a billing entitlement refusal (close code
 4429, e.g. `insufficient_quota`/`monthly_cap_reached`) both end the session
