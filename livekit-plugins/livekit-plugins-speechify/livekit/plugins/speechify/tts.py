@@ -219,7 +219,7 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_id": self._opts.voice_id,
             "language": self._opts.language if is_given(self._opts.language) else None,
             "model": self._opts.model if is_given(self._opts.model) else None,
-            "output_format": _audio_format_from_encoding(self._opts.encoding),
+            "output_format": self._opts.encoding,
             "options": {
                 "loudness_normalization": self._opts.loudness_normalization
                 if is_given(self._opts.loudness_normalization)
