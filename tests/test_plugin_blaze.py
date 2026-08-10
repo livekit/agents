@@ -118,6 +118,23 @@ def test_blaze_config_defaults_without_environment(monkeypatch: pytest.MonkeyPat
     assert config.llm_timeout == 60.0
 
 
+def test_blaze_config_empty_or_invalid_timeout_env_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blank/non-numeric timeout env vars must not crash plugin construction."""
+    monkeypatch.setenv("BLAZE_STT_TIMEOUT", "")
+    monkeypatch.setenv("BLAZE_TTS_TIMEOUT", "  ")
+    monkeypatch.setenv("BLAZE_TTS_STREAM_TIMEOUT", "not-a-number")
+    monkeypatch.setenv("BLAZE_LLM_TIMEOUT", "abc")
+
+    config = BlazeConfig()
+
+    assert config.stt_timeout == 30.0
+    assert config.tts_timeout == 60.0
+    assert config.tts_stream_timeout == 300.0
+    assert config.llm_timeout == 60.0
+
+
 # ---------------------------------------------------------------------------
 # Utils
 # ---------------------------------------------------------------------------
@@ -347,6 +364,40 @@ async def test_stt_pending_pcm_is_instance_local() -> None:
 
     await stt_a.aclose()
     await stt_b.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stt_pending_pcm_not_inherited_after_instance_gc() -> None:
+    """WeakKeyDictionary drops pending when the STT instance is collected."""
+    import gc
+
+    from livekit.plugins.blaze import stt as stt_mod
+
+    marker = b"\xab\xcd"
+
+    async def _seed_and_drop() -> None:
+        stt = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
+        stt._pending_pcm = marker
+        assert stt._pending_pcm == marker
+        await stt.aclose()
+        # Drop last strong ref; WeakKeyDictionary entry must go away.
+        del stt
+        gc.collect()
+
+    await _seed_and_drop()
+    gc.collect()
+
+    # Fresh instance in the same task must not see the old buffer.
+    stt_new = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
+    assert stt_new._pending_pcm == b""
+    await stt_new.aclose()
+    del stt_new
+    gc.collect()
+
+    # ContextVar bucket should hold no live STT keys after GC.
+    bucket = stt_mod._pending_var.get()
+    if bucket is not None:
+        assert len(list(bucket.keys())) == 0
 
 
 async def test_stt_clears_stale_pending_buffer_after_idle_gap(

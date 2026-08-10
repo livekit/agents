@@ -29,6 +29,7 @@ import io
 import json
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 
 import httpx
@@ -73,12 +74,15 @@ class _RecognizePending:
     last_recognize_time: float = 0.0
 
 
-# Task-local map of STT instance id -> pending buffer. Isolates concurrent
+# Task-local WeakKeyDictionary[STT, _RecognizePending]. Isolates concurrent
 # StreamAdapter / AgentSession recognize() calls AND distinct STT instances
-# used in the same task (e.g. FallbackAdapter wrapping two Blaze STTs).
-_pending_var: contextvars.ContextVar[dict[int, _RecognizePending] | None] = contextvars.ContextVar(
-    "blaze_stt_recognize_pending",
-    default=None,
+# used in the same task (e.g. FallbackAdapter). Weak keys auto-drop entries
+# when an STT is GC'd, so recycled id(self) values cannot inherit stale PCM.
+_pending_var: contextvars.ContextVar[weakref.WeakKeyDictionary[STT, _RecognizePending] | None] = (
+    contextvars.ContextVar(
+        "blaze_stt_recognize_pending",
+        default=None,
+    )
 )
 
 
@@ -177,19 +181,20 @@ class STT(stt.STT):
     def _recognize_pending(self) -> _RecognizePending:
         """Return pending PCM state for this STT instance in the current task.
 
-        Keyed by ``id(self)`` inside a task-local dict so two Blaze STT
-        instances used from the same asyncio Task (e.g. FallbackAdapter)
-        never share or mix empty-segment buffers.
+        Uses a task-local ``WeakKeyDictionary`` keyed by the STT instance so:
+        * two Blaze STTs in the same task (e.g. FallbackAdapter) never mix
+          empty-segment buffers;
+        * entries are dropped when the STT is garbage-collected (no stale
+          PCM inheritance via recycled ``id(self)``).
         """
         bucket = _pending_var.get()
         if bucket is None:
-            bucket = {}
+            bucket = weakref.WeakKeyDictionary()
             _pending_var.set(bucket)
-        key = id(self)
-        pending = bucket.get(key)
+        pending = bucket.get(self)
         if pending is None:
             pending = _RecognizePending(sample_rate=self._sample_rate)
-            bucket[key] = pending
+            bucket[self] = pending
         return pending
 
     # Back-compat accessors used by unit tests (map onto task-local state).
@@ -462,13 +467,23 @@ class STT(stt.STT):
         had_pending = pending.empty_count > 0
         pending.pcm = b""
         pending.empty_count = 0
-        logger.info(
+        pending_note = f" (included {pending_duration:.1f}s pending audio)" if had_pending else ""
+        # Transcript text at DEBUG only — may contain PII / conversation content.
+        logger.debug(
             "[%s] STT completed: text='%s', confidence=%.3f, latency=%.3fs%s",
             request_id,
             text[:80],
             confidence,
             latency,
-            f" (included {pending_duration:.1f}s pending audio)" if had_pending else "",
+            pending_note,
+        )
+        logger.info(
+            "[%s] STT completed: %d chars, confidence=%.3f, latency=%.3fs%s",
+            request_id,
+            len(text),
+            confidence,
+            latency,
+            pending_note,
         )
 
         return stt.SpeechEvent(

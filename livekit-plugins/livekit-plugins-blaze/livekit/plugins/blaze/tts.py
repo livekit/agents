@@ -801,13 +801,21 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             if not normalized.strip():
                                 return
                             query_count += 1
+                            # User speech content stays at DEBUG — avoid shipping
+                            # end-user text into default production log sinks.
                             preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
-                            logger.info(
+                            logger.debug(
                                 "[%s] TTS query %d — %d chars: '%s'",
                                 request_id,
                                 query_count,
                                 len(normalized),
                                 preview,
+                            )
+                            logger.info(
+                                "[%s] TTS query %d — %d chars",
+                                request_id,
+                                query_count,
+                                len(normalized),
                             )
                             sent_queries.append(normalized)
                             await ws.send(json.dumps({"query": normalized}))

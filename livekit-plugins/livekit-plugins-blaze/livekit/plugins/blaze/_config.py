@@ -10,11 +10,33 @@ from __future__ import annotations
 
 import os
 
+from .log import logger
+
 _DEFAULT_API_URL = "https://api.blaze.vn"
 _DEFAULT_STT_TIMEOUT = 30.0
 _DEFAULT_TTS_TIMEOUT = 60.0
 _DEFAULT_TTS_STREAM_TIMEOUT = 300.0
 _DEFAULT_LLM_TIMEOUT = 60.0
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var; empty/invalid values fall back to ``default``."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    stripped = raw.strip()
+    if not stripped:
+        return default
+    try:
+        return float(stripped)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %.1f",
+            name,
+            raw,
+            default,
+        )
+        return default
 
 
 class BlazeConfig:
@@ -61,12 +83,12 @@ class BlazeConfig:
         self.stt_timeout: float = (
             stt_timeout
             if stt_timeout is not None
-            else float(os.environ.get("BLAZE_STT_TIMEOUT", _DEFAULT_STT_TIMEOUT))
+            else _env_float("BLAZE_STT_TIMEOUT", _DEFAULT_STT_TIMEOUT)
         )
         self.tts_timeout: float = (
             tts_timeout
             if tts_timeout is not None
-            else float(os.environ.get("BLAZE_TTS_TIMEOUT", _DEFAULT_TTS_TIMEOUT))
+            else _env_float("BLAZE_TTS_TIMEOUT", _DEFAULT_TTS_TIMEOUT)
         )
         # Separate timeout for the full TTS streaming session (WebSocket + all batches).
         # Streaming turns can span many text batches and require a longer timeout than
@@ -74,10 +96,10 @@ class BlazeConfig:
         self.tts_stream_timeout: float = (
             tts_stream_timeout
             if tts_stream_timeout is not None
-            else float(os.environ.get("BLAZE_TTS_STREAM_TIMEOUT", _DEFAULT_TTS_STREAM_TIMEOUT))
+            else _env_float("BLAZE_TTS_STREAM_TIMEOUT", _DEFAULT_TTS_STREAM_TIMEOUT)
         )
         self.llm_timeout: float = (
             llm_timeout
             if llm_timeout is not None
-            else float(os.environ.get("BLAZE_LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT))
+            else _env_float("BLAZE_LLM_TIMEOUT", _DEFAULT_LLM_TIMEOUT)
         )
