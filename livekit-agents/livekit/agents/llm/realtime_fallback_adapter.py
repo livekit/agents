@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from .chat_context import ChatContext
+from .chat_context import ChatContext, MetricsMetadata
 from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
@@ -120,6 +120,9 @@ class RealtimeModelFallbackAdapter(
         self._regenerate_on_swap = regenerate_on_swap
         self._sessions: weakref.WeakSet[_FallbackRealtimeSession] = weakref.WeakSet()
 
+        # the model currently serving sessions; used to label metrics & traces
+        self._active_instance: RealtimeModel = models[0]
+
     @property
     def model(self) -> str:
         return "RealtimeModelFallbackAdapter"
@@ -127,6 +130,11 @@ class RealtimeModelFallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the model currently serving sessions (the primary until a swap)."""
+        return self._active_instance.metrics_metadata
 
     def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
         sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
@@ -192,6 +200,8 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._active = adapter._models[0].session(
             turn_detection_disabled=self._turn_detection_disabled
         )
+        # a fresh session always starts on the primary, even after an earlier failover
+        adapter._active_instance = adapter._models[0]
         self._bind(self._active)
 
     def _bind(self, child: RealtimeSession) -> None:
@@ -304,6 +314,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                     )
                     if is_given(self._tool_choice):
                         self._active.update_options(tool_choice=self._tool_choice)
+                    self._adapter._active_instance = self._adapter._models[index]
                     return None
                 except Exception as e:
                     logger.exception("failed to start realtime model on swap, trying next")

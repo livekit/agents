@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from ..llm.chat_context import ChatContext, ChatItem
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
+    DuplicateScope,
     FunctionTool,
     RawFunctionTool,
     StopResponse,
@@ -22,7 +24,7 @@ from ..llm.tool_context import (
     Toolset,
     function_tool,
 )
-from ..llm.utils import prepare_function_arguments
+from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
@@ -198,12 +200,53 @@ def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
     return False
 
 
+def _canonical_args(raw_arguments: dict[str, Any]) -> str:
+    """Stable JSON for argument comparison.
+
+    ``sort_keys`` recurses into nested objects, so a provider's key-emission order
+    can't make two identical calls look different. Lists stay order-sensitive —
+    ``["a", "b"]`` and ``["b", "a"]`` are genuinely different arguments.
+    """
+    return json.dumps(raw_arguments, sort_keys=True, default=str)
+
+
+def _duplicate_key(
+    *,
+    fnc: FunctionTool | RawFunctionTool,
+    fnc_name: str,
+    scope: DuplicateScope,
+    raw_arguments: dict[str, Any],
+) -> tuple[str, str | None]:
+    """The identity a call is deduplicated on. Always name-scoped, so two tools
+    can never collide; under ``"name"`` equality reduces to name equality.
+
+    ``"name_and_args"`` compares *validated* arguments, so an optional parameter the
+    LLM omitted on one call and passed explicitly on the next still reads as the same
+    call (see :func:`validated_arguments`).
+    """
+    if scope != "name_and_args":
+        return (fnc_name, None)
+
+    # the confirm flag is harness state, not an argument
+    raw = {k: v for k, v in raw_arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
+
+    try:
+        # encoding is in the try too: validated values are Python objects, so a type like
+        # dict[SomeEnum, int] yields keys json can't encode
+        return (fnc_name, _canonical_args(validated_arguments(fnc, raw)))
+    except Exception:
+        # the call raises ToolError on its own later; key on what was sent, which always
+        # encodes, rather than failing the guard here
+        return (fnc_name, _canonical_args(raw))
+
+
 @dataclass
 class _RunningTask:
     ctx: RunContext
     exe_task: asyncio.Task[Any]
     executor: _ToolExecutor
     allow_cancellation: bool
+    duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
 
 
 @dataclass
@@ -272,15 +315,26 @@ class _ToolExecutor:
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
 
-        duplicate_result = await self._check_duplicate(
-            fnc_name, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
-        )
-        if duplicate_result is not None:
-            logger.debug(
-                "duplicate tool call rejected",
-                extra={"call_id": call_id, "function": fnc_name},
+        # nothing can match an "allow" tool's key: keys are name-scoped, the mode is per tool
+        dup_key: tuple[str, str | None] | None = None
+        if on_duplicate != "allow":
+            # derived AFTER the pop, so a confirming re-call keys like the call it confirms
+            dup_key = _duplicate_key(
+                fnc=tool,
+                fnc_name=fnc_name,
+                scope=info.duplicate_scope,
+                raw_arguments=raw_arguments,
             )
-            return duplicate_result
+
+            duplicate_result = await self._check_duplicate(
+                dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
+            )
+            if duplicate_result is not None:
+                logger.debug(
+                    "duplicate tool call rejected",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                return duplicate_result
 
         if call_id in self._running_tasks:
             raise ValueError(f"Task already running for call_id: {call_id}")
@@ -363,6 +417,7 @@ class _ToolExecutor:
             exe_task=exe_task,
             executor=self,
             allow_cancellation=allow_cancellation,
+            duplicate_key=dup_key,
         )
         self._running_tasks[call_id] = running_task
 
@@ -597,7 +652,7 @@ class _ToolExecutor:
 
     async def _check_duplicate(
         self,
-        fnc_name: str,
+        dup_key: tuple[str, str | None],
         *,
         on_duplicate: DuplicateMode,
         confirm_duplicate: bool | None,
@@ -605,11 +660,13 @@ class _ToolExecutor:
         if on_duplicate == "allow":
             return None
 
+        fnc_name = dup_key[0]
+
         async with self._duplicate_check_lock:
             running_fnc_calls = [
                 t.ctx.function_call
                 for t in self._running_tasks.values()
-                if t.ctx.function_call.name == fnc_name
+                if t.duplicate_key == dup_key
             ]
             if len(running_fnc_calls) == 0:
                 return None

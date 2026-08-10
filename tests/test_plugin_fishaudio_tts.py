@@ -153,6 +153,13 @@ def test_normalize_loudness_with_speed_and_volume():
     assert prosody == {"speed": 1.2, "volume": -3.0, "normalize_loudness": True}
 
 
+def test_quality_guard_always_enabled():
+    """Every request carries the quality-guard feature flag; it is not configurable."""
+    from livekit.plugins.fishaudio.tts import _build_tts_request
+
+    assert _build_tts_request(TTS_opts(), text="hi")["features"] == ["quality-guard"]
+
+
 def test_generation_tuning_omitted_by_default():
     """Unset tuning params are absent from the request so Fish's defaults apply."""
     from livekit.plugins.fishaudio.tts import _build_tts_request

@@ -74,6 +74,7 @@ from .generation import (
     _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
+    _time_to_first_sentence,
     _TTSGenerationData,
     forward_generation,
     perform_audio_forwarding,
@@ -2649,10 +2650,7 @@ class AgentActivity(RecognitionHooks):
         return instructions
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
-        """Resolve the session's internal expressive setting. Returns None if disabled.
-
-        Expressive mode is framework-internal and not publicly exposed; the session
-        hardcodes it to ``False``, so this currently always returns ``None``.
+        """Resolve the session's expressive setting. Returns None if disabled.
 
         Expressive mode requires two things:
         - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
@@ -3376,18 +3374,18 @@ class AgentActivity(RecognitionHooks):
         assistant_metrics: llm.MetricsReport = {}
 
         if self.llm:
-            assistant_metrics["llm_metadata"] = {
-                "model_name": self.llm.model,
-                "model_provider": self.llm.provider,
-            }
+            assistant_metrics["llm_metadata"] = self.llm.metrics_metadata
         if self.tts:
-            assistant_metrics["tts_metadata"] = {
-                "model_name": self.tts.model,
-                "model_provider": self.tts.provider,
-            }
+            assistant_metrics["tts_metadata"] = self.tts.metrics_metadata
 
         if llm_gen_data.ttft is not None:
             assistant_metrics["llm_node_ttft"] = llm_gen_data.ttft
+
+        if llm_gen_data.tps is not None:
+            assistant_metrics["llm_node_tps"] = llm_gen_data.tps
+
+        if (ttfs := _time_to_first_sentence(llm_gen_data, first_tts_gen_data)) is not None:
+            assistant_metrics["llm_node_ttfs"] = ttfs
 
         if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
             assistant_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
@@ -4476,10 +4474,7 @@ class AgentActivity(RecognitionHooks):
     def _init_metrics_from_end_of_turn(self, info: _EndOfTurnInfo) -> llm.MetricsReport:
         metrics_report: llm.MetricsReport = {}
         if self.stt:
-            metrics_report["stt_metadata"] = {
-                "model_name": self.stt.model,
-                "model_provider": self.stt.provider,
-            }
+            metrics_report["stt_metadata"] = self.stt.metrics_metadata
         if info.metrics.started_speaking_at is not None:
             metrics_report["started_speaking_at"] = info.metrics.started_speaking_at
 
