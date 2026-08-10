@@ -607,7 +607,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APITimeoutError("STT realtime: timed out waiting for ready")
 
                 async def _send_audio() -> None:
-                    """Forward audio frames; mark intentional close when input ends."""
+                    """Forward audio frames; close WS when input ends so recv exits."""
                     nonlocal closing_ws
                     try:
                         async for item in self._input_ch:
@@ -618,6 +618,19 @@ class SpeechStream(stt.SpeechStream):
                             if pcm:
                                 await ws.send(pcm)
                         closing_ws = True
+                        # Input drained (end_input). Blaze keeps the socket open and
+                        # finalizes on silence — without closing here, `async for raw in
+                        # ws` never terminates and the stream only ends via task cancel.
+                        # Brief grace for a trailing final transcript, then close.
+                        try:
+                            await asyncio.sleep(min(1.0, max(0.1, timeout * 0.1)))
+                            await ws.close()
+                        except Exception as close_err:
+                            logger.debug(
+                                "[%s] STT WS close after end_input: %s",
+                                self._request_id,
+                                close_err,
+                            )
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
