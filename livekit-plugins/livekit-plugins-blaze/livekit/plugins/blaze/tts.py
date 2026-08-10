@@ -805,8 +805,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                 # drained; resend the buffered (already
                                 # normalized) queries without re-normalizing.
                                 logger.warning(
-                                    "[%s] TTS WS reconnect attempt %d/%d — "
-                                    "resending %d query(ies)",
+                                    "[%s] TTS WS reconnect attempt %d/%d — resending %d query(ies)",
                                     request_id,
                                     ws_attempt,
                                     max_ws_attempts,
@@ -869,11 +868,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                     # Mid-input drops cannot reconstruct consumed channel text —
                     # raise so the framework SynthesizeStream retry can replay.
                     mid_input = input_started and not input_done
-                    if (
-                        stream_initialized
-                        or mid_input
-                        or ws_attempt >= max_ws_attempts
-                    ):
+                    if stream_initialized or mid_input or ws_attempt >= max_ws_attempts:
                         raise APIConnectionError(
                             f"TTS WebSocket closed: {e}",
                             retryable=not stream_initialized,
