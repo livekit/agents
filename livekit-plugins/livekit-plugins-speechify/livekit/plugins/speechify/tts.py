@@ -141,20 +141,36 @@ class TTS(tts.TTS):
         )
 
         self._owns_client = client is None
-        resolved_key = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
-        if not resolved_key:
-            raise ValueError(
-                "Speechify API key is required, either as the api_key argument "
-                "or via the SPEECHIFY_API_KEY environment variable"
-            )
-        self._api_key = resolved_key
-        self._base_url = base_url if is_given(base_url) else "https://api.sws.speechify.com"
 
         if client is not None:
+            # Use preconfigured client and extract its credentials
             self._client = client
-            # Extract the httpx client from the SDK client for direct streaming calls
-            self._httpx_client = client._client
+            # Extract the httpx client from the SDK client wrapper
+            self._httpx_client = client._client_wrapper.httpx_client
+            # Extract base_url and token from the configured client
+            self._base_url = client._client_wrapper.base_url or "https://api.sws.speechify.com"
+            # Extract token from the client's auth header
+            auth_header = client._client_wrapper._get_default_headers().get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                self._api_key = auth_header[7:]
+            else:
+                self._api_key = auth_header or ""
         else:
+            # Create our own client with validated credentials
+            resolved_key = api_key if is_given(api_key) else os.environ.get("SPEECHIFY_API_KEY")
+            if not resolved_key:
+                raise ValueError(
+                    "Speechify API key is required, either as the api_key argument "
+                    "or via the SPEECHIFY_API_KEY environment variable"
+                )
+            self._api_key = resolved_key
+            resolved_base_url = base_url if is_given(base_url) else "https://api.sws.speechify.com"
+            # Validate base URL scheme for security
+            if not resolved_base_url.startswith(("https://", "http://")):
+                raise ValueError(
+                    f"base_url must start with http:// or https://, got: {resolved_base_url}"
+                )
+            self._base_url = resolved_base_url
             # Fixed httpx.AsyncClient default header so every request the SDK
             # issues is attributed to this integration, regardless of call site.
             # Timeout/limits mirror the openai plugin's owned-client defaults —
@@ -377,11 +393,11 @@ def _timed_transcript_from_marks(speech_marks: list[dict], offset: float) -> lis
             continue
 
         value = mark.get("value")
-        start = mark.get("start")
+        start = mark.get("start_time")
         if value is None or start is None:
             continue
 
-        end = mark.get("end")
+        end = mark.get("end_time")
         out.append(
             TimedString(
                 text=value,
