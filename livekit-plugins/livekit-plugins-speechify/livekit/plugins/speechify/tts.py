@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
 from dataclasses import dataclass, replace
 
@@ -54,7 +56,7 @@ def _audio_format_from_encoding(encoding: TTSEncoding) -> str:
 DEFAULT_VOICE_ID = "jack"
 API_BASE_URL_V1 = "https://api.sws.speechify.com/v1"
 AUTHORIZATION_HEADER = "Authorization"
-CALLER_HEADER = "x-caller"
+CALLER_HEADER = "Speechify-Caller"
 
 
 @dataclass
@@ -99,6 +101,10 @@ class TTS(tts.TTS):
     ) -> None:
         """
         Create a new instance of Speechify TTS.
+
+        Synthesis uses the Speechify ``/v1/audio/stream/with-timestamps`` endpoint,
+        which streams raw PCM audio together with word-level speech marks via
+        Server-Sent Events (SSE). The plugin emits audio and aligned word timestamps.
 
         Args:
             voice_id (NotGivenOr[str]): Voice ID. Defaults to `cliff`.
@@ -213,7 +219,7 @@ class ChunkedStream(tts.ChunkedStream):
             "voice_id": self._opts.voice_id,
             "language": self._opts.language if is_given(self._opts.language) else None,
             "model": self._opts.model if is_given(self._opts.model) else None,
-            "audio_format": _audio_format_from_encoding(self._opts.encoding),
+            "output_format": _audio_format_from_encoding(self._opts.encoding),
             "options": {
                 "loudness_normalization": self._opts.loudness_normalization
                 if is_given(self._opts.loudness_normalization)
@@ -233,9 +239,9 @@ class ChunkedStream(tts.ChunkedStream):
             ) as resp:
                 resp.raise_for_status()
 
-                if not resp.content_type.startswith("audio/"):
+                if not resp.content_type.startswith("text/event-stream"):
                     content = await resp.text()
-                    raise APIError(message="Speechify returned non-audio data", body=content)
+                    raise APIError(message="Speechify returned non-SSE data", body=content)
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -244,8 +250,51 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type=f"audio/{_audio_format_from_encoding(self._opts.encoding)}",
                 )
 
-                async for chunk, _ in resp.content.iter_chunks():
-                    output_emitter.push(chunk)
+                # Parse SSE stream
+                audio_chunks = []
+                speech_marks = []
+                
+                async for line in resp.content:
+                    line_str = line.decode("utf-8").strip()
+                    
+                    if not line_str:
+                        continue
+                    
+                    if line_str.startswith("event:"):
+                        event_type = line_str[6:].strip()
+                    elif line_str.startswith("data:"):
+                        data_str = line_str[5:].strip()
+                        
+                        try:
+                            parsed = json.loads(data_str)
+                            
+                            if event_type == "speech.chunk":
+                                if "audio" in parsed:
+                                    audio_b64 = parsed["audio"]
+                                    audio_bytes = base64.b64decode(audio_b64)
+                                    audio_chunks.append(audio_bytes)
+                                    output_emitter.push(audio_bytes)
+                                
+                                if "speech_marks" in parsed:
+                                    speech_marks.extend(parsed["speech_marks"])
+                        except json.JSONDecodeError:
+                            pass
+
+                # Convert speech marks to timed transcript
+                if speech_marks:
+                    timed_segments = []
+                    for mark in speech_marks:
+                        if mark.get("type") == "word":
+                            timed_segments.append(
+                                tts.TimedString(
+                                    text=mark.get("value", ""),
+                                    start_time=mark.get("start", 0) / 1000.0,
+                                    end_time=mark.get("end", 0) / 1000.0,
+                                )
+                            )
+                    
+                    if timed_segments:
+                        output_emitter.push_timed_transcript(timed_segments)
 
                 output_emitter.flush()
 
@@ -264,7 +313,7 @@ class ChunkedStream(tts.ChunkedStream):
 
 def _synthesize_url(opts: _TTSOptions) -> str:
     """Construct the Speechify stream URL."""
-    return f"{opts.base_url}/audio/stream"
+    return f"{opts.base_url}/audio/stream/with-timestamps"
 
 
 def _get_headers(token: str, *, encoding: TTSEncoding | None = None) -> dict[str, str]:
