@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
+from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import numpy as np
 
@@ -29,9 +30,6 @@ from .. import utils, vad
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-
-if TYPE_CHECKING:
-    from concurrent.futures import Executor
 
 SLOW_INFERENCE_THRESHOLD = 0.2  # late by 200ms
 _MODEL_SAMPLE_RATE = 16000
@@ -54,8 +52,8 @@ class VAD(vad.VAD):
 
     The native model singleton is loaded once at module import (via the
     pybind11 ``.so`` constructor); each stream allocates its own per-instance
-    LSTM/context state. Pass ``executor`` to isolate inference from the event
-    loop's default executor; the caller remains responsible for shutting it down.
+    LSTM/context state. Each stream uses a dedicated one-worker executor by default.
+    When an executor is provided, the caller remains responsible for shutting it down.
     """
 
     def __init__(
@@ -149,6 +147,9 @@ class _VADStream(vad.VADStream):
     def __init__(self, parent: VAD, opts: _VADOptions, *, executor: Executor | None) -> None:
         super().__init__(parent)
         self._opts = opts
+        self._owns_executor = executor is None
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference.vad")
         self._executor = executor
         self._native_vad = _NativeVAD()
 
@@ -156,6 +157,13 @@ class _VADStream(vad.VADStream):
         self._speech_buffer: np.ndarray | None = None
         self._speech_buffer_max_reached = False
         self._prefix_padding_samples = 0  # (input_sample_rate)
+
+    async def aclose(self) -> None:
+        try:
+            await super().aclose()
+        finally:
+            if self._owns_executor:
+                self._executor.shutdown(wait=False, cancel_futures=True)
 
     def update_options(
         self,
