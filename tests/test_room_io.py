@@ -634,38 +634,6 @@ async def test_audio_output_drops_a_paused_frame_from_an_interrupted_segment() -
 
 
 @pytest.mark.asyncio
-async def test_audio_output_clear_finishes_all_empty_segments() -> None:
-    empty_frame = rtc.AudioFrame(b"", 48000, 1, 0)
-
-    with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
-        output = _ParticipantAudioOutput(
-            _FakeRoom(),
-            sample_rate=48000,
-            num_channels=1,
-            track_publish_options=rtc.TrackPublishOptions(),
-        )
-    output._subscribed_fut.set_result(None)  # skip track publish/subscription
-    forward_task = asyncio.create_task(output._forward_audio())
-
-    finished: list[PlaybackFinishedEvent] = []
-    output.on("playback_finished", finished.append)
-
-    try:
-        for _ in range(2):
-            await output.capture_frame(empty_frame)
-            output.flush()
-
-        output.clear_buffer()
-        await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
-    finally:
-        await utils.aio.cancel_and_wait(forward_task)
-
-    assert len(finished) == 2
-    assert all(event.interrupted for event in finished)
-    assert all(event.playback_position == 0 for event in finished)
-
-
-@pytest.mark.asyncio
 async def test_audio_output_waits_for_active_submission_and_source_playout() -> None:
     # One progressive chunk leaves no buffered remainder after the forwarder dequeues it.
     frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms

@@ -136,8 +136,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_bstream.clear()
 
         if not self._pushed_duration:
-            while self._pending_playback_count:
-                self.on_playback_finished(playback_position=0, interrupted=True)
             return
 
         self._interrupted_event.set()
