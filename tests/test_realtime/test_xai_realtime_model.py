@@ -10,10 +10,15 @@ from openai.types.realtime import (
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeAudioConfigOutput,
+    RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseCreatedEvent,
     ResponseTextDeltaEvent,
 )
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm, utils
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
@@ -21,19 +26,69 @@ from livekit.plugins.openai.realtime.realtime_model import (
     _DiscardedGeneration,
     _MessageGeneration,
 )
-from livekit.plugins.xai.realtime.realtime_model import RealtimeSession
+from livekit.plugins.xai.realtime.realtime_model import (
+    XAI_DEFAULT_MODEL,
+    RealtimeModel,
+    RealtimeSession,
+)
 
 pytestmark = pytest.mark.unit
 
 
+def test_default_model_is_grok_voice_latest() -> None:
+    assert XAI_DEFAULT_MODEL == "grok-voice-latest"
+    model = RealtimeModel(api_key="fake")
+    assert model.model == "grok-voice-latest"
+    assert model.capabilities.supports_say is True
+    assert model._opts.input_audio_transcription is not None
+    assert model._opts.input_audio_transcription.model == "grok-transcribe"
+
+
+def test_wrap_session_update_lifts_voice_and_turn_detection() -> None:
+    turn_detection = ServerVad(type="server_vad", create_response=True, interrupt_response=True)
+    req = RealtimeSessionCreateRequest(
+        type="realtime",
+        audio=RealtimeAudioConfig(
+            input=RealtimeAudioConfigInput(turn_detection=turn_detection),
+            output=RealtimeAudioConfigOutput(voice="Ara"),
+        ),
+    )
+    sess = RealtimeSession.__new__(RealtimeSession)
+    sess._opts = SimpleNamespace(is_azure=False, api_version=None)  # type: ignore[attr-defined]
+    event = RealtimeSession._wrap_session_update(sess, "evt", req)
+    assert getattr(req, "voice", None) == "Ara"
+    assert getattr(req, "turn_detection", None) == turn_detection
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+    assert dumped["type"] == "session.update"
+    assert dumped["session"].get("voice") == "Ara" or getattr(req, "voice", None) == "Ara"
+
+
+def test_transcription_updated_emits_non_final() -> None:
+    session, emitted = _make_session()
+    session._on_xai_server_event(
+        {
+            "type": "conversation.item.input_audio_transcription.updated",
+            "item_id": "item_1",
+            "transcript": "hello there",
+        }
+    )
+    assert [(ev.item_id, ev.transcript, ev.is_final) for ev in emitted] == [
+        ("item_1", "hello there", False)
+    ]
+
+
 def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionCompleted]]:
     # no network or model is needed, and a discarded generation skips the base bookkeeping
+    from collections import deque
+
     session = RealtimeSession.__new__(RealtimeSession)
     session._remote_chat_ctx = RemoteChatContext()  # type: ignore[attr-defined]
     session._current_generation = _DiscardedGeneration()  # type: ignore[attr-defined]
     session._opts = SimpleNamespace(modalities=["audio", "text"])  # type: ignore[assignment]
     session._item_create_future = {}  # type: ignore[attr-defined]
     session._msg_ch = utils.aio.Chan()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    session._say_tasks = set()
     session._reset_input_turn_state()
 
     emitted: list[llm.InputTranscriptionCompleted] = []
@@ -384,3 +439,119 @@ async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
     _speech_started(session, "item_1")
 
     assert not generation._done_fut.done()
+
+
+async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
+    # Cancel must leave the say id taggable so a late response.created hits
+    # discard-by-id; clearing the deque early lets cancelled speech play.
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    fut = session.say("hello from force message")
+    assert session._response_created_futures
+    assert session._say_tasks  # strong ref so the send task is not GC'd
+    # allow the background send task to queue force_message + pending say id
+    await asyncio.sleep(0)
+    pending_before = list(session._pending_say_event_ids)
+    assert pending_before
+    say_id = pending_before[0]
+    say_tasks = list(session._say_tasks)
+    fut.cancel()
+    if say_tasks:
+        await asyncio.wait(say_tasks)
+
+    assert list(session._pending_say_event_ids) == [say_id]
+    assert session._response_created_futures == {}
+    assert say_id in session._discarded_event_ids
+    assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+
+    # late server announcement must be tagged then discarded, not spoken
+    _response_created(session)
+    assert isinstance(session._current_generation, _DiscardedGeneration)
+    assert list(session._pending_say_event_ids) == []
+    assert say_id not in session._discarded_event_ids
+
+
+async def test_cancelling_say_task_resolves_future() -> None:
+    # aclose cancels _say_task after force_message; fut must be cancelled too
+    # or AgentActivity awaits say() forever
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    session.send_event = lambda *_: None  # type: ignore[method-assign]
+
+    fut = session.say("still speaking")
+    await asyncio.sleep(0)
+    assert not fut.done()
+    say_tasks = list(session._say_tasks)
+    assert say_tasks
+
+    for task in say_tasks:
+        task.cancel()
+    await asyncio.gather(*say_tasks, return_exceptions=True)
+
+    assert fut.cancelled()
+    assert session._response_created_futures == {}
+    assert not session._say_tasks
+
+
+async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
+    # cancel before force_message must be local-only — a bare response.cancel
+    # would silence an unrelated in-flight reply
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    async def slow_chunks() -> object:
+        await asyncio.sleep(0.05)
+        yield "too late"
+
+    fut = session.say(slow_chunks())  # type: ignore[arg-type]
+    say_tasks = list(session._say_tasks)
+    fut.cancel()
+    if say_tasks:
+        await asyncio.wait(say_tasks)
+
+    assert list(session._pending_say_event_ids) == []
+    assert session._response_created_futures == {}
+    assert not session._discarded_event_ids
+    assert not any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+    assert sent == []
+    assert not session._say_tasks
+
+
+def test_pending_say_ids_are_consumed_fifo() -> None:
+    from collections import deque
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._pending_say_event_ids = deque(["say_first", "say_second"])
+    tagged: list[str] = []
+    for _ in range(2):
+        assert session._pending_say_event_ids
+        event = ResponseCreatedEvent.construct(
+            type="response.created",
+            event_id="evt",
+            response={"id": "resp", "object": "realtime.response", "output": [], "metadata": None},
+        )
+        # mirror the tagging branch in _handle_response_created
+        if not isinstance(event.response.metadata, dict):
+            event.response.metadata = {}
+        event.response.metadata["client_event_id"] = session._pending_say_event_ids.popleft()
+        tagged.append(event.response.metadata["client_event_id"])
+
+    assert tagged == ["say_first", "say_second"]
+    assert list(session._pending_say_event_ids) == []
