@@ -1525,6 +1525,14 @@ def _run_console(
     _configure_logger(c, log_level)
     c.print("Starting console mode 🚀", tag="Agents")
 
+    c.print(
+        "console mode is deprecated and will be removed in a future release. "
+        "Use [bold]lk agent console[/bold] instead: "
+        "https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup",
+        tag="Deprecated",
+        tag_style=Style.parse("black on yellow"),
+    )
+
     if c.record:
         c.print(
             f"Session recording will be saved to {c.session_directory}",
@@ -1653,6 +1661,9 @@ def _build_cli(server: AgentServer) -> typer.Typer:
     ) -> None:
         """
         Run a [bold]LiveKit Agents[/bold] in [yellow]console[/yellow] mode.
+
+        [red]Deprecated[/red]: use [bold]lk agent console[/bold] instead
+        (https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup).
         """
         if list_devices:
             _print_audio_devices()
@@ -1767,6 +1778,18 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             ),
         ] = None,
     ) -> None:
+        """
+        Run a [bold]LiveKit Agents[/bold] in [yellow]development[/yellow] mode.
+
+        [red]Deprecated[/red]: use [bold]lk agent dev[/bold] instead
+        (https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup).
+        """
+        logger.warning(
+            "dev mode is deprecated and will be removed in a future release; "
+            "use `lk agent dev` instead "
+            "(https://docs.livekit.io/reference/developer-tools/livekit-cli/#setup)"
+        )
+
         if reload:
             logger.warning(
                 "in-process auto-reload has been removed from the Python CLI; "

@@ -44,6 +44,8 @@ class TestAudioRecognitionAclose:
         audio_recognition._backchannel_boundary_timer = None
         audio_recognition._AudioRecognition__stt_context = None
         audio_recognition._user_turn_span = None
+        audio_recognition._user_turn_start = None
+        audio_recognition._transcription_timeout_handle = None
 
         return audio_recognition
 
@@ -153,28 +155,34 @@ class TestAudioRecognitionAclose:
         assert end_of_turn_task.done()
 
     @pytest.mark.asyncio
-    async def test_aclose_ends_in_progress_user_turn_span(self):
-        """A turn that never completed still gets its span ended (and exported) on close."""
+    @pytest.mark.parametrize(("is_recording", "expected_end_count"), [(True, 1), (False, 0)])
+    async def test_aclose_finalizes_user_turn_span(
+        self, is_recording: bool, expected_end_count: int
+    ):
         audio_recognition = self._create_audio_recognition()
 
         span = MagicMock()
-        span.is_recording.return_value = True
+        span.is_recording.return_value = is_recording
         audio_recognition._user_turn_span = span
+        audio_recognition._user_turn_start = 123.0
 
         await audio_recognition._aclose()
 
-        span.end.assert_called_once()
+        assert span.end.call_count == expected_end_count
         assert audio_recognition._user_turn_span is None
+        assert audio_recognition._user_turn_start is None
 
     @pytest.mark.asyncio
     async def test_aclose_ends_user_turn_span_when_teardown_raises(self):
-        """Teardown blowing up must not take the span with it — closing on error is the
-        case that leaks spans in the first place."""
         audio_recognition = self._create_audio_recognition()
 
         span = MagicMock()
         span.is_recording.return_value = True
         audio_recognition._user_turn_span = span
+        audio_recognition._user_turn_start = 123.0
+
+        timeout_handle = MagicMock()
+        audio_recognition._transcription_timeout_handle = timeout_handle
 
         stt_pipeline = MagicMock()
         stt_pipeline.aclose = AsyncMock(side_effect=RuntimeError("vendor stream teardown failed"))
@@ -184,18 +192,6 @@ class TestAudioRecognitionAclose:
             await audio_recognition._aclose()
 
         span.end.assert_called_once()
+        timeout_handle.cancel.assert_called_once()
         assert audio_recognition._user_turn_span is None
-
-    @pytest.mark.asyncio
-    async def test_aclose_does_not_reend_completed_user_turn_span(self):
-        """The eou detection already ended the span, aclose must not end it twice."""
-        audio_recognition = self._create_audio_recognition()
-
-        span = MagicMock()
-        span.is_recording.return_value = False
-        audio_recognition._user_turn_span = span
-
-        await audio_recognition._aclose()
-
-        span.end.assert_not_called()
-        assert audio_recognition._user_turn_span is None
+        assert audio_recognition._user_turn_start is None

@@ -76,6 +76,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
         timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
         """
@@ -89,6 +90,8 @@ class LLM(llm.LLM):
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
+        max_retries (int, optional): Vendor client retries. Defaults to 0 because the framework
+            owns retries via ``conn_options``.
         timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
             Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
             while allowing up to 30 s between streamed chunks — long enough for Claude's
@@ -124,6 +127,7 @@ class LLM(llm.LLM):
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
+            max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
                 timeout=timeout or httpx.Timeout(5.0, read=30.0),
                 follow_redirects=True,

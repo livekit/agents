@@ -31,6 +31,7 @@ from ._utils import (
     HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
+    extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -95,6 +96,27 @@ def drop_unsupported_params(
     ):
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
     return params
+
+
+# lowest supported reasoning effort per model; "none" requires gpt-5.1+
+_MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
+    "gpt-5.1": "none",
+    "gpt-5.2": "none",
+    "gpt-5.4": "none",
+    "gpt-5.4-mini": "none",
+    "gpt-5": "minimal",
+    "gpt-5-mini": "minimal",
+    "gpt-5-nano": "minimal",
+}
+
+
+def min_reasoning_effort(model: str) -> ReasoningEffort | None:
+    """Lowest reasoning effort the model supports, or None if the model has no
+    reasoning-effort control.
+
+    Strips any provider prefix (e.g. ``openai/gpt-5`` -> ``gpt-5``) before matching.
+    """
+    return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
 
 
 OpenAIModels = Literal[
@@ -454,10 +476,10 @@ class LLMStream(llm.LLMStream):
                         usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
-                                completion_tokens=chunk.usage.completion_tokens,
-                                prompt_tokens=chunk.usage.prompt_tokens,
+                                completion_tokens=chunk.usage.completion_tokens or 0,
+                                prompt_tokens=chunk.usage.prompt_tokens or 0,
                                 prompt_cached_tokens=cached_tokens or 0,
-                                total_tokens=chunk.usage.total_tokens,
+                                total_tokens=chunk.usage.total_tokens or 0,
                                 service_tier=getattr(chunk, "service_tier", None),
                             ),
                         )
@@ -466,6 +488,8 @@ class LLMStream(llm.LLMStream):
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except openai.APIStatusError as e:
+            if e.status_code == 429:
+                self._log_rate_limited(e)
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
@@ -475,6 +499,16 @@ class LLMStream(llm.LLMStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
+
+    def _log_rate_limited(self, e: openai.APIStatusError) -> None:
+        """Log the gateway's quota snapshot when a request is rejected with 429.
+
+        The gateway stamps X-LiveKit-Inference-{RPM,TPM,Credits}-{Limit,Used}
+        on rejections so customers can see which limit they hit and by how much.
+        """
+        extra: dict[str, Any] = {"model": self._model, "request_id": e.request_id}
+        extra.update(extract_quota_usage(e.response.headers))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
 
     def _parse_choice(
         self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter
