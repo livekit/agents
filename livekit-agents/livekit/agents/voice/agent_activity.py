@@ -4386,9 +4386,7 @@ class AgentActivity(RecognitionHooks):
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(
-                        started_at=time.time(), resumed=True
-                    )
+                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()
@@ -4458,13 +4456,6 @@ class AgentActivity(RecognitionHooks):
 
         if not self._paused_speech:
             return
-
-        # the pause withheld end-of-agent-speech for a resume; interrupting ends the turn
-        # instead. the audio stopped when it was paused, so no playout is left to wait for
-        if interrupt and self._audio_recognition:
-            self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=time.time()
-            )
 
         if (
             interrupt

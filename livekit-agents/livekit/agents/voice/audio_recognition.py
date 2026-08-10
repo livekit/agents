@@ -296,6 +296,7 @@ class AudioRecognition:
         self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN
         self._transcript_buffer: deque[SpeechEvent] = deque()
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
+        # Tracks active audio playout, independently of the generation lifecycle.
         self._agent_speaking: bool = False
         self._agent_speech_started_at: float | None = None
         # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
@@ -462,8 +463,12 @@ class AudioRecognition:
 
     # endregion
 
-    def _on_start_of_agent_speech(self, started_at: float, *, resumed: bool = False) -> None:
-        resumed = resumed or self._overlap_open
+    def _on_start_of_agent_speech(self, started_at: float) -> None:
+        """Mark the start of active agent speech.
+
+        This lifecycle follows audible playout, not the generation. Resuming paused playout
+        starts a new active-speech interval.
+        """
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
@@ -477,13 +482,16 @@ class AudioRecognition:
                 start_cooldown, self._on_backchannel_boundary_done
             )
 
-        # a resume re-enters the same agent turn; restarting would discard the open overlap
-        if self._adaptive_interruption_active and not resumed:
+        if self._adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
     def _on_end_of_agent_speech(
         self, *, ignore_user_transcript_until: float, paused: bool = False
     ) -> None:
+        """Mark the end of active agent speech.
+
+        This can occur while the generation remains active, such as when playout is paused.
+        """
         self._cancel_backchannel_boundary()
 
         if self._agent_speaking:
@@ -497,9 +505,7 @@ class AudioRecognition:
             if not paused and not is_given(self._ignore_user_transcript_until):
                 self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
 
-        # a pause is provisional: keep the inference running until the overlap has a verdict
-        if not paused:
-            self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
+        self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
         if self._agent_speaking:
             end_cooldown: float = (
@@ -525,9 +531,8 @@ class AudioRecognition:
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
 
-        if not paused:
-            # the sentinel sent above resets the detector stream, dropping any open overlap
-            self._overlap_open = False
+        # the sentinel sent above resets the detector stream, dropping any open overlap
+        self._overlap_open = False
         self._agent_speaking = False
 
     def _on_start_of_speech(
