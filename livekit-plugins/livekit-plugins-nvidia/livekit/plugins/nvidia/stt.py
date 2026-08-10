@@ -45,6 +45,22 @@ InferenceMode = Literal["auto", "streaming", "offline"]
 
 @dataclass(frozen=True)
 class EndpointingConfig:
+    """Configure NVIDIA Speech endpoint detection for streaming recognition.
+
+    Attributes:
+        mode: Endpointing preset. ``"low_latency"`` applies the plugin's low-latency
+            defaults before any field overrides.
+        start_history: VAD start-history override in audio frames.
+        start_threshold: Dimensionless VAD speech-start threshold override.
+        stop_history: VAD stop-history override in audio frames.
+        stop_threshold: Dimensionless VAD speech-stop threshold override.
+        stop_history_eou: End-of-utterance stop-history override in audio frames.
+        stop_threshold_eou: Dimensionless end-of-utterance stop-threshold override.
+
+    ``None`` leaves a field at the value selected by ``mode``. Values of ``-1`` or
+    ``-1.0`` ask NVIDIA Speech to use its model default for that field.
+    """
+
     mode: EndpointingMode = "low_latency"
     start_history: int | None = None
     start_threshold: float | None = None
@@ -100,6 +116,38 @@ class STT(stt.STT):
         enable_word_time_offsets: bool = True,
         inference_mode: InferenceMode = "auto",
     ):
+        """Create an NVIDIA Speech recognition client.
+
+        Args:
+            model: NVIDIA Speech model name sent with recognition requests.
+            function_id: NVIDIA-hosted NVCF function ID. Local deployments may use
+                the value expected by their gateway.
+            punctuate: Whether to enable automatic punctuation.
+            language_code: Recognition language code, such as ``"en-US"``.
+            sample_rate: Streaming input sample rate in Hz.
+            server: NVIDIA Speech gRPC endpoint.
+            use_ssl: Whether to use TLS for the gRPC connection.
+            api_key: NVIDIA API key. When omitted, reads ``NVIDIA_API_KEY``.
+            enable_diarization: Whether to request speaker diarization.
+            max_speaker_count: Maximum expected speakers when diarization is enabled.
+            interim_results: Whether streaming recognition emits interim transcripts.
+            profanity_filter: Whether to mask profane words in transcripts.
+            verbatim_transcripts: Whether to request verbatim transcript formatting.
+            boosted_lm_words: Words or phrases to boost during recognition.
+            boosted_lm_score: Global boost score applied to ``boosted_lm_words``.
+            endpointing: Streaming endpoint-detection settings. ``None`` leaves the
+                deployed model's endpointing configuration unchanged.
+            options: Provider-specific escape hatch. ``recognition_config`` values are
+                passed to ``riva.client.RecognitionConfig``; ``custom_configuration``
+                is applied to the streaming configuration when supported by the client.
+            enable_word_time_offsets: Whether to request word timestamps.
+            inference_mode: ``"streaming"`` or ``"offline"`` advertises only that
+                capability; ``"auto"`` preserves support for both APIs.
+
+        Raises:
+            ValueError: If the inference mode is invalid or hosted authentication is
+                enabled without an API key.
+        """
         if inference_mode not in ("auto", "streaming", "offline"):
             raise ValueError("inference_mode must be 'auto', 'streaming', or 'offline'")
 
@@ -582,7 +630,7 @@ def _to_stt_api_error(error: Exception, *, operation: str) -> APIError:
             grpc.StatusCode.PERMISSION_DENIED: 403,
             grpc.StatusCode.RESOURCE_EXHAUSTED: 429,
             grpc.StatusCode.FAILED_PRECONDITION: 400,
-            grpc.StatusCode.ABORTED: 409,
+            grpc.StatusCode.ABORTED: 503,
             grpc.StatusCode.OUT_OF_RANGE: 400,
             grpc.StatusCode.UNIMPLEMENTED: 501,
             grpc.StatusCode.INTERNAL: 500,

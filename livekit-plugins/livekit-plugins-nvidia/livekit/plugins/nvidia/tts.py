@@ -66,6 +66,31 @@ class TTS(tts.TTS):
         options: dict[str, Any] | None = None,
         inference_mode: InferenceMode = "online",
     ):
+        """Create an NVIDIA Speech synthesis client.
+
+        Args:
+            server: NVIDIA Speech gRPC endpoint.
+            voice: Voice name exposed by the deployed synthesis model.
+            function_id: NVIDIA-hosted NVCF function ID. Local deployments may use
+                the value expected by their gateway.
+            language_code: Synthesis language code, such as ``"en-US"``.
+            sample_rate: Output PCM sample rate in Hz.
+            use_ssl: Whether to use TLS for the gRPC connection.
+            api_key: NVIDIA API key. When omitted, reads ``NVIDIA_API_KEY``.
+            audio_prompt_file: Reference-audio path for models supporting zero-shot
+                voice prompting.
+            quality: Zero-shot synthesis quality accepted by compatible clients.
+            word_tokenizer: Tokenizer used to split text submitted through ``stream()``
+                into synthesis requests.
+            options: Additional keyword arguments passed to the installed NVIDIA
+                synthesis client after compatibility validation.
+            inference_mode: ``"online"`` uses streaming synthesis; ``"offline"`` uses
+                the batch synthesis RPC.
+
+        Raises:
+            ValueError: If the inference mode is invalid or hosted authentication is
+                enabled without an API key.
+        """
         if inference_mode not in ("online", "offline"):
             raise ValueError("inference_mode must be either 'online' or 'offline'")
 
@@ -208,6 +233,8 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
+    """Synthesis stream for a complete NVIDIA Speech text request."""
+
     def __init__(
         self,
         *,
