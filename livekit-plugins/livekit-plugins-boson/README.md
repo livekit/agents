@@ -88,20 +88,18 @@ it even if present in a raw `input_audio_transcription` dict.
 
 ### `generate_reply()` overrides
 
-Boson has no per-response override for `instructions`/`tool_choice`/`tools`:
-setting any of them inside `response.create` switches that turn to an
-isolated, history-less conversation context instead of continuing the real
-one, and the override itself is not applied. When `generate_reply()` is
-called with any of these, the plugin instead scopes them at the session
-level — a `session.update` carrying the override before `response.create`
-(which carries none of them), then a follow-up `session.update` carrying the
-previously configured values once the response is created. Overlapping scoped
-calls are serialized so they can't stomp each other's follow-up value.
+`generate_reply(instructions=...)` sends the instructions in `response.create`.
+The server applies them to that response alone: they replace the session
+instructions for the turn, which still answers from the conversation so far.
+Because it is a replacement rather than an addition, the event carries the
+session instructions and the per-response ones together.
 
-This means the scoped value is only guaranteed to apply to *this* response
-while it's the only one in flight — a server-VAD-triggered response created
-concurrently, or a second `generate_reply()` call, would only be scoped
-correctly if it starts after the current one's follow-up has gone out.
+`tools` and `tool_choice` are **not** applied per response — the server accepts
+and ignores them. `generate_reply()` therefore ignores them too (with a warning)
+rather than sending values that would appear to take effect. The framework
+scopes them at the session level around the call instead, since the plugin
+reports `per_response_tool_choice = False`; to scope them from your own code,
+use `update_tools()` and `update_options(tool_choice=...)` directly.
 
 ## Protocol compatibility
 
