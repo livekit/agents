@@ -18,11 +18,13 @@ import asyncio
 import contextlib
 import datetime
 import inspect
+import logging
 import math
 import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -60,6 +62,12 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long the control-plane connection must stay up before losing it is treated as
+# routine churn rather than a worker that cannot hold a connection
+STABLE_CONNECTION_INTERVAL = 30
+# the control plane going away underneath a working worker: the server closing the
+# connection, or the socket itself failing. Anything else is a fault worth reporting.
+CONNECTION_LOST_ERRORS = (APIStatusError, aiohttp.ClientError, OSError)
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
 
@@ -1082,6 +1090,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         retry_count = 0
         ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
+            serving_since: float | None = None
             try:
                 self._connecting = True
                 join_jwt = (
@@ -1148,6 +1157,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
+                serving_since = time.perf_counter()
                 await self._run_ws(ws)
             except Exception as e:
                 if self._closed:
@@ -1162,7 +1172,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_delay = min(retry_count * 2, 10)
                 retry_count += 1
 
-                logger.warning(
+                # losing a connection that stayed up retries at 0s, because the successful
+                # connect already reset retry_count, and that first retry normally succeeds.
+                # Everything else keeps warning: a worker that never connected, one dropping
+                # faster than STABLE_CONNECTION_INTERVAL, a retry that had to back off, and
+                # any fault that isn't the connection going away.
+                was_stable = (
+                    serving_since is not None
+                    and isinstance(e, CONNECTION_LOST_ERRORS)
+                    and time.perf_counter() - serving_since >= STABLE_CONNECTION_INTERVAL
+                )
+                logger.log(
+                    logging.INFO if was_stable and retry_delay == 0 else logging.WARNING,
                     f"failed to connect to livekit, retrying in {retry_delay}s",
                     extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
