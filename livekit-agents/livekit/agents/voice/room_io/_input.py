@@ -345,14 +345,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
-        first_stream = True
-        allow_empty_reattach = True
+        is_initial_stream = True
+        consecutive_empty_streams = 0
         silent_samples = int(self._sample_rate * 0.5)
         while True:
             read_result = await super()._forward_task(None, stream, publication, participant)
 
             # push a silent frame to flush the stt final result if any
-            if first_stream or read_result.forwarded_frame:
+            if is_initial_stream or read_result.forwarded_frame:
                 await self._data_ch.send(
                     rtc.AudioFrame(
                         b"\x00\x00" * silent_samples,
@@ -361,7 +361,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                         samples_per_channel=silent_samples,
                     )
                 )
-            first_stream = False
+            is_initial_stream = False
 
             if self._stream is not stream or self._publication is not publication:
                 return read_result
@@ -371,7 +371,12 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             self._close_stream()
             if track is None or not publication.subscribed:
                 return read_result
-            if not read_result.received_frame and not allow_empty_reattach:
+
+            if read_result.received_frame:
+                consecutive_empty_streams = 0
+            else:
+                consecutive_empty_streams += 1
+            if consecutive_empty_streams > 1:
                 logger.warning(
                     "replacement audio stream closed before receiving frames; not reattaching",
                     extra={"participant": participant.identity, "track_id": track.sid},
@@ -381,7 +386,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             stream = self._create_stream(track, participant)
             self._stream = stream
             self._publication = publication
-            allow_empty_reattach = read_result.received_frame
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
