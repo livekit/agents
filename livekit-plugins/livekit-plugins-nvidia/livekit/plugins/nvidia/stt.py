@@ -370,6 +370,7 @@ class _RecognitionAttempt:
     replay_audio: list[bytes] = field(default_factory=list)
     replay_audio_bytes: int = 0
     replay_enabled: bool = True
+    final_transcript_received: bool = False
     replay_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def buffer_for_replay(self, audio: bytes, *, max_bytes: int) -> None:
@@ -390,6 +391,7 @@ class _RecognitionAttempt:
     def mark_final_transcript(self) -> None:
         with self.replay_lock:
             self.final_transcript_emitted = True
+            self.final_transcript_received = True
             self.replay_audio.clear()
             self.replay_audio_bytes = 0
             self.replay_enabled = True
@@ -398,6 +400,10 @@ class _RecognitionAttempt:
         with self.replay_lock:
             audio = list(self.replay_audio) if self.replay_enabled else None
             return audio, self.final_transcript_emitted
+
+    def received_final_transcript(self) -> bool:
+        with self.replay_lock:
+            return self.final_transcript_received
 
 
 class SpeechStream(stt.SpeechStream):
@@ -415,34 +421,66 @@ class SpeechStream(stt.SpeechStream):
         config = self._create_streaming_config()
         event_loop = asyncio.get_running_loop()
         active_attempt: _RecognitionAttempt | None = None
+        streaming_retry_count = 0
         max_replay_bytes = (
             self._stt._opts.sample_rate * _PCM_BYTES_PER_SAMPLE * _MAX_REPLAY_AUDIO_SECONDS
         )
+        input_aiter = self._input_ch.__aiter__()
+        input_task = asyncio.create_task(anext(input_aiter))
 
         try:
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    audio_bytes = data.data.tobytes()
-                    if not audio_bytes:
-                        continue
+            while True:
+                waiters: set[asyncio.Future[Any]] = {input_task}
+                if active_attempt is not None:
+                    waiters.add(active_attempt.done_fut)
 
-                    if active_attempt is None:
-                        active_attempt = self._start_recognition_attempt(config, event_loop)
-                    active_attempt.buffer_for_replay(audio_bytes, max_bytes=max_replay_bytes)
-                    active_attempt.audio_queue.put(audio_bytes)
-                elif isinstance(data, self._FlushSentinel) and active_attempt is not None:
-                    await self._finish_recognition_segment(
+                completed, _ = await asyncio.wait(
+                    waiters,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if input_task in completed:
+                    try:
+                        data = input_task.result()
+                    except StopAsyncIteration:
+                        break
+                    input_task = asyncio.create_task(anext(input_aiter))
+
+                    if isinstance(data, rtc.AudioFrame):
+                        audio_bytes = data.data.tobytes()
+                        if audio_bytes:
+                            if active_attempt is None:
+                                active_attempt = self._start_recognition_attempt(config, event_loop)
+                            active_attempt.buffer_for_replay(
+                                audio_bytes,
+                                max_bytes=max_replay_bytes,
+                            )
+                            active_attempt.audio_queue.put(audio_bytes)
+                    elif isinstance(data, self._FlushSentinel) and active_attempt is not None:
+                        await self._finish_recognition_segment(
+                            config=config,
+                            attempt=active_attempt,
+                            event_loop=event_loop,
+                        )
+                        active_attempt = None
+                        streaming_retry_count = 0
+
+                if active_attempt is not None and active_attempt.done_fut.done():
+                    active_attempt, streaming_retry_count = await self._restart_streaming_attempt(
                         config=config,
                         attempt=active_attempt,
                         event_loop=event_loop,
+                        retry_count=streaming_retry_count,
+                        max_replay_bytes=max_replay_bytes,
                     )
-                    active_attempt = None
         finally:
+            input_task.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await input_task
             if active_attempt is not None:
                 self._close_attempt_input(active_attempt)
-                if not active_attempt.done_fut.done():
-                    with suppress(asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                        await asyncio.wait_for(asyncio.shield(active_attempt.done_fut), timeout=1.0)
+                with suppress(asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(asyncio.shield(active_attempt.done_fut), timeout=1.0)
                 await self._join_attempt(active_attempt)
 
     def _start_recognition_attempt(
@@ -462,6 +500,52 @@ class SpeechStream(stt.SpeechStream):
         attempt.thread = recognition_thread
         recognition_thread.start()
         return attempt
+
+    async def _restart_streaming_attempt(
+        self,
+        *,
+        config: riva.client.StreamingRecognitionConfig,
+        attempt: _RecognitionAttempt,
+        event_loop: asyncio.AbstractEventLoop,
+        retry_count: int,
+        max_replay_bytes: int,
+    ) -> tuple[_RecognitionAttempt, int]:
+        try:
+            attempt.done_fut.result()
+        except APIError as error:
+            api_error = error
+        else:
+            api_error = APIConnectionError(
+                "NVIDIA Speech streaming STT connection ended unexpectedly"
+            )
+
+        await self._join_attempt(attempt)
+
+        if attempt.received_final_transcript():
+            retry_count = 0
+        if not api_error.retryable:
+            raise api_error
+
+        replay_audio, _ = attempt.replay_snapshot()
+        if replay_audio is None:
+            raise APIConnectionError(
+                "NVIDIA Speech streaming STT failed after the retry buffer "
+                f"exceeded {_MAX_REPLAY_AUDIO_SECONDS} seconds",
+                retryable=False,
+            ) from api_error
+        if retry_count == self._conn_options.max_retry:
+            raise APIConnectionError(
+                f"NVIDIA Speech streaming STT failed after {retry_count + 1} attempts",
+                retryable=False,
+            ) from api_error
+
+        await asyncio.sleep(self._conn_options._interval_for_retry(retry_count))
+        next_attempt = self._start_recognition_attempt(config, event_loop)
+        for audio_chunk in replay_audio:
+            next_attempt.buffer_for_replay(audio_chunk, max_bytes=max_replay_bytes)
+            next_attempt.audio_queue.put(audio_chunk)
+
+        return next_attempt, retry_count + 1
 
     async def _finish_recognition_segment(
         self,

@@ -356,6 +356,105 @@ async def test_stt_replays_segment_after_retryable_backend_failure(
     await stream.aclose()
 
 
+@pytest.mark.parametrize("termination", ["error", "normal"])
+async def test_stt_restarts_completed_worker_without_flush(
+    monkeypatch: pytest.MonkeyPatch,
+    termination: str,
+) -> None:
+    service = nvidia_stt.STT(api_key="test-key")
+    calls: list[list[bytes]] = []
+    first_attempt_finished = threading.Event()
+    restarted = threading.Event()
+    final_response = SimpleNamespace(
+        results=[
+            SimpleNamespace(
+                is_final=True,
+                alternatives=[SimpleNamespace(transcript="reconnected", confidence=0.9, words=[])],
+            )
+        ]
+    )
+
+    class RestartingASRService:
+        def streaming_response_generator(self, audio_generator, config):
+            call_audio: list[bytes] = []
+            calls.append(call_audio)
+            call_number = len(calls)
+
+            def responses():
+                call_audio.append(next(audio_generator))
+                if call_number == 1:
+                    first_attempt_finished.set()
+                    if termination == "error":
+                        raise APIConnectionError("connection dropped")
+                    return
+
+                restarted.set()
+                yield final_response
+                call_audio.extend(audio_generator)
+
+            return responses()
+
+    monkeypatch.setattr(service, "_ensure_asr_service", lambda: RestartingASRService())
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_create_streaming_config",
+        lambda self: SimpleNamespace(),
+    )
+
+    stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+    first_frame = _audio_frame(3)
+    second_frame = _audio_frame(4)
+    stream.push_frame(first_frame)
+
+    assert await asyncio.to_thread(first_attempt_finished.wait, 1.0)
+    assert await asyncio.to_thread(restarted.wait, 1.0)
+
+    stream.push_frame(second_frame)
+    stream.end_input()
+    await asyncio.wait_for(stream._task, timeout=2.0)
+    events = [event async for event in stream]
+
+    assert calls == [
+        [first_frame.data.tobytes()],
+        [first_frame.data.tobytes(), second_frame.data.tobytes()],
+    ]
+    assert any(
+        event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
+        and event.alternatives[0].text == "reconnected"
+        for event in events
+    )
+    await stream.aclose()
+
+
+async def test_stt_surfaces_midstream_retry_exhaustion_without_flush(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = nvidia_stt.STT(api_key="test-key")
+    calls: list[list[bytes]] = []
+
+    class FailingASRService:
+        def streaming_response_generator(self, audio_generator, config):
+            calls.append([next(audio_generator)])
+            raise APIConnectionError("connection dropped")
+
+    monkeypatch.setattr(service, "_ensure_asr_service", lambda: FailingASRService())
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_create_streaming_config",
+        lambda self: SimpleNamespace(),
+    )
+
+    stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+    frame = _audio_frame(3)
+    stream.push_frame(frame)
+
+    with pytest.raises(APIConnectionError, match="failed after 2 attempts"):
+        await asyncio.wait_for(stream._task, timeout=2.0)
+
+    assert calls == [[frame.data.tobytes()], [frame.data.tobytes()]]
+    await stream.aclose()
+
+
 async def test_stt_retry_buffer_is_bounded_and_resets_after_final() -> None:
     attempt = nvidia_stt._RecognitionAttempt(
         audio_queue=queue.Queue(),
