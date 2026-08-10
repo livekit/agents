@@ -107,6 +107,27 @@ ALLOWED_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000, 320
 STREAMING_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000})
 
 
+# ``pace`` is accepted over a narrower range on bulbul:v3 / v3-beta than on
+# bulbul:v2; the server rejects anything outside it. Verified against the live
+# API; see https://docs.sarvam.ai/api/getting-started/models/bulbul
+_V3_PACE_RANGE: tuple[float, float] = (0.5, 2.0)
+_V2_PACE_RANGE: tuple[float, float] = (0.3, 3.0)
+
+
+def pace_range(model: str) -> tuple[float, float]:
+    """Return the inclusive ``(min, max)`` pace accepted by ``model``."""
+    if model.startswith("bulbul:v3"):
+        return _V3_PACE_RANGE
+    return _V2_PACE_RANGE
+
+
+def _validate_pace(pace: float, model: str) -> None:
+    """Raise ``ValueError`` if ``pace`` is outside the range ``model`` accepts."""
+    low, high = pace_range(model)
+    if not low <= pace <= high:
+        raise ValueError(f"Pace must be between {low} and {high} for {model}")
+
+
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
     mime = _CODEC_TO_MIME.get(codec)
@@ -323,7 +344,7 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 on bulbul:v3 / v3-beta, 0.3 to 3.0 on bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
@@ -377,7 +398,7 @@ class TTS(tts.TTS):
             22050 or 24000; 32000, 44100 and 48000 are REST-only.
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 on bulbul:v3 / v3-beta, 0.3 to 3.0 on bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -450,8 +471,7 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        _validate_pace(pace, model)
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -714,6 +734,9 @@ class TTS(tts.TTS):
                         f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers(self._opts.model))}"
                     )
+            if pace is None:
+                # The pace already in effect may be out of range for the new model.
+                _validate_pace(self._opts.pace, self._opts.model)
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
@@ -735,8 +758,7 @@ class TTS(tts.TTS):
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
+            _validate_pace(pace, self._opts.model)
             self._opts.pace = pace
 
         if loudness is not None:

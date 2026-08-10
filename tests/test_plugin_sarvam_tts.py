@@ -8,6 +8,7 @@ from livekit.plugins.sarvam.tts import (
     STREAMING_SAMPLE_RATES,
     TTS,
     compatible_speakers,
+    pace_range,
     validate_model_speaker_compatibility,
 )
 
@@ -71,6 +72,46 @@ def test_rest_only_rates_construct_on_v2_too(rate: int) -> None:
     tts = TTS(model="bulbul:v2", speaker="anushka", speech_sample_rate=rate, api_key=API_KEY)
     assert tts.sample_rate == rate
     assert rate not in STREAMING_SAMPLE_RATES
+
+
+def test_pace_range_is_per_model() -> None:
+    assert pace_range("bulbul:v3") == (0.5, 2.0)
+    assert pace_range("bulbul:v3-beta") == (0.5, 2.0)
+    assert pace_range("bulbul:v2") == (0.3, 3.0)
+
+
+@pytest.mark.parametrize("pace", [0.4, 2.5])
+def test_v2_only_pace_rejected_on_v3(pace: float) -> None:
+    with pytest.raises(ValueError, match="Pace must be between 0.5 and 2.0"):
+        TTS(model="bulbul:v3", pace=pace, api_key=API_KEY)
+
+
+@pytest.mark.parametrize("pace", [0.3, 1.0, 3.0])
+def test_v2_accepts_its_wider_pace_range(pace: float) -> None:
+    TTS(model="bulbul:v2", speaker="anushka", pace=pace, api_key=API_KEY)
+
+
+@pytest.mark.parametrize("pace", [0.5, 1.0, 2.0])
+def test_v3_accepts_its_own_range(pace: float) -> None:
+    TTS(model="bulbul:v3", pace=pace, api_key=API_KEY)
+
+
+def test_update_options_validates_pace_against_current_model() -> None:
+    tts = TTS(model="bulbul:v3", api_key=API_KEY)
+    with pytest.raises(ValueError, match="Pace must be between 0.5 and 2.0"):
+        tts.update_options(pace=2.5)
+
+
+def test_switching_to_v3_rechecks_the_pace_already_set() -> None:
+    tts = TTS(model="bulbul:v2", speaker="anushka", pace=3.0, api_key=API_KEY)
+    with pytest.raises(ValueError, match="Pace must be between 0.5 and 2.0"):
+        tts.update_options(model="bulbul:v3", speaker="shubh")
+
+
+def test_switching_to_v2_widens_the_allowed_pace() -> None:
+    tts = TTS(model="bulbul:v3", pace=2.0, api_key=API_KEY)
+    tts.update_options(model="bulbul:v2", speaker="anushka", pace=3.0)
+    assert tts._opts.pace == 3.0
 
 
 def test_unsupported_sample_rate_still_rejected() -> None:
