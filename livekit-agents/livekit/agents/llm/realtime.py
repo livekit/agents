@@ -15,7 +15,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .chat_context import ChatContext, ChatItem, FunctionCall
+from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
 
 
@@ -106,6 +106,11 @@ class RealtimeModel:
     @property
     def provider(self) -> str:
         return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this realtime model."""
+        return {"model_name": self.model, "model_provider": self.provider}
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
