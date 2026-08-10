@@ -718,34 +718,46 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
-        """Update TTS options with validation."""
+        """Update TTS options with validation.
+
+        The update is atomic: every value is validated against the *candidate*
+        configuration first, and nothing is assigned unless all checks pass. A
+        ``ValueError`` therefore leaves the current options untouched, instead
+        of half-applying an update that would fail server-side later.
+        """
+        updates: dict[str, object] = {}
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            updates["target_language_code"] = LanguageCode(target_language_code)
 
+        # model, speaker and pace are interdependent, so resolve the candidate
+        # values for all three before validating any of them.
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers(self._opts.model))}"
-                    )
-            if pace is None:
-                # The pace already in effect may be out of range for the new model.
-                _validate_pace(self._opts.pace, self._opts.model)
+            updates["model"] = model
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
+            updates["speaker"] = speaker
+
+        candidate_model = model if model is not None else self._opts.model
+        candidate_speaker = speaker if speaker is not None else self._opts.speaker
+
+        if (model is not None or speaker is not None) and candidate_speaker is not None:
+            if not validate_model_speaker_compatibility(candidate_model, candidate_speaker):
                 raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers(self._opts.model))}"
+                    f"Speaker '{candidate_speaker}' incompatible with {candidate_model}. "
+                    f"Compatible speakers: {', '.join(compatible_speakers(candidate_model))}"
                 )
-            self._opts.speaker = speaker
+
+        if model is not None or pace is not None:
+            # A new model may narrow the range around the pace already in effect.
+            _validate_pace(pace if pace is not None else self._opts.pace, candidate_model)
+        if pace is not None:
+            updates["pace"] = pace
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
@@ -755,21 +767,17 @@ class TTS(tts.TTS):
                     pitch,
                 )
                 pitch = max(-0.75, min(0.75, pitch))
-            self._opts.pitch = pitch
-
-        if pace is not None:
-            _validate_pace(pace, self._opts.model)
-            self._opts.pace = pace
+            updates["pitch"] = pitch
 
         if loudness is not None:
             if not 0.5 <= loudness <= 2.0:
                 raise ValueError("Loudness must be between 0.5 and 2.0")
-            self._opts.loudness = loudness
+            updates["loudness"] = loudness
 
         if temperature is not None:
             if not 0.01 <= temperature <= 2.0:
                 raise ValueError("Temperature must be between 0.01 and 2.0")
-            self._opts.temperature = temperature
+            updates["temperature"] = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -777,29 +785,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            updates["output_audio_bitrate"] = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            updates["min_buffer_size"] = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            updates["max_chunk_length"] = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            updates["enable_preprocessing"] = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            updates["dict_id"] = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            updates["enable_cached_responses"] = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            updates["send_completion_event"] = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -807,7 +815,11 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            updates["output_audio_codec"] = output_audio_codec
+
+        # Every check passed -- apply the whole update.
+        for field, value in updates.items():
+            setattr(self._opts, field, value)
 
     # Implement the abstract synthesize method
     def synthesize(

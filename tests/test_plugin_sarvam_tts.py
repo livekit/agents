@@ -114,6 +114,37 @@ def test_switching_to_v2_widens_the_allowed_pace() -> None:
     assert tts._opts.pace == 3.0
 
 
+def test_failed_update_leaves_model_and_speaker_untouched() -> None:
+    tts = TTS(model="bulbul:v2", speaker="anushka", api_key=API_KEY)
+    with pytest.raises(ValueError, match="incompatible"):
+        tts.update_options(model="bulbul:v3")  # anushka is not a v3 speaker
+    assert tts._opts.model == "bulbul:v2"
+    assert tts._opts.speaker == "anushka"
+
+
+def test_failed_pace_update_leaves_model_untouched() -> None:
+    tts = TTS(model="bulbul:v2", speaker="anushka", pace=3.0, api_key=API_KEY)
+    with pytest.raises(ValueError, match="Pace must be between 0.5 and 2.0"):
+        tts.update_options(model="bulbul:v3", speaker="shubh")
+    assert tts._opts.model == "bulbul:v2"
+    assert tts._opts.speaker == "anushka"
+    assert tts._opts.pace == 3.0
+
+
+def test_failed_update_does_not_apply_earlier_valid_fields() -> None:
+    tts = TTS(model="bulbul:v3", speaker="shubh", api_key=API_KEY)
+    with pytest.raises(ValueError, match="Loudness"):
+        tts.update_options(target_language_code="hi-IN", pace=1.5, loudness=9.0)
+    assert tts._opts.target_language_code == "en-IN"
+    assert tts._opts.pace == 1.0
+
+
+def test_model_and_speaker_change_together_is_accepted() -> None:
+    tts = TTS(model="bulbul:v2", speaker="anushka", api_key=API_KEY)
+    tts.update_options(model="bulbul:v3", speaker="shubh")
+    assert (tts._opts.model, tts._opts.speaker) == ("bulbul:v3", "shubh")
+
+
 def test_unsupported_sample_rate_still_rejected() -> None:
     with pytest.raises(ValueError, match="Sample rate must be one of"):
         TTS(speech_sample_rate=12345, api_key=API_KEY)
