@@ -185,6 +185,13 @@ def test_effective_connect_timeout_uses_plugin_default_for_framework_default() -
     assert effective_connect_timeout(DEFAULT_API_CONNECT_OPTIONS, 60.0) == 60.0
 
 
+def test_effective_connect_timeout_uses_plugin_for_framework_default_copy() -> None:
+    """Stream adapter / voice pipeline pass copies, not the singleton."""
+    copied = APIConnectOptions(max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout)
+    assert copied is not DEFAULT_API_CONNECT_OPTIONS
+    assert effective_connect_timeout(copied, 60.0) == 60.0
+
+
 def test_effective_connect_timeout_honors_explicit_override() -> None:
     assert effective_connect_timeout(APIConnectOptions(timeout=5.0), 60.0) == 5.0
 
@@ -463,6 +470,10 @@ def test_ws_base_url_upgrades_remote_http_to_wss() -> None:
 
     remote = STT(config=BlazeConfig(api_url="http://api.example.com", api_token="tok"))
     assert remote._ws_url == "wss://api.example.com/v1/stt/realtime"
+    # userinfo must be stripped so tokens are not sent via unexpected authority
+    assert ws_base_url("user@evil.host/path") == "wss://evil.host/path"
+    assert ws_base_url("https://user:pass@api.blaze.vn/v1") == "wss://api.blaze.vn/v1"
+    assert ws_base_url("http://user@localhost:8080") == "ws://localhost:8080"
 
 
 def test_stt_update_models() -> None:

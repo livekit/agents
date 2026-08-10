@@ -14,10 +14,19 @@ def effective_connect_timeout(
     conn_options: APIConnectOptions,
     plugin_timeout: float,
 ) -> float:
-    """Return the plugin timeout when default connect options are used."""
+    """Return the plugin timeout when framework default connect options are used.
+
+    Compares the timeout *value* (not object identity) so framework-copied
+    options — e.g. ``DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS`` or
+    ``APIConnectOptions`` rebuilt by the voice pipeline — still honour
+    plugin-configured ``stt_timeout`` / ``tts_timeout`` / ``llm_timeout``.
+    Explicit non-default timeouts on ``conn_options`` still win.
+    """
     if not conn_options.timeout:
         return plugin_timeout
-    if conn_options is DEFAULT_API_CONNECT_OPTIONS:
+    # Treat the framework default timeout as "unset" regardless of whether
+    # the caller passed the DEFAULT_API_CONNECT_OPTIONS singleton or a copy.
+    if conn_options.timeout == DEFAULT_API_CONNECT_OPTIONS.timeout:
         return plugin_timeout
     return conn_options.timeout
 
@@ -33,6 +42,23 @@ def _host_from_authority(authority: str) -> str:
             return authority[1:end]
     # IPv4 or hostname — strip :port (not valid bare IPv6 without brackets)
     return authority.split(":")[0]
+
+
+def _strip_userinfo(rest: str) -> str:
+    """Remove ``userinfo@`` from a scheme-less URL rest (``auth@host/path``).
+
+    Auth is sent on the first WebSocket frame, so embedded URL credentials
+    must not redirect the connection (or the bearer token) to an unexpected
+    authority. Only the host/port/path are kept.
+    """
+    if "@" not in rest:
+        return rest
+    if "/" in rest:
+        authority, _, path = rest.partition("/")
+        if "@" in authority:
+            authority = authority.rsplit("@", 1)[-1]
+        return f"{authority}/{path}" if path else authority
+    return rest.rsplit("@", 1)[-1]
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -52,24 +78,27 @@ def ws_base_url(api_url: str) -> str:
     endpoints always use ``wss://`` (even if ``BLAZE_API_URL`` is ``http://``).
     Only true loopback hosts (``localhost`` / ``127.0.0.1`` / ``::1``) keep
     plaintext ``ws://`` for local development.
+
+    Embedded URL userinfo (``user@host`` / ``user:pass@host``) is stripped so
+    a misconfigured ``BLAZE_API_URL`` cannot redirect the bearer token.
     """
     base = api_url.strip().rstrip("/")
     if base.startswith("https://"):
-        return "wss://" + base[len("https://") :]
+        return "wss://" + _strip_userinfo(base[len("https://") :])
     if base.startswith("wss://"):
-        return base
+        return "wss://" + _strip_userinfo(base[len("wss://") :])
     if base.startswith("ws://"):
-        rest = base[len("ws://") :]
+        rest = _strip_userinfo(base[len("ws://") :])
         if _is_loopback_host(_host_from_authority(rest)):
-            return base
+            return "ws://" + rest
         return "wss://" + rest
     if base.startswith("http://"):
-        rest = base[len("http://") :]
+        rest = _strip_userinfo(base[len("http://") :])
         if _is_loopback_host(_host_from_authority(rest)):
             return "ws://" + rest
         return "wss://" + rest
     # No scheme — assume HTTPS/WSS
-    return "wss://" + base.lstrip("/")
+    return "wss://" + _strip_userinfo(base.lstrip("/"))
 
 
 def convert_pcm_to_wav(
