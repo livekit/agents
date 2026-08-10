@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
@@ -287,15 +286,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # in and so does not cover it.
         self._chat_ctx_sync_error: llm.RealtimeError | None = None
         self._chat_ctx_sync_lock = asyncio.Lock()
-        # item_id -> the previous_item_id its pending conversation.item.create
-        # was chained to, for every create currently (or recently) in flight.
-        # Lets an invalid_previous_item_id error (which names the missing
-        # previous_item_id but not the rejected item) be matched back to the
-        # specific pending item(s) that referenced it, instead of failing
-        # every _item_create_future/_item_delete_future indiscriminately —
-        # that would misattribute the error to an unrelated, still-live
-        # update_chat_ctx() call. Pruned in _create_update_chat_ctx_events.
-        self._pending_item_create_previous_ids: dict[str, str | None] = {}
         # Server-assigned session id (from session.created), kept for logging.
         # The server does not persist sessions: every connection is a fresh
         # session, so reconnection replays the local chat context instead.
@@ -505,14 +495,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # transcription is still pending) instead of deleting it, and filters
         # it out otherwise.
         #
-        # Opportunistically prune _pending_item_create_previous_ids: any item
-        # no longer in _item_create_future has already resolved one way or
-        # another (echoed, explicitly failed, or timed out and cleaned up by
-        # the base class), so its previous_item_id mapping is stale.
-        for item_id in list(self._pending_item_create_previous_ids):
-            if item_id not in self._item_create_future:
-                del self._pending_item_create_previous_ids[item_id]
-
         # Items with a role the server cannot store are dropped here, before
         # the diff runs, not further down while walking its output: an
         # unsupported item never reaches _remote_chat_ctx, so leaving it in
@@ -575,7 +557,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 # create future.
                 dropped[ev.item.id] = previous_item_id
                 continue
-            self._pending_item_create_previous_ids[ev.item.id] = previous_item_id
             events.append(
                 _BosonConversationItemCreateEvent(
                     type="conversation.item.create",
@@ -604,7 +585,6 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 # Not addressable on the wire (unsupported role, no text,
                 # etc.); skip without advancing previous_item_id to it.
                 continue
-            self._pending_item_create_previous_ids[item.id] = previous_item_id
             events.append(
                 _BosonConversationItemCreateEvent(
                     type="conversation.item.create",
@@ -954,32 +934,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     llm.RealtimeError(_format_error_message(error, event_id)), event_id=event_id
                 )
             if error.get("type") == "invalid_previous_item_id":
-                # This error carries no event_id, and names the missing
-                # previous_item_id, not the rejected item's own id — the
-                # server never echoes either the client's event_id or the new
-                # item's id for it. Without failing anything, the item's
-                # _item_create_future would sit until update_chat_ctx()'s own
-                # 5s timeout, surfacing a generic "timed out" instead of this
-                # actionable message. But this can arrive after its own
-                # update_chat_ctx() call already gave up and returned (its
-                # future cleaned up by the base class's timeout handler)
-                # while a *different*, unrelated update_chat_ctx() call is now
-                # in flight — failing "whatever's currently pending" would
-                # misattribute this error to that unrelated call. Match by
-                # the previous_item_id every pending create actually used
-                # instead, and only fail (and only let update_chat_ctx()
-                # re-raise for) the one(s) that really referenced it.
-                # The id is only recoverable by parsing the message, so a
-                # wording change makes it unrecoverable. Bail out rather than
-                # correlate on the parse failure itself: `None` is a real
-                # previous_item_id (it means append-at-tail), so letting it
-                # into the match below would pin this error on whichever
-                # append happened to be pending. Giving up here degrades to
-                # the base class's timeout, which is merely less specific.
-                missing_previous_item_id = _extract_missing_previous_item_id(
-                    error.get("message") or ""
-                )
-                if missing_previous_item_id is None:
+                # Fail the one create this rejects, by the item id the server
+                # names. Leaving it to time out instead would surface a generic
+                # "timed out" 5s later in place of this specific message — and
+                # failing "whatever is pending" is not an option either: the
+                # error can arrive after its own update_chat_ctx() gave up and
+                # returned, while a different one is now in flight.
+                #
+                # Servers that predate the id report nothing this can be
+                # attributed to, so the turn degrades to that timeout.
+                rejected_item_id = error.get("item_id")
+                if not rejected_item_id:
                     logger.warning(
                         "Could not determine which conversation item an "
                         "invalid_previous_item_id error refers to; "
@@ -987,17 +952,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
                         extra={"error": error},
                     )
                     return
-                sync_error = llm.RealtimeError(_format_error_message(error, event_id))
-                for item_id, previous_item_id in list(
-                    self._pending_item_create_previous_ids.items()
-                ):
-                    if previous_item_id != missing_previous_item_id:
-                        continue
-                    fut = self._item_create_future.get(item_id)
-                    if fut is not None and not fut.done():
-                        fut.set_exception(sync_error)
-                        self._chat_ctx_sync_error = sync_error
-                    self._pending_item_create_previous_ids.pop(item_id, None)
+                fut = self._item_create_future.get(rejected_item_id)
+                if fut is not None and not fut.done():
+                    sync_error = llm.RealtimeError(_format_error_message(error, event_id))
+                    fut.set_exception(sync_error)
+                    self._chat_ctx_sync_error = sync_error
             return
 
         realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
@@ -1245,16 +1204,6 @@ def _text_from_content(content: list[llm.ChatContent]) -> str:
         elif isinstance(part, llm.AudioContent) and part.transcript:
             parts.append(part.transcript)
     return "\n".join(parts)
-
-
-_MISSING_PREVIOUS_ITEM_ID_RE = re.compile(r"previous_item_id '(.*?)' not found")
-
-
-def _extract_missing_previous_item_id(message: str) -> str | None:
-    """Pull the missing previous_item_id out of an invalid_previous_item_id
-    error message (the server has no other way to report which id it was)."""
-    match = _MISSING_PREVIOUS_ITEM_ID_RE.search(message)
-    return match.group(1) if match else None
 
 
 def _format_error_message(error: dict[str, Any], event_id: str | None) -> str:

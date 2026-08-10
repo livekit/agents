@@ -1804,6 +1804,7 @@ async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fas
                 "error": {
                     "type": "invalid_previous_item_id",
                     "message": "previous_item_id 'user_1' not found in conversation",
+                    "item_id": "user_2",
                 },
             },
         )
@@ -1816,12 +1817,11 @@ async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fas
 
 
 @pytest.mark.asyncio
-async def test_boson_realtime_unparseable_invalid_previous_item_id_blames_nobody(monkeypatch):
-    # Which item an invalid_previous_item_id error refers to is only
-    # recoverable by parsing its message, so a wording change makes it
-    # unrecoverable. It must not then be pinned on an unrelated item: `None`
-    # is a real previous_item_id (append-at-tail), so a failed parse yielding
-    # None must not match the pending append below.
+async def test_boson_realtime_unattributable_invalid_previous_item_id_blames_nobody(monkeypatch):
+    # A server that predates the rejected item's id in this error reports
+    # nothing the failure can be attributed to. The turn must degrade to
+    # update_chat_ctx()'s own timeout rather than pin the error on whichever
+    # create happens to be pending.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
     model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
@@ -1838,9 +1838,8 @@ async def test_boson_realtime_unparseable_invalid_previous_item_id_blames_nobody
         create_event = await session._msg_ch.recv()
         assert create_event["item"]["id"] == "user_1"
         assert create_event["previous_item_id"] is None
-        assert session._pending_item_create_previous_ids == {"user_1": None}
 
-        # Same error type, wording the regex cannot parse.
+        # Same error type, from a server that does not name the rejected item.
         _server_event(
             session,
             {
@@ -1911,6 +1910,7 @@ async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(monkey
                 "error": {
                     "type": "invalid_previous_item_id",
                     "message": "previous_item_id 'user_1' not found in conversation",
+                    "item_id": "user_2",
                 },
             },
         )
@@ -1988,13 +1988,9 @@ async def test_boson_realtime_invalid_previous_item_id_does_not_affect_unrelated
     try:
         await session._msg_ch.recv()  # initial session.update
 
-        # Simulate call 1 having already timed out and cleaned up: an item's
-        # previous_item_id mapping is recorded, but its future is gone.
-        stale_fut: asyncio.Future[None] = asyncio.Future()
-        session._pending_item_create_previous_ids["stale_item"] = "root_1"
-        session._item_create_future["stale_item"] = stale_fut
-        stale_fut.set_result(None)  # already resolved; simulates prior cleanup
-        del session._item_create_future["stale_item"]  # base class pops on timeout
+        # Call 1 has already timed out and been cleaned up by the base class,
+        # so nothing is left keyed under its item id.
+        assert "user_stale" not in session._item_create_future
 
         # Call 2 is a genuinely different, currently in-flight sync.
         update_task = asyncio.create_task(
@@ -2005,8 +2001,8 @@ async def test_boson_realtime_invalid_previous_item_id_does_not_affect_unrelated
         create_event = await session._msg_ch.recv()
         assert create_event["item"]["id"] == "user_9"
 
-        # Call 1's stale error arrives late, referencing its own (unrelated,
-        # already-gone) previous_item_id.
+        # Call 1's stale error arrives late, naming its own item -- which no
+        # longer has a future to fail.
         _server_event(
             session,
             {
@@ -2014,6 +2010,7 @@ async def test_boson_realtime_invalid_previous_item_id_does_not_affect_unrelated
                 "error": {
                     "type": "invalid_previous_item_id",
                     "message": "previous_item_id 'root_1' not found in conversation",
+                    "item_id": "user_stale",
                 },
             },
         )
