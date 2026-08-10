@@ -161,11 +161,16 @@ class SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
-            RuntimeError: If this speech handle does not allow interruptions.
+            RuntimeError: If this speech handle is still running and does not allow
+                interruptions.
 
         Returns:
             SpeechHandle: The same speech handle that was interrupted.
         """
+        if self.interrupted or self.done():
+            # already cancelled or finished: nothing to interrupt, and protection is moot
+            return self
+
         if not force and not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
