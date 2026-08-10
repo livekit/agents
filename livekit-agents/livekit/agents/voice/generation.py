@@ -851,13 +851,12 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-                    if fnc_call_out := output.fnc_call_out:
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
-                        )
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error
-                        )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
+                    )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
@@ -911,11 +910,10 @@ async def _execute_tools_task(
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
-    fnc_call_out: llm.FunctionCallOutput | None
+    fnc_call_out: llm.FunctionCallOutput
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
-    reply_required: bool = field(default=True)
 
 
 def make_tool_output(
@@ -956,7 +954,12 @@ def make_tool_output(
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
-                fnc_call_out=None,
+                fnc_call_out=llm.FunctionCallOutput(
+                    name=fnc_call.name,
+                    call_id=fnc_call.call_id,
+                    output="the tool returned more than one agent",
+                    is_error=True,
+                ),
                 agent_task=None,
                 raw_output=output,
                 raw_exception=exception,
@@ -980,11 +983,12 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
+    # a tool that returned nothing to say, such as a bare handoff, expects no reply
+    base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,
         raw_exception=exception,

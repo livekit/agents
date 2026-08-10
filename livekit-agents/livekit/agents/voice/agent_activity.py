@@ -3303,8 +3303,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
@@ -3465,7 +3464,7 @@ class AgentActivity(RecognitionHooks):
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
+                if sanitized_out.agent_task is None:
                     interrupted_calls.append(sanitized_out.fnc_call)
                     interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
 
@@ -3503,11 +3502,10 @@ class AgentActivity(RecognitionHooks):
                 function_calls=[], function_call_outputs=[]
             )
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None:
-                    new_calls.append(sanitized_out.fnc_call)
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        fnc_executed_ev._reply_required = True
+                new_calls.append(sanitized_out.fnc_call)
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
+                if sanitized_out.fnc_call_out.reply_required:
+                    fnc_executed_ev._reply_required = True
 
                 # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
@@ -3962,8 +3960,7 @@ class AgentActivity(RecognitionHooks):
             self._session._tool_items_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -4104,9 +4101,7 @@ class AgentActivity(RecognitionHooks):
             # so every one of them answers, or the model waits on a call it never gets back
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
-                if (fnc_call_out := sanitized_out.fnc_call_out) is None:
-                    continue
-
+                fnc_call_out = sanitized_out.fnc_call_out
                 if sanitized_out.agent_task is not None:
                     # an interruption leaves the handoff unapplied, so the model is told it
                     # failed and can ask again, instead of reading an empty success
@@ -4161,14 +4156,13 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
-                if sanitized_out.fnc_call_out is not None:
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        fnc_executed_ev._reply_required = True
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
+                if sanitized_out.fnc_call_out.reply_required:
+                    fnc_executed_ev._reply_required = True
 
-                    # add tool output to the chat context
-                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                    self._session._tool_items_added([sanitized_out.fnc_call_out])
+                # add tool output to the chat context
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(

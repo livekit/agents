@@ -476,8 +476,7 @@ class LLMStream(ABC):
             for tc in response.tool_calls:
                 result = await llm.execute_function_call(tc, tool_ctx)
                 ctx.insert(result.fnc_call)
-                if result.fnc_call_out:
-                    ctx.insert(result.fnc_call_out)
+                ctx.insert(result.fnc_call_out)
             ```
         """
         text_parts: list[str] = []

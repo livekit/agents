@@ -531,7 +531,6 @@ class SessionHost:
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
-            if fco is not None
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(
