@@ -65,6 +65,10 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # the run this call belongs to; background work that outlives it must not hold a
+        # later run open
+        self._run_state = session._global_run_state
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -159,7 +163,7 @@ class RunContext(Generic[Userdata_T]):
         plays before the floor is held — keeps chat order matching code order.
         """
         await self._drain_pending_reply()
-        async with self._session._wait_for_idle_and_hold() as activity:
+        async with self._session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
     async def update(

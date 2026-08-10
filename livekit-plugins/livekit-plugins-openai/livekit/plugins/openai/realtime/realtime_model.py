@@ -886,6 +886,9 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
+        # future per in-flight chat ctx event, so a rejection settles the one it answers
+        self._chat_ctx_event_futures: dict[str, asyncio.Future] = {}
+
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
@@ -943,7 +946,9 @@ class RealtimeSession(
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
-            # chat context
+            # chat context. the turn state goes first, since what it settles belongs in the
+            # mirror that is replayed below
+            self._reset_input_turn_state()
             chat_ctx = self.chat_ctx.copy(
                 exclude_function_call=True,
                 exclude_instructions=True,
@@ -953,7 +958,6 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._reset_input_turn_state()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -1096,12 +1100,8 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    if lk_oai_debug:
-                        msg_copy = msg.copy()
-                        if msg_copy["type"] == "input_audio_buffer.append":
-                            msg_copy = {**msg_copy, "audio": "..."}
-
-                        logger.debug(f">>> {msg_copy}")
+                    if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
+                        logger.debug(f">>> {msg}")
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1434,30 +1434,45 @@ class RealtimeSession(
 
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
+            self._chat_ctx_event_futures = {}
 
             for ev in events:
                 futs.append(f := asyncio.Future[None]())
                 if isinstance(ev, ConversationItemDeleteEvent):
                     self._item_delete_future[ev.item_id] = f
-                elif isinstance(ev, ConversationItemCreateEvent):
+                else:
                     assert ev.item.id is not None
                     self._item_create_future[ev.item.id] = f
+
+                # an updated item sends a delete and a create under the same id, so only the
+                # event id tells a rejection which of the two it answers
+                if ev.event_id:
+                    self._chat_ctx_event_futures[ev.event_id] = f
                 self.send_event(ev)
 
             if not futs:
                 return
             try:
-                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
+                results = await asyncio.wait_for(
+                    asyncio.gather(*futs, return_exceptions=True), timeout=5.0
+                )
             except asyncio.TimeoutError:
-                # clean up timed-out futures so late server responses don't hit
-                # InvalidStateError when calling set_result on cancelled futures
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+            finally:
+                self._chat_ctx_event_futures = {}
                 for ev in events:
                     if isinstance(ev, ConversationItemDeleteEvent):
                         self._item_delete_future.pop(ev.item_id, None)
-                    elif isinstance(ev, ConversationItemCreateEvent):
+                    else:
                         assert ev.item.id is not None
                         self._item_create_future.pop(ev.item.id, None)
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+
+            # a rejected item is not worth failing the turn over
+            if rejected := [str(r) for r in results if isinstance(r, BaseException)]:
+                logger.warning(
+                    f"{self._realtime_model._provider_label} rejected part of a chat context update",  # noqa: E501
+                    extra={"errors": rejected},
+                )
 
     def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
@@ -1917,8 +1932,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_create_future.pop(event.item.id, None):
-            if fut.cancelled():
-                logger.error(f"item create future for `{event.item.id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item create future for `{event.item.id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -1936,8 +1951,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
-            if fut.cancelled():
-                logger.error(f"item delete future for `{event.item_id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item delete future for `{event.item_id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -2256,6 +2271,17 @@ class RealtimeSession(
             logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
+        # a rejected item event gets no deleted/added reply, so fail its future rather than
+        # leave update_chat_ctx to stall inside the speech that awaits it
+        if (event_id := event.error.event_id) and (
+            fut := self._chat_ctx_event_futures.pop(event_id, None)
+        ):
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(event.error.message))
+            # a terminal one still has to end the session, whatever it came in reply to
+            if not _is_fatal_error(event.error):
+                return
+
         if event.error.message.startswith("Cancellation failed"):
             return
 

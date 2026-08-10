@@ -351,6 +351,9 @@ class LLMStream(llm.LLMStream):
         )
 
         full_response = ""
+        # Once any chunk has been delivered, failures must not be retried by the
+        # framework — a retry would re-request the full answer and double-speak.
+        retryable = True
         try:
             async with blaze._client.stream(
                 "POST",
@@ -394,6 +397,7 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                         self._event_ch.send_nowait(chunk)
+                        retryable = False
                         continue
 
                     # Handle text content
@@ -408,15 +412,16 @@ class LLMStream(llm.LLMStream):
                             ),
                         )
                         self._event_ch.send_nowait(chunk)
+                        retryable = False
 
         except httpx.TimeoutException as e:
-            raise APITimeoutError(f"LLM request timed out: {e}") from e
+            raise APITimeoutError(f"LLM request timed out: {e}", retryable=retryable) from e
         except httpx.NetworkError as e:
-            raise APIConnectionError(f"LLM network error: {e}") from e
+            raise APIConnectionError(f"LLM network error: {e}", retryable=retryable) from e
         except APIStatusError:
             raise
         except Exception as e:
-            raise APIConnectionError(f"LLM connection error: {e}") from e
+            raise APIConnectionError(f"LLM connection error: {e}", retryable=retryable) from e
 
         latency = time.monotonic() - start_time
         logger.info(
