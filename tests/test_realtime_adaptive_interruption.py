@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import NOT_GIVEN, Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import (
@@ -44,6 +45,52 @@ def _end_of_turn_info(
     )
 
 
+def test_adaptive_verdict_flushes_before_normal_interruption_thresholds() -> None:
+    activity = AgentActivity.__new__(AgentActivity)
+    calls: list[str] = []
+    activity._audio_recognition = MagicMock()
+    activity._audio_recognition._current_transcript = ""
+
+    def _flush(**_: object) -> None:
+        calls.append("flush")
+        activity._audio_recognition._current_transcript = "enough words"
+
+    def _interrupt() -> bool:
+        calls.append("interrupt")
+        assert activity._audio_recognition._current_transcript == "enough words"
+        return True
+
+    activity._restore_interruption_by_audio_activity = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: calls.append("restore")
+    )
+    activity._interrupt_by_audio_activity = MagicMock(  # type: ignore[method-assign]
+        side_effect=_interrupt
+    )
+    activity._audio_recognition._flush_held_transcripts.side_effect = _flush
+    activity._paused_speech = None
+
+    activity.on_interruption(MagicMock(spec=OverlappingSpeechEvent))
+
+    assert calls == ["flush", "restore", "interrupt"]
+    activity._interrupt_by_audio_activity.assert_called_once_with()  # type: ignore[attr-defined]
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
+
+
+def test_adaptive_verdict_does_not_end_agent_when_min_words_rejects() -> None:
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._restore_interruption_by_audio_activity = MagicMock()  # type: ignore[method-assign]
+    activity._interrupt_by_audio_activity = MagicMock(  # type: ignore[method-assign]
+        return_value=False
+    )
+    activity._audio_recognition = MagicMock()
+    activity._paused_speech = None
+
+    activity.on_interruption(MagicMock(spec=OverlappingSpeechEvent))
+
+    activity._audio_recognition._flush_held_transcripts.assert_called_once()
+    activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
+
+
 def _realtime_barge_in_session() -> AgentSession:
     return AgentSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
@@ -73,8 +120,7 @@ async def test_adaptive_interruption_enabled_for_realtime_without_stt(
 async def test_adaptive_interruption_still_requires_stt_for_non_realtime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # the STT pipeline path is unchanged: without an aligned streaming STT there is
-    # nothing to gatekeep, so adaptive interruption stays disabled
+    # the non-realtime gate still needs STT because VAD alone cannot provide text
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
@@ -303,16 +349,15 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._interruption_enabled = True
     ar._interruption_ch = ch  # type: ignore[assignment]
     ar._agent_speaking = False
-    ar._agent_speech_started_at = None
+    ar._active_vad_speech_started_at = None
     ar._endpointing = MagicMock()
     ar._backchannel_boundary = None
     ar._backchannel_boundary_timer = None
     ar._backchannel_boundary_callback = None
-    ar._ignore_user_transcript_until = NOT_GIVEN
     ar._overlap_in_current_turn = False
     ar._overlap_open = False
     ar._turn_backchannel_over_agent = False
-    ar._transcript_buffer = []
+    ar._transcript_buffer = deque()
     ar._tasks = set()
     ar._user_silence_ev = asyncio.Event()
     ar._user_silence_ev.set()
@@ -331,7 +376,7 @@ async def test_agent_speech_end_closes_overlap_before_reset() -> None:
     ar._on_start_of_speech(started_at=time.time())
     ch.sent.clear()
 
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time())
 
     assert _sentinel_names(ch) == [
         "_OverlapSpeechEndedSentinel",
@@ -345,7 +390,7 @@ async def test_user_speech_ending_after_agent_end_does_not_close_overlap_again()
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time())
     ch.sent.clear()
 
     ar._on_end_of_speech(ended_at=time.time())
@@ -359,7 +404,7 @@ async def test_resume_restarts_the_detector() -> None:
     user_started_at = time.time()
     ar._speaking = True
     ar._on_start_of_speech(started_at=user_started_at)
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time())
     ch.sent.clear()
 
     resumed_at = time.time()
@@ -396,7 +441,7 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
     ar._on_start_of_speech(started_at=time.time())
     ch.sent.clear()
 
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time())
 
     assert _sentinel_names(ch) == [
         "_OverlapSpeechEndedSentinel",
