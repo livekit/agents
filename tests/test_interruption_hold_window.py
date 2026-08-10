@@ -24,6 +24,7 @@ def _make_recognition(
     recognition._active_vad_speech_started_at = vad_sos
     recognition._backchannel_boundary = (0.0, end_boundary)
     recognition._transcript_buffer = deque()
+    recognition._transcript_gate_active = True
     recognition._process_stt_event = MagicMock()  # type: ignore[method-assign]
     return recognition
 
@@ -49,19 +50,22 @@ def _event(
     )
 
 
-def _held_text(recognition: AudioRecognition) -> list[str]:
-    return [event.alternatives[0].text for event in recognition._transcript_buffer]
-
-
 def test_active_vad_utterance_extends_past_end_boundary() -> None:
     recognition = _make_recognition(vad_sos=5.0, end_boundary=1.0)
 
-    recognition._hold_stt_event(_event("before", created_at=4.0))
-    recognition._hold_stt_event(_event("utterance start", created_at=5.0))
-    recognition._hold_stt_event(_event("utterance end", created_at=9.5))
+    recognition._transcript_buffer.extend(
+        [
+            _event("before", created_at=4.0),
+            _event("utterance start", created_at=5.0),
+            _event("utterance end", created_at=9.5),
+        ]
+    )
 
-    flush_start = recognition._transcript_flush_start(now=10.0)
-    recognition._flush_held_transcripts(flush_start=flush_start)
+    flush_start = recognition._transcript_flush_start(
+        now=10.0,
+        vad_speech_started_at=5.0,
+    )
+    recognition._release_transcript_gate(at=10.0, vad_speech_started_at=5.0)
 
     emitted = [
         call.args[0].alternatives[0].text
@@ -71,32 +75,20 @@ def test_active_vad_utterance_extends_past_end_boundary() -> None:
     assert emitted == ["utterance start", "utterance end"]
 
 
-def test_events_remain_held_until_overlap_verdict() -> None:
-    recognition = _make_recognition(vad_sos=5.0, end_boundary=1.0)
-
-    recognition._hold_stt_event(_event("utterance start", created_at=5.0))
-
-    # the true verdict can already be queued when VAD EOS clears the active utterance
-    recognition._active_vad_speech_started_at = None
-    recognition._hold_stt_event(_event("utterance end", created_at=7.0))
-
-    assert _held_text(recognition) == ["utterance start", "utterance end"]
-
-
 def test_flush_start_does_not_precede_agent_speech() -> None:
     recognition = _make_recognition(vad_sos=5.0, agent_sos=8.0, end_boundary=1.0)
 
-    assert recognition._transcript_flush_start(now=10.0) == 8.0
+    assert recognition._transcript_flush_start(now=10.0, vad_speech_started_at=5.0) == 8.0
 
 
 def test_end_boundary_is_used_without_active_vad_utterance() -> None:
     recognition = _make_recognition(vad_sos=None, end_boundary=1.0)
 
-    recognition._hold_stt_event(_event("old", created_at=8.0))
-    recognition._hold_stt_event(_event("near end", created_at=9.5))
+    recognition._transcript_buffer.extend(
+        [_event("old", created_at=8.0), _event("near end", created_at=9.5)]
+    )
 
-    flush_start = recognition._transcript_flush_start(now=10.0)
-    recognition._flush_held_transcripts(flush_start=flush_start)
+    recognition._release_transcript_gate(at=10.0, vad_speech_started_at=None)
 
     emitted = [
         call.args[0].alternatives[0].text
@@ -119,7 +111,7 @@ def test_provider_timestamps_do_not_affect_gate() -> None:
     recognition._transcript_buffer.extend(
         [stale_arrival_with_future_word_time, recent_arrival_without_word_times]
     )
-    recognition._flush_held_transcripts(flush_start=9.0)
+    recognition._release_transcript_gate(at=10.0, vad_speech_started_at=None)
 
     emitted = [
         call.args[0].alternatives[0].text
@@ -128,7 +120,7 @@ def test_provider_timestamps_do_not_affect_gate() -> None:
     assert emitted == ["recent"]
 
 
-def test_force_flush_preserves_provider_order() -> None:
+def test_drain_preserves_provider_order() -> None:
     recognition = _make_recognition(vad_sos=5.0)
     events = [
         SpeechEvent(
@@ -141,8 +133,25 @@ def test_force_flush_preserves_provider_order() -> None:
     ]
     recognition._transcript_buffer.extend(events)
 
-    recognition._flush_held_transcripts(force=True)
+    recognition._drain_transcript_gate()
 
     emitted = [call.args[0] for call in recognition._process_stt_event.call_args_list]  # type: ignore[attr-defined]
     assert emitted == events
+    assert not recognition._transcript_buffer
+
+
+def test_disabling_vad_drains_the_transcript_gate() -> None:
+    recognition = _make_recognition(vad_sos=5.0)
+    event = _event("held", created_at=5.0)
+    recognition._transcript_buffer.append(event)
+    recognition._interruption_enabled = True
+    recognition._interruption_detection = MagicMock()
+    recognition._vad = MagicMock()
+    recognition._vad_atask = None
+    recognition._turn_detector = None
+
+    recognition._update_vad(None)
+
+    recognition._process_stt_event.assert_called_once_with(event)  # type: ignore[attr-defined]
+    assert not recognition._transcript_gate_active
     assert not recognition._transcript_buffer
