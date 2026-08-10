@@ -173,16 +173,15 @@ SarvamTTSLanguages = Literal[
 ]
 
 SarvamTTSSpeakers = Literal[
-    # bulbul:v2 Female (lowercase)
+    # bulbul:v2 only
     "anushka",
     "manisha",
     "vidya",
     "arya",
-    # bulbul:v2 Male (lowercase)
     "abhilash",
     "karun",
     "hitesh",
-    # bulbul:v3-beta Customer Care
+    # bulbul:v3 and bulbul:v3-beta
     "shubh",
     "ritu",
     "rahul",
@@ -198,7 +197,6 @@ SarvamTTSSpeakers = Literal[
     "manan",
     "sumit",
     "priya",
-    # bulbul:v3-beta Content Creation
     "aditya",
     "kabir",
     "neha",
@@ -207,150 +205,74 @@ SarvamTTSSpeakers = Literal[
     "aayan",
     "ashutosh",
     "advait",
-    # bulbul:v3-beta International
-    "amelia",
-    "sophia",
-    # bulbul:v3
     "suhani",
     "rupali",
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
-# Model-Speaker compatibility mapping
-MODEL_SPEAKER_COMPATIBILITY = {
-    "bulbul:v2": {
-        "female": ["anushka", "manisha", "vidya", "arya"],
-        "male": ["abhilash", "karun", "hitesh"],
-        "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    },
-    "bulbul:v3-beta": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-        ],
-    },
-    "bulbul:v3": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-    },
+# Speakers accepted by each model, verified against the live Sarvam API and
+# https://docs.sarvam.ai/api/getting-started/models/bulbul (the two agree exactly).
+# bulbul:v3 and bulbul:v3-beta share one speaker set; bulbul:v2 has its own.
+_V2_SPEAKERS: frozenset[str] = frozenset(
+    {"anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh"}
+)
+_V3_SPEAKERS: frozenset[str] = frozenset(
+    {
+        "aayan",
+        "aditya",
+        "advait",
+        "amit",
+        "anand",
+        "ashutosh",
+        "dev",
+        "gokul",
+        "ishita",
+        "kabir",
+        "kavitha",
+        "kavya",
+        "manan",
+        "mani",
+        "mohit",
+        "neha",
+        "pooja",
+        "priya",
+        "rahul",
+        "ratan",
+        "rehan",
+        "ritu",
+        "rohan",
+        "roopa",
+        "rupali",
+        "shreya",
+        "shruti",
+        "shubh",
+        "simran",
+        "soham",
+        "suhani",
+        "sumit",
+        "sunny",
+        "tanya",
+        "tarun",
+        "varun",
+        "vijay",
+    }
+)
+
+MODEL_SPEAKER_COMPATIBILITY: dict[str, frozenset[str]] = {
+    "bulbul:v2": _V2_SPEAKERS,
+    "bulbul:v3-beta": _V3_SPEAKERS,
+    "bulbul:v3": _V3_SPEAKERS,
 }
 
 
@@ -363,17 +285,22 @@ class ConnectionState(enum.Enum):
     FAILED = "failed"
 
 
+def compatible_speakers(model: str) -> list[str]:
+    """Return the speakers accepted by ``model``, sorted; empty if the model is unknown."""
+    return sorted(MODEL_SPEAKER_COMPATIBILITY.get(model, frozenset()))
+
+
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     """Validate that the speaker is compatible with the model version."""
     if model not in MODEL_SPEAKER_COMPATIBILITY:
         logger.warning(f"Unknown model '{model}', skipping compatibility check")
         return True
 
-    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY[model]["all"]
-    if speaker.lower() not in compatible_speakers:
+    if speaker.lower() not in MODEL_SPEAKER_COMPATIBILITY[model]:
+        compatible_speakers_ = compatible_speakers(model)
         logger.error(
             f"Speaker '{speaker}' is not compatible with model '{model}'. "
-            f"Compatible speakers for {model}: {', '.join(compatible_speakers)}"
+            f"Compatible speakers for {model}: {', '.join(compatible_speakers_)}"
         )
         return False
     return True
@@ -539,10 +466,9 @@ class TTS(tts.TTS):
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
-            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(model, {}).get("all", [])
             raise ValueError(
                 f"Speaker '{speaker}' is not compatible with model '{model}'. "
-                f"Please choose a compatible speaker from: {', '.join(compatible_speakers)}"
+                f"Please choose a compatible speaker from: {', '.join(compatible_speakers(model))}"
             )
 
         # Initialize word tokenizer for streaming
@@ -764,23 +690,17 @@ class TTS(tts.TTS):
             self._opts.model = model
             if speaker is None and self._opts.speaker is not None:
                 if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                        "all", []
-                    )
                     raise ValueError(
                         f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers)}"
+                        f"Compatible speakers: {', '.join(compatible_speakers(self._opts.model))}"
                     )
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
             if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
                 raise ValueError(
                     f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
+                    f"Compatible speakers: {', '.join(compatible_speakers(self._opts.model))}"
                 )
             self._opts.speaker = speaker
 
