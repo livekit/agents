@@ -428,9 +428,10 @@ class ChunkedStream(tts.ChunkedStream):
                         body=json.dumps(msg),
                     )
 
-                # Single speech session
+                # Single speech session. No speech-start ack is defined by the
+                # gateway protocol (or agents-js); the read loop below ignores
+                # any incidental status frames before/alongside audio.
                 await ws.send(json.dumps(self._speech_start_params()))
-                await ws_guard.recv(ws)  # speech-start ack
                 await ws.send(json.dumps({"query": text}))
                 await ws.send(json.dumps({"event": "speech-end"}))
 
@@ -670,8 +671,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             json.dumps(speech_start_msg, ensure_ascii=False),
                         )
                         await ws.send(json.dumps(speech_start_msg))
-                        ack = await ws_guard.recv(ws)
-                        logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
+                        # Do not block on a speech-start ack — none is in the
+                        # documented protocol. The reader task below handles
+                        # status/binary frames (and would drop the first frame
+                        # if we blindly recv here).
 
                         async def _read_audio(
                             guard: _WSStreamGuard = ws_guard,
