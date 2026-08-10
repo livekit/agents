@@ -563,6 +563,11 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
         Mid-input drops raise so ``SynthesizeStream._main_task`` can replay
         buffered text. After audio has been emitted, errors are non-retryable.
+
+        ``stream_initialized`` only tracks AudioEmitter lifecycle (it may flip
+        True on ``started-byte-stream`` before any PCM arrives). Retry and
+        private-reconnect decisions use ``audio_emitted`` instead — set only
+        when bytes are actually pushed to the emitter.
         """
         request_id = shortuuid()
         turn_start = time.monotonic()
@@ -576,6 +581,8 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             "wav": "audio/wav",
         }.get(tts_cfg._audio_format, "audio/pcm")
         stream_initialized = False
+        # Distinct from stream_initialized: True only after real audio push.
+        audio_emitted = False
         runtime_mime_type = configured_mime_type
         runtime_is_pcm = runtime_mime_type == "audio/pcm"
 
@@ -622,6 +629,13 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             # Keep in sync with SynthesizeStream._main_task segment validation.
             self._num_segments = output_emitter.num_segments
             stream_initialized = True
+
+        def _push_audio(data: bytes) -> None:
+            """Push audio to the emitter and record that real bytes were delivered."""
+            nonlocal audio_emitted
+            if data:
+                audio_emitted = True
+            output_emitter.push(data)
 
         query_count = 0
         seg_count = 0
@@ -696,7 +710,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                     total_bytes += len(frame)
 
                                     if not runtime_is_pcm:
-                                        output_emitter.push(frame)
+                                        _push_audio(frame)
                                         first_audio = False
                                         continue
 
@@ -718,7 +732,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                     if len(pcm) <= tail_bytes:
                                         pending_tail = pcm + odd_carry
                                         continue
-                                    output_emitter.push(pcm[:-tail_bytes])
+                                    _push_audio(pcm[:-tail_bytes])
                                     pending_tail = pcm[-tail_bytes:] + odd_carry
                                 else:
                                     msg = json.loads(frame)
@@ -726,7 +740,7 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                                     if st == "speech-end":
                                         if runtime_is_pcm and pending_tail:
-                                            output_emitter.push(
+                                            _push_audio(
                                                 _apply_pcm16_fade(
                                                     pending_tail,
                                                     fade_samples=fade_samples,
@@ -739,13 +753,13 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         _ensure_output_initialized(msg.get("contentType"))
                                         if has_prev_segment:
                                             if runtime_is_pcm and silence_pcm:
-                                                output_emitter.push(silence_pcm)
+                                                _push_audio(silence_pcm)
                                             first_audio = True
 
                                     elif st == "finished-byte-stream":
                                         _seg_count += 1
                                         if runtime_is_pcm and pending_tail:
-                                            output_emitter.push(
+                                            _push_audio(
                                                 _apply_pcm16_fade(
                                                     pending_tail,
                                                     fade_samples=fade_samples,
@@ -867,11 +881,14 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                     # - input is fully drained (queries buffered) and no audio yet.
                     # Mid-input drops cannot reconstruct consumed channel text —
                     # raise so the framework SynthesizeStream retry can replay.
+                    # Use audio_emitted (not stream_initialized): the emitter may
+                    # already be open after started-byte-stream while zero PCM
+                    # has been delivered — that case must stay retryable.
                     mid_input = input_started and not input_done
-                    if stream_initialized or mid_input or ws_attempt >= max_ws_attempts:
+                    if audio_emitted or mid_input or ws_attempt >= max_ws_attempts:
                         raise APIConnectionError(
                             f"TTS WebSocket closed: {e}",
-                            retryable=not stream_initialized,
+                            retryable=not audio_emitted,
                         ) from e
                     retry_interval = self._conn_options._interval_for_retry(ws_attempt - 1)
                     logger.warning(

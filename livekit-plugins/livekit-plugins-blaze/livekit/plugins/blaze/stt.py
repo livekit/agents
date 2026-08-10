@@ -64,7 +64,7 @@ DEFAULT_STREAM_MODEL = "stt-stream-1.5"
 
 @dataclass
 class _RecognizePending:
-    """Per-task empty-segment PCM buffer (isolated across concurrent streams)."""
+    """Empty-segment PCM buffer for one STT instance within one asyncio Task."""
 
     pcm: bytes = b""
     sample_rate: int = 16000
@@ -73,9 +73,10 @@ class _RecognizePending:
     last_recognize_time: float = 0.0
 
 
-# Each asyncio Task gets its own ContextVar copy, so concurrent StreamAdapter /
-# AgentSession recognize() calls on one STT instance do not share pending PCM.
-_pending_var: contextvars.ContextVar[_RecognizePending | None] = contextvars.ContextVar(
+# Task-local map of STT instance id -> pending buffer. Isolates concurrent
+# StreamAdapter / AgentSession recognize() calls AND distinct STT instances
+# used in the same task (e.g. FallbackAdapter wrapping two Blaze STTs).
+_pending_var: contextvars.ContextVar[dict[int, _RecognizePending] | None] = contextvars.ContextVar(
     "blaze_stt_recognize_pending",
     default=None,
 )
@@ -174,11 +175,21 @@ class STT(stt.STT):
         return self._sample_rate
 
     def _recognize_pending(self) -> _RecognizePending:
-        """Return task-local pending PCM state (not shared across sessions)."""
-        pending = _pending_var.get()
+        """Return pending PCM state for this STT instance in the current task.
+
+        Keyed by ``id(self)`` inside a task-local dict so two Blaze STT
+        instances used from the same asyncio Task (e.g. FallbackAdapter)
+        never share or mix empty-segment buffers.
+        """
+        bucket = _pending_var.get()
+        if bucket is None:
+            bucket = {}
+            _pending_var.set(bucket)
+        key = id(self)
+        pending = bucket.get(key)
         if pending is None:
             pending = _RecognizePending(sample_rate=self._sample_rate)
-            _pending_var.set(pending)
+            bucket[key] = pending
         return pending
 
     # Back-compat accessors used by unit tests (map onto task-local state).

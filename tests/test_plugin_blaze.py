@@ -314,7 +314,6 @@ async def test_stt_discards_pending_when_duration_limit_exceeded() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_stt_pending_pcm_is_task_local() -> None:
     """Each asyncio Task keeps its own empty-segment PCM buffer (ContextVar)."""
     import asyncio
@@ -331,6 +330,23 @@ async def test_stt_pending_pcm_is_task_local() -> None:
     assert results["a"] == b"\x01\x00"
     assert results["b"] == b"\x02\x00"
     await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stt_pending_pcm_is_instance_local() -> None:
+    """Two STT instances in the same task do not share empty-segment PCM."""
+    stt_a = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
+    stt_b = _make_stt(lambda _req: httpx.Response(200, json={"transcription": ""}))
+
+    stt_a._pending_pcm = b"\x01\x00"
+    stt_b._pending_pcm = b"\x02\x00"
+
+    assert stt_a._pending_pcm == b"\x01\x00"
+    assert stt_b._pending_pcm == b"\x02\x00"
+    assert stt_a._pending_pcm != stt_b._pending_pcm
+
+    await stt_a.aclose()
+    await stt_b.aclose()
 
 
 async def test_stt_clears_stale_pending_buffer_after_idle_gap(
