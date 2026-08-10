@@ -18,6 +18,8 @@ from .types import NoiseCancellationParams, NoiseCancellationSelector
 
 T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
+_AUDIO_STREAM_REATTACH_DELAY = 0.5
+
 
 class _StreamReadResult(NamedTuple):
     received_frame: bool
@@ -368,8 +370,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
             # An RTC stream may reach EOS while its track remains subscribed.
             track = publication.track
-            self._close_stream()
             if track is None or not publication.subscribed:
+                self._close_stream()
                 return read_result
 
             if read_result.received_frame:
@@ -377,10 +379,21 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             else:
                 consecutive_empty_streams += 1
             if consecutive_empty_streams > 1:
+                self._close_stream()
                 logger.warning(
                     "replacement audio stream closed before receiving frames; not reattaching",
                     extra={"participant": participant.identity, "track_id": track.sid},
                 )
+                return read_result
+
+            await asyncio.sleep(_AUDIO_STREAM_REATTACH_DELAY)
+
+            if self._stream is not stream or self._publication is not publication:
+                return read_result
+
+            track = publication.track
+            self._close_stream()
+            if track is None or not publication.subscribed:
                 return read_result
 
             stream = self._create_stream(track, participant)

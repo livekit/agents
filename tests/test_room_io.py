@@ -325,6 +325,52 @@ async def test_audio_input_reattaches_when_stream_closes_while_track_is_subscrib
 
 
 @pytest.mark.asyncio
+async def test_audio_input_waits_before_reattaching_productive_stream() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    first_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+    frame = rtc.AudioFrame(bytes(480 * 2), 24000, 1, 480)
+    reconnect_started = asyncio.Event()
+    allow_reconnect = asyncio.Event()
+
+    async def wait_before_reconnect(delay: float) -> None:
+        assert delay == 0.5
+        reconnect_started.set()
+        await allow_reconnect.wait()
+
+    with (
+        patch(
+            "livekit.agents.voice.room_io._input.asyncio.sleep",
+            side_effect=wait_before_reconnect,
+        ) as reconnect_sleep,
+        patch(
+            "livekit.rtc.AudioStream.from_track",
+            side_effect=[first_stream, replacement_stream],
+        ) as create_stream,
+    ):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(first_stream.started.wait(), timeout=1)
+
+        first_stream.push_frame(frame)
+        first_stream.end()
+        await asyncio.wait_for(reconnect_started.wait(), timeout=1)
+
+        create_stream.assert_called_once()
+        assert audio_input._stream is first_stream
+
+        allow_reconnect.set()
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+    reconnect_sleep.assert_awaited_once_with(0.5)
+    assert create_stream.call_count == 2
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
 async def test_audio_input_counts_frames_received_while_detached_for_reattach_limit() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)
