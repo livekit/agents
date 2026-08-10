@@ -36,6 +36,7 @@ import asyncio
 import json
 import re
 import time
+from typing import Any, cast
 
 import websockets
 
@@ -835,8 +836,12 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                                 resend_t = asyncio.create_task(_resend_queries())
                                 try:
+                                    # Cast: asyncio.wait requires homogeneous Task types.
                                     done, _ = await asyncio.wait(
-                                        {resend_t, reader_task},
+                                        cast(
+                                            "set[asyncio.Task[Any]]",
+                                            {resend_t, reader_task},
+                                        ),
                                         return_when=asyncio.FIRST_COMPLETED,
                                     )
                                     if reader_task in done:
@@ -873,35 +878,36 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                                 input_t = asyncio.create_task(_input_task())
                                 send_t = asyncio.create_task(_token_send_task())
+
+                                async def _drain_input(
+                                    _in: asyncio.Task[None] = input_t,
+                                    _send: asyncio.Task[None] = send_t,
+                                ) -> None:
+                                    await asyncio.gather(_in, _send)
+
                                 # Drain input while racing the audio reader so a
                                 # mid-turn WS error/timeout aborts the text pump
                                 # immediately (instead of waiting for end_input).
-                                drain_t = asyncio.gather(input_t, send_t)
+                                drain_t = asyncio.create_task(_drain_input())
                                 try:
                                     done, _ = await asyncio.wait(
-                                        {drain_t, reader_task},
+                                        cast(
+                                            "set[asyncio.Task[Any]]",
+                                            {drain_t, reader_task},
+                                        ),
                                         return_when=asyncio.FIRST_COMPLETED,
                                     )
                                     if reader_task in done:
                                         # Reader failed or finished early —
                                         # stop pumping text and surface the error.
-                                        await utils.aio.gracefully_cancel(input_t, send_t)
-                                        if not drain_t.done():
-                                            drain_t.cancel()
-                                            try:
-                                                await drain_t
-                                            except (
-                                                asyncio.CancelledError,
-                                                Exception,
-                                            ):
-                                                pass
+                                        await utils.aio.gracefully_cancel(input_t, send_t, drain_t)
                                         seg_count, _ = await reader_task
                                     else:
                                         await drain_t
                                         # Only mark complete after a successful drain.
                                         input_done = True
                                 finally:
-                                    await utils.aio.gracefully_cancel(input_t, send_t)
+                                    await utils.aio.gracefully_cancel(input_t, send_t, drain_t)
                                     await sent_tok.aclose()
 
                             # Close the single speech session (if reader still
