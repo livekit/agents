@@ -202,7 +202,8 @@ class TTS(tts.TTS):
 
         self._config = config or BlazeConfig()
 
-        self._api_url = api_url or self._config.api_url
+        # Normalize base URL (constructor override may bypass BlazeConfig strip).
+        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
         self._language = language
         self._speaker_id = speaker_id
         self._auth_token = auth_token or self._config.api_token

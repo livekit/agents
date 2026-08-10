@@ -118,6 +118,28 @@ def test_blaze_config_defaults_without_environment(monkeypatch: pytest.MonkeyPat
     assert config.llm_timeout == 60.0
 
 
+def test_blaze_config_strips_trailing_slash_from_api_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trailing slash on base URL must not produce //v1/... HTTP paths."""
+    monkeypatch.setenv("BLAZE_API_URL", "https://env.example.com/")
+    assert BlazeConfig().api_url == "https://env.example.com"
+
+    config = BlazeConfig(api_url="https://custom.example.com/")
+    assert config.api_url == "https://custom.example.com"
+
+    stt = STT(config=config)
+    assert stt._transcribe_url == "https://custom.example.com/v1/stt/transcribe"
+    assert "//v1/" not in stt._transcribe_url
+
+    # Direct constructor override also normalizes.
+    stt_direct = STT(api_url="https://direct.example.com/")
+    assert stt_direct._transcribe_url == "https://direct.example.com/v1/stt/transcribe"
+
+    llm = LLM(bot_id="bot", config=BlazeConfig(api_url="https://llm.example.com/"))
+    assert llm._chat_url == ("https://llm.example.com/v1/voicebot-call/bot/chat-conversion-stream")
+
+
 def test_blaze_config_empty_or_invalid_timeout_env_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

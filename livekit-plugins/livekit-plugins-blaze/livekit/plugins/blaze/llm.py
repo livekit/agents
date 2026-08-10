@@ -99,7 +99,8 @@ class LLM(llm.LLM):
         super().__init__()
 
         self._config = config or BlazeConfig()
-        self._api_url = api_url or self._config.api_url
+        # Normalize base URL (constructor override may bypass BlazeConfig strip).
+        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
         self._bot_id = bot_id
         self._auth_token = auth_token or self._config.api_token
         self._deep_search = deep_search

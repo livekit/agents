@@ -135,7 +135,8 @@ class STT(stt.STT):
         )
 
         self._config = config or BlazeConfig()
-        self._api_url = api_url or self._config.api_url
+        # Normalize base URL (constructor override may bypass BlazeConfig strip).
+        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
         self._language = language
         self._auth_token = auth_token or self._config.api_token
         self._sample_rate = sample_rate
@@ -706,6 +707,13 @@ class SpeechStream(stt.SpeechStream):
                     if not closing_ws:
                         raise APIConnectionError("STT WebSocket closed unexpectedly")
                 finally:
+                    # Pair START_OF_SPEECH if the server never sent `final` before
+                    # the socket closed (grace window after end_input, peer drop).
+                    if speaking:
+                        speaking = False
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        )
                     send_task.cancel()
                     try:
                         await send_task
