@@ -35,6 +35,7 @@ import os
 from dataclasses import dataclass
 
 import aiohttp
+
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -145,12 +146,8 @@ class GandrTTS(tts.TTS):
                 "Keys: https://gandr.ai/waitlist/"
             )
         if sample_rate not in SAMPLE_RATES:
-            raise ValueError(
-                f"sample_rate must be one of {SAMPLE_RATES}, got {sample_rate}"
-            )
-        self._opts = _Opts(
-            key, voice, lang, base_url, sample_rate, timeout, speed, volume, extra
-        )
+            raise ValueError(f"sample_rate must be one of {SAMPLE_RATES}, got {sample_rate}")
+        self._opts = _Opts(key, voice, lang, base_url, sample_rate, timeout, speed, volume, extra)
         self._session = http_session
         self._prewarm_task: asyncio.Task | None = None
         if prewarm_on_start:
@@ -166,13 +163,21 @@ class GandrTTS(tts.TTS):
         return self._session
 
     # ── waking the fleet ────────────────────────────────────────────
-    async def prewarm(self) -> None:
+    def prewarm(self) -> None:
         """Boot a worker in the background. Returns as soon as the API
         has accepted the request, it does not wait for the worker.
 
-        Call it on the SIP invite, or whenever you know a call is about
-        to start, and first audio is at full speed by the time your LLM
-        has a sentence to say."""
+        Sync on purpose: livekit-agents calls this fire-and-forget from
+        synchronisation hooks, so scheduling, not awaiting, is the
+        contract. Call it on the SIP invite, or whenever you know a call
+        is about to start, and first audio is at full speed by the time
+        your LLM has a sentence to say."""
+        self._prewarm_soon()
+
+    async def _prewarm_async(self) -> None:
+        """The awaitable form of `prewarm`, kept separate so the sync
+        public method never returns a coroutine to a fire-and-forget
+        caller."""
         try:
             async with self._ensure_session().get(
                 self._opts.base_url + "/v1/prewarm",
@@ -182,7 +187,7 @@ class GandrTTS(tts.TTS):
                 await resp.read()
         except Exception:
             # Prewarming is an optimisation. It must never be the reason
-            # a call fails, so every failure here is swallowed, 
+            # a call fails, so every failure here is swallowed,
             # synthesize() retries through a cold wake on its own.
             pass
 
@@ -193,14 +198,14 @@ class GandrTTS(tts.TTS):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # constructed before the loop; synthesize() covers it
-        self._prewarm_task = loop.create_task(self.prewarm())
+        self._prewarm_task = loop.create_task(self._prewarm_async())
 
     def synthesize(
         self,
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def update_options(
@@ -225,12 +230,10 @@ class GandrTTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """One utterance, streamed from Gandr's SSE lane as base64 PCM."""
 
-    def __init__(
-        self, *, tts: GandrTTS, input_text: str, conn_options: APIConnectOptions
-    ):
+    def __init__(self, *, tts: GandrTTS, input_text: str, conn_options: APIConnectOptions):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._o = tts._opts
-        self._tts = tts
+        self._tts: GandrTTS = tts
 
     def _body(self) -> dict:
         o = self._o
@@ -254,9 +257,20 @@ class ChunkedStream(tts.ChunkedStream):
         except _ColdWorker:
             # The fleet was asleep. Wake it and take one more run at it,
             # rather than handing the caller silence.
-            await self._tts.prewarm()
+            await self._tts._prewarm_async()
             await asyncio.sleep(1.0)
-            await self._attempt(output_emitter)
+            try:
+                await self._attempt(output_emitter)
+            except _ColdWorker:
+                # Still cold after a retry. Convert the internal marker to
+                # a retryable API error so livekit-agents owns the retry
+                # instead of letting an internal exception escape.
+                raise APIStatusError(
+                    message="Gandr workers are still cold",
+                    status_code=503,
+                    request_id=None,
+                    body=None,
+                ) from None
 
     async def _attempt(self, output_emitter: tts.AudioEmitter) -> None:
         o = self._o
