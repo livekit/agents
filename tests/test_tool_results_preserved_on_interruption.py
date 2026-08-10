@@ -260,7 +260,11 @@ async def _realtime_turn_interrupted_after_tool(agent: Agent) -> FakeRealtimeMod
 
 
 async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> None:
-    """The result reaches both the local context and the realtime session."""
+    """The result reaches both the local context and the realtime session, wanting no reply.
+
+    The model is owed the result, but the user cut its turn short, so it must not answer. Each
+    plugin reads `reply_required` and stays quiet the way its provider allows.
+    """
 
     class RealtimeWeatherAgent(WeatherAgent):
         @function_tool
@@ -274,10 +278,17 @@ async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> 
     synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
     assert len(synced) == 1, "the tool output was never synced to the realtime session"
     assert synced[0].call_id == "1"
+    assert not synced[0].reply_required
 
 
-async def test_realtime_handoff_tool_not_recorded_when_interrupted() -> None:
-    """Handoffs stay retryable on a realtime model too, so nothing is recorded or synced."""
+async def test_realtime_handoff_tool_reports_its_cancellation_when_interrupted() -> None:
+    """An interrupted handoff is answered as failed, and the agent does not switch.
+
+    The model emitted the call and a realtime session holds it open until it is answered, so
+    staying silent strands the session. Withholding it is not an option, and an empty success
+    would claim a transfer that never happened, so it is answered as an error the model can
+    act on by asking again.
+    """
 
     class RealtimeTransferAgent(Agent):
         def __init__(self) -> None:
@@ -337,8 +348,15 @@ async def test_realtime_handoff_tool_not_recorded_when_interrupted() -> None:
         session.interrupt()
         await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
 
-        for items in (agent.chat_ctx.items, session.history.items):
-            assert not any(i.type == "function_call_output" for i in items)
-        assert not any(
-            i.type == "function_call_output" for i in model.active_session.chat_ctx.items
-        )
+        assert session.current_agent is agent, "the handoff must not be applied"
+
+        for label, items in (
+            ("agent chat_ctx", agent.chat_ctx.items),
+            ("session history", session.history.items),
+            ("realtime session", model.active_session.chat_ctx.items),
+        ):
+            outs = [i for i in items if i.type == "function_call_output"]
+            assert len(outs) == 1, f"{label}: the interrupted handoff must be answered once"
+            assert outs[0].call_id == "1"
+            assert outs[0].is_error
+            assert not outs[0].reply_required

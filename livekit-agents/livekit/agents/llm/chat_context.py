@@ -360,6 +360,13 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    False for a result no reply was ever wanted for: a turn the user interrupted, or a handler
+    that cancelled the reply. Only realtime models read it, since they answer a result on their
+    own; with a pipeline LLM the agent decides when to reply.
+    """
 
 
 class AgentHandoff(BaseModel):

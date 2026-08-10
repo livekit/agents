@@ -486,8 +486,13 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
-                    if self._configs_for_tools.get(item.name or "", {}).get(
-                        "forbid_speech_after_tool_call", False
+                    # the tool forbids speech after its call, or no reply was wanted for this
+                    # result, such as one owed for a turn the user interrupted
+                    if (
+                        self._configs_for_tools.get(item.name or "", {}).get(
+                            "forbid_speech_after_tool_call", False
+                        )
+                        or not item.reply_required
                     ):
                         forbid_speech = True
 

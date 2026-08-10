@@ -524,6 +524,8 @@ class RealtimeSession(  # noqa: F811
         self._stream_response = None
         self._bedrock_client = None
         self._pending_tools: set[str] = set()
+        # whether the session already warned that a tool reply cannot be suppressed
+        self._silent_tool_result_warned = False
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext.empty()
@@ -1760,6 +1762,13 @@ class RealtimeSession(  # noqa: F811
 
                 logger.debug(f"function call output: {item}")
                 self._pending_tools.discard(item.call_id)
+
+                if not item.reply_required and not self._silent_tool_result_warned:
+                    self._silent_tool_result_warned = True
+                    logger.warning(
+                        "a tool result wants no reply, but Nova Sonic will answer it anyway. "
+                        "Sending it regardless, since an unanswered tool use keeps the turn open."
+                    )
 
                 # Format tool result as proper JSON
                 if item.is_error:

@@ -84,10 +84,22 @@ def get_tool_results_for_realtime(
     *,
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+    silent_scheduling: bool = False,
 ) -> types.LiveClientToolResponse | None:
+    """Build the tool responses to send, SILENT for the outputs that want no reply.
+
+    `silent_scheduling` says the session can honour that; Gemini reads `scheduling` only on
+    NON_BLOCKING declarations, and vertex drops it entirely.
+    """
     function_responses = [
         create_function_response(
-            msg, vertexai=vertexai, tool_response_scheduling=tool_response_scheduling
+            msg,
+            vertexai=vertexai,
+            tool_response_scheduling=(
+                types.FunctionResponseScheduling.SILENT
+                if silent_scheduling and not msg.reply_required
+                else tool_response_scheduling
+            ),
         )
         for msg in chat_ctx.items
         if msg.type == "function_call_output"

@@ -517,8 +517,8 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
-        # whether playout of the current turn was cut short
-        self._playout_interrupted = False
+        # whether the session already warned that a tool reply cannot be suppressed
+        self._silent_tool_result_warned = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -672,19 +672,31 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            scheduling = self._opts.tool_response_scheduling
+            # vertex drops `scheduling` and Gemini reads it only on NON_BLOCKING declarations,
+            # so only those sessions can record a result without prompting speech
+            silent_scheduling = (
+                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+            )
             if (
-                self._playout_interrupted
-                # only honoured on NON_BLOCKING declarations
-                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                not silent_scheduling
+                and not self._silent_tool_result_warned
+                and any(
+                    item.type == "function_call_output" and not item.reply_required
+                    for item in append_ctx.items
+                )
             ):
-                # the turn is over, so record the result without prompting more speech
-                scheduling = types.FunctionResponseScheduling.SILENT
+                self._silent_tool_result_warned = True
+                logger.warning(
+                    "a tool result wants no reply, but Gemini will answer it anyway; declare "
+                    "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
+                    "regardless, since an unanswered call blocks the session."
+                )
 
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
-                tool_response_scheduling=scheduling,
+                tool_response_scheduling=self._opts.tool_response_scheduling,
+                silent_scheduling=silent_scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
@@ -841,9 +853,6 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def interrupt(self) -> None:
-        # recorded locally since this cannot reach Gemini under automatic activity detection
-        self._playout_interrupted = True
-
         # Gemini Live treats activity start as interruption, so we rely on start_user_activity
         # notifications to handle it
         if (
@@ -1237,7 +1246,6 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
-        self._playout_interrupted = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()

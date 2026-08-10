@@ -140,8 +140,16 @@ def _tool_call(call_id: str = "fc_1", name: str = "lookup") -> types.LiveServerT
     )
 
 
-def _tool_output(call_id: str = "fc_1", name: str = "lookup") -> llm.FunctionCallOutput:
-    return llm.FunctionCallOutput(call_id=call_id, name=name, output="42", is_error=False)
+def _tool_output(
+    call_id: str = "fc_1", name: str = "lookup", *, reply_required: bool = True
+) -> llm.FunctionCallOutput:
+    return llm.FunctionCallOutput(
+        call_id=call_id,
+        name=name,
+        output="42",
+        is_error=False,
+        reply_required=reply_required,
+    )
 
 
 @asynccontextmanager
@@ -173,7 +181,7 @@ async def _drain_sent(session: RealtimeSession) -> list[object]:
     return sent
 
 
-async def test_tool_response_sent_after_client_interruption(
+async def test_tool_response_wanting_no_reply_is_silent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A tool result owed by an interrupted turn still reaches Gemini, silently.
@@ -186,13 +194,10 @@ async def test_tool_response_sent_after_client_interruption(
     async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
-
-        # the user was interrupted locally; Gemini was never told
-        session.interrupt()
         await _drain_sent(session)
 
         chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output())
+        chat_ctx.items.append(_tool_output(reply_required=False))
         await session.update_chat_ctx(chat_ctx)
 
         sent = await _drain_sent(session)
@@ -205,35 +210,11 @@ async def test_tool_response_sent_after_client_interruption(
         )
 
 
-async def test_tool_response_sent_after_server_interruption(
+async def test_tool_response_wanting_a_reply_uses_configured_scheduling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Gemini drops the call when it interrupts the turn itself, but the result is still sent.
-
-    It costs nothing — the API can use it on the next turn — and withholding it would leave the
-    local context claiming a result the server never saw.
-    """
-    async with _make_connected_session(monkeypatch) as session:
-        session._start_new_generation()
-        session._handle_tool_calls(_tool_call())
-        session._handle_server_content(types.LiveServerContent(interrupted=True))
-        await _drain_sent(session)
-
-        chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output())
-        await session.update_chat_ctx(chat_ctx)
-
-        responses = [
-            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
-        ]
-        assert len(responses) == 1
-
-
-async def test_tool_response_uses_configured_scheduling_when_not_interrupted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The normal path keeps the configured scheduling; SILENT is only for interrupted turns."""
-    async with _make_connected_session(monkeypatch) as session:
+    """The normal path keeps the configured scheduling; SILENT is only for a withheld reply."""
+    async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
         await _drain_sent(session)
@@ -250,22 +231,24 @@ async def test_tool_response_uses_configured_scheduling_when_not_interrupted(
         assert responses[0].function_responses[0].scheduling is None
 
 
-async def test_interrupted_tool_response_keeps_default_scheduling_for_blocking_tools(
+async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Gemini ignores scheduling on BLOCKING declarations, so none is claimed.
+    """Gemini ignores scheduling on BLOCKING declarations, so the reply cannot be prevented.
 
-    The response is still sent — unblocking the turn matters more than the reply it prompts.
+    The response is still sent — unblocking the turn matters more than the reply it prompts —
+    and the session says so once instead of failing quietly.
     """
     async with _make_connected_session(monkeypatch) as session:
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
-        session.interrupt()
         await _drain_sent(session)
 
         chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output())
-        await session.update_chat_ctx(chat_ctx)
+        chat_ctx.items.append(_tool_output(reply_required=False))
+        with caplog.at_level(logging.WARNING):
+            await session.update_chat_ctx(chat_ctx)
 
         responses = [
             m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
@@ -273,6 +256,7 @@ async def test_interrupted_tool_response_keeps_default_scheduling_for_blocking_t
         assert len(responses) == 1
         assert responses[0].function_responses is not None
         assert responses[0].function_responses[0].scheduling is None
+        assert any("wants no reply" in r.message for r in caplog.records)
 
 
 @pytest.mark.parametrize("vertexai", [False, True])
