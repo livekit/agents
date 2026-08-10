@@ -553,10 +553,16 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         is sent as a ``query``; flush sentinels flush the tokenizer stream.
 
         Timeouts use per-recv idle detection (``_timeout``) plus an absolute
-        session cap (``_stream_timeout``). If the WebSocket drops before any
-        audio is emitted, up to ``_WS_FAST_RECONNECT_ATTEMPTS`` fast reconnects
-        resend queued queries; further retries are handled by
-        ``SynthesizeStream._main_task``.
+        session cap (``_stream_timeout``). Private fast reconnects (up to
+        ``_WS_FAST_RECONNECT_ATTEMPTS``) are only used when the WebSocket drops
+        before any audio is emitted and either:
+
+        * before input drain starts (connect/auth/speech-start), or
+        * after input has been fully drained (``input_done``) so all queries are
+          buffered in ``sent_queries`` and can be re-sent safely.
+
+        Mid-input drops raise so ``SynthesizeStream._main_task`` can replay
+        buffered text. After audio has been emitted, errors are non-retryable.
         """
         request_id = shortuuid()
         turn_start = time.monotonic()
@@ -651,17 +657,6 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                         await ws.send(json.dumps(speech_start_msg))
                         ack = await ws_guard.recv(ws)
                         logger.debug("[%s] TTS speech-start ack: %s", request_id, ack)
-
-                        if sent_queries and ws_attempt > 1 and input_done:
-                            logger.warning(
-                                "[%s] TTS WS reconnect attempt %d/%d — resending %d query(ies)",
-                                request_id,
-                                ws_attempt,
-                                max_ws_attempts,
-                                len(sent_queries),
-                            )
-                            for query in sent_queries:
-                                await ws.send(json.dumps({"query": query}))
 
                         async def _read_audio(
                             guard: _WSStreamGuard = ws_guard,
@@ -777,9 +772,11 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
                             return _seg_count, total_bytes
 
+                        # Start the audio reader before any queries so reconnect
+                        # resends cannot race past early binary frames.
                         reader_task = asyncio.create_task(_read_audio())
 
-                        async def _send_query(text: str, *, resend: bool = False) -> None:
+                        async def _send_query(text: str) -> None:
                             nonlocal query_count
                             normalized = apply_normalization_rules(
                                 text,
@@ -788,23 +785,36 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             normalized = _normalize_text(normalized)
                             if not normalized.strip():
                                 return
-                            if not resend:
-                                query_count += 1
-                                preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
-                                logger.info(
-                                    "[%s] TTS query %d — %d chars: '%s'",
-                                    request_id,
-                                    query_count,
-                                    len(normalized),
-                                    preview,
-                                )
-                                sent_queries.append(normalized)
+                            query_count += 1
+                            preview = normalized[:80] + ("..." if len(normalized) > 80 else "")
+                            logger.info(
+                                "[%s] TTS query %d — %d chars: '%s'",
+                                request_id,
+                                query_count,
+                                len(normalized),
+                                preview,
+                            )
+                            sent_queries.append(normalized)
                             await ws.send(json.dumps({"query": normalized}))
-                            if query_count == 1 and not resend:
+                            if query_count == 1:
                                 self._mark_started()
 
                         try:
-                            if not input_done:
+                            if input_done and sent_queries and ws_attempt > 1:
+                                # Safe private reconnect: input channel already
+                                # drained; resend the buffered (already
+                                # normalized) queries without re-normalizing.
+                                logger.warning(
+                                    "[%s] TTS WS reconnect attempt %d/%d — "
+                                    "resending %d query(ies)",
+                                    request_id,
+                                    ws_attempt,
+                                    max_ws_attempts,
+                                    len(sent_queries),
+                                )
+                                for query in sent_queries:
+                                    await ws.send(json.dumps({"query": query}))
+                            elif not input_done:
                                 input_started = True
                                 sent_tok = tts_cfg._sentence_tokenizer.stream()
 
@@ -853,11 +863,17 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             _ensure_output_initialized()
                         break
                 except websockets.exceptions.ConnectionClosed as e:
-                    # Private reconnect is only safe before we start draining
-                    # input_ch (tokenizer partials / consumed channel items cannot
-                    # be reconstructed). After input starts, raise so the
-                    # framework SynthesizeStream retry can replay buffered text.
-                    if stream_initialized or input_started or ws_attempt >= max_ws_attempts:
+                    # Private reconnect is safe when:
+                    # - no input has been drained yet (connect/auth/speech-start), or
+                    # - input is fully drained (queries buffered) and no audio yet.
+                    # Mid-input drops cannot reconstruct consumed channel text —
+                    # raise so the framework SynthesizeStream retry can replay.
+                    mid_input = input_started and not input_done
+                    if (
+                        stream_initialized
+                        or mid_input
+                        or ws_attempt >= max_ws_attempts
+                    ):
                         raise APIConnectionError(
                             f"TTS WebSocket closed: {e}",
                             retryable=not stream_initialized,
@@ -865,10 +881,12 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                     retry_interval = self._conn_options._interval_for_retry(ws_attempt - 1)
                     logger.warning(
                         "[%s] TTS WebSocket closed before first audio "
-                        "(attempt %d/%d), retrying in %.1fs",
+                        "(attempt %d/%d, input_done=%s, queries=%d), retrying in %.1fs",
                         request_id,
                         ws_attempt,
                         max_ws_attempts,
+                        input_done,
+                        len(sent_queries),
                         retry_interval,
                     )
                     await asyncio.sleep(retry_interval)
