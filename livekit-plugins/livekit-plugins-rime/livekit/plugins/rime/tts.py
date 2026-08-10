@@ -44,7 +44,7 @@ from livekit.agents.voice.io import TimedString
 
 from .langs import TTSLangs
 from .log import logger
-from .models import ArcanaVoices, DefaultCodaVoice, DefaultMistVoice, TTSModels
+from .models import DefaultCodaVoice, DefaultMistVoice, TTSModels
 
 # arcana can take as long as 80% of the total duration of the audio it's synthesizing.
 ARCANA_MODEL_TIMEOUT = 60 * 4
@@ -155,7 +155,7 @@ def _check_time_scale_factor_supported(
 ) -> None:
     if is_given(time_scale_factor) and model == "mistv2":
         raise ValueError(
-            "time_scale_factor is not supported by the mistv2 model; use arcana, mistv3, or coda."
+            "time_scale_factor is not supported by the mistv2 model; use mistv3 or coda."
         )
 
 
@@ -164,8 +164,8 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        model: TTSModels | str = "arcana",
-        speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
+        model: TTSModels | str = "coda",
+        speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         # Arcana options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,

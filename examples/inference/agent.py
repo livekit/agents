@@ -25,6 +25,11 @@ DEFAULT_STT = "deepgram/nova-3"
 DEFAULT_LLM = "google/gemma-4-31b-it"
 DEFAULT_TTS = "inworld/inworld-tts-2"
 
+
+def tts_voice_for_model(model: str) -> str:
+    return "wawona" if model == "rime/coda" else "Sarah"
+
+
 # Default starter prompt. Keep in sync with the `set_system_prompt`
 # control's `default` in examples/playground.yaml — the UI seeds the
 # textarea with the same string so the first session before any edit
@@ -76,7 +81,7 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(
             model=DEFAULT_TTS,
-            voice="Sarah",
+            voice=tts_voice_for_model(DEFAULT_TTS),
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
         # Flip user_state to "away" after 10s of mutual silence so we can
@@ -144,7 +149,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if isinstance(session.tts, inference.TTS) and session.tts.model == model:
             return ""
         logger.info("switching TTS → %s", model)
-        session.tts.update_options(model=model)
+        session.tts.update_options(model=model, voice=tts_voice_for_model(model))
         session.generate_reply(
             instructions=_SWAP_PROMPT.format(modality="text-to-speech", model=model)
         )
