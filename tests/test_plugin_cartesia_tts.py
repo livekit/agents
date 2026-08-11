@@ -109,9 +109,7 @@ def test_unsupported_config_logs_warning(caplog: pytest.LogCaptureFixture) -> No
         tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
 
     assert tts.capabilities.aligned_transcript is False
-    assert any(
-        "does not support aligned transcript" in record.message for record in caplog.records
-    )
+    assert any("does not support aligned transcript" in record.message for record in caplog.records)
 
 
 def test_update_options_narrows_capability_when_language_becomes_unsupported() -> None:
