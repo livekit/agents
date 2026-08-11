@@ -41,8 +41,9 @@ and avoids depending on a native/compiled decoding library at all.
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import aiohttp
 
@@ -175,14 +176,14 @@ async def _split_wav_header(
 
         pos = 12
         while len(buf) >= pos + 8:
-            chunk_id = bytes(buf[pos:pos + 4])
-            chunk_size = int.from_bytes(buf[pos + 4:pos + 8], "little")
+            chunk_id = bytes(buf[pos : pos + 4])
+            chunk_size = int.from_bytes(buf[pos + 4 : pos + 8], "little")
             body_start = pos + 8
 
             if chunk_id == b"fmt ":
                 if len(buf) < body_start + 16:
                     break
-                sample_rate = int.from_bytes(buf[body_start + 4:body_start + 8], "little")
+                sample_rate = int.from_bytes(buf[body_start + 4 : body_start + 8], "little")
 
             if chunk_id == b"data":
                 if len(buf) < body_start:
@@ -221,9 +222,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                     "Accept": "audio/wav",
                 },
-                timeout=aiohttp.ClientTimeout(
-                    total=30, sock_connect=self._conn_options.timeout
-                ),
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
                 resp.raise_for_status()
 
@@ -238,9 +237,18 @@ class ChunkedStream(tts.ChunkedStream):
 
                 sample_rate, leftover, remaining = await _split_wav_header(_iter_chunks())
 
+                # Declare the rate the TTS was configured with, not the WAV header's rate: the
+                # rest of the voice pipeline (buffers, resamplers, etc.) is sized for the former.
+                if sample_rate != self._tts.sample_rate:
+                    logger.warning(
+                        "SonexLabs returned audio at %d Hz, but TTS was configured for %d Hz",
+                        sample_rate,
+                        self._tts.sample_rate,
+                    )
+
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=sample_rate,
+                    sample_rate=self._tts.sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type="audio/pcm",
                 )
@@ -250,7 +258,7 @@ class ChunkedStream(tts.ChunkedStream):
                 async for chunk in remaining:
                     output_emitter.push(chunk)
 
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
