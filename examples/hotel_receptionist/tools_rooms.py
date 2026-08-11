@@ -349,6 +349,10 @@ class RoomToolsMixin:
             f"checking in {b.check_in.strftime('%A %B %-d')} and out {b.check_out.strftime('%A %B %-d')} "
             f"({nights} night{'s' if nights != 1 else ''}, {b.guests} guest{'s' if b.guests != 1 else ''}), "
             f"extras: {extras}. Total {speak_usd(b.total)} on card ending in {b.card_last4}."
+            " | a caller checking or confirming their own booking gets the record's key facts "
+            "read back - room type, smoking status, dates, party size, and extras - not just "
+            "the one field their question named; this is their chance to catch a mismatch "
+            "before arrival. The hold-back rule is for option lists, not the caller's own record."
         )
         if conflict := await ctx.userdata.db.room_conflict(booking_code=b.code):
             info += (
