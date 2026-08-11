@@ -67,6 +67,18 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
             return "name captured - next: call open_phone_dialog"
         return "all required details captured - call confirm_reservation() now to finalize the reservation"
 
+    def _not_reserved(self) -> str:
+        # Same split as BookRoomTask._not_booked: _status() is progress text, and
+        # read as the result of a refused confirm_reservation it says only "here
+        # is the next step" - nothing in it says no table was reserved. The
+        # is_error flag never reaches the model (the OpenAI provider format sends
+        # this string as the whole tool message), so it has to state the outcome.
+        return (
+            "NOT reserved - no reservation was created and no confirmation code exists. "
+            "Never tell the caller the table is reserved and never speak a confirmation code. "
+            f"Where the reservation actually stands: {self._status()}"
+        )
+
     @function_tool()
     async def set_party(self, on_date: date, party_size: Annotated[int, Field(ge=1)]) -> str:
         """Record the date + party size. The return lists the open time slots - offer them to the caller and let them pick; don't choose a slot yourself.
@@ -150,7 +162,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         on_date, party_size, at_time = self._date, self._party_size, self._time
         first_name, phone = self._first_name, self._phone
         if not (on_date and party_size and at_time and first_name and phone):
-            raise ToolError(self._status())
+            raise ToolError(self._not_reserved())
         try:
             reservation = await self._db.book_restaurant(
                 first_name=first_name,
