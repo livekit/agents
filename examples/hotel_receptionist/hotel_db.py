@@ -1366,6 +1366,7 @@ class HotelDB:
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
+        departure_time: time | None = None,
     ) -> str:
         room_id = self._require_room(room)
         code = _new_code("FLT-")
@@ -1384,11 +1385,25 @@ class HotelDB:
                         c for c in booking_reference if c.isalnum()
                     ).upper(),
                     "seat_check": int(seat_check),
+                    "departure_time": wall_clock_iso(departure_time) if departure_time else None,
                 },
             )
         if self.on_change:
             await self.on_change()
         return code
+
+    async def latest_flight_departure(self, *, room: str, flight_date: date) -> time | None:
+        """The departure time of the most recently logged flight reconfirmation for
+        this room on this date, if one was captured - what an airport-car pickup
+        gets sanity-checked against."""
+        room_id = self._require_room(room)
+        row = self.connection.execute(
+            "SELECT departure_time FROM flight_reconfirmations"
+            " WHERE room_id = ? AND flight_date = ? AND departure_time IS NOT NULL"
+            " ORDER BY id DESC LIMIT 1",
+            (room_id, flight_date.isoformat()),
+        ).fetchone()
+        return time.fromisoformat(row[0]) if row else None
 
     async def book_airport_car(
         self,
@@ -1910,6 +1925,7 @@ CREATE TABLE IF NOT EXISTS flight_reconfirmations (
     airline           TEXT    NOT NULL,
     flight_number     TEXT    NOT NULL,
     flight_date       DATE    NOT NULL,
+    departure_time    TIME,
     booking_reference TEXT    NOT NULL,
     seat_check        BOOLEAN NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL DEFAULT 'pending'

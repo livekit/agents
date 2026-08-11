@@ -619,8 +619,8 @@ scenarios:
     expected_state:
     - |
       INSERT INTO flight_reconfirmations
-        (code, room_id, airline, flight_number, flight_date, booking_reference, seat_check)
-      VALUES ('IGNORED', 'RM_401', 'Iberia', 'IB6174', '2026-06-11', 'QX4R7T', 1)
+        (code, room_id, airline, flight_number, flight_date, departure_time, booking_reference, seat_check)
+      VALUES ('IGNORED', 'RM_401', 'Iberia', 'IB6174', '2026-06-11', '17:40:00', 'QX4R7T', 1)
     - |
       INSERT INTO airport_cars
         (code, room_id, pickup_date, pickup_time, passengers)
