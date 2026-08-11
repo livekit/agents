@@ -134,7 +134,7 @@ class RestaurantToolsMixin:
             confirmation_code: confirmation code like 'RES-X9Y2'.
             new_date: the new date, in ISO YYYY-MM-DD format (e.g. "2026-01-20").
             new_time: the new time, in 24-hour HH:MM format (e.g. "18:00").
-            new_party_size: new number of guests; omit to keep the current party size.
+            new_party_size: new number of guests, ONLY when the caller states the new number. "Keep it the same" means OMIT this parameter - the reservation keeps its current size when omitted. Never fill it with a number the caller didn't say.
         """
         if new_date < TODAY:
             raise ToolError("the new date can't be in the past")
