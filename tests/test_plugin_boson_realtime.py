@@ -1908,11 +1908,12 @@ async def test_boson_realtime_nonfatal_invalid_previous_item_id_is_swallowed(mon
 
 @pytest.mark.asyncio
 async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fast(monkeypatch):
-    # invalid_previous_item_id carries no event_id, and names the missing
-    # previous_item_id rather than the rejected item's own id. Without
-    # matching it to the specific pending create that used it, update_chat_ctx()
-    # would sit until the base class's own 5s timeout and raise a generic
-    # "timed out" instead of this specific, immediate error.
+    # An older server reports neither its own event id nor, in the message, the
+    # rejected item's -- only the missing previous_item_id. Attribution then rests
+    # entirely on the item_id field, and without it update_chat_ctx() would sit
+    # until the base's 5s timeout and raise a generic "timed out" in place of this
+    # specific, immediate error. The current server also sends event_id; see the
+    # test below.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
     model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
@@ -1943,6 +1944,56 @@ async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fas
                 "error": {
                     "type": "invalid_previous_item_id",
                     "message": "previous_item_id 'user_1' not found in conversation",
+                    "item_id": "user_2",
+                },
+            },
+        )
+
+        with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
+            await asyncio.wait_for(update_task, timeout=0.5)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_invalid_previous_item_id_still_raises_with_an_event_id(monkeypatch):
+    # The current server names both ids on this error, so the generic event-id
+    # lookup reaches the create's future before the invalid_previous_item_id
+    # branch does. Both find the same object, so whichever arrives second sees it
+    # already settled -- and if escalating depended on being the one to settle it,
+    # update_chat_ctx() would return success for a sync the server refused, on
+    # exactly the servers that report the most detail.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext(
+                    [
+                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
+                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
+                    ]
+                )
+            )
+        )
+        create_event = await session._msg_ch.recv()
+        assert create_event["item"]["id"] == "user_2"
+        assert create_event["event_id"]
+
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_previous_item_id",
+                    "message": "previous_item_id 'user_1' not found in conversation",
+                    "event_id": create_event["event_id"],
                     "item_id": "user_2",
                 },
             },

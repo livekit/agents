@@ -91,6 +91,12 @@ _NON_RETRYABLE_CLOSE_CODES = frozenset({3000, 4429})
 _BOSON_NONFATAL_ERROR_CODES = frozenset({"response_not_active", "response_id_mismatch"})
 _BOSON_NONFATAL_ERROR_TYPES = frozenset({"voice_output_task_ongoing", "invalid_previous_item_id"})
 
+# Rejections that say the conversation is out of step rather than that one item
+# was refused: update_chat_ctx() re-raises these. Every other rejection is left
+# to the base, which gathers them and logs a warning, on the grounds that one
+# rejected item is not worth failing the turn over.
+_CHAT_CTX_ESCALATING_ERROR_TYPES = frozenset({"invalid_previous_item_id"})
+
 # Roles the server's conversation store cannot hold; see
 # _livekit_item_to_boson_item and _create_update_chat_ctx_events.
 _UNSUPPORTED_ITEM_ROLES = frozenset({"system", "developer"})
@@ -1242,19 +1248,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # Kept ahead of every branch below because it is orthogonal to them --
         # the same error may also name a generate_reply, and the specific
         # invalid_previous_item_id handling further down stays as the fallback
-        # for servers that report no event id. Both settle the same future
-        # object, and neither overwrites a future the other already failed.
+        # for servers that report no event id. Both reach the same future, so
+        # settling is shared rather than duplicated; see _settle_chat_ctx_wait.
         if event_id and (chat_ctx_fut := self._chat_ctx_event_futures.pop(event_id, None)):
-            if not chat_ctx_fut.done():
-                # Not recorded in _chat_ctx_sync_error: the base gathers these
-                # with return_exceptions=True and warns, on the grounds that one
-                # rejected item is not worth failing the turn over. Unblocking is
-                # the fix here; which rejections should escalate to the caller is
-                # a separate question, and invalid_previous_item_id is the only
-                # one this plugin has answered yes to.
-                chat_ctx_fut.set_exception(
-                    llm.RealtimeError(_format_error_message(error, event_id))
-                )
+            self._settle_chat_ctx_wait(chat_ctx_fut, error, event_id)
 
         if error.get("code") in _BOSON_NONFATAL_ERROR_CODES or (
             error.get("type") in _BOSON_NONFATAL_ERROR_TYPES
@@ -1294,10 +1291,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     )
                     return
                 fut = self._item_create_future.get(rejected_item_id)
-                if fut is not None and not fut.done():
-                    sync_error = llm.RealtimeError(_format_error_message(error, event_id))
-                    fut.set_exception(sync_error)
-                    self._chat_ctx_sync_error = sync_error
+                if fut is not None:
+                    self._settle_chat_ctx_wait(fut, error, event_id)
             return
 
         realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
@@ -1311,6 +1306,27 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # failure (see _main_task), where every pending future really is done.
         if event_id and event_id in self._response_created_futures:
             self._fail_response_created_futures(realtime_error, event_id=event_id)
+
+    def _settle_chat_ctx_wait(
+        self, fut: asyncio.Future[None], error: dict[str, Any], event_id: str | None
+    ) -> None:
+        """Fail the update_chat_ctx() waiter that a rejection answers.
+
+        Two lookups arrive here -- the client event id, and the item id the
+        server names on invalid_previous_item_id. They find the same future, one
+        object the base registered under both keys, and which one gets here first
+        depends only on whether the server put an event id on the error.
+
+        So escalation cannot be conditioned on having been the one to settle it.
+        ``_chat_ctx_sync_error`` is what makes update_chat_ctx() re-raise rather
+        than return while the base logs a warning; deciding it here, from the
+        error's own type, keeps it independent of the arrival order.
+        """
+        sync_error = llm.RealtimeError(_format_error_message(error, event_id))
+        if not fut.done():
+            fut.set_exception(sync_error)
+        if error.get("type") in _CHAT_CTX_ESCALATING_ERROR_TYPES:
+            self._chat_ctx_sync_error = sync_error
 
     def _fail_response_created_futures(
         self, error: Exception, *, event_id: str | None = None
