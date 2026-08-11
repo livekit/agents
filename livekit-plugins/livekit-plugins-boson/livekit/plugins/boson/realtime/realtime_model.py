@@ -1,3 +1,24 @@
+"""Realtime model for the Boson (Higgs) speech-to-speech API.
+
+Boson speaks a dialect of the OpenAI Realtime protocol, so this builds on the
+OpenAI plugin and overrides where the two differ. The differences that reach
+callers are:
+
+- ``session.update`` replaces the whole session rather than merging into it, so
+  every update resends the full configuration.
+- ``instructions`` on ``generate_reply()`` applies to that turn only. Per-response
+  ``tools``/``tool_choice`` are accepted by the server and ignored, so they are
+  scoped at the session level instead.
+- ``conversation.item.create`` is a plain insert; it never triggers a reply.
+- The server does not persist sessions. Each connection starts empty, and a
+  reconnect replays the chat context from the client.
+- Consecutive same-role speech merges into a single conversation item, which is
+  re-sent with its accumulated transcript as it grows.
+- Output is single-modality: ``["text"]`` or ``["audio"]``, never both.
+
+See the package README for configuration examples.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -94,6 +115,28 @@ class _BosonOptions:
 
 
 class RealtimeModel(openai_rt.RealtimeModel):
+    """A speech-to-speech model served by the Boson realtime API.
+
+    Pass an instance to ``AgentSession(llm=...)``. Each session it opens is a
+    fresh server-side conversation; the model itself holds only configuration.
+
+    Example:
+        ```python
+        from livekit.agents import Agent, AgentSession
+        from livekit.plugins import boson
+
+        session = AgentSession(
+            llm=boson.realtime.RealtimeModel(
+                url="wss://your-boson-host/v1/realtime/",
+                api_key="...",
+                instructions="You are a helpful voice assistant.",
+                input_audio_transcription_model="higgs-stt-3.1",
+            )
+        )
+        await session.start(agent=Agent(instructions="..."), room=ctx.room)
+        ```
+    """
+
     def __init__(
         self,
         *,
@@ -117,6 +160,55 @@ class RealtimeModel(openai_rt.RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """Configure a Boson realtime model.
+
+        Args:
+            url: WebSocket endpoint, e.g. ``wss://host/v1/realtime/``. ``http``
+                and ``https`` are accepted and rewritten to ``ws``/``wss``.
+            api_key: Bearer token for the endpoint. ``None`` sends a placeholder,
+                for deployments that do not authenticate.
+            model: Server-side model name.
+            voice: Output voice name.
+            instructions: System prompt for the session. Unlike OpenAI, the server
+                replaces the whole prompt on every session update, so this is
+                resent with each one; ``generate_reply(instructions=...)``
+                replaces it for a single turn.
+            output_modalities: Exactly one of ``["text"]`` or ``["audio"]``.
+                ``None`` selects ``["audio"]``. Mixed and empty lists raise
+                ``ValueError`` -- the server has no combined mode.
+            temperature: Sampling temperature.
+            max_output_tokens: Cap on tokens per response, or ``"inf"``.
+            tool_choice: How the model picks tools (``"auto"``, ``"none"``,
+                ``"required"``, or a specific function). Applies to the session:
+                the server ignores per-response tool settings.
+            speed: Playback rate for synthesized audio; ``1.0`` is unmodified.
+            turn_detection: Server VAD settings. Omit for the default
+                (``server_vad``, 500 ms silence, threshold 0.55); pass a dict to
+                tune it; pass ``None`` or ``False`` to turn server VAD off, which
+                leaves the client responsible for committing turns.
+            input_audio_transcription: Raw transcription config, for options the
+                two arguments below do not cover. A ``prompt`` key is dropped --
+                it is not part of the supported wire config.
+            input_audio_transcription_model: ASR model for user transcripts, e.g.
+                ``"higgs-stt-3.1"``. Transcript events are emitted **only** when
+                this is non-empty; leaving it unset still runs ASR server-side for
+                the model's own use, but sends nothing back.
+            input_audio_transcription_language: ASR language hint, e.g.
+                ``"english"``.
+            input_audio_noise_reduction: ``"near_field"``, ``"far_field"``, or a
+                dict. ``None`` disables it.
+            truncation: How the server trims context that no longer fits.
+            query_params: Extra query parameters to merge into ``url``.
+            http_session: ``aiohttp`` session to connect on. One is created and
+                owned by the model if omitted.
+            conn_options: Connect timeout and retry policy. Retries stop early on
+                close codes a reconnect cannot fix -- a rejected key (3000) or a
+                refused billing entitlement (4429).
+
+        Raises:
+            ValueError: If ``output_modalities`` is not exactly one of ``["text"]``
+                or ``["audio"]``.
+        """
         resolved_output_modalities = _resolve_output_modalities(output_modalities)
         turn_detection_config = (
             dict(_DEFAULT_TURN_DETECTION)
@@ -194,15 +286,26 @@ class RealtimeModel(openai_rt.RealtimeModel):
 
     @property
     def model(self) -> str:
+        """The configured server-side model name."""
         return self._boson_opts.model
 
     @property
     def provider(self) -> str:
+        """Host this model connects to, used to label metrics and traces."""
         return urlparse(self._boson_opts.url).netloc
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        # disabling server-side turn detection is unsupported
-        # (can_disable_turn_detection=False), so the argument is never True here
+        """Open a new session against this model.
+
+        Args:
+            turn_detection_disabled: Ignored. Whether the server runs VAD is fixed
+                for the model by ``turn_detection``; this plugin reports
+                ``can_disable_turn_detection=False``, so the framework never asks
+                for a per-session override.
+
+        Returns:
+            A session that connects on first use.
+        """
         session = RealtimeSession(self)
         self._sessions.add(session)
         return session
@@ -223,6 +326,28 @@ class RealtimeModel(openai_rt.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
+        """Change the defaults new sessions start from.
+
+        Sessions already open keep their own copy and are unaffected. Omitted
+        arguments are left alone.
+
+        Args:
+            voice: Output voice name.
+            turn_detection: Server VAD settings; ``None`` or ``False`` turns
+                server VAD off.
+            tool_choice: How the model picks tools.
+            speed: Playback rate for synthesized audio.
+            input_audio_transcription: Raw transcription config.
+            input_audio_noise_reduction: Noise reduction type or dict.
+            max_response_output_tokens: Cap on tokens per response. Alias of
+                ``max_output_tokens``, kept for the base class signature; if both
+                are given, ``max_output_tokens`` wins.
+            tracing: Ignored -- not supported by this API.
+            truncation: How the server trims context that no longer fits.
+            reasoning: Ignored -- not supported by this API.
+            temperature: Sampling temperature.
+            max_output_tokens: Cap on tokens per response, or ``"inf"``.
+        """
         _ = (tracing, reasoning)
         next_max_output_tokens = (
             max_output_tokens if is_given(max_output_tokens) else max_response_output_tokens
@@ -278,7 +403,24 @@ class RealtimeModel(openai_rt.RealtimeModel):
 
 
 class RealtimeSession(openai_rt.RealtimeSession):
+    """One conversation with the Boson realtime API.
+
+    Created by `RealtimeModel.session()` rather than directly. It takes its own
+    copy of the model's options, so `update_options` here affects this
+    conversation alone.
+
+    The server keeps no session state between connections: a dropped socket is
+    reconnected and the chat context is replayed from the client as text. An
+    audio turn whose transcript had not arrived by then has nothing to replay
+    and is lost -- at most the last untranscribed turn.
+    """
+
     def __init__(self, realtime_model: RealtimeModel) -> None:
+        """Prepare a session. Connecting happens on first use.
+
+        Args:
+            realtime_model: The model to take configuration from.
+        """
         self._boson_model = realtime_model
         self._boson_opts = replace(realtime_model._boson_opts)
         self._closed = False
@@ -323,6 +465,14 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self.on("session_reconnected", self._on_session_reconnected)
 
     def send_event(self, event: Any) -> None:
+        """Queue a raw client event for the socket.
+
+        Dropped silently once the session is closed, so teardown races do not
+        raise.
+
+        Args:
+            event: A dict, or a pydantic model to serialize by alias.
+        """
         if self._closed or self._msg_ch.closed:
             return
         if isinstance(event, BaseModel):
@@ -332,6 +482,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
 
     @property
     def session_id(self) -> str | None:
+        """Server-assigned id for the current connection, for correlating logs.
+
+        ``None`` before ``session.created`` arrives. A reconnect yields a new id,
+        since the server treats every connection as a new session.
+        """
         return self._session_id
 
     async def _main_task(self) -> None:
@@ -690,6 +845,14 @@ class RealtimeSession(openai_rt.RealtimeSession):
         return converted
 
     async def update_instructions(self, instructions: str) -> None:
+        """Replace the system prompt for the rest of this session.
+
+        Takes effect on the next turn. Because the server replaces the whole
+        session on update, this resends the full configuration alongside it.
+
+        Args:
+            instructions: The new system prompt.
+        """
         # Both copies: _boson_opts feeds the wire, the base's own feeds the
         # per-response prefix in generate_reply. See __init__ on why there are
         # two.
@@ -698,6 +861,20 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self.send_event(self._build_session_update_event("instructions_update_"))
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """Bring the server's conversation in line with ``chat_ctx``.
+
+        Sends only the difference against what the server is known to hold, as
+        item creates and deletes. ``system`` and ``developer`` items are skipped
+        -- the server's conversation store has no place for them, and the system
+        prompt travels in the session config instead.
+
+        Args:
+            chat_ctx: The conversation the server should end up holding.
+
+        Raises:
+            llm.RealtimeError: If the server rejects an item, or does not confirm
+                the change within five seconds.
+        """
         # _chat_ctx_sync_error is a single session-level slot, but the clear
         # and the read below straddle an await. The base serializes its own
         # body on _update_chat_ctx_lock, which it takes *inside* that await —
@@ -732,6 +909,28 @@ class RealtimeSession(openai_rt.RealtimeSession):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
+        """Change this session's configuration, leaving the model's untouched.
+
+        Omitted arguments are left alone. Because the server replaces the whole
+        session on update, one changed field resends everything.
+
+        Args:
+            tool_choice: How the model picks tools.
+            voice: Output voice name.
+            speed: Playback rate for synthesized audio.
+            turn_detection: Server VAD settings; ``None`` or ``False`` turns
+                server VAD off.
+            input_audio_transcription: Raw transcription config.
+            input_audio_noise_reduction: Noise reduction type or dict.
+            max_response_output_tokens: Cap on tokens per response. Alias of
+                ``max_output_tokens``, kept for the base class signature; if both
+                are given, ``max_output_tokens`` wins.
+            tracing: Ignored -- not supported by this API.
+            truncation: How the server trims context that no longer fits.
+            reasoning: Ignored -- not supported by this API.
+            temperature: Sampling temperature.
+            max_output_tokens: Cap on tokens per response, or ``"inf"``.
+        """
         _ = (tracing, reasoning)
         next_max_output_tokens = (
             max_output_tokens if is_given(max_output_tokens) else max_response_output_tokens
@@ -774,6 +973,22 @@ class RealtimeSession(openai_rt.RealtimeSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Ask the model to reply now, without waiting for the user to speak.
+
+        Args:
+            instructions: A system prompt for this turn alone. The server swaps
+                it in for the session prompt while the turn still answers from
+                the real conversation; the session prompt returns afterwards.
+            tool_choice: Not supported per response -- the server accepts and
+                ignores it. Passing it logs one warning per session. The
+                framework instead scopes tools at the session level around this
+                call, so agents do not hit this.
+            tools: Not supported per response, as ``tool_choice``.
+
+        Returns:
+            A future resolving to the generation event once the server has
+            created the response.
+        """
         # `instructions` rides in response.create: the server scopes it to that
         # turn, replacing the session prompt for it alone while the turn still
         # answers from the real conversation. The base builds that event,
@@ -800,11 +1015,25 @@ class RealtimeSession(openai_rt.RealtimeSession):
         )
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
+        """Discard a video frame, warning once per session.
+
+        Boson takes no video input. This is on the per-frame path, so an
+        unsupported configuration is not worth raising into.
+
+        Args:
+            frame: The frame to drop.
+        """
         if not self._video_unsupported_warned:
             self._video_unsupported_warned = True
             logger.warning("Boson RealtimeModel does not support video input; frames are ignored.")
 
     def interrupt(self) -> None:
+        """Stop the reply in progress.
+
+        A no-op when nothing is generating. When server VAD already cancelled the
+        response itself, the redundant cancel is skipped -- the server answers a
+        second one with ``response_not_active``.
+        """
         if not self.has_active_generation:
             return
         if self._suppress_next_response_cancel:
@@ -820,6 +1049,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
         self.send_event(event)
 
     async def aclose(self) -> None:
+        """Close the session and its socket.
+
+        Ends any generation in flight and stops further sends. Returns without
+        waiting out a retry backoff or a connect already under way.
+        """
         self._closing = True
         self._closed = True
         self._close_current_generation("session closed")
