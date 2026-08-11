@@ -5,14 +5,7 @@ import logging
 from livekit.agents import JobContext, SimulationContext
 from livekit.agents.evals import (
     JudgeGroup,
-    accuracy_judge,
-    coherence_judge,
-    conciseness_judge,
-    handoff_judge,
-    relevancy_judge,
-    safety_judge,
     task_completion_judge,
-    tool_use_judge,
 )
 
 from .benchmark import build_expected, diff_databases
