@@ -411,8 +411,9 @@ class ServicesToolsMixin:
         return (
             f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
-            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
-            "total to the caller - no further tool call is needed for this order."
+            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, the total, "
+            "and the reference to the caller - the reference is part of the confirmation, not "
+            "optional. No further tool call is needed for this order."
         )
 
     @function_tool
