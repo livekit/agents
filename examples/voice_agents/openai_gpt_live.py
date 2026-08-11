@@ -2,8 +2,8 @@
 
 GPT-Live is a server-driven, full-duplex voice model: it listens and speaks at the
 same time and decides for itself when to reply. Reasoning and tools are delegated to a
-backend Responses model (``gpt-5.6-sol``), so ordinary ``@function_tool`` methods and
-the hosted ``web_search`` tool work as usual.
+backend Responses model (``gpt-5.6-sol``), so ordinary ``@function_tool`` methods and OpenAI's
+hosted tools, such as ``openai.tools.WebSearch``, work as usual.
 
 Notes for this alpha:
 - Barge-in is the model's own: it keeps listening while it speaks and decides when to yield,
@@ -40,6 +40,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import function_tool
 from livekit.plugins.openai.realtime import GPTLiveModel
+from livekit.plugins.openai.tools import WebSearch
 
 logger = logging.getLogger("gpt-live-agent")
 
@@ -78,6 +79,8 @@ class Assistant(Agent):
                 "Ask before taking any external action."
             ),
             chat_ctx=prior_conversation(),
+            # hosted tool the backend Responses model runs on its own, no client round trip
+            tools=[WebSearch()],
         )
 
     async def on_enter(self) -> None:

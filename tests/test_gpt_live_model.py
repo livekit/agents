@@ -14,6 +14,7 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveModel,
     GPTLiveSession,
 )
+from livekit.plugins.openai.tools import WebSearch
 
 pytestmark = pytest.mark.unit
 
@@ -222,6 +223,28 @@ async def test_first_event_is_a_session_update_carrying_the_whole_configuration(
                 "content": [{"type": "input_text", "text": "a prior turn"}],
             }
         ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_hosted_tool_is_delegated_to_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OpenAI provider tool goes to the backend as its own entry, next to the function tools."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session(wait_for_config=True)
+    try:
+        await session._update_session(
+            instructions="Be concise.",
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[_get_weather, WebSearch(search_context_size="low")],
+        )
+        await asyncio.sleep(0.1)
+
+        tools = ws.sent[0]["session"]["delegation"]["responses"]["tools"]
+        assert tools[0]["name"] == "_get_weather"
+        assert tools[1] == {"type": "web_search", "search_context_size": "low"}
     finally:
         await session.aclose()
         await model.aclose()

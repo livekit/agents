@@ -27,6 +27,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
 from ..log import logger
+from ..tools import OpenAITool
 from . import gpt_live_types as types
 
 # GPT-Live is a full-duplex voice model. Unlike the Realtime API it is server-driven: the model
@@ -112,6 +113,8 @@ def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
             schema.pop("meta", None)
             schema["type"] = "function"
             oai_tools.append(schema)
+        elif isinstance(tool, OpenAITool):
+            oai_tools.append(tool.to_dict())
         else:
             logger.debug("gpt-live delegation ignores unsupported tool", extra={"tool": tool})
     return oai_tools
@@ -162,7 +165,6 @@ class _LiveOptions:
     backend_model: str
     backend_instructions: str | None
     tool_choice: llm.ToolChoice | None
-    web_search: bool
     reasoning: dict[str, Any] | None
     service_tier: str | None
     max_output_tokens: int | None
@@ -185,7 +187,6 @@ class GPTLiveModel(llm.DuplexModel):
         backend_model: str = DEFAULT_BACKEND_MODEL,
         backend_instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        web_search: bool = False,
         reasoning: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
         service_tier: NotGivenOr[str | None] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
@@ -206,7 +207,6 @@ class GPTLiveModel(llm.DuplexModel):
             backend_model: Responses model the voice model delegates reasoning and tools to.
             backend_instructions: Instructions for the backend Responses model.
             tool_choice: Tool selection policy for the backend Responses model.
-            web_search: Enable the server-side ``web_search`` hosted tool on the backend.
             reasoning: Reasoning config for the backend Responses model, e.g. ``{"effort": "medium"}``.
             service_tier: Backend service tier (``auto``, ``default``, ``flex`` or ``priority``).
             max_output_tokens: Backend max output tokens.
@@ -243,7 +243,6 @@ class GPTLiveModel(llm.DuplexModel):
             backend_model=backend_model,
             backend_instructions=backend_instructions if is_given(backend_instructions) else None,
             tool_choice=tool_choice if is_given(tool_choice) else None,
-            web_search=web_search,
             reasoning=reasoning if is_given(reasoning) else None,
             service_tier=service_tier if is_given(service_tier) else None,
             max_output_tokens=max_output_tokens if is_given(max_output_tokens) else None,
@@ -343,18 +342,18 @@ class GPTLiveSession(
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
             # there is no backend model to give tools to; the model asks the app in plain text
-            if self._tools.function_tools and not self._tools_ignored:
+            if (
+                tool_ids := [tool.id for tool in self._tools.flatten()]
+            ) and not self._tools_ignored:
                 self._tools_ignored = True
                 logger.warning(
                     "gpt-live client delegation has no tool channel; answer delegation_created "
                     "with send_delegation_context instead",
-                    extra={"tools": list(self._tools.function_tools)},
+                    extra={"tools": tool_ids},
                 )
             return types.Delegation(type="client")
 
         tools = _build_delegation_tools(self._tools.flatten())
-        if self._opts.web_search:
-            tools.insert(0, {"type": "web_search"})
         return types.Delegation(
             type="responses",
             responses=types.ResponsesConfig(
