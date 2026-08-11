@@ -22,6 +22,8 @@ Expect noisy voice transcription: digits read aloud ('four' -> 4, 'oh'/'zero' ->
 Never read the full card number or the security code back to the caller; refer to the card by its last four digits only. If a tool rejects a value, ask the caller to repeat just that detail - don't start the whole card over. If the caller switches cards mid-way, just record the new values; recording a field again replaces it.
 
 If the caller refuses to provide the card, call decline_card_capture.
+
+Caller has no usable card right now (their card is expired or keeps failing and they have no other card to give): don't keep asking for another card. Reassure them there's no pressure - the booking stays held - and call decline_card_capture with the reason; the receptionist arranges the retry from there.
 """
 
 
@@ -122,7 +124,10 @@ class GetCardTask(AgentTask[GetCardResult]):
         if not 0 <= year <= 99:
             raise ToolError("that expiration year is invalid - ask the caller to repeat it")
         if (2000 + year, month) < (TODAY.year, TODAY.month):
-            raise ToolError("that date is in the past, the card is expired - ask for another card")
+            raise ToolError(
+                "that date is in the past, the card is expired - ask if they have another "
+                "card; if they have no other card right now, call decline_card_capture"
+            )
         self._expiration = f"{month:02d}/{year:02d}"
         return f"expiration recorded | {self._status()}"
 
@@ -180,10 +185,10 @@ class GetCardTask(AgentTask[GetCardResult]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_card_capture(self, reason: str) -> None:
-        """The caller explicitly refuses to provide their card.
+        """End the card capture without a card: the caller explicitly refuses to provide one, or cannot provide a usable card right now (their only card is expired or won't validate and they have no other card to give).
 
         Args:
-            reason: A short explanation of why the caller declined.
+            reason: A short explanation of why no card could be taken.
         """
         if not self.done():
             self.complete(ToolError(f"couldn't get the card details: {reason}"))
