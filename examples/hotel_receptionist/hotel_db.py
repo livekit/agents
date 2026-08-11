@@ -66,16 +66,6 @@ def speak_usd(cents: int) -> str:
     return f"{dollars} dollars and {change} cents"
 
 
-def speak_room(room: str) -> str:
-    """A room as the desk says it, from either its id or the spoken number.
-
-    The penthouse's id is RM_PH, so echoing the stored form back reads as
-    "room PH" - a room number no guest has ever been given.
-    """
-    suffix = room.strip().upper().removeprefix("RM_")
-    return "the penthouse suite" if suffix == "PH" else f"room {suffix}"
-
-
 def speak_time(t: time) -> str:
     """A clock time as natural speech, e.g. '7 PM', '6:30 PM'."""
     hour = t.hour % 12 or 12
@@ -497,6 +487,12 @@ FLORIST_ARRANGEMENTS: dict[str, FloralArrangement] = {
     "roses": FloralArrangement(name="Dozen long-stem roses", price=9500),
     "centerpiece": FloralArrangement(name="Table centerpiece arrangement", price=14000),
 }
+
+
+def speak_room(room_id: str) -> str:
+    suffix = room_id.removeprefix("RM_")
+    return "the penthouse suite" if suffix == "PH" else f"room {suffix}"
+
 
 # The partner property used when a confirmed guest has to be walked.
 WALK_PARTNER_HOTEL = "the Harbor House"
@@ -1300,7 +1296,6 @@ class HotelDB:
                 "no delivery destination: a room/suite or a recipient name is required"
             )
         if room_id is not None:
-            room_id = self._normalize_room(room_id)
             if not self._room_exists(room_id):
                 raise NotFound(f"no such room: {room_id}")
             recipient_name = None  # the room is the destination; exactly one is stored
