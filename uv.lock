@@ -14,6 +14,7 @@ members = [
     "livekit-agents",
     "livekit-example-avatar",
     "livekit-example-drive-thru",
+    "livekit-example-expressive-agent",
     "livekit-example-frontdesk",
     "livekit-example-healthcare",
     "livekit-example-homepage",
@@ -2359,7 +2360,7 @@ requires-dist = [
 [[package]]
 name = "livekit-example-drive-thru"
 version = "0"
-source = { virtual = "examples/drive-thru" }
+source = { virtual = "examples/drive_thru" }
 dependencies = [
     { name = "livekit-agents" },
     { name = "livekit-plugins-silero" },
@@ -2374,6 +2375,21 @@ requires-dist = [
     { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
     { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+
+[[package]]
+name = "livekit-example-expressive-agent"
+version = "0"
+source = { virtual = "examples/expressive_agent" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
@@ -3212,7 +3228,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=2.36" },
+    { name = "openai", extras = ["realtime"], specifier = ">=2.50" },
 ]
 provides-extras = ["vertex"]
 
@@ -4205,7 +4221,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "2.46.0"
+version = "2.53.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -4217,9 +4233,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/ac/f725c4efbda8657d02be684607e5a2e5ce362e4790fdbcbdfb7c15018647/openai-2.46.0.tar.gz", hash = "sha256:0421e0735ac41451cad894af4cddf0435bfbf8cbc538ac0e15b3c062f2ddc06a", size = 1114628, upload-time = "2026-07-17T02:48:06.05Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/cf/36e3e7235fdf6d125c052acc0970924611b17a20a4fe580596faf4566a65/openai-2.53.0.tar.gz", hash = "sha256:baf5802ad08980e1d9d561e1b996e800c8bcd14af5847c6d0e7a5cc59e4d4116", size = 1099435, upload-time = "2026-08-03T21:42:01.664Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/7b/206238ebcb50b235942b1c66dba4974776f2057402a8d91c399be587d66a/openai-2.46.0-py3-none-any.whl", hash = "sha256:672381db55efb3a1e2610f29304c130cccdd0b319bace4d492b2443cb64c1e7c", size = 1637556, upload-time = "2026-07-17T02:48:03.695Z" },
+    { url = "https://files.pythonhosted.org/packages/78/0f/cc6afea3542a5142c5d8fc8211c5e059a8375105d004a41dfa2c7948dbb0/openai-2.53.0-py3-none-any.whl", hash = "sha256:c694ffc747a3c4d1663ef2b07b811315a476164ee5efa3a993967349ebca7618", size = 1659829, upload-time = "2026-08-03T21:41:59.581Z" },
 ]
 
 [package.optional-dependencies]

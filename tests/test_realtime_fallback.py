@@ -43,6 +43,67 @@ class _StubAgentSession:
         return object()
 
 
+class _NamedRealtimeModel(FakeRealtimeModel):
+    """FakeRealtimeModel with a configurable model/provider so tests can tell instances apart."""
+
+    def __init__(self, *, model: str, provider: str) -> None:
+        super().__init__()
+        self._model_name = model
+        self._provider_name = provider
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider_name
+
+
+async def test_reports_active_model_and_provider() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    # before any swap, the primary is reported
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
+    # the backup now serves the session, so metrics must be labeled with it
+    assert adapter.metrics_metadata == {
+        "model_name": "backup-model",
+        "model_provider": "backup",
+    }
+    # the adapter keeps its own stable identity for spans, logs, and error events
+    assert adapter.model == "RealtimeModelFallbackAdapter"
+
+
+async def test_new_session_resets_active_model_to_primary() -> None:
+    primary = _NamedRealtimeModel(model="primary-model", provider="primary")
+    backup = _NamedRealtimeModel(model="backup-model", provider="backup")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    session = adapter.session()
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+    assert adapter.metrics_metadata["model_name"] == "backup-model"
+
+    # a fresh session (e.g. a new agent activity) always starts on the primary,
+    # so the label must follow it instead of sticking to the old failover target
+    adapter.session()
+
+    assert adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+
 def test_requires_at_least_one_model() -> None:
     with pytest.raises(ValueError):
         RealtimeModelFallbackAdapter([])

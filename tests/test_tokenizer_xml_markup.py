@@ -82,7 +82,23 @@ class TestExtractAndStrip:
     def test_square_brackets_are_never_markup(self) -> None:
         # only XML is markup here — bracket spans reach transcripts as prose/markdown
         text = 'Press [Enter] <emotion value="happy"/> to open [the docs](https://lk.io)'
-        assert _strip(text, ["emotion"]) == "Press [Enter]  to open [the docs](https://lk.io)"
+        assert _strip(text, ["emotion"]) == "Press [Enter] to open [the docs](https://lk.io)"
+
+    def test_removal_leaves_a_single_space(self) -> None:
+        # a tag between two spaces must not leave both behind: the transcript would show
+        # a double space after the punctuation the tag followed
+        assert _strip('Right. <emotion value="sad"/> Anyway.', ["emotion"]) == "Right. Anyway."
+        # the space survives when it is the only separator between the words
+        assert _strip('Right.<emotion value="sad"/> Anyway.', ["emotion"]) == "Right. Anyway."
+        assert _strip('Right. <emotion value="sad"/>Anyway.', ["emotion"]) == "Right. Anyway."
+        # trailing: the space may separate words still streaming in, so it is kept
+        assert _strip('Right. <emotion value="sad"/>', ["emotion"]) == "Right. "
+        # a wrapping tag keeps its content, so nothing is doubled to begin with
+        assert _strip("a <spell>b</spell> c", ["spell"]) == "a b c"
+        # a lone closing tag is a removal too
+        assert _strip("a </spell> b", ["spell"]) == "a b"
+        # newlines are structure, not a doubled separator
+        assert _strip('a\n<emotion value="sad"/>\nb', ["emotion"]) == "a\n\nb"
 
     def test_reports_stripped_tags(self) -> None:
         clean, tags = extract_and_strip(
@@ -111,7 +127,7 @@ class TestXaiDialect:
         assert instr is not None
         # this branch instructs the unified expr dialect; convert_markup lowers it to
         # xAI's native syntax (see tests/test_expr_markup.py)
-        assert '<expr type="sound" label="laugh"/>' in instr
+        assert '<expr type="sound" label="breath"/>' in instr
         assert '<expr type="prosody" label="' in instr
 
     def test_strip_removes_inline_keeps_wrapping_inner(self) -> None:
@@ -259,6 +275,44 @@ class TestFishAudioDialect:
         # other providers advertise "laugh"; a hallucinated one still lowers to a
         # sound Fish renders
         assert pf.convert_markup("fishaudio", '<expr type="sound" label="laugh"/>') == "[laughing]"
+        assert pf.convert_markup("fishaudio", '<expr type="sound" label="sigh"/>') == "[sighing]"
+        assert pf.convert_markup("fishaudio", '<expr type="sound" label="cry"/>') == "[sobbing]"
+
+    def test_convert_tone_wrap_to_prefix_marker(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # Fish tones have no closing form: the wrap lowers to a prefix marker
+        raw = '<expr type="prosody" label="whispering">don\'t tell anyone</expr> okay?'
+        assert pf.convert_markup("fishaudio", raw) == "[whispering] don't tell anyone okay?"
+        # a self-closing tone (taught as wrapping, but Fish's native form is a
+        # prefix anyway) is salvaged rather than dropped
+        assert pf.convert_markup("fishaudio", '<expr type="prosody" label="soft"/> hey') == (
+            "[soft] hey"
+        )
+        # labels outside the tone vocabulary still unwrap to their words
+        raw = '<expr type="prosody" label="like a pirate">ahoy</expr>'
+        assert pf.convert_markup("fishaudio", raw) == "ahoy"
+
+    def test_tone_wrap_stripped_from_transcript(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = '<expr type="prosody" label="shouting">We won the whole thing!</expr>'
+        clean, tags = pf.split_all_markup(raw)
+        assert clean == "We won the whole thing!"
+        assert ("prosody", "shouting") in [(t["type"], t["value"]) for t in tags]
+
+    def test_new_emotions_advertised_and_mapped(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+        from livekit.agents.tts._mood import match_mood
+
+        instr = pf.llm_instructions("fishaudio")
+        assert instr is not None
+        for tone in pf._FISHAUDIO_TONES:
+            assert tone in instr
+        # every advertised emotion resolves to a real mood, not the fallback —
+        # lk.expression consumers get a meaningful enum for the whole vocabulary
+        for emotion in pf._FISHAUDIO_EMOTIONS:
+            assert match_mood(emotion, fallback=None) is not None, emotion
 
     def test_split_markup_strips_expr(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -310,7 +364,11 @@ class TestFishAudioDialect:
         # the queryable capabilities matrix: every Fish sound governed by one field
         assert pf.supported_nonverbals("fishaudio") == {
             "laughing": ["laughing", "chuckling"],
-            "reflex_sounds": ["clear throat"],
+            "breathing": ["gasping"],
+            "sighing": ["sighing"],
+            "crying": ["sobbing"],
+            "vocalizing": ["groaning"],
+            "reflex_sounds": ["clear throat", "yawning"],
         }
         governed = [
             label for labels in pf._NONVERBAL_SOUND_LABELS["fishaudio"].values() for label in labels
@@ -355,13 +413,9 @@ class TestFishAudioDialect:
         assert off is not None and on is not None and default is not None
         assert 'type="sound"' not in off and "laughing" not in off
         for instr in (on, default):
-            assert "laughing, chuckling, clear throat" in instr
+            assert ", ".join(pf._FISHAUDIO_SOUNDS) in instr
         assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": False}) == []
-        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": True}) == [
-            "laughing",
-            "chuckling",
-            "clear throat",
-        ]
+        assert pf._allowed_sounds("fishaudio", {"nonverbal_sounds": True}) == pf._FISHAUDIO_SOUNDS
 
     def test_all_on_forms_render_like_omission(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -390,7 +444,14 @@ class TestFishAudioDialect:
         # a dict is a sparse opt-out: omitted categories stay enabled, so
         # {"laughing": False} removes laughter and nothing else
         steering = {"nonverbal_sounds": {"laughing": False}}
-        assert pf._allowed_sounds("fishaudio", steering) == ["clear throat"]
+        assert pf._allowed_sounds("fishaudio", steering) == [
+            "clear throat",
+            "sighing",
+            "gasping",
+            "groaning",
+            "yawning",
+            "sobbing",
+        ]
         inworld = pf._allowed_sounds("inworld", steering)
         assert "laugh" not in inworld
         for kept in ("sigh", "breathe", "clear throat", "cough", "yawn"):
@@ -697,7 +758,7 @@ class TestUniversalMarkupStrip:
 
         _, tags = split_all_markup('<emotion value="sad"/>oh no')
         attr = expression_attribute(tags)
-        assert attr == {"lk.expression": '{"value":"sad"}'}
+        assert attr == {"lk.expression": '{"expression":"sad","mood":"sad"}'}
 
         # no expression/emotion tag -> no attribute
         _, tags = split_all_markup('<break time="1s"/>hi')
@@ -714,7 +775,9 @@ class TestUniversalMarkupStrip:
         out += s.flush()
         assert "<emotion" not in out
         assert out.replace(" ", "") == "Hithere"
-        assert s.expression_attribute() == {"lk.expression": '{"value":"happy"}'}
+        assert s.expression_attribute() == {
+            "lk.expression": '{"expression":"happy","mood":"happy"}'
+        }
 
     def test_streaming_stripper_markdown_link_survives(self) -> None:
         from livekit.agents.tts._provider_format import TranscriptMarkupStripper

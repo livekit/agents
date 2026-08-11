@@ -100,6 +100,22 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
+| `websocket_timeout_sec` | `int` | Seconds of inactivity before the Phonic websocket is closed |
+| `intelligence_level` | `"standard"` \| `"high"` | LLM intelligence level |
+| `is_welcome_message_interruptible` | `bool` | When False, the welcome message cannot be interrupted |
+| `vad_prebuffer_duration_ms` | `int` | Voice-activity-detection prebuffer duration (ms) |
+| `vad_min_speech_duration_ms` | `int` | Minimum speech duration for VAD (ms) |
+| `vad_min_silence_duration_ms` | `int` | Minimum silence duration for VAD (ms) |
+| `vad_threshold` | `float` | Voice-activity-detection threshold |
+| `enable_assistant_backchannel` | `bool` | When True, the assistant backchannels (e.g. "mm-hmm") while the user speaks |
+| `assistant_backchannel_aggressiveness` | `float` | How aggressively the assistant backchannels (needs `enable_assistant_backchannel`) |
+| `pronunciation_dictionary` | `list[PronunciationEntry]` | `{ word, pronunciation }` entries; words must be unique |
+| `template_variables` | `dict[str, str]` | Variables substituted into the system prompt and welcome message |
+| `enable_redaction` | `bool` | Redact PII/PHI from transcripts and bleep it from audio after the conversation |
+| `mcp_servers` | `list[str]` | Names of pre-configured MCP servers to make available (must be unique) |
+| `observability_integrations` | `list["braintrust"]` | Observability integrations to forward traces to |
+| `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
+| `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
 
 ### Per-tool configuration

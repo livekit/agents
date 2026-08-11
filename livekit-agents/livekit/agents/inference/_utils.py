@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import os
 import platform
+from collections.abc import Mapping
 
 from livekit import api
 
@@ -18,6 +19,33 @@ HEADER_AGENT_ID = "X-LiveKit-Agent-ID"
 HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
+
+# Quota telemetry headers the inference gateway stamps on LLM completions
+# responses (including 429 rejections). RPM/TPM are per-minute rate limits;
+# Credits is a cumulative token-credit balance. The gateway omits a dimension's
+# headers when it has no data for it, so absence means "not enforced / unknown",
+# never zero.
+QUOTA_HEADER_FIELDS: dict[str, str] = {
+    "X-LiveKit-Inference-RPM-Limit": "rpm_limit",
+    "X-LiveKit-Inference-RPM-Used": "rpm_used",
+    "X-LiveKit-Inference-TPM-Limit": "tpm_limit",
+    "X-LiveKit-Inference-TPM-Used": "tpm_used",
+    "X-LiveKit-Inference-Credits-Limit": "credits_limit",
+    "X-LiveKit-Inference-Credits-Used": "credits_used",
+}
+
+
+def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
+    """Extract the gateway's quota headers into log-friendly fields.
+
+    Only dimensions the gateway actually stamped are returned; an empty dict
+    means the response carried no quota telemetry.
+    """
+    return {
+        field: value
+        for header, field in QUOTA_HEADER_FIELDS.items()
+        if (value := headers.get(header))
+    }
 
 
 def get_default_inference_url() -> str:
