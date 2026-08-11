@@ -1999,6 +1999,55 @@ async def test_boson_realtime_rejected_item_settles_its_own_create(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_rejected_item_survives_a_later_echo(monkeypatch):
+    # A rejected create stays registered in _item_create_future -- the error
+    # paths settle the future without removing the entry, and only
+    # update_chat_ctx() clears it. If the server then echoes the item anyway,
+    # the merged-item branch finds a future that is already done with an
+    # exception. Resolving it there would raise InvalidStateError, which the
+    # base recv loop swallows as "failed to handle event" after abandoning the
+    # rest of this event's handling.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+
+        # Changing an item's content sends a delete and a create under its id.
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["changed"])])
+            )
+        )
+        events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
+        create_event = next(e for e in events if e["type"] == "conversation.item.create")
+
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "item_rejected",
+                    "message": "conversation item rejected",
+                    "event_id": create_event["event_id"],
+                },
+            },
+        )
+
+        # The echo the server should not have sent. Handling it must not raise.
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+
+        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_1"})
+        await asyncio.wait_for(update_task, timeout=1.0)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_unattributable_invalid_previous_item_id_blames_nobody(monkeypatch):
     # A server that predates the rejected item's id in this error reports
     # nothing the failure can be attributed to. The turn must degrade to
