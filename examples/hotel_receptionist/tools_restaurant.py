@@ -69,7 +69,8 @@ class RestaurantToolsMixin:
     ) -> str:
         """Read-only lookup of a confirmed restaurant reservation. Use this when the caller wants
         to check or recall their reservation details (date, time, party size, notes) without
-        changing or cancelling it.
+        changing or cancelling it - and before a modification that keeps some details "the
+        same", so you know the current values being kept.
 
         Args:
             last_name: caller's last name.
