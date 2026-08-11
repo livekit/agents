@@ -139,6 +139,8 @@ class TfidfLoopDetector:
         if len(self._transcribed_chunks) < 2:
             return False
 
+        # Rebuild the matrix for each chunk so the vocabulary and IDF reflect the
+        # current window. This is bounded by the small window size above.
         doc_matrix = self._tfidf_matrix(self._transcribed_chunks)
         last_chunk_similarity = doc_matrix[:-1] @ doc_matrix[-1]
 

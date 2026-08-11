@@ -63,6 +63,7 @@ def test_tfidf_detects_loop_without_scikit_learn(monkeypatch: pytest.MonkeyPatch
             raise ImportError("scikit-learn is not installed")
         return real_import(name, *args, **kwargs)
 
+    # This guard ensures the detector does not accidentally regain a runtime sklearn import.
     monkeypatch.setattr(builtins, "__import__", import_without_scikit_learn)
 
     transcripts = [
