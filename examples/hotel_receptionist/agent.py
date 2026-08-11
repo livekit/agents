@@ -69,10 +69,22 @@ server = AgentServer()
 _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
+def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
+    """No key means the DB isn't checked; null or [] means it must come back unchanged."""
+    if "expected_state" not in userdata:
+        return None
+    statements = userdata["expected_state"]
+    if statements is None:
+        return []
+    if not isinstance(statements, list) or not all(isinstance(s, str) for s in statements):
+        raise TypeError("expected_state must be a list of SQL statements")
+    return statements
+
+
 async def on_simulation_end(ctx: SimulationContext) -> None:
     db_diffs: list[str] = []
-    expected_state = ctx.userdata().get("expected_state")
-    if expected_state:
+    expected_state = _expected_state_statements(ctx.userdata())
+    if expected_state is not None:
         # Grade the run on final DB state: build the scenario's `expected_state` on a
         # fresh seed, then diff it against the agent's DB. The diff compares
         # agent-decided facts only (room type, dates, extras, status), so minted
