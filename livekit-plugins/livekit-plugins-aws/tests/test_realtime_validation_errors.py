@@ -70,3 +70,24 @@ async def test_old_response_task_does_not_deactivate_restarted_session(
     await session._process_responses()
 
     assert session._is_sess_active.is_set()
+
+
+async def test_current_response_task_deactivates_session() -> None:
+    class OutputStream:
+        async def receive(self):
+            return None
+
+    class StreamResponse:
+        async def await_output(self):
+            return None, OutputStream()
+
+    session = object.__new__(realtime_model.RealtimeSession)
+    session._is_sess_active = asyncio.Event()
+    session._is_sess_active.set()
+    session._stream_ready = asyncio.Event()
+    session._stream_response = StreamResponse()
+    session._response_task = asyncio.current_task()
+
+    await session._process_responses()
+
+    assert not session._is_sess_active.is_set()
