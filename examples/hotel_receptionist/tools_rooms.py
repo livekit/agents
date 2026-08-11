@@ -526,7 +526,7 @@ class RoomToolsMixin:
         """Handle a guest dispute on a line item.
 
         Args:
-            category: Pick the category that best matches what the caller is disputing.
+            category: Pick the category that best matches what the caller is disputing. A charge for a stay the guest never arrived for, with no cancellation on record ("I never showed up", "I thought I cancelled"), is "no_show" - never "cancellation_fee", which is only for a fee from an actual recorded cancellation.
             line_item_label: The label of the line item exactly as lookup_invoice quoted it - the label only, never with the amount appended to it.
             caller_note: A short summary of what the caller said about the charge.
             resolution_status: Required. Use "pending" on the first call, before the policy
