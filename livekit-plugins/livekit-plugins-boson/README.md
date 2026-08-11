@@ -144,6 +144,13 @@ prepending a context summary), the plugin deletes and recreates the entire
 remote conversation in the target order instead of silently misordering it by
 appending the new item at the tail.
 
+That rebuild can only put back what it can express as text. A user turn whose
+transcript has not arrived yet has none, and no audio is kept client-side, so it
+is deleted along with the rest and not recreated — the server answers without it
+until a later `update_chat_ctx()` recreates it (at the tail) once its transcript
+exists. The plugin logs a warning naming the affected item ids whenever this
+happens.
+
 ## Limitations
 
 - The plugin expects the current realtime event names, such as

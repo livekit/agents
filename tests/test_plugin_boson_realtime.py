@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import time
 
 import aiohttp
@@ -2396,6 +2397,58 @@ async def test_boson_realtime_chat_ctx_audio_content_uses_transcript(monkeypatch
         ]
 
         _server_event(session, _item_added_echo(create_event["item"]))
+        await asyncio.wait_for(update_task, timeout=1.0)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(monkeypatch, caplog):
+    # Inserting ahead of what the server holds rebuilds the whole conversation,
+    # which deletes every remote item and recreates only the ones with text. A
+    # user turn still waiting on its transcript has none, so the delete takes it
+    # away and nothing puts it back until a later sync. That is inherent -- no
+    # audio is kept client-side -- but it must not happen silently.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        # An audio turn whose transcription has not arrived: the server holds it,
+        # the local mirror has it with no content.
+        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
+        assert session._remote_chat_ctx.get("user_1").item.content == []
+
+        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+            update_task = asyncio.create_task(
+                session.update_chat_ctx(
+                    llm.ChatContext(
+                        [
+                            llm.ChatMessage(id="summary", role="user", content=["so far: ..."]),
+                            llm.ChatMessage(id="user_1", role="user", content=[]),
+                        ]
+                    )
+                )
+            )
+            events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
+            assert session._msg_ch.empty()
+
+        assert [e["type"] for e in events] == [
+            "conversation.item.delete",
+            "conversation.item.create",
+        ]
+        assert events[0]["item_id"] == "user_1"
+        # Deleted, and not among the recreates.
+        assert events[1]["item"]["id"] == "summary"
+
+        assert "user_1" in [
+            item_id for record in caplog.records for item_id in getattr(record, "item_ids", [])
+        ]
+
+        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_1"})
+        _server_event(session, _user_item_added("summary", [{"type": "input_text", "text": "s"}]))
         await asyncio.wait_for(update_task, timeout=1.0)
     finally:
         await session.aclose()
