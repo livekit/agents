@@ -515,9 +515,13 @@ class SpeechStream(stt.SpeechStream):
         except APIError as error:
             api_error = error
         else:
-            api_error = APIConnectionError(
-                "NVIDIA Speech streaming STT connection ended unexpectedly"
-            )
+            await self._join_attempt(attempt)
+            replay_audio, _ = attempt.replay_snapshot()
+            next_attempt = self._start_recognition_attempt(config, event_loop)
+            for audio_chunk in replay_audio or []:
+                next_attempt.buffer_for_replay(audio_chunk, max_bytes=max_replay_bytes)
+                next_attempt.audio_queue.put(audio_chunk)
+            return next_attempt, 0
 
         await self._join_attempt(attempt)
 
@@ -876,9 +880,9 @@ def _combine_result_alternatives(
         if (transcript := getattr(alternative, "transcript", ""))
     ]
     confidences = [
-        float(confidence)
+        float(getattr(alternative, "confidence", 0.0) or 0.0)
         for alternative in alternatives
-        if (confidence := getattr(alternative, "confidence", 0.0))
+        if hasattr(alternative, "confidence")
     ]
     words = [
         word for alternative in alternatives for word in (getattr(alternative, "words", []) or [])
