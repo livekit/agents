@@ -502,6 +502,15 @@ class RealtimeSession(llm.RealtimeSession):
         self._active_session: AsyncSession | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
+        # a tool result produced while the socket is restarting (e.g. update_tools mid-turn)
+        # is stashed here and replayed once the new session is established, otherwise it would
+        # be sent on the dying session and never reach the model (the turn would hang).
+        self._pending_tool_result: types.LiveClientToolResponse | None = None
+        # tracks whether the current generation has reached its completion signal. it lets us
+        # drop trailing `model_turn` frames that some Live preview models emit after a
+        # generation completed, instead of attaching them to the wrong (finished) generation.
+        # True means "idle / completed"; set False when a new generation starts.
+        self._generation_completed = True
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
@@ -643,9 +652,7 @@ class RealtimeSession(llm.RealtimeSession):
             exclude_config_update=True,
         )
         async with self._session_lock:
-            if not self._active_session:
-                self._chat_ctx = chat_ctx
-                return
+            active_session = self._active_session
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
@@ -664,21 +671,47 @@ class RealtimeSession(llm.RealtimeSession):
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            if self._realtime_model.capabilities.mutable_chat_context:
-                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                    format="google", inject_dummy_user_message=False
-                )
-                turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                if turns:
-                    self._send_client_event(
-                        types.LiveClientContent(turns=turns, turn_complete=False)
+            # There is no live socket to send on when either no session is established yet
+            # (initial startup or mid-reconnect, when _main_task has nulled _active_session) or
+            # the socket is tearing down (e.g. update_tools() mid-turn). In those cases the
+            # (re)connect replays self._chat_ctx for us, so the plain turns land there — but that
+            # replay excludes function_call/function_call_output items, so a tool result would be
+            # dropped forever and the turn would hang. Buffer it for _main_task to replay once the
+            # new session is established.
+            if active_session is None or self._session_should_close.is_set():
+                if tool_results:
+                    logger.debug(
+                        "no live session; buffering tool result to replay after (re)connect"
                     )
-            if tool_results:
-                self._send_client_event(tool_results)
+                    self._buffer_pending_tool_result(tool_results)
+            else:
+                if self._realtime_model.capabilities.mutable_chat_context:
+                    turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                        format="google", inject_dummy_user_message=False
+                    )
+                    turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                    if turns:
+                        self._send_client_event(
+                            types.LiveClientContent(turns=turns, turn_complete=False)
+                        )
+                if tool_results:
+                    self._send_client_event(tool_results)
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
+
+    def _buffer_pending_tool_result(self, tool_results: types.LiveClientToolResponse) -> None:
+        # Accumulate rather than overwrite: more than one tool result can land during a single
+        # reconnect window (update_chat_ctx is called once per tool-execution round), so keep
+        # them all for _main_task to replay once the new session is established.
+        if self._pending_tool_result is None:
+            self._pending_tool_result = tool_results
+        else:
+            self._pending_tool_result.function_responses = [
+                *(self._pending_tool_result.function_responses or []),
+                *(tool_results.function_responses or []),
+            ]
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
@@ -743,15 +776,6 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
-            fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
-            )
-            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
@@ -773,13 +797,21 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        # Gemini requires the last message to end with user's turn so we add a placeholder user
+        # turn to trigger a new generation. Mutable-context models accept an appended
+        # client-content turn; the live-preview family ignores appended turns until the next
+        # session, so nudge those with a realtime text input instead.
+        if self._realtime_model.capabilities.mutable_chat_context:
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        else:
+            if is_given(instructions):
+                self._send_client_event(types.LiveClientRealtimeInput(text=instructions))
+            else:
+                self._send_client_event(types.LiveClientRealtimeInput(text="."))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -878,6 +910,8 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            # a fresh session starts idle, with no generation in flight
+            self._generation_completed = True
             config = self._build_connect_config()
             session = None
             try:
@@ -918,6 +952,24 @@ class RealtimeSession(llm.RealtimeSession):
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+
+                    # A tool result produced while the previous session was tearing down was
+                    # buffered instead of being sent on the dying socket. Replay it now so the
+                    # model receives it and can continue the turn.
+                    if self._pending_tool_result is not None and (
+                        function_responses := self._pending_tool_result.function_responses
+                    ):
+                        logger.debug("replaying buffered tool result to the new session")
+                        # Gemini Live auto-generates a reply after a function response
+                        # (auto_tool_reply_generation), so sending the tool result is enough to
+                        # continue the turn. We deliberately do NOT inject a placeholder user
+                        # turn here: it would be a bogus "." message in the transcript and can
+                        # trigger a second, unrelated reply.
+                        await session.send_tool_response(function_responses=function_responses)
+                        # Clear only after the send succeeds. If send_tool_response raises (e.g.
+                        # the fresh socket drops during reconnect churn), the buffer survives so
+                        # the next reconnect can replay it instead of leaving the model hanging.
+                        self._pending_tool_result = None
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1093,6 +1145,24 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
+                    if (
+                        (not self._current_generation or self._current_generation._done)
+                        and not self._generation_completed
+                        and response.server_content
+                        and response.server_content.model_turn
+                    ):
+                        # A `model_turn` arrived for a generation that was already torn down but
+                        # never saw a completion signal (`_generation_completed` is still False).
+                        # There is no active, incomplete generation to attach it to, so
+                        # processing it would double-process the content or spin up a spurious
+                        # generation. Drop this frame; a genuine next turn will start its own
+                        # generation once a completion signal has been recorded.
+                        if lk_google_debug:
+                            logger.debug(
+                                "dropping trailing model_turn without an active generation"
+                            )
+                        continue
+
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1212,6 +1282,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
+        # a generation is now in flight; its completion signal will flip this back to True
+        self._generation_completed = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1328,6 +1400,7 @@ class RealtimeSession(llm.RealtimeSession):
                 current_gen.push_text(text)
 
         if server_content.generation_complete or server_content.turn_complete:
+            self._generation_completed = True
             current_gen._completed_timestamp = time.time()
 
         # gemini delays turn_complete until it thinks client-side playback finished, so end
@@ -1454,6 +1527,11 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+        # A tool call completes the current generation regardless of model family (some Live
+        # preview models don't emit a separate generation_complete afterwards). Recording the
+        # completion here keeps the model's post-tool reply flowing as a fresh generation and
+        # keeps the trailing-model_turn guard in _recv_task from misfiring on it.
+        self._generation_completed = True
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
