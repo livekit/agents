@@ -184,6 +184,14 @@ class RoomTypeAvailability:
     views: list[str]
 
 
+def describe_room_options(avail: list[RoomTypeAvailability]) -> str:
+    return " | ".join(
+        f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, "
+        f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
+        for a in avail
+    )
+
+
 @dataclass
 class RoomBooking:
     id: int

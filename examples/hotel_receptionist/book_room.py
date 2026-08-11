@@ -13,6 +13,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from persona import COMMON_INSTRUCTIONS
@@ -139,11 +140,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
-        options = " | ".join(
-            f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
-            for a in avail
-        )
+        options = describe_room_options(avail)
         return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
 
     @function_tool()
