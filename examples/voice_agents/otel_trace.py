@@ -98,7 +98,7 @@ class Kelly(Agent):
             tts=FallbackTTSAdapter(
                 tts=[
                     inference.TTS("cartesia"),
-                    inference.TTS("rime/coda", voice="wawona"),
+                    inference.TTS("rime/coda", voice="astra"),
                 ]
             ),
             tools=[lookup_weather],

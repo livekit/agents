@@ -27,7 +27,8 @@ DEFAULT_TTS = "inworld/inworld-tts-2"
 
 
 def tts_voice_for_model(model: str) -> str:
-    return "wawona" if model == "rime/coda" else "Sarah"
+    """Return a voice that is supported by the selected TTS model."""
+    return "astra" if model == "rime/coda" else "Sarah"
 
 
 # Default starter prompt. Keep in sync with the `set_system_prompt`

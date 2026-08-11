@@ -164,7 +164,7 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        model: TTSModels | str = "coda",
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         # Arcana options
@@ -208,21 +208,30 @@ class TTS(tts.TTS):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
-        _check_time_scale_factor_supported(model, time_scale_factor)
+        if is_given(model):
+            resolved_model = model
+            model_is_explicit = True
+        else:
+            resolved_model = "coda"
+            model_is_explicit = False
+
+        _check_time_scale_factor_supported(resolved_model, time_scale_factor)
 
         if not is_given(speaker):
-            if _is_mist_model(model):
+            if not model_is_explicit:
+                speaker = "astra"
+            elif _is_mist_model(resolved_model):
                 speaker = DefaultMistVoice
-            elif model == "coda":
+            elif resolved_model == "coda":
                 speaker = DefaultCodaVoice
             else:
                 speaker = "astra"
 
         self._opts = _TTSOptions(
-            model=model,
+            model=resolved_model,
             speaker=speaker,
         )
-        if model == "arcana":
+        if resolved_model == "arcana":
             self._opts.arcana_options = _ArcanaOptions(
                 repetition_penalty=repetition_penalty,
                 temperature=temperature,
@@ -233,7 +242,7 @@ class TTS(tts.TTS):
                 speed_alpha=speed_alpha,
                 time_scale_factor=time_scale_factor,
             )
-        elif model == "coda":
+        elif resolved_model == "coda":
             self._opts.coda_options = _CodaOptions(
                 max_tokens=max_tokens,
                 lang=lang,
@@ -241,7 +250,7 @@ class TTS(tts.TTS):
                 speed_alpha=speed_alpha,
                 time_scale_factor=time_scale_factor,
             )
-        elif _is_mist_model(model):
+        elif _is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
                 lang=lang,
                 sample_rate=sample_rate,
@@ -256,7 +265,7 @@ class TTS(tts.TTS):
         self._use_websocket = use_websocket
         self._segment = segment if is_given(segment) else "bySentence"
 
-        self._total_timeout = _timeout_for_model(model)
+        self._total_timeout = _timeout_for_model(resolved_model)
 
         self._streams: weakref.WeakSet[SynthesizeStream] = weakref.WeakSet()
         self._sentence_tokenizer = (

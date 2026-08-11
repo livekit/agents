@@ -534,7 +534,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/coda", voice="wawona")),
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/coda", voice="astra")),
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-rime",
