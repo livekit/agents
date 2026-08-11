@@ -728,14 +728,20 @@ class RealtimeSession(openai_rt.RealtimeSession):
             isinstance(ev, ConversationItemCreateEvent) and ev.previous_item_id == "root"
             for ev in base_events
         ):
-            # "root" means the target context's first item isn't remote yet —
-            # not "the remote context is empty" (e.g. a caller prepending a
-            # summary ahead of turns the server still has). The server has no
-            # insert-at-head primitive (previous_item_id=None always means
-            # append-at-tail), so mapping "root" -> None here would silently
-            # append the new item after the existing ones instead, misordering
-            # the conversation. Rebuild the remote conversation from scratch in
-            # the target order rather than guess at a partial reorder.
+            # "root" is the base's marker for the item at the head of the target
+            # context, not for one that is new to the server. Two things reach it:
+            # a genuine insert ahead of turns the server still has (a caller
+            # prepending a summary, say), and a plain text change to the item
+            # already at the head, which the base expresses as a delete and a
+            # create under the same id.
+            #
+            # Neither can be sent incrementally. The server has no insert-at-head
+            # primitive -- previous_item_id=None always means append-at-tail -- so
+            # mapping "root" -> None while the server holds anything would put the
+            # item after those turns instead of before them. That is as wrong for
+            # the recreated head item, which the delete just took out of its
+            # position, as it is for a new one. Rebuild in the target order rather
+            # than guess at a partial reorder.
             return self._rebuild_chat_ctx_events(boson_ctx, remote_items)
 
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []

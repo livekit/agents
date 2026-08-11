@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import time
@@ -2523,6 +2524,70 @@ async def test_boson_realtime_chat_ctx_audio_content_uses_transcript(monkeypatch
         ]
 
         _server_event(session, _item_added_echo(create_event["item"]))
+        await asyncio.wait_for(update_task, timeout=1.0)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(monkeypatch):
+    # Editing the text of the item at the head is not an insert, but it reaches
+    # the rebuild for the same reason one does: the base expresses a content
+    # change as a delete and a create, and that create carries "root". Sending it
+    # incrementally would map "root" to None, which appends -- putting the head
+    # item after the turns it used to precede, since the delete just removed it
+    # from its position. Narrowing the trigger to "genuine inserts" reintroduces
+    # exactly that, so the behaviour is pinned here.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+        # Chained after user_1: _user_item_added always reports no predecessor,
+        # which the remote mirror reads as insert-at-head and would leave the two
+        # in reverse order.
+        second = _user_item_added("user_2", [{"type": "input_text", "text": "again"}])
+        second["previous_item_id"] = "user_1"
+        _server_event(session, second)
+
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext(
+                    [
+                        llm.ChatMessage(id="user_1", role="user", content=["hello there"]),
+                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
+                    ]
+                )
+            )
+        )
+        # Bounded: a narrower trigger sends two events rather than four, and this
+        # has to fail rather than block waiting for the other two.
+        events = []
+        with contextlib.suppress(asyncio.TimeoutError):
+            while True:
+                events.append(await asyncio.wait_for(session._msg_ch.recv(), timeout=0.5))
+
+        # Everything torn down, then re-sent in target order -- not a delete and
+        # an append of user_1 alone, which would leave it behind user_2.
+        assert [e["type"] for e in events] == [
+            "conversation.item.delete",
+            "conversation.item.delete",
+            "conversation.item.create",
+            "conversation.item.create",
+        ]
+        assert [e["item_id"] for e in events[:2]] == ["user_1", "user_2"]
+        assert [(e["item"]["id"], e["previous_item_id"]) for e in events[2:]] == [
+            ("user_1", None),
+            ("user_2", "user_1"),
+        ]
+
+        for item_id in ("user_1", "user_2"):
+            _server_event(session, {"type": "conversation.item.deleted", "item_id": item_id})
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "x"}]))
+        _server_event(session, _user_item_added("user_2", [{"type": "input_text", "text": "y"}]))
         await asyncio.wait_for(update_task, timeout=1.0)
     finally:
         await session.aclose()
