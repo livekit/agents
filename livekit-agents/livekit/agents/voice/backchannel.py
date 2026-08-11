@@ -12,8 +12,10 @@ Enabled with ``InterruptionOptions["backchannel_filter"]``; disabled by
 default. The filter is either a phrase list (matched with the built-in
 phrase/filler logic below) or a user callback ``(transcript) -> bool`` for
 full control over the classification (custom languages, model-based
-detection, context-dependent rules). ``DEFAULT_BACKCHANNEL_PHRASES`` is a
-curated English starter list for the phrase-list form.
+detection, context-dependent rules). No phrase list ships with the
+library — which words are pure acknowledgments depends on the agent's
+prompts and language; see ``examples/voice_agents/backchannel_filter.py``
+for a starter list and its caveats.
 """
 
 from __future__ import annotations
@@ -25,34 +27,6 @@ BackchannelFilter = Sequence[str] | Callable[[str], bool]
 """Either a list of backchannel phrases (matched by the built-in
 phrase/filler matcher) or a callback receiving the transcribed text of the
 overlapping speech and returning ``True`` when it is backchannel-only."""
-
-DEFAULT_BACKCHANNEL_PHRASES: tuple[str, ...] = (
-    "makes sense",
-    "sounds good",
-    "thank you",
-    "got it",
-    "i see",
-    "mm hmm",
-    "uh huh",
-    "gotcha",
-    "mhm",
-    "mmhmm",
-    "thanks",
-    "okay",
-    "ok",
-    "yeah",
-    "yep",
-    "yes",
-    "right",
-    "sure",
-    "alright",
-    "cool",
-)
-"""A curated list of English acknowledgment phrases suitable for
-``InterruptionOptions["backchannel_filter"]``. Deliberately absent:
-"no", "wait", "stop", "what", "hello", and a bare "huh" — those are
-real barge-ins ("uh huh" the backchannel still matches as a phrase).
-"""
 
 # Filler sounds are skipped between phrases, and a filler-only utterance
 # ("uh", "um hm") counts as a backchannel: with ``min_words`` low, a lone

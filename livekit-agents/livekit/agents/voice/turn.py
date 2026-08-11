@@ -198,13 +198,13 @@ class InterruptionOptions(TypedDict, total=False):
 
     Either a phrase list — the utterance must consist solely of the given
     phrases and filler sounds ("uh", "um"); see
-    ``DEFAULT_BACKCHANNEL_PHRASES`` for a curated English starter list — or
-    a callback receiving the transcribed text and returning ``True`` when
-    it is backchannel-only, for full control over the classification
-    (custom languages, model-based detection). The callback is invoked with
-    live interim transcripts on the interruption path and with the final
-    transcript at turn commit, only for speech overlapping the agent's
-    turn.
+    ``examples/voice_agents/backchannel_filter.py`` for a starter list and
+    its caveats — or a callback receiving the transcribed text and
+    returning ``True`` when it is backchannel-only, for full control over
+    the classification (custom languages, model-based detection). The
+    callback is invoked with live interim transcripts on the interruption
+    path and with the final transcript at turn commit, only for speech
+    overlapping the agent's turn.
 
     Requires an STT transcript (complements the adaptive detector's
     acoustic backchannel classification, which needs no transcript but only

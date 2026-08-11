@@ -116,7 +116,6 @@ from .voice.amd import (
     AMDCategory,
     AMDPredictionEvent,
 )
-from .voice.backchannel import DEFAULT_BACKCHANNEL_PHRASES
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
@@ -278,7 +277,6 @@ __all__ = [
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
-    "DEFAULT_BACKCHANNEL_PHRASES",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
     "KeytermsOptions",

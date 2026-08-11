@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from livekit.agents import (
-    DEFAULT_BACKCHANNEL_PHRASES,
     Agent,
     AgentSession,
     UserInputTranscribedEvent,
@@ -17,6 +16,32 @@ from livekit.agents.voice.backchannel import is_backchannel_only
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
 from .fake_session import FakeActions, create_session, run_session
+
+# mirrors the starter list in examples/voice_agents/backchannel_filter.py —
+# the library deliberately ships no default list (which words are pure
+# acknowledgments depends on the agent's prompts and language)
+PHRASES: tuple[str, ...] = (
+    "makes sense",
+    "sounds good",
+    "thank you",
+    "got it",
+    "i see",
+    "mm hmm",
+    "uh huh",
+    "gotcha",
+    "mhm",
+    "mmhmm",
+    "thanks",
+    "okay",
+    "ok",
+    "yeah",
+    "yep",
+    "yes",
+    "right",
+    "sure",
+    "alright",
+    "cool",
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -52,7 +77,7 @@ class EchoAgent(Agent):
     ],
 )
 def test_backchannel_only(text: str) -> None:
-    assert is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES)
+    assert is_backchannel_only(text, PHRASES)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +97,7 @@ def test_backchannel_only(text: str) -> None:
     ],
 )
 def test_not_backchannel(text: str) -> None:
-    assert not is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES)
+    assert not is_backchannel_only(text, PHRASES)
 
 
 @pytest.mark.parametrize(
@@ -90,9 +115,9 @@ def test_partial_defers_phrase_prefixes(text: str) -> None:
     known phrase defers the cut (interims arrive word by word). The same text
     as a final is a complete utterance and must not match (except a lone
     filler, which is ignorable on finals too)."""
-    assert is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES, partial=True)
+    assert is_backchannel_only(text, PHRASES, partial=True)
     if text != "Mm":
-        assert not is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES)
+        assert not is_backchannel_only(text, PHRASES)
 
 
 @pytest.mark.parametrize(
@@ -106,12 +131,12 @@ def test_partial_defers_phrase_prefixes(text: str) -> None:
     ],
 )
 def test_partial_still_cuts_real_speech(text: str) -> None:
-    assert not is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES, partial=True)
+    assert not is_backchannel_only(text, PHRASES, partial=True)
 
 
 def test_custom_phrases() -> None:
     assert is_backchannel_only("de acuerdo", ["de acuerdo", "vale"])
-    assert not is_backchannel_only("de acuerdo", DEFAULT_BACKCHANNEL_PHRASES)
+    assert not is_backchannel_only("de acuerdo", PHRASES)
 
 
 def test_blank_phrase_entries_are_ignored() -> None:
@@ -156,7 +181,7 @@ def _make_recognition(
     overlapped: bool = True,
     agent_speaking: bool = True,
     agent_state: str = "speaking",
-    backchannel_filter: Sequence[str] | Callable[[str], bool] | None = DEFAULT_BACKCHANNEL_PHRASES,
+    backchannel_filter: Sequence[str] | Callable[[str], bool] | None = PHRASES,
     turn_detection_mode: str | None = "vad",
 ) -> AudioRecognition:
     ar = object.__new__(AudioRecognition)
@@ -243,9 +268,7 @@ async def test_backchannel_over_agent_speech_is_dropped() -> None:
     # so the decision reaches the transcript and the phrase filter judges it
     session = create_session(
         _story_actions("Okay, thank you."),
-        turn_handling={
-            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
-        },
+        turn_handling={"interruption": {"min_words": 1, "backchannel_filter": PHRASES}},
     )
     agent = EchoAgent()
     playback_finished_events, user_transcription_events = _collect_session_events(session)
@@ -279,7 +302,7 @@ async def test_callable_filter_drops_backchannel() -> None:
     # here composing the built-in matcher (partial=True so live interims
     # with a trailing phrase prefix defer the cut instead of committing it)
     def acknowledgments_only(text: str) -> bool:
-        return is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES, partial=True)
+        return is_backchannel_only(text, PHRASES, partial=True)
 
     session = create_session(
         _story_actions("Okay, thank you."),
@@ -318,9 +341,7 @@ async def test_backchannel_interrupts_without_phrase_filter() -> None:
 async def test_real_barge_in_still_interrupts() -> None:
     session = create_session(
         _story_actions("Wait, I have a question."),
-        turn_handling={
-            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
-        },
+        turn_handling={"interruption": {"min_words": 1, "backchannel_filter": PHRASES}},
     )
     agent = EchoAgent()
     playback_finished_events, _ = _collect_session_events(session)
@@ -349,9 +370,7 @@ async def test_backchannel_while_listening_commits_turn() -> None:
 
     session = create_session(
         actions,
-        turn_handling={
-            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
-        },
+        turn_handling={"interruption": {"min_words": 1, "backchannel_filter": PHRASES}},
     )
     agent = EchoAgent()
 
