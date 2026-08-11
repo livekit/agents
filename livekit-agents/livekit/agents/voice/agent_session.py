@@ -94,6 +94,10 @@ if TYPE_CHECKING:
     from .transcription.text_transforms import TextTransforms
 
 
+_SIP_RULE_ID_ATTR = "sip.ruleID"
+_DEFAULT_AEC_WARMUP_DURATION = 3.0
+
+
 class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
@@ -156,10 +160,11 @@ class SessionConnectOptions:
 class NonverbalOptions(TypedDict, total=False):
     """Non-verbal vocalizations the TTS may produce (sounds that aren't words).
 
-    Omitted keys default to off, and together the keys cover every sound the
-    providers offer — a sound whose key is off is never advertised to the LLM.
-    Each key may later widen to ``bool | <Sound>Options`` (e.g.
-    ``laughing: bool | LaughingOptions``) for per-sound control without
+    A sparse opt-out: omitted keys default to ON, and a category set to
+    ``False`` is never advertised to the LLM — ``{"laughing": False}``
+    removes laughter and nothing else. Together the keys cover every sound
+    the providers offer. Each key may later widen to ``bool | <Sound>Options``
+    (e.g. ``laughing: bool | LaughingOptions``) for per-sound control without
     breaking existing callers.
     """
 
@@ -177,24 +182,24 @@ class NonverbalOptions(TypedDict, total=False):
     """cough, clearing the throat, yawn"""
 
 
-SpeechSteeringPreset = Literal["formal", "casual"]
-
-
 class SpeechSteeringOptions(TypedDict, total=False):
     """Steers verbal delivery and non-verbal sounds in generated speech.
 
-    Without ``preset``, this dict is the complete spec and ``nonverbal_sounds``
-    is atomic: passing it replaces the default value entirely rather than
-    merging field-by-field.
+    Every key is a sparse override on the default (full sound vocabulary,
+    light fillers): the expressive instructions already tell the LLM to match
+    its delivery to the register of the moment, so most agents need no
+    steering at all — set a key only to take an option away regardless of
+    context.
     """
 
-    preset: SpeechSteeringPreset
-    """Base preset; the other keys become sparse overrides merged onto it
-    (``nonverbal_sounds`` merges field-by-field)."""
     disfluencies: bool
     """Filler words such as "um" / "uh". On by default
     (``DEFAULT_SPEECH_STEERING_OPTIONS``); set ``False`` to opt out."""
-    nonverbal_sounds: NonverbalOptions
+    nonverbal_sounds: bool | NonverbalOptions
+    """Which non-verbal sounds the TTS may make. ``True`` (and omitting the
+    key) keeps the provider's full vocabulary, ``False`` disables every sound,
+    and a ``NonverbalOptions`` dict toggles per category (omitted categories
+    stay enabled)."""
     pace: Literal["slow", "normal", "fast"]
 
 
@@ -202,7 +207,7 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline (framework-internal, not publicly exposed).
+    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``.
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
@@ -240,24 +245,6 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     return Instructions(template + "\n\n" + extra)
 
 
-def _resolve_speech_steering(steering: SpeechSteeringOptions) -> SpeechSteeringOptions:
-    """Resolve a ``preset`` reference; the returned dict never contains ``preset``."""
-    if (name := steering.get("preset")) is None:
-        return steering
-    from .presets import _BY_NAME
-
-    base = _BY_NAME.get(name)
-    if base is None:
-        raise ValueError(f"unknown speech steering preset {name!r}, available: {sorted(_BY_NAME)}")
-    merged: SpeechSteeringOptions = {**base, **steering}
-    merged.pop("preset", None)
-    base_sounds = base.get("nonverbal_sounds")
-    override_sounds = steering.get("nonverbal_sounds")
-    if base_sounds is not None and override_sounds is not None:
-        merged["nonverbal_sounds"] = {**base_sounds, **override_sounds}
-    return merged
-
-
 def resolve_expressive_options(
     expr: ExpressiveOptions, *, provider_key: str, default: ExpressiveOptions
 ) -> ExpressiveOptions:
@@ -266,9 +253,8 @@ def resolve_expressive_options(
     Starts from ``default``, renders ``speech_steering`` into per-provider delivery
     guidelines appended to the template, then applies any explicit
     ``tts_instructions_template`` override and ``tts_instructions_append`` (last, so
-    the user's free-form rules always win). Steering fields the user's
-    (preset-resolved) steering doesn't set fall back to ``default``'s
-    ``speech_steering``, so an explicit value — from the user or a preset — always
+    the user's free-form rules always win). Steering fields the user doesn't set
+    fall back to ``default``'s ``speech_steering``, so an explicit value always
     wins over a default. The returned dict always has ``tts_instructions_template``
     and ``speech_steering`` (never ``tts_instructions_append``); ``speech_steering``
     passes through so injection can filter the advertised markup vocabulary
@@ -280,7 +266,7 @@ def resolve_expressive_options(
 
     steering: SpeechSteeringOptions = {
         **default.get("speech_steering", {}),
-        **_resolve_speech_steering(expr.get("speech_steering") or {}),
+        **(expr.get("speech_steering") or {}),
     }
     if fragment := _provider_format.steering_instructions(provider_key, steering):
         tts_tmpl = _append_instructions(tts_tmpl, fragment)
@@ -299,6 +285,7 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    transcription_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -394,12 +381,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         min_consecutive_speech_delay: float = 0.0,
+        expressive: bool | ExpressiveOptions = False,
         # Misc settings
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
-        aec_warmup_duration: float | None = 3.0,
+        aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -471,6 +460,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tts_text_transforms (Sequence[TextTransforms], optional): The transforms to apply
                 to the tts input text, available built-in transforms: ``"filter_markdown"``, ``"filter_emoji"``.
                 Set to ``None`` to disable. When NOT_GIVEN, all filters will be applied.
+            expressive (bool | ExpressiveOptions, optional): Let the LLM steer how the
+                agent sounds. When enabled, the provider's markup guide is injected into
+                the LLM prompt so it can emit inline delivery tags (emotion, pacing,
+                non-verbal sounds), which are rendered by the TTS and stripped from the
+                transcript. Pass an :class:`ExpressiveOptions` dict to steer or override
+                the injected instructions. Requires ``livekit.agents.inference.TTS`` with
+                a model that declares a markup dialect; it stays off otherwise.
+                Default ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
             conn_options (SessionConnectOptions, optional): Connection options for
@@ -480,10 +477,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
+            transcription_timeout (float, optional): If set, emit a
+                ``user_transcription_timeout`` event when VAD detects user speech
+                during the user's turn but no non-empty final transcript arrives
+                within this amount of time after the speech ends. This can happen
+                because STT failed or because audio was intentionally withheld from
+                STT, such as during AEC warmup or uninterruptible agent speech. Use
+                it to prompt the user to repeat themselves. A non-empty final transcript
+                satisfies the timeout for the current turn even if adaptive interruption
+                detection later discards it as part of a backchannel. Requires both VAD
+                and STT. Disabled by default.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
-                Set to ``None`` to disable. Default ``3.0`` s.
+                Defaults to ``3.0``, or ``None`` for outbound SIP calls.
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
@@ -541,6 +548,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         else:
             stt_context = None
         user_turn_limit = _resolve_user_turn_limit(turn_handling.get("user_turn_limit"))
+        self._aec_warmup_duration_explicit = is_given(aec_warmup_duration)
+        resolved_aec_warmup_duration = (
+            aec_warmup_duration if is_given(aec_warmup_duration) else _DEFAULT_AEC_WARMUP_DURATION
+        )
 
         # This is the "global" chat_context, it holds the entire conversation history
         self._chat_ctx = ChatContext.empty()
@@ -556,6 +567,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            transcription_timeout=transcription_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms
@@ -566,11 +578,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             use_tts_aligned_transcript=(
                 use_tts_aligned_transcript if is_given(use_tts_aligned_transcript) else None
             ),
-            aec_warmup_duration=aec_warmup_duration,
+            aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
         )
-        # expressive mode is not publicly exposed; the pipeline stays disabled
-        self._expressive: bool | ExpressiveOptions = False
+        self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
 
@@ -622,7 +633,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tts_error_counts = 0
 
         # aec warmup: disable interruptions while AEC warms up
-        self._aec_warmup_remaining = aec_warmup_duration or 0.0
+        self._aec_warmup_remaining = resolved_aec_warmup_duration or 0.0
         self._aec_warmup_timer: asyncio.TimerHandle | None = None
 
         # configurable IO
@@ -676,6 +687,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._idle_released.set()
 
         self._global_run_state: RunResult | None = None
+        # guards keeping an active run open across `_wait_for_idle_and_hold` scopes
+        self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
 
@@ -814,6 +827,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[True],
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -828,6 +842,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: Literal[False] = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -841,6 +856,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         capture_run: bool = False,
         room: NotGivenOr[rtc.Room] = NOT_GIVEN,
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
+        session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
@@ -854,6 +870,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         Args:
             capture_run: Whether to return a RunResult and capture the run result during session start.
             room: The room to use for input and output
+            session_host: Whether a `RemoteSession` can drive and observe this session
+                over the room. Defaults to True, or False when another session in the
+                same job is already the primary. Set False when the room already has
+                its agent and this session is only a participant in it, such as a
+                client talking to that agent. Ignored under the console subcommand,
+                where hosting is how the console reaches the session at all.
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
@@ -894,6 +916,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             self._recording_options = _resolve_recording_options(False)
 
                 job_ctx.init_recording(self._recording_options)
+
+            # hosting needs the primary designation as before, and the caller's consent
+            hosting = is_primary and (session_host if is_given(session_host) else True)
 
             # Under a text simulation the simulated user interacts over text
             # streams only: disable audio I/O here, and STT/TTS/VAD via
@@ -979,7 +1004,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
                 await self._room_io.start()
 
-                if is_primary:
+                if hosting:
                     # only the primary session can have a session host
                     transport = RoomSessionTransport(room)
                     self._session_host = SessionHost(transport)
@@ -1478,9 +1503,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
+        A queued speech created with ``allow_interruptions=False`` keeps playing,
+        along with the ones behind it, unless ``force`` is set.
+
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
             and chat context has been updated.
+
+        Raises:
+            RuntimeError: If the session isn't running, or if the speech currently
+                playing disallows interruptions and ``force`` is False.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
@@ -1601,21 +1633,44 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 continue
 
     @asynccontextmanager
-    async def _wait_for_idle_and_hold(self) -> AsyncIterator[AgentActivity]:
-        """Wait for idle, then block other ``wait_for_idle`` callers until exit."""
+    async def _wait_for_idle_and_hold(
+        self, *, run_state: RunResult | None = None
+    ) -> AsyncIterator[AgentActivity]:
+        """Wait for idle, then block other ``wait_for_idle`` callers until exit.
+
+        ``run_state`` is the run that owns the turn of the caller. That run is guarded for
+        the whole scope, since reaching idle is itself what completes the run: without the
+        guard, whatever the scope does next lands after ``run()`` returned and goes
+        unrecorded. A caller whose turn already ended guards nothing, so background work
+        cannot hold a later run open.
+        """
         from .agent_activity import _IdleHoldContextVar
 
-        activity = await self.wait_for_idle()
-        self._idle_holds += 1
-        self._idle_released.clear()
-        token = _IdleHoldContextVar.set(True)
+        # registered before the wait below, which is what lets the run complete
+        guard: asyncio.Future[None] | None = None
+        if run_state is not None and run_state is self._global_run_state and not run_state.done():
+            guard = asyncio.get_running_loop().create_future()
+            run_state._watch_handle(guard)
+            self._foreground_guards.add(guard)
+
         try:
-            yield activity
+            activity = await self.wait_for_idle()
+            self._idle_holds += 1
+            self._idle_released.clear()
+            token = _IdleHoldContextVar.set(True)
+            try:
+                yield activity
+            finally:
+                _IdleHoldContextVar.reset(token)
+                self._idle_holds -= 1
+                if self._idle_holds == 0:
+                    self._idle_released.set()
         finally:
-            _IdleHoldContextVar.reset(token)
-            self._idle_holds -= 1
-            if self._idle_holds == 0:
-                self._idle_released.set()
+            if guard is not None:
+                self._foreground_guards.discard(guard)
+                # the run re-checks from the done callback; releasing here rather than on
+                # the way out of the inner block covers a floor that never arrives
+                guard.set_result(None)
 
     async def _update_activity(
         self,
@@ -1824,6 +1879,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._aec_warmup_remaining = 0.0
         if self._aec_warmup_timer is not None:
+            self._aec_warmup_timer.cancel()
+            self._aec_warmup_timer = None
+
+    def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        if self._aec_warmup_duration_explicit:
+            return
+
+        is_outbound_sip = (
+            participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+            and not participant.attributes.get(_SIP_RULE_ID_ATTR)
+        )
+        self._opts.aec_warmup_duration = None if is_outbound_sip else _DEFAULT_AEC_WARMUP_DURATION
+        self._aec_warmup_remaining = self._opts.aec_warmup_duration or 0.0
+
+        if is_outbound_sip and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
 

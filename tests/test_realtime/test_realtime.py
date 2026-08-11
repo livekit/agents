@@ -55,10 +55,16 @@ REALTIME_MODELS: list = [
     pytest.param(_xai_model, id="xai", marks=_skip_xai),
 ]
 
-# xAI doesn't support conversation.item.delete or sequential response.create
+# sequential response.create races are flaky on xAI; history delete works on current API
 OPENAI_AND_AZURE: list = [
     pytest.param(_openai_model, id="openai"),
     pytest.param(_azure_model, id="azure"),
+]
+
+OPENAI_AZURE_AND_XAI: list = [
+    pytest.param(_openai_model, id="openai"),
+    pytest.param(_azure_model, id="azure"),
+    pytest.param(_xai_model, id="xai", marks=_skip_xai),
 ]
 
 
@@ -114,7 +120,12 @@ async def _push_speech(session: llm.RealtimeSession, wav_name: str = "hello_worl
     for frame in _load_wav(wav_name):
         session.push_audio(frame)
         await asyncio.sleep(0.02)
-    session.push_audio(_silence())
+    # stream trailing silence in real time so server VAD can observe speech_stopped
+    # (a single multi-second frame floods appends and often never ends the turn on xAI)
+    silence_chunk = _silence(0.02)
+    for _ in range(100):  # ~2s
+        session.push_audio(silence_chunk)
+        await asyncio.sleep(0.02)
 
 
 # -- Basic generation --
@@ -276,8 +287,7 @@ async def test_chat_ctx_populated_after_reply(rt_session: llm.RealtimeSession):
     assert any(item.type == "message" and item.role == "assistant" for item in ctx.items)
 
 
-# xAI doesn't support conversation.item.delete
-@pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
+@pytest.mark.parametrize("rt_session", OPENAI_AZURE_AND_XAI, indirect=True)
 async def test_update_chat_ctx_replaces_history(rt_session: llm.RealtimeSession):
     ctx1 = llm.ChatContext()
     ctx1.add_message(role="user", content="Remember: color is red")
@@ -314,6 +324,27 @@ async def test_interrupt(rt_session: llm.RealtimeSession):
             break
         break
     assert got_chunk
+
+
+@_skip_xai
+async def test_xai_say_force_message() -> None:
+    """xAI force_message / say() produces audio without an extra response.create."""
+    model = _xai_model()
+    session = model.session()
+    try:
+        gen_ev = await asyncio.wait_for(session.say("Hello from force message."), timeout=15)
+        assert gen_ev.user_initiated
+        got_audio = False
+        async for msg_gen in gen_ev.message_stream:
+            async for frame in msg_gen.audio_stream:
+                assert len(frame.data) > 0
+                got_audio = True
+                break
+            break
+        assert got_audio
+    finally:
+        await session.aclose()
+        await model.aclose()
 
 
 @pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)

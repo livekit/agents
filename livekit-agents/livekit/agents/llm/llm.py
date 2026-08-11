@@ -28,7 +28,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio
-from .chat_context import ChatContext, ChatRole
+from .chat_context import ChatContext, ChatRole, MetricsMetadata
 from .tool_context import Tool, ToolChoice
 
 
@@ -131,6 +131,11 @@ class LLM(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this LLM instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
 
     @abstractmethod
     def chat(
@@ -362,6 +367,7 @@ class LLMStream(ABC):
             completion_tokens=usage.completion_tokens if usage else 0,
             prompt_tokens=usage.prompt_tokens if usage else 0,
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
+            cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
             metadata=Metadata(
