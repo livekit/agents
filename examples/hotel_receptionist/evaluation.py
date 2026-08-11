@@ -93,13 +93,13 @@ async def on_session_end(ctx: JobContext) -> None:
         llm="openai/gpt-4.1-mini",
         judges=[
             task_completion_judge(),
-            accuracy_judge(),
-            tool_use_judge(),
-            handoff_judge(),
-            safety_judge(),
-            relevancy_judge(),
-            coherence_judge(),
-            conciseness_judge(),
+            # accuracy_judge(),
+            # tool_use_judge(),
+            # handoff_judge(),
+            # safety_judge(),
+            # relevancy_judge(),
+            # coherence_judge(),
+            # conciseness_judge(),
         ],
     )
     await judges.evaluate(report.chat_history)

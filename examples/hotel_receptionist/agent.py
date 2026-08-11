@@ -20,6 +20,7 @@ from livekit.agents import (
     inference,
     llm,
 )
+from livekit.plugins import openai
 
 from .capabilities import CAPABILITIES, render
 from .common import Userdata, resolve_today
@@ -28,36 +29,88 @@ from .fake_data.seed import build_seed_bytes
 from .hotel_db import HotelDB
 from .persona_core import core_instructions
 from .policies import build_lookup_policy_tool
+from .raw_generation import publish_raw_generations
 from .suggested_replies import SuggestedReplies
 from .tools_restaurant import RestaurantToolsMixin
 from .tools_rooms import RoomToolsMixin
 from .tools_services import ServicesToolsMixin
 from .ui_view import UiView
 
+# Loaded at import time, not in main(): `lk agent simulate`/`start` boot the
+# agent through `python -m livekit.agents start`, which imports this module and
+# never calls main(). Existing environment variables win over the file. Skipped
+# under pytest - tests import this module too, and the demo endpoint's env
+# (OPENAI_BASE_URL, LIVEKIT_URL...) would leak into unrelated tests.
+if not os.environ.get("PYTEST_VERSION"):
+    load_dotenv(Path(__file__).with_name(".env.local"))
+
 logger = logging.getLogger("hotel-receptionist")
+
+# The receptionist's own LLM. `MODEL` overrides it so a benchmark sweep can
+# point a *deployed* agent at a different model with `lk agent update-secrets`
+# (a restart, not a rebuild) instead of redeploying once per model. Unset keeps
+# the previous behaviour. The suggested-replies LLM below is deliberately not
+# swept: it is a UI side-feature, and holding it fixed keeps the receptionist's
+# own LLM the only variable under test.
+DEFAULT_LLM_MODEL = "google/gemma-4-31b-it"
+
+
+def _session_llm_model() -> str:
+    return os.environ.get("MODEL", "").strip() or DEFAULT_LLM_MODEL
+
+
+def _session_llm():
+    """The receptionist's LLM: LiveKit Inference, or an OpenAI-compatible endpoint.
+
+    `OPENAI_BASE_URL` switches to a self-hosted server (Ollama, vLLM, LM Studio) so a
+    model running on the operator's own machine can be benchmarked with the same
+    scenarios. Only works when this agent runs locally — a cloud deployment cannot
+    reach a private address — which Benchbin enforces before launching a run.
+    """
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+    model = _session_llm_model()
+    if not base_url:
+        return inference.LLM(model)
+
+    logger.info("session llm via self-hosted endpoint: %s @ %s", model, base_url)
+    return openai.LLM(
+        model=model,
+        base_url=base_url,
+        # Local servers usually ignore the key, but the client requires one.
+        api_key=os.environ.get("OPENAI_API_KEY", "").strip() or "local",
+    )
+
 
 # Set by the frontend on the caller's participant ("true"/"false") to opt in
 # to expressive TTS delivery for the session.
 EXPRESSIVE_ATTRIBUTE = "expressive"
 
+# Appended to the expressive pipeline's TTS-markup instructions, so it reaches
+# every turn - including task/sub-flow turns - and is removed with the rest of
+# the expressive instructions if the mode is toggled off.
+EXPRESSIVE_EXTRA_INSTRUCTIONS = (
+    "Match your delivery to the caller's mood: brighter and warmer for a happy "
+    "booking, steadier and more measured for a complaint or a stressful moment."
+    "Your goal is to really be expressive, dynamic, and show the customer you care."
+    "Customer service is extremely important at the Gilded Rose hotel, make sure "
+    "that the customers can feel it! Speak softly when they're disappointed, and "
+    "add more energy when the customer is feeling energetic or happy."
+    "Only emphasize a single word per sentence. Emphasize only the most important word."
+    "Not every sentence needs emphasis!"
+    "If it's a date, emphasize the day of the week."
+    "Sprinkle in disfluencies like 'um' or 'so' at thought boundaries."
+)
+
 
 def _expressive_options(expressive: bool) -> bool | dict[str, object]:
-    """The session's expressive-pipeline config: composed, formal delivery
-    (the old presets.FORMAL) - breathing and light fillers stay on, every
-    other non-verbal sound is disabled."""
+    """The session's expressive-pipeline config: composed, formal delivery -
+    light fillers stay on (the default, and the extra instructions ask for
+    them), every non-verbal sound is disabled."""
     if not expressive:
         return False
     return {
-        "speech_steering": {
-            "nonverbal_sounds": {
-                "laughing": False,
-                "sighing": False,
-                "crying": False,
-                "vocalizing": False,
-                "mouth_sounds": False,
-                "reflex_sounds": False,
-            },
-        },
+        "speech_steering": {"nonverbal_sounds": False},
+        "tts_instructions_append": EXPRESSIVE_EXTRA_INSTRUCTIONS,
     }
 
 
@@ -139,6 +192,17 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     logger.info("expressive mode: %s", "on" if expressive else "off")
 
     today = resolve_today()
+    llm_model = _session_llm_model()
+    # Logged per session so a sweep's evidence shows which model actually served
+    # it — the secret is read at session start, so a restart mid-sweep is visible.
+    # The endpoint is logged too: the same model id means something different when
+    # it is served from a self-hosted box than from Inference.
+    logger.info(
+        "session llm: %s | endpoint: %s | today: %s",
+        llm_model,
+        os.environ.get("OPENAI_BASE_URL", "").strip() or "livekit-inference",
+        today.isoformat(),
+    )
     db = HotelDB.from_bytes(build_seed_bytes(today), today)
 
     ui = UiView(ctx.room, db.connection)
@@ -156,7 +220,7 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         userdata=userdata,
         vad=inference.VAD(model="silero"),
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemma-4-31b-it"),
+        llm=_session_llm(),
         tts=inference.TTS(
             model="xai/tts-1",
             voice="carina",
@@ -207,11 +271,13 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         expressive=expressive,
     ).attach()
 
+    if expressive:
+        publish_raw_generations(session, ctx.room)
+
     await session.start(agent=HotelReceptionistAgent(today=today), room=ctx.room)
 
 
 def main() -> None:
-    load_dotenv(Path(__file__).with_name(".env.local"))
     cli.run_app(server)
 
 
