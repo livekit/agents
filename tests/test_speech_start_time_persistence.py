@@ -216,3 +216,46 @@ class TestUserTurnStartPersistence:
             self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.0)
         )
         assert audio_recognition.current_speech_duration == pytest.approx(0.6)
+
+    @pytest.mark.asyncio
+    async def test_vad_speech_duration_cleared_when_turn_commits(self):
+        """EOT cleanup must drop ``_vad_speech_duration`` with other speech anchors.
+
+        Otherwise the next turn's STT-failsafe path (no fresh VAD events) reuses
+        the previous segment length for ``interruption.min_duration``.
+        """
+        audio_recognition = self._create_audio_recognition()
+        audio_recognition._closing = asyncio.Event()
+        audio_recognition._endpointing = MagicMock()
+        audio_recognition._endpointing.min_delay = 0.0
+        audio_recognition._endpointing.max_delay = 0.0
+        audio_recognition._turn_detector = None
+        audio_recognition._hooks.on_end_of_turn.return_value = True
+        audio_recognition._turn_backchannel_over_agent = False
+        audio_recognition._overlap_in_current_turn = False
+        audio_recognition._stt_request_ids = []
+        audio_recognition._last_final_transcript_time = None
+        audio_recognition._final_transcript_confidence = []
+        audio_recognition._reset_transcription_timeout = MagicMock()
+        audio_recognition._audio_transcript = "hello"
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.1)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=0.8, silence_duration=0.1)
+        )
+        assert audio_recognition.current_speech_duration == pytest.approx(0.8)
+
+        chat_ctx = MagicMock()
+        chat_ctx.copy.return_value = chat_ctx
+        chat_ctx.add_message = MagicMock()
+        chat_ctx.items = []
+
+        audio_recognition._run_eou_detection(chat_ctx, trigger="vad")
+        task = audio_recognition._end_of_turn_task
+        assert task is not None
+        await task
+
+        assert audio_recognition.current_speech_duration is None
+        assert audio_recognition._vad_speech_duration is None

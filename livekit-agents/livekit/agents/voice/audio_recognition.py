@@ -1809,6 +1809,10 @@ class AudioRecognition:
                     self._speech_start_time = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
+                    # drop the prior segment's voiced duration so a late STT
+                    # failsafe (no new VAD events) sees unknown duration, not
+                    # a stale min_duration gate from the previous turn
+                    self._vad_speech_duration = None
 
                 if self._turn_detector_stream is not None:
                     self._turn_detector_stream.flush(reason="turn committed")
