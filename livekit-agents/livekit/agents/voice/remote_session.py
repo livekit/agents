@@ -132,6 +132,7 @@ class RoomSessionTransport(SessionTransport):
         with contextlib.suppress(utils.aio.ChanClosed):
             self._incoming_ch.send_nowait(reader)
 
+    @utils.log_exceptions(logger=logger)
     async def _read_loop(self) -> None:
         # sequential, so messages reach _recv_ch in the order they were sent
         async for reader in self._incoming_ch:
@@ -434,7 +435,7 @@ class SessionHost:
         # events are emitted from sync callbacks and nobody awaits them, so they
         # queue here and one long-lived writer drains them in emission order
         self._event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] | None = None
-        self._event_writer_task: asyncio.Task[None] | None = None
+        self._write_task: asyncio.Task[None] | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -458,8 +459,8 @@ class SessionHost:
         self._started = True
         await self._transport.start()
         self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
-        self._event_writer_task = asyncio.create_task(
-            self._event_writer_loop(self._event_ch), name="SessionHost._event_writer"
+        self._write_task = asyncio.create_task(
+            self._write_loop(self._event_ch), name="SessionHost._write_loop"
         )
         self._recv_task = asyncio.create_task(self._recv_loop())
 
@@ -505,9 +506,9 @@ class SessionHost:
         # their way out, then exit
         if self._event_ch is not None:
             self._event_ch.close()
-        if self._event_writer_task is not None:
-            await _drain({self._event_writer_task}, deadline)
-            self._event_writer_task = None
+        if self._write_task is not None:
+            await _drain({self._write_task}, deadline)
+            self._write_task = None
 
         await self._transport.close()
 
@@ -548,9 +549,8 @@ class SessionHost:
         with contextlib.suppress(utils.aio.ChanClosed):
             self._event_ch.send_nowait(msg)
 
-    async def _event_writer_loop(
-        self, event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage]
-    ) -> None:
+    @utils.log_exceptions(logger=logger)
+    async def _write_loop(self, event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage]) -> None:
         # nobody awaits an event, so a failed one is logged rather than raised.
         # Draining them from a single task keeps their emission order and avoids
         # spawning a task per event.
