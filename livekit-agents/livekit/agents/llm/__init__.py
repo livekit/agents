@@ -88,7 +88,6 @@ __all__ = [
     "AvailabilityChangedEvent",
     "RealtimeModelFallbackAdapter",
     "FallbackRealtimeSession",
-    "_FallbackRealtimeSession",
     "RealtimeAvailabilityChangedEvent",
     "ToolChoice",
     "Tool",
