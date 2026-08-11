@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from datetime import date, time
+from enum import StrEnum
 from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -77,6 +78,23 @@ Room = Annotated[NumberedRoom | PenthouseSuite, Field(discriminator="type")]
 
 def room_to_id(room: NumberedRoom | PenthouseSuite) -> str:
     return "RM_PH" if room.type == "penthouse" else f"RM_{room.number}"
+
+
+class DeliveryPreference(StrEnum):
+    """The handling notes the florist actually acts on. A closed set: free text let the
+    agent write the destination back as an instruction, or invent a delivery guarantee."""
+
+    AS_EARLY_AS_POSSIBLE = "as_early_as_possible"
+    BEFORE_NOON_IF_POSSIBLE = "before_noon_if_possible"
+    LEAVE_WITH_FRONT_DESK = "leave_with_front_desk"
+
+
+def _speak_delivery_instruction(instruction: DeliveryPreference) -> str:
+    return {
+        DeliveryPreference.AS_EARLY_AS_POSSIBLE: "as early as possible",
+        DeliveryPreference.BEFORE_NOON_IF_POSSIBLE: "before noon if possible",
+        DeliveryPreference.LEAVE_WITH_FRONT_DESK: "leave with the front desk",
+    }[instruction]
 
 
 class ServicesToolsMixin:
@@ -379,7 +397,7 @@ class ServicesToolsMixin:
         guest_phone: str,
         room: Room | None = None,
         recipient: str | None = None,
-        delivery_instruction: str = "",
+        delivery_instruction: DeliveryPreference | None = None,
     ) -> str:
         """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instruction here, or via amend_florist_order after placing - never in a followup.
 
@@ -391,7 +409,7 @@ class ServicesToolsMixin:
             guest_phone: The caller's phone number, in case the florist needs to reach them.
             room: The destination room, ONLY if the caller named one. A numbered room or suite is {"type": "room", "number": <number>}; the penthouse suite is {"type": "penthouse"}. Omit when no room was named - never guess; if you don't know where it goes, ask.
             recipient: The recipient's name, ONLY when no room is known yet (an arriving guest whose room isn't assigned). Leave unset when you pass room.
-            delivery_instruction: How the delivery should be handled ("before the guest arrives", "leave with the concierge") if the caller says. Empty otherwise.
+            delivery_instruction: A handling constraint ADDITIONAL to the destination, never a restatement of it - if the destination already implies it, the florist has it and this stays unset. Match the caller's actual constraint: a deadline is "before_noon_if_possible"; "as_early_as_possible" is for the earliest slot with no deadline. These are requests to the florist, not guaranteed delivery times. Omit if the caller adds none.
         """
         room_id = room_to_id(room) if room else None
         try:
@@ -403,7 +421,9 @@ class ServicesToolsMixin:
                 recipient_name=recipient,
                 on_date=on_date,
                 card_message=card_message,
-                delivery_instructions=delivery_instruction,
+                delivery_instructions=(
+                    delivery_instruction.value if delivery_instruction is not None else ""
+                ),
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -418,25 +438,30 @@ class ServicesToolsMixin:
 
     @function_tool
     async def amend_florist_order(
-        self, ctx: RunContext[Userdata], order_code: str, delivery_instruction: str
+        self,
+        ctx: RunContext[Userdata],
+        order_code: str,
+        delivery_instruction: DeliveryPreference,
     ) -> str:
         """Attach or replace the delivery handling note on a florist order already placed. Use it when the caller adds a handling request after the order ("make sure it's there before she arrives") - the note belongs on the order the florist reads, not in a followup nobody routes.
 
         Args:
             order_code: The florist order reference from order_flowers (e.g. "FLR-...").
-            delivery_instruction: How the delivery should be handled, in one line.
+            delivery_instruction: The handling constraint the caller added. Match what they actually said: a deadline is "before_noon_if_possible"; "as_early_as_possible" is for the earliest slot with no deadline. These are requests to the florist, not guaranteed delivery times.
         """
         try:
             await ctx.userdata.db.amend_florist_order(
-                code=order_code, delivery_instructions=delivery_instruction
+                code=order_code, delivery_instructions=delivery_instruction.value
             )
         except NotFound:
             raise ToolError(
                 f"no florist order {order_code} - re-confirm the reference with the caller"
             ) from None
         return (
-            f'noted on the order: "{delivery_instruction}" | confirm to the caller that the '
-            "florist has it; no further tool call is needed."
+            f"noted on order {_speak_code(order_code)}: "
+            f'"{_speak_delivery_instruction(delivery_instruction)}" | read the note back to the '
+            "caller in those words - it goes to the florist with the order; no further tool call "
+            "is needed."
         )
 
     @function_tool
