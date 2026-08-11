@@ -173,6 +173,43 @@ def test_public_option_and_event_types_are_exported() -> None:
     assert public_types.isdisjoint(byteplus.__pdoc__)
 
 
+@pytest.fixture
+def clear_byteplus_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for variable in ("BYTEPLUS_API_KEY", "BYTEPLUS_APP_ID", "BYTEPLUS_ACCESS_KEY"):
+        monkeypatch.delenv(variable, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("app_id", "access_key"),
+    [
+        pytest.param("test-app-id", None, id="missing-access-key"),
+        pytest.param(None, "test-access-key", id="missing-app-id"),
+    ],
+)
+def test_legacy_auth_requires_both_credentials(
+    clear_byteplus_auth_env: None,
+    app_id: str | None,
+    access_key: str | None,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="^legacy authentication requires both app_id and access_key$",
+    ):
+        TTS(app_id=app_id, access_key=access_key)
+
+
+def test_missing_authentication_uses_general_error(clear_byteplus_auth_env: None) -> None:
+    with pytest.raises(ValueError, match="^BytePlus TTS authentication is required"):
+        TTS()
+
+
+def test_legacy_auth_accepts_complete_pair(clear_byteplus_auth_env: None) -> None:
+    provider = TTS(app_id="test-app-id", access_key="test-access-key")
+
+    assert provider._opts.app_id == "test-app-id"
+    assert provider._opts.access_key == "test-access-key"
+
+
 @pytest.mark.parametrize("invalid_value", [False, True, 0.0, 100.0])
 def test_parenthesis_filter_requires_an_exact_integer_choice(invalid_value: object) -> None:
     with pytest.raises(ValueError, match="max_length_to_filter_parenthesis"):

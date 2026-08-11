@@ -768,14 +768,14 @@ def _resolve_base_url(base_url: NotGivenOr[str]) -> str:
 
 def _validate_options(opts: _TTSOptions) -> _TTSOptions:
     """Validate individual values and every deterministic cross-parameter rule."""
+    if bool(opts.app_id) != bool(opts.access_key) and not opts.api_key:
+        raise ValueError("legacy authentication requires both app_id and access_key")
     if not opts.api_key and not (opts.app_id and opts.access_key):
         raise ValueError(
             "BytePlus TTS authentication is required. Provide api_key or set "
             "BYTEPLUS_API_KEY; alternatively provide "
             "both app_id and access_key for legacy authentication."
         )
-    if bool(opts.app_id) != bool(opts.access_key) and not opts.api_key:
-        raise ValueError("legacy authentication requires both app_id and access_key")
 
     for name, value in (
         ("api_key", opts.api_key),
