@@ -25,9 +25,11 @@ from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _BOOK_ROOM_INSTRUCTIONS = """\
-You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
+You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask a detail this booking already holds. The tool returns tell you what it holds; they are the record, not your memory of the conversation.
 
-Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave.
+This flow holds exactly ONE room - there is one stay and one room choice, and calling set_stay or choose_room again REPLACES the values, it never adds a second room. When the caller wants more than one room (a family booking two rooms, different checkout days), pick one room, carry it through confirm_booking, and let the receptionist start a fresh flow for the next room once this one has completed - never try to capture two stays in the same flow.
+
+Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave. When the conversation covered more than one room, take only the values the caller gave for the room this flow is holding; a value they gave for a different room is not this room's, and where they haven't given one for this room, ask. That scan covers the stay and the room; it is not a licence to skip a dialog.
 
 Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick before calling choose_room. Each option's line says what to do with its view: ask which one only when that line lists two, and state the single view as a fact when it lists one - offering a view a type doesn't have hands the caller a choice that isn't real. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
 
@@ -109,6 +111,21 @@ class BookRoomTask(AgentTask[RoomBooking]):
             f"({dates} - use these exact weekday names - room and extras, {total}card "
             f"ending {self._card_last4}) and call confirm_booking() the moment the "
             "caller agrees. Quote ONLY this total - never compute your own."
+        )
+
+    def _not_booked(self) -> str:
+        # The refusal path gets its own text; _status() is for the success and
+        # progress returns only. _status() on its own reads as "here is the next
+        # step" - nothing in it says no booking happened, and by this point in a
+        # multi-room call the model has usually already spoken a real "HTL-..."
+        # code, so it has a template to invent one from. The is_error flag is no
+        # help here: the OpenAI provider format drops it and sends a tool message
+        # whose content is this string and nothing else, so the text itself has to
+        # carry the outcome. Still no missing-field list, for the reason above.
+        return (
+            "NOT booked - no reservation was created and no confirmation code exists. "
+            "Do not tell the caller they're booked and never speak a confirmation code. "
+            f"Where the booking actually stands: {self._status()}"
         )
 
     @function_tool()
@@ -282,7 +299,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             and phone
             and card_last4
         ):
-            raise ToolError(self._status())
+            raise ToolError(self._not_booked())
         try:
             booking = await self._db.book_room(
                 room_type=room_type,
