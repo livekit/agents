@@ -42,7 +42,7 @@ from .realtime_fallback_adapter import (
     FallbackRealtimeSession,
     RealtimeAvailabilityChangedEvent,
     RealtimeModelFallbackAdapter,
-    _FallbackRealtimeSession,
+    _FallbackRealtimeSession as _FallbackRealtimeSession,
 )
 from .tool_context import (
     DuplicateScope,
