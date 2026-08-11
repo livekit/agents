@@ -29,7 +29,7 @@ You're handling a room booking from start to finish. Collect details in whatever
 
 Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave.
 
-Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick (ask about any preference they've hinted at, like a view) before calling choose_room. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
+Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick before calling choose_room. Each option's line says what to do with its view: ask which one only when that line lists two, and state the single view as a fact when it lists one - offering a view a type doesn't have hands the caller a choice that isn't real. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
 
 Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm_booking() now", call it - the call IS the next action, no filler turn.
 
@@ -99,11 +99,16 @@ class BookRoomTask(AgentTask[RoomBooking]):
         total = (
             f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
         )
+        dates = (
+            f"{self._check_in:%A, %B %-d} to {self._check_out:%A, %B %-d}"
+            if self._check_in and self._check_out
+            else "dates"
+        )
         return (
             "all required details captured - read the booking back in one sentence "
-            f"(dates, room and extras, {total}card ending {self._card_last4}) and call "
-            "confirm_booking() the moment the caller agrees. Quote ONLY this total - "
-            "never compute your own."
+            f"({dates} - use these exact weekday names - room and extras, {total}card "
+            f"ending {self._card_last4}) and call confirm_booking() the moment the "
+            "caller agrees. Quote ONLY this total - never compute your own."
         )
 
     @function_tool()
@@ -140,8 +145,14 @@ class BookRoomTask(AgentTask[RoomBooking]):
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
-        options = describe_room_options(avail)
-        return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
+        # Weekdays come from the computed dates, never from model arithmetic - a
+        # hallucinated "Friday the thirteenth" survives every read-back otherwise.
+        return (
+            f"stay recorded ({check_in:%A} {check_in} to {check_out:%A} {check_out}, "
+            f"{guests} guests; those weekday names are computed - use them, never your "
+            f"own day-counting)\noptions (the views on a type's line are the only views "
+            f"that type has):\n{describe_room_options(avail)}\n{self._status()}"
+        )
 
     @function_tool()
     async def choose_room(
