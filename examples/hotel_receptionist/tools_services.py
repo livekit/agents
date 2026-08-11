@@ -100,7 +100,7 @@ class ServicesToolsMixin:
         caller_phone: str,
         summary: str,
     ) -> str:
-        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
+        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes. Florist delivery notes are the one exception - they belong on the order itself via amend_florist_order, never here.
 
         Args:
             kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
