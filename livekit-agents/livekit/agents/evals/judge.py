@@ -24,10 +24,9 @@ def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
     Empty for a plugin LLM, which has no LiveKit Inference class to set.
     """
     from ..inference import LLM as InferenceLLM
-    from ..inference._utils import INFERENCE_CLASS_LOW
 
     if isinstance(llm, InferenceLLM):
-        return {"inference_class": INFERENCE_CLASS_LOW}
+        return {"inference_class": "low"}
 
     return {}
 

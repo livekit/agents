@@ -20,6 +20,7 @@ from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
@@ -106,6 +107,9 @@ class FallbackAdapter(
             for _ in self._stt_instances
         ]
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: STT = self._stt_instances[0]
+
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
@@ -117,6 +121,11 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
@@ -242,13 +251,15 @@ class FallbackAdapter(
             stt_status = self._status[i]
             if stt_status.available or all_failed:
                 try:
-                    return await self._try_recognize(
+                    event = await self._try_recognize(
                         stt=stt,
                         buffer=buffer,
                         language=language,
                         conn_options=conn_options,
                         recovering=False,
                     )
+                    self._active_instance = stt
+                    return event
                 except Exception:  # exceptions already logged inside _try_recognize
                     if stt_status.available:
                         stt_status.available = False
@@ -375,8 +386,12 @@ class FallbackRecognizeStream(RecognizeStream):
                         forward_input_task = asyncio.create_task(_forward_input_task())
 
                     try:
+                        should_set_active = True
                         async with main_stream:
                             async for ev in main_stream:
+                                if should_set_active:
+                                    should_set_active = False
+                                    self._fallback_adapter._active_instance = stt
                                 self._event_ch.send_nowait(ev)
 
                     except asyncio.TimeoutError:

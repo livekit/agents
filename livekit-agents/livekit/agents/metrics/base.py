@@ -24,10 +24,16 @@ class LLMMetrics(_BaseMetrics):
     timestamp: float
     duration: float
     ttft: float
+    """Time to first generated token in seconds. -1 if the response generated none."""
     cancelled: bool
     completion_tokens: int
     prompt_tokens: int
     prompt_cached_tokens: int
+    cache_creation_tokens: int = 0
+    """The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
+
+    Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
+    """
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None

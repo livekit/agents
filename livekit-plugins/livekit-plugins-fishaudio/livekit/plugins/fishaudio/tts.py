@@ -408,6 +408,9 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
         "prosody": prosody,
         "top_p": opts.top_p,
         "temperature": opts.temperature,
+        # Server-side reliability feature, deliberately not exposed as an option:
+        # every synthesis request runs with the quality guard enabled.
+        "features": ["quality-guard"],
     }
     # Generation-tuning fields have no plugin default: they are omitted unless
     # set so Fish's server-side defaults stay in effect.

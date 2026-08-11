@@ -512,7 +512,7 @@ class JobContext:
         about itself outranks what an individual model was configured with. Empty for
         an ordinary job.
         """
-        from .inference._utils import HEADER_INFERENCE_PRIORITY, INFERENCE_CLASS_LOW
+        from .inference._utils import HEADER_INFERENCE_PRIORITY
         from .simulation import SimulationMode
 
         headers: dict[str, str] = {}
@@ -524,7 +524,7 @@ class JobContext:
         # so their latency has to stay representative of production.
         sim = self.simulation_context()
         if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
-            headers[HEADER_INFERENCE_PRIORITY] = INFERENCE_CLASS_LOW
+            headers[HEADER_INFERENCE_PRIORITY] = "low"
 
         return headers
 
