@@ -1995,7 +1995,7 @@ class AgentActivity(RecognitionHooks):
 
         if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
-                run_state._watch_handle(handle)
+                run_state._watch_handle(handle, label="auto_tool_reply")
             self._pending_auto_tool_reply_fut = None
             fut.set_result(None)
 
@@ -4214,7 +4214,7 @@ class AgentActivity(RecognitionHooks):
                                 self._pending_auto_tool_reply_fut = None
 
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
-                    run_state._watch_handle(task)
+                    run_state._watch_handle(task, label="auto_tool_reply_wait")
 
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)

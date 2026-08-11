@@ -6,6 +6,7 @@ import contextvars
 import functools
 import json
 import os
+import time
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -35,6 +36,12 @@ if TYPE_CHECKING:
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
+
+# How long a run may stay pending before it is reported as stalled. A run that
+# outlives this is not necessarily broken (a slow tool is enough), but callers
+# driving turns over `session.run()` usually give up around a minute, so the
+# report has to land while the run is still stuck and its handles observable.
+STALL_WARN_AFTER = 30.0
 
 _OUTPUT_RETRY_PROMPT = (
     "You have not provided the final output yet. Call the appropriate function "
@@ -105,6 +112,10 @@ class RunResult(Generic[Run_T]):
         session: AgentSession | None = None,
     ) -> None:
         self._handles: set[SpeechHandle | asyncio.Future[Any]] = set()
+        # what each watched handle is, for the stall diagnostics below. A run only
+        # completes once every handle here is done, so when one never completes the
+        # run hangs; the label is what turns that into a nameable culprit.
+        self._handle_labels: dict[SpeechHandle | asyncio.Future[Any], str] = {}
 
         if not is_given(output_options):
             output_options = RunOutputOptions()
@@ -121,6 +132,10 @@ class RunResult(Generic[Run_T]):
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
+
+        self._started_at = time.time()
+        self._stall_watchdog_atask: asyncio.Task[None] | None = None
+        self._done_fut.add_done_callback(lambda _: self._cancel_stall_watchdog())
 
         self.__last_speech_handle: SpeechHandle | None = None
 
@@ -215,11 +230,14 @@ class RunResult(Generic[Run_T]):
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
 
-    def _watch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> None:
+    def _watch_handle(
+        self, handle: SpeechHandle | asyncio.Future[Any], *, label: str = "unknown"
+    ) -> None:
         if self._done_fut.done():
             return
 
         self._handles.add(handle)
+        self._handle_labels.setdefault(handle, label)
 
         if isinstance(handle, SpeechHandle):
             handle._add_item_added_callback(self._item_added)
@@ -236,6 +254,65 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
         return True
+
+    def _pending_handles(self) -> list[str]:
+        """Describe the handles this run is still waiting on.
+
+        A run completes only once every watched handle is done, so this is the
+        list of reasons it has not completed yet. Empty means the run is only
+        waiting on its own bookkeeping.
+        """
+        pending: list[str] = []
+        for handle in self._handles:
+            if handle.done():
+                continue
+
+            label = self._handle_labels.get(handle, "unknown")
+            if isinstance(handle, SpeechHandle):
+                pending.append(f"{label}(speech_id={handle.id})")
+            elif isinstance(handle, asyncio.Task):
+                pending.append(f"{label}(task={handle.get_name()})")
+            else:
+                pending.append(label)
+
+        return sorted(pending)
+
+    def _start_stall_watchdog(self) -> None:
+        """Report what the run is waiting on if it stays pending for too long.
+
+        A run that never completes is otherwise silent from the agent's side:
+        the caller times out with nothing naming the handle that held it open,
+        while the transcript looks complete because the reply itself did land.
+        """
+        if self._stall_watchdog_atask is not None or self._done_fut.done():
+            return
+
+        self._stall_watchdog_atask = asyncio.create_task(
+            self._stall_watchdog(), name="RunResult._stall_watchdog"
+        )
+
+    def _cancel_stall_watchdog(self) -> None:
+        if self._stall_watchdog_atask is not None:
+            self._stall_watchdog_atask.cancel()
+            self._stall_watchdog_atask = None
+
+    async def _stall_watchdog(self) -> None:
+        from ..log import logger
+
+        await asyncio.sleep(STALL_WARN_AFTER)
+        if self._done_fut.done():
+            return
+
+        # not necessarily a bug — a slow tool looks the same from here — so this
+        # stays a warning and the run is left running
+        logger.warning(
+            "run has not completed yet, it is still waiting on the handles below",
+            extra={
+                "elapsed": round(time.time() - self._started_at, 1),
+                "pending_handles": self._pending_handles(),
+                "user_input": self._user_input,
+            },
+        )
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):

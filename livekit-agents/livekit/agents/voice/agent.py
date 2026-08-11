@@ -946,7 +946,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # (the parent speech may predate the run, e.g. created in on_enter)
         if (run_state := session._global_run_state) and not run_state.done():
             for task in blocked_tasks:
-                run_state._watch_handle(task)
+                run_state._watch_handle(task, label="blocked_task")
 
         if (
             task_info.function_call
@@ -983,7 +983,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 if run_state and not run_state.done():
                     # watch the on_enter task as a guard so RunResult won't complete
                     # before on_enter has registered its own speech handles
-                    run_state._watch_handle(on_enter_task)
+                    run_state._watch_handle(on_enter_task, label="agent_task_on_enter")
                     pending_on_enter_task = on_enter_task
                 else:
                     # no active run to guard — just wait for on_enter directly
@@ -1020,7 +1020,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             # is tracked by the current RunResult again
             if run_state and not run_state.done():
                 for handle in suspended_handles:
-                    run_state._watch_handle(handle)
+                    run_state._watch_handle(handle, label="resumed_after_agent_task")
 
             if pending_on_enter_task:
                 try:

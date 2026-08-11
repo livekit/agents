@@ -817,6 +817,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
         self._global_run_state = run_state
         self.generate_reply(user_input=user_input, input_modality=input_modality)
+        # a run drives one turn, so it is expected to complete; report it if it
+        # does not, naming the handles still holding it open
+        run_state._start_stall_watchdog()
         return run_state
 
     @overload
@@ -1430,7 +1433,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 add_to_chat_ctx=add_to_chat_ctx,
             )
             if run_state:
-                run_state._watch_handle(handle)
+                run_state._watch_handle(handle, label="say")
 
         return handle
 
@@ -1496,7 +1499,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 input_details=InputDetails(modality=input_modality),
             )
             if run_state:
-                run_state._watch_handle(handle)
+                run_state._watch_handle(handle, label="generate_reply")
 
         return handle
 
@@ -1605,7 +1608,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if run_state:
                 # don't mark the RunResult as done, if there is currently an agent transition happening.  # noqa: E501
                 # (used to make sure we're correctly adding the AgentHandoffResult before completion)  # noqa: E501
-                run_state._watch_handle(task)
+                run_state._watch_handle(task, label="agent_handoff")
 
     async def wait_for_idle(self) -> AgentActivity:
         """Wait until the current activity is idle and return it. Re-targets on handoff.
@@ -1650,7 +1653,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         guard: asyncio.Future[None] | None = None
         if run_state is not None and run_state is self._global_run_state and not run_state.done():
             guard = asyncio.get_running_loop().create_future()
-            run_state._watch_handle(guard)
+            run_state._watch_handle(guard, label="foreground_hold")
             self._foreground_guards.add(guard)
 
         try:
@@ -1783,7 +1786,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # watch on_enter so the run captures its output without awaiting it
         if (activity := self._activity) is not None and activity._on_enter_task is not None:
             if (run_state := self._global_run_state) is not None and not run_state.done():
-                run_state._watch_handle(activity._on_enter_task)
+                run_state._watch_handle(activity._on_enter_task, label="on_enter")
 
     def _emit_debug_message(self, payload: dict[str, Any]) -> None:
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
