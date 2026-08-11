@@ -214,16 +214,28 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                url,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    API_AUTH_HEADER: self._opts.api_key,
-                },
-            ),
-            timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        API_AUTH_HEADER: self._opts.api_key,
+                    },
+                ),
+                timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(type(e).__name__) from None
+
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(
             "Established new Cartesia TTS WebSocket connection",
@@ -547,6 +559,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",

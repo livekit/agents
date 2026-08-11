@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from livekit.agents import APIConnectionError
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -57,6 +57,16 @@ class _DummySTT(STT):
 
     def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _DummyStream:
         return _DummyStream(stt=self)
+
+
+class _NonRetryableStream(RecognizeStream):
+    def __init__(self, *, stt: STT) -> None:
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        self.run_count = 0
+
+    async def _run(self) -> None:
+        self.run_count += 1
+        raise APIStatusError("Unauthorized", status_code=401)
 
 
 async def test_start_time_seeded_on_init() -> None:
@@ -113,5 +123,18 @@ async def test_start_time_reseeded_on_retry() -> None:
     assert stream.start_time != sentinel
     # And it should be a recent wall-clock value.
     assert time.time() - stream.start_time < 5.0
+
+    await stream.aclose()
+
+
+async def test_non_retryable_error_is_not_retried() -> None:
+    stt = _DummySTT()
+    stream = _NonRetryableStream(stt=stt)
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stream._task
+
+    assert exc_info.value.status_code == 401
+    assert stream.run_count == 1
 
     await stream.aclose()

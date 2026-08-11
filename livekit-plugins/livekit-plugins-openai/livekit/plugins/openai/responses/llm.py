@@ -484,8 +484,9 @@ class LLMStream(llm.LLMStream):
                 }
                 async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
-                    self._process_event(parsed_ev)
-                    retryable = False
+                    chunk = self._process_event(parsed_ev)
+                    if chunk is not None and chunk.has_response():
+                        retryable = False
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
@@ -512,8 +513,9 @@ class LLMStream(llm.LLMStream):
 
                 async with stream:
                     async for event in stream:
-                        self._process_event(event)
-                        retryable = False
+                        chunk = self._process_event(event)
+                        if chunk is not None and chunk.has_response():
+                            retryable = False
 
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
@@ -567,9 +569,10 @@ class LLMStream(llm.LLMStream):
             return ResponseFailedEvent.model_validate(event)
         return None
 
-    def _process_event(self, event: ResponseStreamEvent | None) -> None:
+    def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
+        """Handle one stream event, returning the chunk it sent to the caller, if any."""
         if event is None:
-            return
+            return None
         chunk = None
         if isinstance(event, ResponseErrorEvent):
             self._handle_error(event)
@@ -585,6 +588,7 @@ class LLMStream(llm.LLMStream):
             self._handle_response_failed(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
+        return chunk
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
         error_code = -1

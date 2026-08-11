@@ -238,20 +238,21 @@ async def _llm_inference_task(
     last_content_at = 0.0
     try:
         async for chunk in llm_node:
-            if data.ttft is None:
-                data.ttft = time.perf_counter() - start_time
-
             # extract text content from either str or ChatChunk
             content: str | None = None
+            generated = False
 
             if isinstance(chunk, str):
                 content = chunk
+                generated = bool(chunk)
 
             elif isinstance(chunk, ChatChunk):
                 if chunk.usage is not None:
                     usage = chunk.usage
                 if not chunk.delta:
                     continue
+
+                generated = chunk.has_response()
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
@@ -288,6 +289,9 @@ async def _llm_inference_task(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
                 content = None
+
+            if generated and data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
 
             # route text content to output channels
             if content:
@@ -495,6 +499,7 @@ def perform_audio_forwarding(
     *,
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
+    reconcile_playout_pause: Callable[[], None],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
     # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
@@ -502,7 +507,14 @@ def perform_audio_forwarding(
     out.first_frame_fut.add_done_callback(
         lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
     )
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+    task = asyncio.create_task(
+        _audio_forwarding_task(
+            audio_output,
+            tts_output,
+            out,
+            reconcile_playout_pause=reconcile_playout_pause,
+        )
+    )
     return task, out
 
 
@@ -511,12 +523,15 @@ async def _audio_forwarding_task(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    *,
+    reconcile_playout_pause: Callable[[], None],
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
     cancelled = False
     try:
-        audio_output.resume()
+        # reconcile any SOS pause before forwarding audio.
+        reconcile_playout_pause()
 
         async for frame in tts_output:
             out.audio.append(frame)
@@ -588,6 +603,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    reconcile_playout_pause: Callable[[], None],
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -602,7 +618,9 @@ async def forward_generation(
         audio_out: _AudioOutput | None = None
         if audio_output is not None and audio_source is not None:
             forward_audio_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=audio_source
+                audio_output=audio_output,
+                tts_output=audio_source,
+                reconcile_playout_pause=reconcile_playout_pause,
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))

@@ -13,14 +13,14 @@ The full menu is loaded once per session and injected directly into the agent's 
 ### Menu Loading
 
 At the start of each session, `new_userdata()` queries `FakeDB` for all item categories (drinks, combos, Happy Meals, regulars, sauces) and stores them in the `Userdata` dataclass alongside a fresh `OrderState`.
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L382-L399
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/agent.py#L382-L399
 `DriveThruAgent.__init__` then formats each category using `menu_instructions()` and concatenates the results with `COMMON_INSTRUCTIONS` to build the full system prompt. This means the LLM sees the entire menu from the first turn and can answer questions or suggest items without any tool calls.
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L55-L83
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/agent.py#L55-L83
 ### Dynamic Tool Building
 
 The three ordering tools are constructed by `build_combo_order_tool`, `build_happy_order_tool`, and `build_regular_order_tool`. Each method closes over the relevant item lists and injects their IDs as the `enum` constraint in the tool's JSON schema.
 
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L85-L119
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/agent.py#L85-L119
 
 This restricts the LLM to known IDs at the schema layer before any runtime logic runs. `ToolError` handles the cases that can't be caught statically — for example, when a drink has multiple available sizes and the customer hasn't specified one yet, the tool raises a `ToolError` prompting the agent to ask for clarification before retrying.
 
@@ -29,7 +29,7 @@ This restricts the LLM to known IDs at the schema layer before any runtime logic
 `order.py` defines three Pydantic models: `OrderedCombo`, `OrderedHappy`, and `OrderedRegular` . A discriminated union `OrderedItem` is also defined. Each ordered item receives a random short `order_id` on creation via `order_uid()`. 
 
 `OrderState` stores the current cart as a `dict[str, OrderedItem]` keyed by `order_id`, which the `remove_order_item` and `list_order_items` tools use to look up or modify existing items.
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/order.py#L45-L56
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/order.py#L45-L56
 
 ### Managing the Order
 
@@ -43,9 +43,9 @@ Two tools handle cart management:
 ### Background Audio
 
 `BackgroundAudioPlayer` plays an ambient drive-thru noise track (`bg_noise.mp3`) throughout the session to set the scene. 
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L438-L443
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/agent.py#L438-L443
 
 ### STT Tuning
 
 The STT model is also initialized with `keyterm` hints for McDonald's brand names (e.g., `"Big Mac"`, `"McFlurry"`, `"McCrispy"`) to improve transcription accuracy.
-https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive-thru/agent.py#L415-L430
+https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/examples/drive_thru/agent.py#L415-L430
