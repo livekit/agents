@@ -243,7 +243,7 @@ async def _llm_inference_task(
                 if not chunk.delta:
                     continue
 
-                generated = chunk.carries_generation()
+                generated = chunk.has_response()
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:

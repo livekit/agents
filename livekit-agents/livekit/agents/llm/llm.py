@@ -81,7 +81,7 @@ class ChatChunk(BaseModel):
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
 
-    def carries_generation(self) -> bool:
+    def has_response(self) -> bool:
         """Whether this chunk delivered generation the caller can see.
 
         Token counts and provider metadata (a gateway deployment stamp, a thought
@@ -346,7 +346,7 @@ class LLMStream(ABC):
                 self._provider_request_ids.append(request_id)
             # measured against generation, not the first chunk: a retry that follows a
             # contentless chunk would otherwise latch the clock on the failed attempt
-            if ttft == -1.0 and ev.carries_generation():
+            if ttft == -1.0 and ev.has_response():
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 

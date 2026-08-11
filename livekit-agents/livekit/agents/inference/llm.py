@@ -465,7 +465,7 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            if chat_chunk.carries_generation():
+                            if chat_chunk.has_response():
                                 retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 

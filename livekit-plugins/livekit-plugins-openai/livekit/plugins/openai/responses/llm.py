@@ -485,7 +485,7 @@ class LLMStream(llm.LLMStream):
                 async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)
-                    if chunk is not None and chunk.carries_generation():
+                    if chunk is not None and chunk.has_response():
                         retryable = False
 
                 if not self._response_completed:
@@ -514,7 +514,7 @@ class LLMStream(llm.LLMStream):
                 async with stream:
                     async for event in stream:
                         chunk = self._process_event(event)
-                        if chunk is not None and chunk.carries_generation():
+                        if chunk is not None and chunk.has_response():
                             retryable = False
 
             except openai.APITimeoutError:
