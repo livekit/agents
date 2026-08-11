@@ -64,6 +64,11 @@ if TYPE_CHECKING:
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
+# How long SessionHost.aclose waits for in-flight request handlers to finish
+# before cancelling them. Stays well under the worker's shutdown_process_timeout
+# (10s by default), which has to cover this plus the rest of session cleanup.
+_SHUTDOWN_DRAIN_TIMEOUT = 3.0
+
 
 class SessionTransport(ABC):
     @abstractmethod
@@ -85,6 +90,7 @@ class RoomSessionTransport(SessionTransport):
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
         self._tasks: set[asyncio.Task[None]] = set()
+        self._send_lock = asyncio.Lock()
 
     @property
     def remote_identity(self) -> str | None:
@@ -122,20 +128,26 @@ class RoomSessionTransport(SessionTransport):
             logger.warning("failed to read binary stream message", exc_info=e)
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        # a dropped message is a request the caller waits out in full, so failures
+        # are raised rather than logged: only the caller knows whether anyone is
+        # waiting on this one
         if self._recv_ch.closed or not self._room.isconnected():
-            return
-        try:
-            data = msg.SerializeToString()
-            dest = [self._remote_identity] if self._remote_identity else None
-            writer = await self._room.local_participant.stream_bytes(
-                name=utils.shortuuid("AS_"),
-                topic=TOPIC_SESSION_MESSAGES,
-                destination_identities=dest,
-            )
-            await writer.write(data)
-            await writer.aclose()
-        except Exception as e:
-            logger.warning("failed to send binary stream message: %s", e)
+            raise RuntimeError("room session transport is closed")
+
+        data = msg.SerializeToString()
+        dest = [self._remote_identity] if self._remote_identity else None
+        # one stream at a time — concurrent writers interleave on the same topic
+        async with self._send_lock:
+            try:
+                writer = await self._room.local_participant.stream_bytes(
+                    name=utils.shortuuid("AS_"),
+                    topic=TOPIC_SESSION_MESSAGES,
+                    destination_identities=dest,
+                )
+                await writer.write(data)
+                await writer.aclose()
+            except Exception as e:
+                raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -169,6 +181,7 @@ class TcpSessionTransport(SessionTransport):
         self._writer: asyncio.StreamWriter | None = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._send_lock = asyncio.Lock()
 
     async def start(self) -> None:
         reader, writer = await asyncio.open_connection(self._host, self._port)
@@ -183,12 +196,18 @@ class TcpSessionTransport(SessionTransport):
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None:
-            return
+            raise RuntimeError("tcp session transport is closed")
+
         data = msg.SerializeToString()
         header = struct.pack(">I", len(data))
-        self._writer.write(header + data)
-        if self._writer.transport.get_write_buffer_size() > 64 * 1024:
-            await self._writer.drain()
+        # the drain below yields, so without the lock a second sender can splice
+        # its frame between this header and its payload
+        async with self._send_lock:
+            if self._closed or self._writer is None:
+                raise RuntimeError("tcp session transport is closed")
+            self._writer.write(header + data)
+            if self._writer.transport.get_write_buffer_size() > 64 * 1024:
+                await self._writer.drain()
 
     def send_message_threadsafe(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None or self._loop is None:
@@ -431,8 +450,20 @@ class SessionHost:
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
+            self._recv_task = None
 
-        await utils.aio.cancel_and_wait(*self._tasks.tasks)
+        # let in-flight handlers finish. Cancelling here drops the response of a
+        # request that already did its work — the caller then waits out its full
+        # timeout for an answer the session had ready.
+        if handlers := self._tasks.tasks:
+            _, pending = await asyncio.wait(handlers, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
+            if pending:
+                logger.warning(
+                    "session host handlers did not finish before the shutdown grace period",
+                    extra={"pending_handlers": len(pending)},
+                )
+                await utils.aio.cancel_and_wait(*pending)
+
         await self._transport.close()
 
     async def _recv_loop(self) -> None:
@@ -463,7 +494,15 @@ class SessionHost:
         ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
-        self._tasks.create_task(self._transport.send_message(msg))
+        self._tasks.create_task(self._send_event_message(msg))
+
+    async def _send_event_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        # events are fire-and-forget: nobody is waiting on one, so a failure is
+        # logged here instead of surfacing as an unhandled task exception
+        try:
+            await self._transport.send_message(msg)
+        except Exception:
+            logger.warning("failed to send session event", exc_info=True)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)

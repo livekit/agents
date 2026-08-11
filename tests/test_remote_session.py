@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,7 @@ from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
 from livekit.agents.voice.remote_session import (
     RemoteSession,
+    RoomSessionTransport,
     SessionHost,
     SessionTransport,
 )
@@ -200,4 +202,148 @@ async def test_run_input():
     assert resp is not None
 
     await client.aclose()
+    await host.aclose()
+
+
+class _SlowRunResult:
+    """A run that completes only once the test releases it."""
+
+    def __init__(self, release: asyncio.Event) -> None:
+        self.events = [MagicMock(item=ChatMessage(role="assistant", content=["done"], id="m-slow"))]
+        self._release = release
+
+    def done(self) -> bool:
+        return True
+
+    def __await__(self):
+        return self._release.wait().__await__()
+
+
+@pytest.mark.asyncio
+async def test_aclose_flushes_the_response_of_an_inflight_request():
+    """Shutdown must not drop the answer to a request that already did its work.
+
+    `aclose` used to cancel in-flight handlers outright, so a run that had just
+    finished lost its response and the caller waited out its whole timeout for
+    an answer the session already had.
+    """
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    release = asyncio.Event()
+    mock_session = _make_mock_session()
+    mock_session.interrupt = AsyncMock()
+    mock_session.run = MagicMock(return_value=_SlowRunResult(release))
+
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    run_task = asyncio.ensure_future(client.run("order a big mac", timeout=1.0))
+    await asyncio.sleep(0.05)  # let the handler reach the pending run
+
+    async def _finish_during_shutdown() -> None:
+        await asyncio.sleep(0.05)
+        release.set()
+
+    # the run completes while aclose is already draining: cancelling the handler
+    # at that moment is what loses the response
+    finisher = asyncio.ensure_future(_finish_during_shutdown())
+    await host.aclose()
+    await finisher
+
+    resp = await asyncio.wait_for(run_task, timeout=2.0)
+    assert [i.message.content[0].text for i in resp.items] == ["done"]
+
+    await client.aclose()
+
+
+def _fake_room(*, connected: bool = True, stream_error: Exception | None = None) -> MagicMock:
+    room = MagicMock()
+    room.isconnected = MagicMock(return_value=connected)
+
+    async def _stream_bytes(**kwargs):
+        if stream_error is not None:
+            raise stream_error
+        writer = MagicMock()
+        writer.write = AsyncMock()
+        writer.aclose = AsyncMock()
+        return writer
+
+    room.local_participant.stream_bytes = _stream_bytes
+    return room
+
+
+@pytest.mark.asyncio
+async def test_room_transport_raises_instead_of_dropping_the_message():
+    """A transport that cannot deliver must say so, not drop the message.
+
+    A silently dropped response is indistinguishable from a hung agent: the
+    caller blocks until its timeout with nothing explaining why.
+    """
+    # the send itself fails
+    transport = RoomSessionTransport(_fake_room(stream_error=RuntimeError("stream refused")))
+    with pytest.raises(RuntimeError, match="failed to send binary stream message"):
+        await transport.send_message(agent_pb.AgentSessionMessage())
+
+    # the room is gone
+    transport = RoomSessionTransport(_fake_room(connected=False))
+    with pytest.raises(RuntimeError, match="closed"):
+        await transport.send_message(agent_pb.AgentSessionMessage())
+
+    # and a healthy room still sends
+    transport = RoomSessionTransport(_fake_room())
+    await transport.send_message(agent_pb.AgentSessionMessage())
+
+
+@pytest.mark.asyncio
+async def test_room_transport_serializes_concurrent_sends():
+    """Concurrent writers must not interleave on the shared topic."""
+    overlapping = False
+    in_flight = 0
+
+    async def _stream_bytes(**kwargs):
+        nonlocal overlapping, in_flight
+        in_flight += 1
+        if in_flight > 1:
+            overlapping = True
+        await asyncio.sleep(0.01)  # a real send yields several times
+        in_flight -= 1
+        writer = MagicMock()
+        writer.write = AsyncMock()
+        writer.aclose = AsyncMock()
+        return writer
+
+    room = _fake_room()
+    room.local_participant.stream_bytes = _stream_bytes
+    transport = RoomSessionTransport(room)
+
+    await asyncio.gather(
+        *(transport.send_message(agent_pb.AgentSessionMessage()) for _ in range(8))
+    )
+    assert not overlapping
+
+
+class _FailingTransport(PairedTransport):
+    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        raise RuntimeError("transport is down")
+
+
+@pytest.mark.asyncio
+async def test_event_send_failure_does_not_escape_as_task_exception(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Events stay fire-and-forget even though the transport now raises."""
+    host = SessionHost(_FailingTransport())
+    host.register_session(_make_mock_session())
+    await host.start()
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        host._send_event(agent_pb.AgentSessionEvent())
+        await asyncio.sleep(0.05)
+
+    assert [r for r in caplog.records if "failed to send session event" in r.message]
+
     await host.aclose()
