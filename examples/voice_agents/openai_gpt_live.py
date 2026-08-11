@@ -141,10 +141,7 @@ async def entrypoint(ctx: JobContext) -> None:
             # backend Responses model that handles reasoning and tools
             backend_model="gpt-5.6-sol",
             backend_instructions="Use tools when current information is required.",
-            # hosted server-side tool, in addition to the @function_tool above
-            web_search=True,
         ),
-        turn_handling={"interruption": {"enabled": False}},
     )
 
     await session.start(agent=Assistant(), room=ctx.room)
