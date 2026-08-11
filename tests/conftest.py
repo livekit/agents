@@ -321,6 +321,21 @@ def format_task(task) -> str:
         return repr(task)
 
 
+async def _still_pending_after_settle(tasks, timeout: float = 0.1) -> list:
+    """Of `tasks`, those still pending after giving them a moment to finish.
+
+    Garbage-collector finalization schedules short-lived close tasks onto whichever event
+    loop happens to be running -- google-genai's `AsyncClient.__del__` calls `aclose()`
+    that way -- so a task can be pending at the instant the loop is sampled without being
+    leaked by the test that was running. A real leak is still pending after settling.
+    """
+    if not tasks:
+        return []
+
+    await asyncio.wait(tasks, timeout=timeout)
+    return [task for task in tasks if not task.done()]
+
+
 @pytest.fixture(autouse=True)
 async def fail_on_leaked_tasks(request):
     if concurrency.is_concurrent_member(request.node):
@@ -344,11 +359,13 @@ async def fail_on_leaked_tasks(request):
 
     tasks_after = set(asyncio.all_tasks())
 
-    leaked_tasks = [
-        task
-        for task in tasks_after - tasks_before
-        if not task.done() and not _is_ignorable_task(task)
-    ]
+    leaked_tasks = await _still_pending_after_settle(
+        [
+            task
+            for task in tasks_after - tasks_before
+            if not task.done() and not _is_ignorable_task(task)
+        ]
+    )
 
     if leaked_tasks:
         tasks_msg = "\n\n".join(format_task(task) for task in leaked_tasks)
