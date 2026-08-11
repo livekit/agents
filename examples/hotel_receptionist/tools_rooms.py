@@ -210,7 +210,20 @@ class RoomToolsMixin:
                 "room, ask them to confirm that first; otherwise just ask if there's anything else."
             )
 
-        booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        # Inline AgentTasks cannot run in parallel: a second activation supplants the
+        # first and its function call never resolves, deadlocking the session. Bounce
+        # a same-turn second call back to the model instead of starting the task.
+        if ctx.userdata.room_booking_in_flight:
+            raise ToolError(
+                "a room-booking flow is already in progress - booking flows run one at a "
+                "time. Finish this room through confirm_booking first; start_room_booking "
+                "for the next room only after this one has returned its result."
+            )
+        ctx.userdata.room_booking_in_flight = True
+        try:
+            booking = await BookRoomTask(db=ctx.userdata.db, chat_ctx=speech_only(self.chat_ctx))
+        finally:
+            ctx.userdata.room_booking_in_flight = False
         ctx.userdata.last_room_booking = booking
         ctx.userdata.caller_turns_at_last_booking = _count_caller_turns(self.session.history)
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)

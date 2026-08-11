@@ -28,6 +28,11 @@ class Userdata:
     # caller input since, which would silently double-book the guest.
     last_room_booking: RoomBooking | None = None
     caller_turns_at_last_booking: int = 0
+    # Whether a room-booking flow is currently awaiting its inline BookRoomTask.
+    # Parallel inline AgentTasks are unsupported (the second activation orphans the
+    # first call's future and wedges the session), so a second start_room_booking
+    # while one is in flight must bounce with a ToolError instead of running.
+    room_booking_in_flight: bool = False
 
 
 def _speak_code(code: str) -> str:
