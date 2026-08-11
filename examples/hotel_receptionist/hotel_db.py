@@ -66,6 +66,16 @@ def speak_usd(cents: int) -> str:
     return f"{dollars} dollars and {change} cents"
 
 
+def speak_room(room: str) -> str:
+    """A room as the desk says it, from either its id or the spoken number.
+
+    The penthouse's id is RM_PH, so echoing the stored form back reads as
+    "room PH" - a room number no guest has ever been given.
+    """
+    suffix = room.strip().upper().removeprefix("RM_")
+    return "the penthouse suite" if suffix == "PH" else f"room {suffix}"
+
+
 def speak_time(t: time) -> str:
     """A clock time as natural speech, e.g. '7 PM', '6:30 PM'."""
     hour = t.hour % 12 or 12

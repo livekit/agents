@@ -14,6 +14,7 @@ from hotel_db import (
     FollowupKind,
     NotFound,
     Unavailable,
+    speak_room,
     speak_time,
     speak_usd,
 )
@@ -124,12 +125,12 @@ class ServicesToolsMixin:
             )
         except NotFound:
             raise ToolError(
-                f"no room {room} exists - re-confirm the room number with the caller"
+                f"{speak_room(room)} doesn't exist here - re-confirm the room number with the caller"
             ) from None
         except Unavailable as e:
             raise ToolError(f"can't schedule that: {e} - re-confirm the date") from None
         return (
-            f"wake-up call set for room {room}, {call_date.strftime('%A, %B %-d')} at "
+            f"wake-up call set for {speak_room(room)}, {call_date.strftime('%A, %B %-d')} at "
             f"{speak_time(call_time)}; reference {_speak_code(code)} | confirm it's set. If the "
             "caller worries about sleeping through: a second call comes about five minutes later "
             "if there's no answer, and no response to that sends staff up for an in-person room "
@@ -161,10 +162,10 @@ class ServicesToolsMixin:
             )
         except NotFound:
             raise ToolError(
-                f"no room {room} exists - re-confirm the room number, calmly, right now"
+                f"{speak_room(room)} doesn't exist here - re-confirm the room number, calmly, right now"
             ) from None
         head = (
-            f"DISPATCHED (ref {code}): duty manager alerted, staff heading to room {room} now | "
+            f"DISPATCHED (ref {code}): duty manager alerted, staff heading to {speak_room(room)} now | "
             "tell the caller, short and calm, that our people are on their way up right now"
         )
         if kind == "medical":
@@ -428,7 +429,9 @@ class ServicesToolsMixin:
                 seat_check=seat_check,
             )
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(
+                f"{speak_room(room)} doesn't exist here - re-confirm the room number"
+            ) from None
         return (
             f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
             "concierge will call the carrier and ring their room with the result within the hour"
@@ -461,7 +464,9 @@ class ServicesToolsMixin:
                 passengers=passengers,
             )
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(
+                f"{speak_room(room)} doesn't exist here - re-confirm the room number"
+            ) from None
         except Unavailable as e:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
         return (
@@ -536,9 +541,11 @@ class ServicesToolsMixin:
         try:
             code = await ctx.userdata.db.set_do_not_disturb(room=room)
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(
+                f"{speak_room(room)} doesn't exist here - re-confirm the room number"
+            ) from None
         return (
-            f"Do-Not-Disturb set on room {room}; reference {_speak_code(code)} | confirm it holds "
+            f"Do-Not-Disturb set on {speak_room(room)}; reference {_speak_code(code)} | confirm it holds "
             "their calls and messages until they ask to lift it, and that a genuine emergency "
             "still gets through."
         )
