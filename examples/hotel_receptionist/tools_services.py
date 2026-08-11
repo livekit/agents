@@ -557,13 +557,16 @@ class ServicesToolsMixin:
             departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
         """
         room_id = room_to_id(room)
+        # The carrier only takes the reference itself; spacing and case are how the caller
+        # said it, not part of it.
+        stored_reference = "".join(c for c in booking_reference if c.isalnum()).upper()
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
                 room=room_id,
                 airline=airline,
                 flight_number=flight_number,
                 flight_date=flight_date,
-                booking_reference=booking_reference,
+                booking_reference=stored_reference,
                 seat_check=seat_check,
                 departure_time=departure_time,
             )
@@ -572,8 +575,11 @@ class ServicesToolsMixin:
                 f"{speak_room(room_id)} doesn't exist here - re-confirm the room"
             ) from None
         return (
-            f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
-            "concierge will call the carrier and ring their room with the result within the hour"
+            f"reconfirmation request logged; request reference {_speak_code(code)}. The airline "
+            f"booking reference on file is {_speak_code(stored_reference)} - read that one back "
+            "too, labeled as the airline booking reference, so the caller doesn't take it for the "
+            "request reference. Tell them the concierge will call the carrier and ring their room "
+            "with the result within the hour"
             + (", including the seat check" if seat_check else "")
             + ". The flight is NOT confirmed yet - never say it is; promise the callback instead."
         )
