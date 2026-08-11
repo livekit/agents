@@ -73,6 +73,15 @@ def speak_time(t: time) -> str:
     return f"{hour} {suffix}" if t.minute == 0 else f"{hour}:{t.minute:02d} {suffix}"
 
 
+def wall_clock_iso(t: time) -> str:
+    """The stored form of a caller-given time: local wall clock, no offset.
+
+    LLM-supplied times can arrive tz-aware ("17:40:00Z" parses with tzinfo), and a
+    raw isoformat() would then store "17:40:00+00:00" alongside naive times.
+    """
+    return t.replace(tzinfo=None).isoformat()
+
+
 def _new_code(prefix: str) -> str:
     """Generated reference codes are stored uppercase: the caller only ever hears
     a code spelled out in uppercase (_speak_code), and the model passes back the
@@ -920,7 +929,11 @@ class HotelDB:
         conn = self.connection
         row = conn.execute(
             _SQL_FREE_TABLE,
-            {"party_size": party_size, "date": on_date.isoformat(), "time": at_time.isoformat()},
+            {
+                "party_size": party_size,
+                "date": on_date.isoformat(),
+                "time": wall_clock_iso(at_time),
+            },
         ).fetchone()
         if not row:
             raise Unavailable(f"restaurant full: {on_date} {at_time}")
@@ -937,7 +950,7 @@ class HotelDB:
                 "phone": "".join(c for c in phone if c.isdigit()),
                 "party_size": party_size,
                 "date": on_date.isoformat(),
-                "time": at_time.isoformat(),
+                "time": wall_clock_iso(at_time),
                 "notes": notes,
             },
         )
@@ -1003,7 +1016,7 @@ class HotelDB:
                 {
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "code": code,
                     "current_table_id": current_table_id,
                 },
@@ -1018,7 +1031,7 @@ class HotelDB:
                     "table_id": table_id,
                     "party_size": new_party,
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                 },
                 {"code": code, "status": "confirmed"},
             )
@@ -1107,7 +1120,7 @@ class HotelDB:
                     "room_id": room_id,
                     "guest_name": guest_name,
                     "date": call_date.isoformat(),
-                    "time": call_time.isoformat(),
+                    "time": wall_clock_iso(call_time),
                 },
             )
         if self.on_change:
@@ -1181,7 +1194,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "party_size": party_size,
                     "total": total,
                 },
@@ -1221,7 +1234,7 @@ class HotelDB:
                     "guest_name": guest_name,
                     "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
                     "date": on_date.isoformat(),
-                    "time": at_time.isoformat(),
+                    "time": wall_clock_iso(at_time),
                     "duration_hours": duration_hours,
                     "total": total,
                 },
@@ -1367,7 +1380,7 @@ class HotelDB:
                     "code": code,
                     "room_id": room_id,
                     "pickup_date": pickup_date.isoformat(),
-                    "pickup_time": pickup_time.isoformat(),
+                    "pickup_time": wall_clock_iso(pickup_time),
                     "passengers": passengers,
                 },
             )
