@@ -433,8 +433,10 @@ class SessionHost:
         self._session: AgentSession | None = None
         self._events_registered = False
         # events are emitted from sync callbacks and nobody awaits them, so they
-        # queue here and one long-lived writer drains them in emission order
-        self._event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] | None = None
+        # queue here and one long-lived writer drains them in emission order.
+        # Built here rather than in start() so events emitted between
+        # register_session() and start() queue up instead of being dropped.
+        self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
         self._write_task: asyncio.Task[None] | None = None
 
     def register_session(self, session: AgentSession) -> None:
@@ -458,7 +460,6 @@ class SessionHost:
             return
         self._started = True
         await self._transport.start()
-        self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
         self._write_task = asyncio.create_task(
             self._write_loop(self._event_ch), name="SessionHost._write_loop"
         )
@@ -494,18 +495,19 @@ class SessionHost:
         # let in-flight handlers finish. Cancelling here drops the response of a
         # request that already did its work — the caller then waits out its full
         # timeout for an answer the session had ready.
-        if abandoned := await _drain(self._tasks.tasks, deadline):
+        if cancelled := await _drain(self._tasks.tasks, deadline):
+            # the type is what can be acted on: it says what was in flight when the
+            # session went away. Reporting the request ids too would not help — a
+            # client shutting down alongside the host cancels its pending requests
+            # rather than waiting out the timeout that would log them to match.
             logger.warning(
-                "gave up on in-flight session requests while closing; "
-                "their callers get no response and will block until they time out. "
-                "Either a request is stuck or the session is closing mid-turn.",
-                extra={"abandoned_requests": sorted(t.get_name() for t in abandoned)},
+                "cancelled in-flight session requests while closing",
+                extra={"request_types": sorted({t.get_name() for t in cancelled})},
             )
 
         # closing the channel lets the writer flush what the handlers queued on
         # their way out, then exit
-        if self._event_ch is not None:
-            self._event_ch.close()
+        self._event_ch.close()
         if self._write_task is not None:
             await _drain({self._write_task}, deadline)
             self._write_task = None
@@ -517,10 +519,11 @@ class SessionHost:
             async for msg in self._transport:
                 if msg.HasField("request"):
                     if self._session is not None:
-                        # named so shutdown can report which requests it abandoned
+                        # the task name is the request type verbatim, which is what
+                        # aclose reports when it gives up on one
                         self._tasks.create_task(
                             self._handle_request_safe(msg.request),
-                            name=f"{msg.request.WhichOneof('request')}:{msg.request.request_id}",
+                            name=msg.request.WhichOneof("request") or "unknown",
                         )
                 else:
                     msg_type = msg.WhichOneof("message")
@@ -544,8 +547,6 @@ class SessionHost:
         ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
-        if self._event_ch is None:
-            return
         with contextlib.suppress(utils.aio.ChanClosed):
             self._event_ch.send_nowait(msg)
 

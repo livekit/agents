@@ -9,6 +9,7 @@ import pytest
 
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
+from livekit.agents.voice import remote_session as remote_session_module
 from livekit.agents.voice.remote_session import (
     RemoteSession,
     RoomSessionTransport,
@@ -480,3 +481,43 @@ async def test_inbound_messages_are_read_without_a_task_each_and_stay_ordered():
     ]
 
     await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_requests_are_logged_by_type(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    """A request that outlives the grace period is reported by what it was.
+
+    The type is what can be acted on; the request id would only mean something
+    alongside a client log that a co-shutting-down client never emits.
+    """
+    monkeypatch.setattr(remote_session_module, "_SHUTDOWN_DRAIN_TIMEOUT", 0.05)
+
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    never_finishes = asyncio.Event()
+    mock_session = _make_mock_session()
+    mock_session.interrupt = AsyncMock()
+    mock_session.run = MagicMock(return_value=_SlowRunResult(never_finishes))
+
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    run_task = asyncio.ensure_future(client.run("order a big mac", timeout=2.0))
+    await asyncio.sleep(0.05)  # let the handler reach the pending run
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        await host.aclose()
+
+    records = [r for r in caplog.records if "cancelled in-flight" in r.message]
+    assert records, "abandoning a request at shutdown must be reported"
+    assert records[0].request_types == ["run_input"]
+
+    never_finishes.set()
+    run_task.cancel()
+    await client.aclose()
