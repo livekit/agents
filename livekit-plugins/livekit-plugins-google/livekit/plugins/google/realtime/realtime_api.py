@@ -579,7 +579,6 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(tool_choice):
             # no per-response tool_choice on Gemini; "none" is emulated by rejecting any tool
             # call emitted during the turn (see _reject_tool_calls).
-            self._opts.tool_choice = tool_choice
             if tool_choice == "none":
                 logger.warning(
                     "the Google Realtime API has no tool_choice='none'; tool calls emitted "
@@ -590,6 +589,8 @@ class RealtimeSession(llm.RealtimeSession):
                     f"tool_choice='{tool_choice}' is not supported by the Google Realtime API, "
                     "falling back to 'auto'."
                 )
+                tool_choice = "auto"
+            self._opts.tool_choice = tool_choice
 
         if should_restart:
             self._mark_restart_needed()
@@ -743,6 +744,10 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
+        if is_given(tool_choice):
+            logger.warning(
+                "per-response tool_choice is not supported by Google Realtime API, ignoring"
+            )
         if not self._realtime_model.capabilities.mutable_chat_context:
             logger.warning(
                 f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."

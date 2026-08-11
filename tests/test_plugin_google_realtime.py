@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import pytest
 from google.genai import types
 
-from livekit.agents import utils
+from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 
 pytestmark = pytest.mark.unit
@@ -130,3 +130,78 @@ async def test_session_close_releases_the_genai_client(
         monkeypatch.setattr(session._client.aio, "aclose", _spy)
 
     assert closed
+
+
+async def test_tool_choice_never_reaches_the_connect_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No tool_choice value may leak into the LiveConnectConfig sent to the API.
+
+    The Google Realtime API rejects a tool_choice parameter (issue #4770), so whatever the
+    user asks for, the connect config must stay free of it.
+    """
+    choices: list[llm.ToolChoice] = [
+        "auto",
+        "none",
+        "required",
+        {"type": "function", "function": {"name": "get_weather"}},
+    ]
+    async with _make_session(monkeypatch) as session:
+        for choice in choices:
+            session.update_options(tool_choice=choice)
+            payload = session._build_connect_config().model_dump(exclude_none=True)
+            assert "tool_choice" not in payload
+            assert "tool_config" not in payload
+
+
+async def test_update_options_tool_choice_none_is_emulated(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """tool_choice='none' is kept and emulated by rejecting tool calls, with a warning."""
+    async with _make_session(monkeypatch) as session:
+        with caplog.at_level(logging.WARNING):
+            session.update_options(tool_choice="none")
+
+        assert session._opts.tool_choice == "none"
+        assert any("tool_choice='none'" in r.message for r in caplog.records)
+
+
+async def test_update_options_unsupported_tool_choice_falls_back_to_auto(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Values the API cannot express warn and are normalized to 'auto'.
+
+    The session must store what it actually does - keeping 'required' around while warning
+    about an 'auto' fallback leaves the state lying about the behavior (issue #4770).
+    """
+    async with _make_session(monkeypatch) as session:
+        with caplog.at_level(logging.WARNING):
+            session.update_options(tool_choice="required")
+            session.update_options(
+                tool_choice={"type": "function", "function": {"name": "get_weather"}}
+            )
+
+        assert session._opts.tool_choice == "auto"
+        not_supported = [
+            r for r in caplog.records if "not supported by the Google Realtime API" in r.message
+        ]
+        assert len(not_supported) == 2
+
+
+async def test_generate_reply_warns_on_tool_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """generate_reply has no per-response tool_choice; it must warn instead of dropping it
+    silently, the same way per-response tools is handled (issue #4770)."""
+    async with _make_session(monkeypatch) as session:
+        with caplog.at_level(logging.WARNING):
+            fut = session.generate_reply(tool_choice="none")
+
+        assert any("per-response tool_choice" in r.message for r in caplog.records)
+
+        # don't leave the generation pending until its 5s timeout fires; cancelling fires
+        # interrupt(), which is a no-op here because _make_session closed the send channel
+        fut.cancel()
