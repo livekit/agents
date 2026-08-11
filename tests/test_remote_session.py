@@ -378,3 +378,105 @@ async def test_events_are_written_by_one_task_in_emission_order():
 
     await host.aclose()  # closing drains what is still queued
     assert sent == [str(i) for i in range(10)]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ready_polls_through_a_transport_that_is_not_up():
+    """`wait_for_ready` exists to poll while the transport is still connecting.
+
+    That transport now reports its state instead of dropping the ping, so the
+    error has to be retried rather than surfaced on the first attempt.
+    """
+    host_transport, client_transport = PairedTransport.create_pair()
+    attempts = 0
+
+    class _LateTransport(PairedTransport):
+        async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise RuntimeError("room session transport is closed")
+            await client_transport.send_message(msg)
+
+    late = _LateTransport()
+    late._peer = host_transport._peer
+    host_transport._peer = late
+
+    mock_session = _make_mock_session()
+    host = SessionHost(host_transport)
+    host.register_session(mock_session)
+    await host.start()
+
+    client = RemoteSession(late)
+    late._peer = host_transport
+    host_transport._peer = late
+    await client.start()
+
+    await client.wait_for_ready(timeout=5.0, retry_interval=0.05)
+    assert attempts >= 3
+
+    await client.aclose()
+    await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ready_surfaces_the_transport_error_past_the_deadline():
+    """Once the deadline passes, the transport error is the useful one."""
+
+    class _DeadTransport(PairedTransport):
+        async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+            raise RuntimeError("room session transport is closed")
+
+    client = RemoteSession(_DeadTransport())
+    await client.start()
+
+    with pytest.raises(RuntimeError, match="transport is closed"):
+        await client.wait_for_ready(timeout=0.2, retry_interval=0.05)
+
+    await client.aclose()
+
+
+class _FakeReader:
+    """Stands in for an rtc.ByteStreamReader over one message."""
+
+    def __init__(self, payload: bytes) -> None:
+        # split so the reader yields mid-message, the window a per-stream task
+        # used to interleave in
+        self._parts = [payload[:1], payload[1:]] if len(payload) > 1 else [payload]
+
+    async def __aiter__(self):
+        for part in self._parts:
+            await asyncio.sleep(0)  # a real reader yields between chunks
+            yield part
+
+
+@pytest.mark.asyncio
+async def test_inbound_messages_are_read_without_a_task_each_and_stay_ordered():
+    """Reading spawns one loop, not one task per message, and preserves order."""
+    transport = RoomSessionTransport(_fake_room())
+    await transport.start()
+
+    before = len(asyncio.all_tasks())
+
+    for i in range(10):
+        msg = agent_pb.AgentSessionMessage(
+            event=agent_pb.AgentSessionEvent(
+                user_input_transcribed=agent_pb.AgentSessionEvent.UserInputTranscribed(
+                    transcript=str(i)
+                )
+            )
+        )
+        transport._on_byte_stream(_FakeReader(msg.SerializeToString()), "remote")
+
+    # queueing 10 messages must not create 10 tasks
+    assert len(asyncio.all_tasks()) <= before
+
+    received = []
+    for _ in range(10):
+        received.append(await asyncio.wait_for(transport.__anext__(), timeout=2.0))
+
+    assert [m.event.user_input_transcribed.transcript for m in received] == [
+        str(i) for i in range(10)
+    ]
+
+    await transport.close()

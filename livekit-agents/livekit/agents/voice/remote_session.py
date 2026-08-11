@@ -71,6 +71,18 @@ TOPIC_SESSION_MESSAGES = "lk.agent.session"
 _SHUTDOWN_DRAIN_TIMEOUT = 3.0
 
 
+async def _drain(tasks: set[asyncio.Task[Any]], deadline: float) -> set[asyncio.Task[Any]]:
+    """Wait for ``tasks`` until ``deadline``, then cancel and return the stragglers."""
+    if not tasks:
+        return set()
+
+    remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+    _, pending = await asyncio.wait(tasks, timeout=remaining)
+    if pending:
+        await utils.aio.cancel_and_wait(*pending)
+    return pending
+
+
 class SessionTransport(ABC):
     @abstractmethod
     async def start(self) -> None: ...
@@ -90,8 +102,12 @@ class RoomSessionTransport(SessionTransport):
         self._remote_identity = remote_identity
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
-        self._tasks: set[asyncio.Task[None]] = set()
         self._send_lock = asyncio.Lock()
+        # inbound streams queue here for a single reader. A task per stream costs
+        # one per message, and lets two streams finish out of order and deliver
+        # their messages swapped.
+        self._incoming_ch: utils.aio.Chan[rtc.ByteStreamReader] = utils.aio.Chan()
+        self._read_task: asyncio.Task[None] | None = None
 
     @property
     def remote_identity(self) -> str | None:
@@ -104,15 +120,22 @@ class RoomSessionTransport(SessionTransport):
     async def start(self) -> None:
         if self._handler_registered:
             return
+        self._read_task = asyncio.create_task(
+            self._read_loop(), name="RoomSessionTransport._read_loop"
+        )
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
 
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
             return
-        task = asyncio.create_task(self._read_stream(reader))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._incoming_ch.send_nowait(reader)
+
+    async def _read_loop(self) -> None:
+        # sequential, so messages reach _recv_ch in the order they were sent
+        async for reader in self._incoming_ch:
+            await self._read_stream(reader)
 
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
@@ -154,8 +177,10 @@ class RoomSessionTransport(SessionTransport):
         if self._recv_ch.closed:
             return
         self._recv_ch.close()
-        await utils.aio.cancel_and_wait(*self._tasks)
-        self._tasks.clear()
+        self._incoming_ch.close()
+        if self._read_task is not None:
+            await utils.aio.cancel_and_wait(self._read_task)
+            self._read_task = None
         if self._handler_registered:
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
@@ -461,29 +486,27 @@ class SessionHost:
             await utils.aio.cancel_and_wait(self._recv_task)
             self._recv_task = None
 
+        # one budget for the whole drain, so aclose cannot stack two full grace
+        # periods and eat the worker's shutdown allowance
+        deadline = asyncio.get_event_loop().time() + _SHUTDOWN_DRAIN_TIMEOUT
+
         # let in-flight handlers finish. Cancelling here drops the response of a
         # request that already did its work — the caller then waits out its full
         # timeout for an answer the session had ready.
-        deadline = asyncio.get_event_loop().time() + _SHUTDOWN_DRAIN_TIMEOUT
-        if handlers := self._tasks.tasks:
-            _, pending = await asyncio.wait(handlers, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
-            if pending:
-                logger.warning(
-                    "session host handlers did not finish before the shutdown grace period",
-                    extra={"pending_handlers": len(pending)},
-                )
-                await utils.aio.cancel_and_wait(*pending)
+        if abandoned := await _drain(self._tasks.tasks, deadline):
+            logger.warning(
+                "gave up on in-flight session requests while closing; "
+                "their callers get no response and will block until they time out. "
+                "Either a request is stuck or the session is closing mid-turn.",
+                extra={"abandoned_requests": sorted(t.get_name() for t in abandoned)},
+            )
 
-        # closing the channel lets the writer send what the handlers just queued
-        # and then exit; handlers and writer share one budget so aclose cannot
-        # stack two full grace periods
+        # closing the channel lets the writer flush what the handlers queued on
+        # their way out, then exit
         if self._event_ch is not None:
             self._event_ch.close()
         if self._event_writer_task is not None:
-            remaining = max(0.0, deadline - asyncio.get_event_loop().time())
-            _, pending = await asyncio.wait({self._event_writer_task}, timeout=remaining)
-            if pending:
-                await utils.aio.cancel_and_wait(self._event_writer_task)
+            await _drain({self._event_writer_task}, deadline)
             self._event_writer_task = None
 
         await self._transport.close()
@@ -493,7 +516,11 @@ class SessionHost:
             async for msg in self._transport:
                 if msg.HasField("request"):
                     if self._session is not None:
-                        self._tasks.create_task(self._handle_request_safe(msg.request))
+                        # named so shutdown can report which requests it abandoned
+                        self._tasks.create_task(
+                            self._handle_request_safe(msg.request),
+                            name=f"{msg.request.WhichOneof('request')}:{msg.request.request_id}",
+                        )
                 else:
                     msg_type = msg.WhichOneof("message")
                     if msg_type:
@@ -1185,9 +1212,14 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
         deadline = asyncio.get_event_loop().time() + timeout
+        # a transport that never came up is the useful answer; a bare timeout
+        # would say only that no pong arrived
+        send_error: Exception | None = None
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
+                if send_error is not None:
+                    raise send_error
                 raise TimeoutError("wait_for_ready timed out")
             req = agent_pb.SessionRequest(
                 request_id=utils.shortuuid("req_"),
@@ -1199,6 +1231,17 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out") from None
+            except Exception as e:
+                # the transport reports that it is not up yet instead of dropping
+                # the ping, and that state is exactly what this call polls
+                # through. The request timeout paced the retries before; pace
+                # them here, since the failure is now immediate.
+                send_error = e
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise
+                await asyncio.sleep(
+                    min(retry_interval, max(0.0, deadline - asyncio.get_event_loop().time()))
+                )
 
     async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
