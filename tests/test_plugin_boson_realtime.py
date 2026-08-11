@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import time
 
 import aiohttp
 import pytest
@@ -1490,6 +1491,109 @@ async def test_boson_realtime_input_transcription_replaces_remote_item_text(monk
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_transcription_carries_the_turn_start(monkeypatch):
+    # The framework stamps the user's message with turn_started_at
+    # (agent_activity._on_input_audio_transcription_completed) so a late
+    # transcript cannot land after the reply it prompted. Without it the message
+    # is dated when the text arrived.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    completed = []
+    session.on("input_audio_transcription_completed", completed.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        before = time.time()
+        _server_event(
+            session,
+            {
+                "type": "input_audio_buffer.speech_started",
+                "event_id": "evt_speech_1",
+                "item_id": "user_1",
+                "audio_start_ms": 0,
+            },
+        )
+        after = time.time()
+        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
+        _server_event(
+            session,
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": "user_1",
+                "content_index": 0,
+                "transcript": "hello world",
+                "logprobs": None,
+            },
+        )
+
+        assert completed
+        assert completed[-1].turn_started_at is not None
+        assert before <= completed[-1].turn_started_at <= after
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_merged_turn_keeps_the_first_fragments_start(monkeypatch):
+    # The server merges consecutive user speech into one item: speech_started
+    # fires once per fragment under the same id, and the item is re-transcribed
+    # with its accumulated text each time. Every revision describes the same
+    # turn, so every one of them has to report the turn's own beginning -- not
+    # the latest fragment's, and not None once the first revision consumed it.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    completed = []
+    session.on("input_audio_transcription_completed", completed.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        def speech_started(event_id: str) -> None:
+            _server_event(
+                session,
+                {
+                    "type": "input_audio_buffer.speech_started",
+                    "event_id": event_id,
+                    "item_id": "user_1",
+                    "audio_start_ms": 0,
+                },
+            )
+
+        def transcribed(transcript: str) -> None:
+            _server_event(
+                session,
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "user_1",
+                    "content_index": 0,
+                    "transcript": transcript,
+                    "logprobs": None,
+                },
+            )
+
+        speech_started("evt_speech_1")
+        turn_start = session._input_speech_started_at["user_1"]
+        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
+        transcribed("so, these thought experiments")
+
+        # second fragment of the same turn, merged into the same item
+        speech_started("evt_speech_2")
+        transcribed("so, these thought experiments would go against quantum physics?")
+
+        assert [c.transcript for c in completed] == [
+            "so, these thought experiments",
+            "so, these thought experiments would go against quantum physics?",
+        ]
+        assert [c.turn_started_at for c in completed] == [turn_start, turn_start]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_chat_ctx_message_schema_uses_boson_shape(monkeypatch):
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
@@ -1845,6 +1949,50 @@ async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fas
 
         with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
             await asyncio.wait_for(update_task, timeout=0.5)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_rejected_item_settles_its_own_create(monkeypatch):
+    # Every other rejection of a conversation.item.create names the client event
+    # id it answers, and never sends the conversation.item.added the create's
+    # future waits on. Matching the two is what keeps update_chat_ctx() from
+    # sitting out the base's 5s timeout and reporting a generic one; the base
+    # then treats the rejected item as a warning rather than a failed turn.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
+            )
+        )
+        create_event = await session._msg_ch.recv()
+        assert create_event["item"]["id"] == "user_1"
+        assert create_event["event_id"]
+
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "item_rejected",
+                    "message": "conversation item rejected",
+                    "event_id": create_event["event_id"],
+                },
+            },
+        )
+
+        # Resolves on the error rather than 5s later, and does not raise: a
+        # single rejected item is not worth failing the turn over.
+        await asyncio.wait_for(update_task, timeout=0.5)
     finally:
         await session.aclose()
         await model.aclose()
