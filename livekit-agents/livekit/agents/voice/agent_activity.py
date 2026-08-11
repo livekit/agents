@@ -2940,7 +2940,7 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         if forwarded_text and add_to_chat_ctx:
-            assistant_metrics: llm.MetricsReport = {}
+            assistant_metrics: llm.MetricsReport = {"speech_id": speech_handle.id}
 
             if tts_gen_data and tts_gen_data.ttfb is not None:
                 assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
@@ -3391,7 +3391,7 @@ class AgentActivity(RecognitionHooks):
                 break
 
         stopped_speaking_at = time.time()
-        assistant_metrics: llm.MetricsReport = {}
+        assistant_metrics: llm.MetricsReport = {"speech_id": speech_handle.id}
 
         if self.llm:
             assistant_metrics["llm_metadata"] = self.llm.metrics_metadata
@@ -4020,7 +4020,7 @@ class AgentActivity(RecognitionHooks):
         def _create_assistant_message(
             message_id: str, forwarded_text: str, interrupted: bool
         ) -> llm.ChatMessage:
-            assistant_metrics: llm.MetricsReport = {}
+            assistant_metrics: llm.MetricsReport = {"speech_id": speech_handle.id}
 
             if generation_ev.response_id:
                 assistant_metrics["provider_request_ids"] = [generation_ev.response_id]

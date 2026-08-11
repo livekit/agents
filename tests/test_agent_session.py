@@ -47,6 +47,7 @@ from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnI
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -301,6 +302,70 @@ async def test_llm_node_ttfs_anchors_on_synthesis_start() -> None:
     assert "llm_node_ttfs" in metrics
     check_timestamp(metrics["llm_node_ttfs"], 2.0, speed_factor=speed)
     check_timestamp(metrics["tts_node_ttfb"], 0.2, speed_factor=speed)
+
+
+async def test_assistant_metrics_share_speech_id_with_tts_metrics() -> None:
+    # TTSMetrics.ttfb is the TTS provider's own latency, while the assistant message's
+    # tts_node_ttfb also covers sentence-tokenizer buffering. Their difference is the
+    # tokenizer overhead, but computing it requires pairing the two for the same turn, and
+    # metrics_collected events are not part of the session report -- so the assistant
+    # message has to carry the correlation id itself
+    speed = 1
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(2.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=speed)
+    agent = MyAgent()
+
+    metrics_events: list[MetricsCollectedEvent] = []
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("metrics_collected", metrics_events.append)
+    session.on("conversation_item_added", conversation_events.append)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant_messages = [
+        ev.item
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    tts_metrics = [ev.metrics for ev in metrics_events if ev.metrics.type == "tts_metrics"]
+    assert len(assistant_messages) == 1
+    assert len(tts_metrics) == 1
+    assert tts_metrics[0].speech_id is not None
+
+    metrics = assistant_messages[0].metrics
+    assert metrics["speech_id"] == tts_metrics[0].speech_id
+
+
+async def test_say_assistant_metrics_carry_speech_id() -> None:
+    # session.say goes through the standalone tts task rather than the reply pipeline, and
+    # it stores an assistant message too, so it needs the same correlation id
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Hello from say", ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, with_stt=False)
+    audio_output = session.output.audio
+    assert isinstance(audio_output, _SyncedAudioOutput)
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await session.start(MyAgent())
+    speech_handle = session.say("Hello from say")
+    await speech_handle
+    await session.aclose()
+    await audio_output._synchronizer.aclose()
+
+    assistant_messages = [
+        ev.item
+        for ev in conversation_events
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0].metrics["speech_id"] == speech_handle.id
 
 
 async def test_tool_call() -> None:

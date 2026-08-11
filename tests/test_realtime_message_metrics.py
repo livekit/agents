@@ -62,6 +62,7 @@ async def test_realtime_response_id_is_available_on_assistant_message() -> None:
     ]
     assert len(assistant_messages) == 1
     assert assistant_messages[0].metrics["provider_request_ids"] == ["provider-response-id"]
+    assert assistant_messages[0].metrics["speech_id"] == speech_handle.id
 
 
 async def _transcribed_user_messages(
