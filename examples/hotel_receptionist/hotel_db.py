@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, fields
 from datetime import date, time, timedelta
@@ -166,10 +167,21 @@ DISPUTE_POLICIES: dict[DisputeCategory, DisputePolicy] = {
     ),
 }
 
-# Set HOTEL_TODAY=YYYY-MM-DD before import for deterministic sim runs.
-TODAY: date = (
-    date.fromisoformat(os.environ["HOTEL_TODAY"]) if os.environ.get("HOTEL_TODAY") else date.today()
-)
+# scenarios.yaml pins every date literal to SIM_TODAY, so simulation runs must
+# not use the real clock. HOTEL_TODAY=YYYY-MM-DD overrides in any mode.
+SIM_TODAY = date(2026, 6, 8)
+
+
+def _resolve_today() -> date:
+    if env_today := os.environ.get("HOTEL_TODAY"):
+        return date.fromisoformat(env_today)
+    # `lk agent simulate` always passes --simulation; job subprocesses inherit argv
+    if "--simulation" in sys.argv:
+        return SIM_TODAY
+    return date.today()
+
+
+TODAY: date = _resolve_today()
 MAX_PARTY_SIZE = 6
 
 RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
