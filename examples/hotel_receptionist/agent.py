@@ -82,31 +82,45 @@ def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
 
 
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    db_diffs: list[str] = []
-    expected_state = _expected_state_statements(ctx.userdata())
-    if expected_state is not None:
-        # Grade the run on final DB state: build the scenario's `expected_state` on a
-        # fresh seed, then diff it against the agent's DB. The diff compares
-        # agent-decided facts only (room type, dates, extras, status), so minted
-        # codes / order / which-king don't matter and the agent need not reproduce the
-        # statements — while collateral damage still surfaces.
-        session = ctx.job_context.primary_session
-        expected = await build_expected(_SEED_DB_BYTES, expected_state)
-        try:
-            db_diffs = diff_databases(expected.connection, session.userdata.db.connection)
-        finally:
-            await expected.aclose()
+    tagger = ctx.job_context.tagger
+    failure: str | None = None
+    graded = False
+    try:
+        expected_state = _expected_state_statements(ctx.userdata())
+        graded = expected_state is not None
+        if expected_state is not None:
+            # Grade the run on final DB state: build the scenario's `expected_state` on a
+            # fresh seed, then diff it against the agent's DB. The diff compares
+            # agent-decided facts only (room type, dates, extras, status), so minted
+            # codes / order / which-king don't matter and the agent need not reproduce the
+            # statements — while collateral damage still surfaces.
+            session = ctx.job_context.primary_session
+            expected = await build_expected(_SEED_DB_BYTES, expected_state)
+            try:
+                diffs = diff_databases(expected.connection, session.userdata.db.connection)
+            finally:
+                await expected.aclose()
+            if diffs:
+                failure = "final DB diverges from expected: " + " | ".join(diffs[:8])
+    except Exception as exc:
+        # Grading that can't run is not a pass. The prefix tells a broken scenario
+        # apart from a failing agent.
+        logger.exception("expected-state grading failed")
+        failure = f"expected-state grading failed: {exc}"
+
+    # Most scenarios skip the DB check on purpose, so the run has to record
+    # whether it ran at all.
+    tagger.add("state:graded" if graded else "state:ungraded")
 
     # A run passes only if both the conversation and the DB check pass. A scenario
     # with no DB check is graded on the conversation alone.
-    if db_diffs:
-        reason = "final DB diverges from expected: " + " | ".join(db_diffs[:8])
-        ctx.fail(reason=reason)
-        ctx.job_context.tagger.fail(reason=reason)
+    if failure:
+        ctx.fail(reason=failure)
+        tagger.fail(reason=failure)
     elif ctx.simulator_verdict.success:
-        ctx.job_context.tagger.success(reason=ctx.simulator_verdict.reason)
+        tagger.success(reason=ctx.simulator_verdict.reason)
     else:
-        ctx.job_context.tagger.fail(reason=ctx.simulator_verdict.reason)
+        tagger.fail(reason=ctx.simulator_verdict.reason)
 
 
 async def on_session_end(ctx: JobContext) -> None:
