@@ -195,13 +195,16 @@ async def test_generate_reply_warns_on_tool_choice(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """generate_reply has no per-response tool_choice; it must warn instead of dropping it
-    silently, the same way per-response tools is handled (issue #4770)."""
+    silently, the same way per-response tools is handled (issue #4770).
+    """
     async with _make_session(monkeypatch) as session:
         with caplog.at_level(logging.WARNING):
             fut = session.generate_reply(tool_choice="none")
 
         assert any("per-response tool_choice" in r.message for r in caplog.records)
+        # the per-response value must not leak into the session options either
+        assert not utils.is_given(session._opts.tool_choice)
 
         # don't leave the generation pending until its 5s timeout fires; cancelling fires
-        # interrupt(), which is a no-op here because _make_session closed the send channel
+        # interrupt(), which is a no-op here since manual activity detection is off
         fut.cancel()
