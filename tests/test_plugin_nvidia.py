@@ -291,6 +291,22 @@ def test_stt_offline_combines_consecutive_results_into_complete_hypotheses() -> 
     assert event.alternatives[1].text == "yellow word"
 
 
+def test_stt_combined_confidence_includes_zero_values() -> None:
+    speech_data = nvidia_stt._combine_result_alternatives(
+        [
+            SimpleNamespace(transcript="low", confidence=0.0, words=[]),
+            SimpleNamespace(transcript="high", confidence=0.9, words=[]),
+        ],
+        language=LanguageCode("en-US"),
+        start_time_offset=0.0,
+        enable_diarization=False,
+        is_final=True,
+    )
+
+    assert speech_data.text == "low high"
+    assert speech_data.confidence == pytest.approx(0.45)
+
+
 async def test_stt_flush_starts_a_new_backend_rpc_for_each_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -421,6 +437,61 @@ async def test_stt_restarts_completed_worker_without_flush(
     assert any(
         event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
         and event.alternatives[0].text == "reconnected"
+        for event in events
+    )
+    await stream.aclose()
+
+
+async def test_stt_clean_completion_does_not_consume_retry_budget_or_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = nvidia_stt.STT(api_key="test-key")
+    calls: list[list[bytes]] = []
+    final_response = SimpleNamespace(
+        results=[
+            SimpleNamespace(
+                is_final=True,
+                alternatives=[SimpleNamespace(transcript="ready", confidence=0.9, words=[])],
+            )
+        ]
+    )
+    final_attempt_started = threading.Event()
+
+    class CleanEndingASRService:
+        def streaming_response_generator(self, audio_generator, config):
+            call_audio: list[bytes] = [next(audio_generator)]
+            calls.append(call_audio)
+            if len(calls) <= 3:
+                return iter(())
+
+            def responses():
+                final_attempt_started.set()
+                yield final_response
+                call_audio.extend(audio_generator)
+
+            return responses()
+
+    monkeypatch.setattr(service, "_ensure_asr_service", lambda: CleanEndingASRService())
+    monkeypatch.setattr(
+        nvidia_stt.SpeechStream,
+        "_create_streaming_config",
+        lambda self: SimpleNamespace(),
+    )
+
+    stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=10))
+    frame = _audio_frame(3)
+    stream.push_frame(frame)
+
+    assert await asyncio.to_thread(final_attempt_started.wait, 1.0)
+    stream.end_input()
+    await asyncio.wait_for(stream._task, timeout=2.0)
+    events = [event async for event in stream]
+
+    assert len(calls) == 4
+    assert all(call[0] == frame.data.tobytes() for call in calls)
+    assert any(
+        event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
+        and event.alternatives[0].text == "ready"
         for event in events
     )
     await stream.aclose()
