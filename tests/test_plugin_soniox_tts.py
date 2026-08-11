@@ -171,3 +171,14 @@ async def test_invalid_stream_idle_timeout_rejected() -> None:
         soniox.TTS(api_key="fake-key", stream_idle_timeout=0)
     with pytest.raises(ValueError):
         soniox.TTS(api_key="fake-key", stream_idle_timeout=-1.0)
+
+
+async def test_reduce_silence_propagates_to_options() -> None:
+    tts = soniox.TTS(api_key="fake-key")
+    assert tts._opts.reduce_silence is False
+
+    tts.update_options(reduce_silence=True)
+    assert tts._opts.reduce_silence is True
+
+    tts = soniox.TTS(api_key="fake-key", reduce_silence=True)
+    assert tts._opts.reduce_silence is True

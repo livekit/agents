@@ -88,6 +88,7 @@ class TTS(tts.TTS):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
         speed: float = DEFAULT_SPEED,
+        reduce_silence: bool = False,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -105,6 +106,9 @@ class TTS(tts.TTS):
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
             speed (float): Speaking rate. 1.0 is the normal rate; values below 1.0 slow speech
                 down and values above 1.0 speed it up. Range is [0.7, 1.3]. Defaults to 1.0.
+            reduce_silence (bool): Shorten the pauses between words. Only supported on
+                models that report supports_silence_reduction (e.g. tts-rt-v2); the server
+                rejects it on other models. Defaults to False.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
@@ -136,6 +140,7 @@ class TTS(tts.TTS):
             model=model,
             language=language,
             voice=voice,
+            reduce_silence=reduce_silence,
             audio_format=audio_format,
             sample_rate=sample_rate,
             bitrate=bitrate,
@@ -199,6 +204,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
+        reduce_silence: NotGivenOr[bool] = NOT_GIVEN,
         stream_idle_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
@@ -207,6 +213,8 @@ class TTS(tts.TTS):
             language: Language code to use.
             voice: Voice to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
+            reduce_silence: Shorten the pauses between words (models with
+                supports_silence_reduction only).
             stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
         if is_given(model):
@@ -221,6 +229,8 @@ class TTS(tts.TTS):
                     f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
                 )
             self._opts.speed = speed
+        if is_given(reduce_silence):
+            self._opts.reduce_silence = reduce_silence
         if is_given(stream_idle_timeout):
             if stream_idle_timeout <= 0:
                 raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
@@ -532,6 +542,7 @@ class _TTSOptions:
     model: str
     language: str
     voice: str
+    reduce_silence: bool
     audio_format: str
     sample_rate: int
     bitrate: int | None
@@ -727,6 +738,8 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.reduce_silence:
+                        config["reduce_silence"] = True
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
