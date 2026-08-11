@@ -50,7 +50,7 @@ from openai.types.realtime import (
 from pydantic import BaseModel, ConfigDict
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, llm, utils
+from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -83,6 +83,17 @@ _DEFAULT_TURN_DETECTION = {
 # contract_ended / no_billing_account); permanent for the account, not a
 # transient rate limit.
 _NON_RETRYABLE_CLOSE_CODES = frozenset({3000, 4429})
+
+# The same refusals as an `error` event, which the server sends just before it
+# closes with 4429. Reconnecting cannot clear any of them, so they end the
+# session rather than being reported as recoverable. Kept separate from the base
+# class's own fatal set, which would catch only `insufficient_quota` here: it
+# reads `code` in preference to `type`, and three of these four codes are Boson's
+# own. `type` is `insufficient_quota` for all of them.
+_BOSON_FATAL_ERROR_CODES = frozenset(
+    {"insufficient_quota", "monthly_cap_reached", "contract_ended", "no_billing_account"}
+)
+_BOSON_FATAL_ERROR_TYPES = frozenset({"insufficient_quota"})
 
 # Error codes/types the server returns for expected client/server races that do
 # not indicate a real problem (e.g. response.cancel arriving after the response
@@ -1295,7 +1306,30 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     self._settle_chat_ctx_wait(fut, error, event_id)
             return
 
-        realtime_error = llm.RealtimeError(_format_error_message(error, event_id))
+        message = _format_error_message(error, event_id)
+        if error.get("code") in _BOSON_FATAL_ERROR_CODES or (
+            error.get("type") in _BOSON_FATAL_ERROR_TYPES
+        ):
+            # Permanent for the account, not for this connection: another attempt
+            # buys nothing. Raised rather than emitted, which is how the base
+            # signals the same thing -- its recv loop lets a non-retryable
+            # APIError through, and _main_task reports it with recoverable=False
+            # and stops reconnecting.
+            #
+            # Today the server follows this with a 4429 close, which
+            # _NON_RETRYABLE_CLOSE_CODES would end the session on anyway. Not
+            # relied on: this arrives first, and emitting it as recoverable would
+            # announce a recovery in the window before the close contradicts it.
+            # A refusal sent without a close is handled by the same branch.
+            logger.error(
+                "%s refused service: %s",
+                self._realtime_model._provider_label,
+                message,
+                extra={"error": error},
+            )
+            raise APIError(message=message, body=error, retryable=False)
+
+        realtime_error = llm.RealtimeError(message)
         self._emit_error(realtime_error, recoverable=True)
         # Only fail the future this error specifically names. An error whose
         # event_id can't be correlated to a pending generate_reply() could
