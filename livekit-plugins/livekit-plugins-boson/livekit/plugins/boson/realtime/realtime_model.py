@@ -166,6 +166,12 @@ class RealtimeModel(openai_rt.RealtimeModel):
             truncation=truncation,
         )
         self._capabilities.turn_detection = turn_detection_config is not None
+        # Whether the server runs VAD is fixed for the model at construction, via
+        # the `turn_detection` argument. The framework's per-session override —
+        # session(turn_detection_disabled=True), which asks a model configured
+        # with server VAD to hand turn-taking back to the client for one session
+        # — has no tested path here, so it is declined rather than half-honored.
+        self._capabilities.can_disable_turn_detection = False
         self._capabilities.user_transcription = _input_audio_transcription_enabled(
             input_audio_transcription_config
         )
@@ -194,7 +200,9 @@ class RealtimeModel(openai_rt.RealtimeModel):
     def provider(self) -> str:
         return urlparse(self._boson_opts.url).netloc
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        # disabling server-side turn detection is unsupported
+        # (can_disable_turn_detection=False), so the argument is never True here
         session = RealtimeSession(self)
         self._sessions.add(session)
         return session
