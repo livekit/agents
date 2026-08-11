@@ -137,9 +137,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        # The field-by-field readback is mandatory: a fluent one-line recital lets a
+        # misheard field pass as the caller's own wording, so enumerating the fields is
+        # what gives the user a chance to catch a transcription error.
         return (
             f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"Repeat the address field by field: {address_fields}\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 

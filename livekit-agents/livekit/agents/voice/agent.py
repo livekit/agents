@@ -960,7 +960,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         self.__inactive_ev.clear()
-        suspended_handles: list[SpeechHandle | asyncio.Task[Any]] = []
+        suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
         pending_on_enter_task: asyncio.Task[None] | None = None
         try:
             # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
@@ -991,13 +991,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
             # now unwatch the parent speech handle and blocked tasks that belong to the
             # old activity — they can't complete while this AgentTask is running, and
-            # keeping them watched would block RunResult from completing.
+            # keeping them watched would block RunResult from completing. A foreground
+            # hold waiting on this task is in the same position, so its guard suspends too.
             if run_state and not run_state.done():
                 if speech_handle and run_state._unwatch_handle(speech_handle):
                     suspended_handles.append(speech_handle)
-                for task in blocked_tasks:
-                    if run_state._unwatch_handle(task):
-                        suspended_handles.append(task)
+                for blocked in [*blocked_tasks, *session._foreground_guards]:
+                    if run_state._unwatch_handle(blocked):
+                        suspended_handles.append(blocked)
                 if suspended_handles:
                     run_state._mark_done_if_needed(None)
         except Exception:

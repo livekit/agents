@@ -159,7 +159,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._detection_timeout_timer = asyncio.get_running_loop().call_later(
             self._timeout,
             functools.partial(
-                self._on_timeout,
+                self.settle,
                 category=AMDCategory.UNCERTAIN,
                 reason="detection_timeout",
             ),
@@ -178,7 +178,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             self._no_speech_timer = asyncio.get_running_loop().call_later(
                 self._no_speech_threshold,
                 functools.partial(
-                    self._on_timeout,
+                    self.settle,
                     category=AMDCategory.UNCERTAIN,
                     reason="no_speech_timeout",
                 ),
@@ -222,7 +222,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                 self._silence_timer = asyncio.get_running_loop().call_later(
                     max(0, self._human_silence_threshold - silence_duration),
                     functools.partial(
-                        self._on_timeout,
+                        self.settle,
                         category=AMDCategory.HUMAN,
                         reason="short_greeting",
                         speech_duration=speech_duration,
@@ -342,25 +342,16 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._try_emit_result()
 
     @log_exceptions(logger=logger)
-    def _on_timeout(
+    def settle(
         self,
         category: AMDCategory,
         reason: str,
         speech_duration: float | None = None,
     ) -> None:
-        """A timeout (detection budget, no-speech, short greeting) fired.
+        """Commit a fallback verdict and attempt emission.
 
-        Commit a fallback verdict if none exists, then try to emit. This only
-        decides *what* the verdict is; ``_can_emit`` decides *when* it is
-        released. End-of-turn is forced here only when there is nothing left to
-        wait for: no speech was heard, or we are not waiting for the greeting to
-        finish. When ``wait_until_finished`` is set and speech was heard, the
-        fallback is still committed but its release stays gated on end-of-turn
-        (the real signal or the backstop timer), so we don't cut the greeting
-        short with an ``uncertain`` result.
-
-        Not gated by ``_listening_guard``: detection_timeout must still fire
-        when the call never reaches listening (e.g. sip never answered).
+        This can run before listening begins. After speech, ``wait_until_finished``
+        keeps emission gated on end-of-turn so a fallback cannot cut the greeting short.
         """
         if self._closed:
             return

@@ -82,7 +82,23 @@ class TestExtractAndStrip:
     def test_square_brackets_are_never_markup(self) -> None:
         # only XML is markup here — bracket spans reach transcripts as prose/markdown
         text = 'Press [Enter] <emotion value="happy"/> to open [the docs](https://lk.io)'
-        assert _strip(text, ["emotion"]) == "Press [Enter]  to open [the docs](https://lk.io)"
+        assert _strip(text, ["emotion"]) == "Press [Enter] to open [the docs](https://lk.io)"
+
+    def test_removal_leaves_a_single_space(self) -> None:
+        # a tag between two spaces must not leave both behind: the transcript would show
+        # a double space after the punctuation the tag followed
+        assert _strip('Right. <emotion value="sad"/> Anyway.', ["emotion"]) == "Right. Anyway."
+        # the space survives when it is the only separator between the words
+        assert _strip('Right.<emotion value="sad"/> Anyway.', ["emotion"]) == "Right. Anyway."
+        assert _strip('Right. <emotion value="sad"/>Anyway.', ["emotion"]) == "Right. Anyway."
+        # trailing: the space may separate words still streaming in, so it is kept
+        assert _strip('Right. <emotion value="sad"/>', ["emotion"]) == "Right. "
+        # a wrapping tag keeps its content, so nothing is doubled to begin with
+        assert _strip("a <spell>b</spell> c", ["spell"]) == "a b c"
+        # a lone closing tag is a removal too
+        assert _strip("a </spell> b", ["spell"]) == "a b"
+        # newlines are structure, not a doubled separator
+        assert _strip('a\n<emotion value="sad"/>\nb', ["emotion"]) == "a\n\nb"
 
     def test_reports_stripped_tags(self) -> None:
         clean, tags = extract_and_strip(
