@@ -74,6 +74,15 @@ class ChoiceDelta(BaseModel):
     tool_calls: list[FunctionToolCall] = Field(default_factory=list)
     extra: dict[str, Any] | None = None
     """Provider-specific extra data (e.g., Google thought signatures)."""
+    tool_call_started: bool = False
+    """Marks the delta where a tool call begins, before its arguments have streamed in.
+
+    Lets downstream consumers flush any buffered text preamble to TTS immediately, instead
+    of waiting for the tool arguments to finish serializing. The flag never accompanies an
+    incomplete call: it rides either a bare marker chunk (no ``tool_calls``) or, when a
+    batched delta names a second tool, the chunk flushing the fully assembled first call.
+    It may also carry ``content``/``extra`` packed into the same delta as the tool call,
+    so consumers should route those before acting on the flush."""
 
 
 class ChatChunk(BaseModel):

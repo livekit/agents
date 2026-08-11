@@ -382,6 +382,10 @@ class LLM(llm.LLM):
 
 
 class LLMStream(llm.LLMStream):
+    # Fallback read before _run() initializes the per-run value; assignment always
+    # creates an instance attribute, so this is never shared state across streams.
+    _tool_start_signaled: bool = False
+
     def __init__(
         self,
         llm_v: LLM | llm.LLM,
@@ -417,6 +421,7 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
         self._tool_extra: dict[str, Any] | None = None
         self._tool_index: int | None = None
+        self._tool_start_signaled = False
         retryable = True
 
         try:
@@ -524,6 +529,8 @@ class LLMStream(llm.LLMStream):
             delta.content, thinking_filter, final=choice.finish_reason is not None
         )
 
+        pending_tool_start = False
+
         if delta.tool_calls:
             for tool in delta.tool_calls:
                 if not tool.function:
@@ -531,11 +538,18 @@ class LLMStream(llm.LLMStream):
 
                 call_chunk = None
                 if self._tool_call_id and tool.id and tool.index != self._tool_index:
+                    # A batched delta can name a second tool before the post-loop marker
+                    # below has a chance to run; carry the start signal on the flushed
+                    # call (which is complete) so the preamble flush is not lost.
+                    signal_tool_start = pending_tool_start and not self._tool_start_signaled
+                    if signal_tool_start:
+                        self._tool_start_signaled = True
                     call_chunk = llm.ChatChunk(
                         id=id,
                         delta=llm.ChoiceDelta(
                             role="assistant",
                             content=delta.content,
+                            tool_call_started=signal_tool_start,
                             tool_calls=[
                                 llm.FunctionToolCall(
                                     arguments=self._fnc_raw_arguments or "",
@@ -556,11 +570,33 @@ class LLMStream(llm.LLMStream):
                     self._fnc_raw_arguments = tool.function.arguments or ""
                     # Extract extra from tool call (e.g., Google thought signatures)
                     self._tool_extra = getattr(tool, "extra_content", None)
+
+                    if not self._tool_start_signaled:
+                        pending_tool_start = True
                 elif tool.function.arguments:
                     self._fnc_raw_arguments += tool.function.arguments  # type: ignore
 
                 if call_chunk is not None:
                     return call_chunk
+
+            # Signal the start of the tool call so a buffered text preamble can be
+            # flushed to TTS now, rather than after the arguments finish streaming
+            # (which can add ~1s of dead air). The marker carries no tool_calls, so
+            # it never triggers tool execution; the assembled call is still emitted
+            # once the arguments are complete. Emitted after the loop so it carries
+            # any content/extra_content sharing this delta and never preempts a
+            # same-delta finish_reason.
+            if pending_tool_start and choice.finish_reason is None:
+                self._tool_start_signaled = True
+                return llm.ChatChunk(
+                    id=id,
+                    delta=llm.ChoiceDelta(
+                        role="assistant",
+                        content=delta.content,
+                        extra=getattr(delta, "extra_content", None),
+                        tool_call_started=True,
+                    ),
+                )
 
         if choice.finish_reason in ("tool_calls", "stop") and self._tool_call_id:
             finish_extra = getattr(delta, "extra_content", None)
