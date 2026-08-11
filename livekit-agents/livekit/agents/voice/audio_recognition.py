@@ -642,6 +642,12 @@ class AudioRecognition:
         backchannel_filter = self._session.options.interruption.get("backchannel_filter")
         if not backchannel_filter:
             return False
+        if self._turn_detection_mode == "manual":
+            # a manual commit_user_turn is an explicit app decision and commits
+            # even with an empty transcript — dropping the final here would
+            # resolve that commit to "" and generate a reply to nothing. the
+            # min_words gates exempt manual mode for the same reason
+            return False
         if self._audio_transcript:
             return False
         if not (self._speech_overlapped_agent or self._agent_mid_utterance):

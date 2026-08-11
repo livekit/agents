@@ -157,6 +157,7 @@ def _make_recognition(
     agent_speaking: bool = True,
     agent_state: str = "speaking",
     backchannel_filter: Sequence[str] | Callable[[str], bool] | None = DEFAULT_BACKCHANNEL_PHRASES,
+    turn_detection_mode: str | None = "vad",
 ) -> AudioRecognition:
     ar = object.__new__(AudioRecognition)
     ar._session = SimpleNamespace(  # type: ignore[assignment]
@@ -166,6 +167,7 @@ def _make_recognition(
     ar._speech_overlapped_agent = overlapped
     ar._agent_speaking = agent_speaking
     ar._audio_transcript = audio_transcript
+    ar._turn_detection_mode = turn_detection_mode
     return ar
 
 
@@ -202,6 +204,14 @@ def test_drop_decision() -> None:
     flt = _make_recognition(backchannel_filter=lambda text: "vale" in text.lower())
     assert flt._should_drop_backchannel_final("Vale, vale.")
     assert not flt._should_drop_backchannel_final("Una pregunta.")
+
+    # manual turn detection: commit_user_turn is an explicit app decision and
+    # commits even with an empty transcript — dropping would resolve that
+    # commit to "" and generate a reply to nothing (the min_words gates
+    # exempt manual mode for the same reason)
+    assert not _make_recognition(turn_detection_mode="manual")._should_drop_backchannel_final(
+        "Okay."
+    )
 
 
 # endregion
