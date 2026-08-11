@@ -761,12 +761,13 @@ class SessionHost:
                 try:
                     result: RunResult[None] = self._session.run(user_input=text)
                     await result
+                    # an empty list is a turn the agent chose to stay silent on, not a
+                    # failure: a tool may have told it to say nothing (a close-the-call
+                    # tool that already delivered its goodbye is the common case). Report
+                    # the silence and let the caller decide what it means.
                     items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
                 except Exception as e:
                     error = str(e)
-
-                if not items_list and not error:
-                    error = "agent produced no response items"
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
