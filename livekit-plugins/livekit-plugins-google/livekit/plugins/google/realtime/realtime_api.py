@@ -517,8 +517,6 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
-        # whether the session already warned that a tool reply cannot be suppressed
-        self._silent_tool_result_warned = False
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -673,29 +671,28 @@ class RealtimeSession(llm.RealtimeSession):
 
         if append_ctx.items:
             # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
-            silent_scheduling = (
+            supports_silent_scheduling = (
                 not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             )
-            if (
-                not silent_scheduling
-                and not self._silent_tool_result_warned
-                and any(
-                    item.type == "function_call_output" and not item.reply_required
+            if not supports_silent_scheduling and (
+                silenced := [
+                    item.name
                     for item in append_ctx.items
-                )
+                    if item.type == "function_call_output" and not item.reply_required
+                ]
             ):
-                self._silent_tool_result_warned = True
                 logger.warning(
                     "a tool result wants no reply, but Gemini will answer it anyway; declare "
                     "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
-                    "regardless, since an unanswered call blocks the session."
+                    "regardless, since an unanswered call blocks the session.",
+                    extra={"functions": silenced},
                 )
 
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
-                silent_scheduling=silent_scheduling,
+                supports_silent_scheduling=supports_silent_scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(

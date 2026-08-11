@@ -235,25 +235,35 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 ) -> None:
     """Gemini ignores scheduling on BLOCKING declarations, so the reply cannot be prevented.
 
-    It is sent anyway, since unblocking the turn matters more, and warns once.
+    It is sent anyway, since unblocking the turn matters more, and every one is reported.
     """
     async with _make_connected_session(monkeypatch) as session:
         session._start_new_generation()
-        session._handle_tool_calls(_tool_call())
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[
+                    types.FunctionCall(id="fc_1", name="lookup", args={}),
+                    types.FunctionCall(id="fc_2", name="search", args={}),
+                ]
+            )
+        )
         await _drain_sent(session)
 
-        chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output(reply_required=False))
         with caplog.at_level(logging.WARNING):
-            await session.update_chat_ctx(chat_ctx)
+            for call_id, name in (("fc_1", "lookup"), ("fc_2", "search")):
+                chat_ctx = session.chat_ctx.copy()
+                chat_ctx.items.append(_tool_output(call_id, name, reply_required=False))
+                await session.update_chat_ctx(chat_ctx)
 
         responses = [
             m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
         ]
-        assert len(responses) == 1
-        assert responses[0].function_responses is not None
-        assert responses[0].function_responses[0].scheduling is None
-        assert any("wants no reply" in r.message for r in caplog.records)
+        assert len(responses) == 2
+        assert all(r.function_responses[0].scheduling is None for r in responses)  # type: ignore[index]
+
+        warnings = [r for r in caplog.records if "wants no reply" in r.message]
+        assert len(warnings) == 2, "every update reports what it could not keep quiet"
+        assert [r.functions for r in warnings] == [["lookup"], ["search"]]  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("vertexai", [False, True])

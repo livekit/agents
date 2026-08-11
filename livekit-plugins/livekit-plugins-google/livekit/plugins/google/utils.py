@@ -84,11 +84,11 @@ def get_tool_results_for_realtime(
     *,
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
-    silent_scheduling: bool = False,
+    supports_silent_scheduling: bool = False,
 ) -> types.LiveClientToolResponse | None:
     """Build the tool responses, SILENT for outputs that want no reply.
 
-    `silent_scheduling` says the session can honour that; see `_RealtimeOptions.tool_behavior`.
+    SILENT is claimed only where the session honours it; see `_RealtimeOptions.tool_behavior`.
     """
     function_responses = [
         create_function_response(
@@ -96,7 +96,7 @@ def get_tool_results_for_realtime(
             vertexai=vertexai,
             tool_response_scheduling=(
                 types.FunctionResponseScheduling.SILENT
-                if silent_scheduling and not msg.reply_required
+                if supports_silent_scheduling and not msg.reply_required
                 else tool_response_scheduling
             ),
         )
