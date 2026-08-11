@@ -1,21 +1,30 @@
-"""Phrase-based backchannel classification for interruption handling.
+"""Transcript-based backchannel classification for interruption handling.
 
 When a user says "okay", "thank you", or "uh-huh" while the agent is
 talking, they usually aren't asking the agent to stop — they're
 acknowledging ("backchanneling"). The adaptive interruption detector
 classifies overlapping speech acoustically; this module is the
 transcript-content counterpart for the STT path: an overlapping utterance
-whose words are entirely backchannel phrases (plus filler sounds) neither
-interrupts the agent's speech nor commits a user turn.
+classified as backchannel-only neither interrupts the agent's speech nor
+commits a user turn.
 
-Enabled with ``InterruptionOptions["backchannel_phrases"]``; disabled by
-default. ``DEFAULT_BACKCHANNEL_PHRASES`` is a curated English starter list.
+Enabled with ``InterruptionOptions["backchannel_filter"]``; disabled by
+default. The filter is either a phrase list (matched with the built-in
+phrase/filler logic below) or a user callback ``(transcript) -> bool`` for
+full control over the classification (custom languages, model-based
+detection, context-dependent rules). ``DEFAULT_BACKCHANNEL_PHRASES`` is a
+curated English starter list for the phrase-list form.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache
+
+BackchannelFilter = Sequence[str] | Callable[[str], bool]
+"""Either a list of backchannel phrases (matched by the built-in
+phrase/filler matcher) or a callback receiving the transcribed text of the
+overlapping speech and returning ``True`` when it is backchannel-only."""
 
 DEFAULT_BACKCHANNEL_PHRASES: tuple[str, ...] = (
     "makes sense",
@@ -40,7 +49,7 @@ DEFAULT_BACKCHANNEL_PHRASES: tuple[str, ...] = (
     "cool",
 )
 """A curated list of English acknowledgment phrases suitable for
-``InterruptionOptions["backchannel_phrases"]``. Deliberately absent:
+``InterruptionOptions["backchannel_filter"]``. Deliberately absent:
 "no", "wait", "stop", "what", "hello", and a bare "huh" — those are
 real barge-ins ("uh huh" the backchannel still matches as a phrase).
 """
@@ -63,12 +72,21 @@ def _split_phrases(phrases: tuple[str, ...]) -> list[list[str]]:
     return sorted((w for p in phrases if (w := _normalize(p))), key=len, reverse=True)
 
 
-def is_backchannel_only(text: str, phrases: Sequence[str], *, partial: bool = False) -> bool:
-    """True when ``text`` consists solely of backchannel ``phrases`` and
-    filler sounds — i.e. the user is acknowledging, not interrupting.
+def is_backchannel_only(
+    text: str, backchannel_filter: BackchannelFilter, *, partial: bool = False
+) -> bool:
+    """True when ``text`` is classified as backchannel-only by
+    ``backchannel_filter`` — i.e. the user is acknowledging, not
+    interrupting.
 
-    Empty text returns ``False``: with no words yet the decision belongs to
-    the ``min_duration``/``min_words`` gates, not to the phrase filter.
+    A ``Sequence[str]`` filter uses the built-in matcher: the text must
+    consist solely of the given phrases and filler sounds. A callable
+    filter is invoked with ``text`` verbatim and owns the classification
+    entirely.
+
+    Empty text returns ``False`` for both forms: with no words yet the
+    decision belongs to the ``min_duration``/``min_words`` gates, not to
+    the backchannel filter.
 
     ``partial=True`` is for judging a LIVE interim transcript (the
     interruption path): a trailing proper prefix of a known phrase
@@ -78,11 +96,15 @@ def is_backchannel_only(text: str, phrases: Sequence[str], *, partial: bool = Fa
     Deferring is safe because every subsequent interim re-judges the full
     text: "thank god you called" cuts one interim later. Final transcripts
     are complete utterances and must use exact matching (``partial=False``).
+    Callable filters receive no ``partial`` signal — they see live interims
+    on the interruption path and must tolerate incomplete text themselves.
     """
     words = _normalize(text)
     if not words:
         return False
-    split = _split_phrases(tuple(phrases))
+    if callable(backchannel_filter):
+        return bool(backchannel_filter(text))
+    split = _split_phrases(tuple(backchannel_filter))
     i = 0
     while i < len(words):
         for p in split:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from types import SimpleNamespace
 
 import pytest
@@ -122,6 +122,29 @@ def test_blank_phrase_entries_are_ignored() -> None:
     assert not is_backchannel_only("anything", ["", "..."])
 
 
+def test_callable_filter() -> None:
+    # a callable filter owns the classification entirely and receives the
+    # text verbatim
+    seen: list[str] = []
+
+    def flt(text: str) -> bool:
+        seen.append(text)
+        return text == "Okay."
+
+    assert is_backchannel_only("Okay.", flt)
+    assert not is_backchannel_only("Okay, but wait.", flt)
+    assert seen == ["Okay.", "Okay, but wait."]
+
+    # partial is a phrase-matcher concept; the callable's verdict is used as-is
+    assert is_backchannel_only("Okay.", flt, partial=True)
+
+    # empty/punctuation-only text short-circuits to False without invoking
+    # the callable: the min_duration/min_words gates own that decision
+    assert not is_backchannel_only("", flt)
+    assert not is_backchannel_only("...", flt)
+    assert seen == ["Okay.", "Okay, but wait.", "Okay."]
+
+
 # endregion
 
 # region drop decision
@@ -133,11 +156,11 @@ def _make_recognition(
     overlapped: bool = True,
     agent_speaking: bool = True,
     agent_state: str = "speaking",
-    phrases: Sequence[str] | None = DEFAULT_BACKCHANNEL_PHRASES,
+    backchannel_filter: Sequence[str] | Callable[[str], bool] | None = DEFAULT_BACKCHANNEL_PHRASES,
 ) -> AudioRecognition:
     ar = object.__new__(AudioRecognition)
     ar._session = SimpleNamespace(  # type: ignore[assignment]
-        options=SimpleNamespace(interruption={"backchannel_phrases": phrases}),
+        options=SimpleNamespace(interruption={"backchannel_filter": backchannel_filter}),
         agent_state=agent_state,
     )
     ar._speech_overlapped_agent = overlapped
@@ -170,10 +193,15 @@ def test_drop_decision() -> None:
     )._should_drop_backchannel_final("Okay.")
 
     # feature off
-    assert not _make_recognition(phrases=None)._should_drop_backchannel_final("Okay.")
+    assert not _make_recognition(backchannel_filter=None)._should_drop_backchannel_final("Okay.")
 
     # real speech never dropped
     assert not _make_recognition()._should_drop_backchannel_final("Okay, but wait.")
+
+    # a callable filter drives the same decision
+    flt = _make_recognition(backchannel_filter=lambda text: "vale" in text.lower())
+    assert flt._should_drop_backchannel_final("Vale, vale.")
+    assert not flt._should_drop_backchannel_final("Una pregunta.")
 
 
 # endregion
@@ -206,7 +234,7 @@ async def test_backchannel_over_agent_speech_is_dropped() -> None:
     session = create_session(
         _story_actions("Okay, thank you."),
         turn_handling={
-            "interruption": {"min_words": 1, "backchannel_phrases": DEFAULT_BACKCHANNEL_PHRASES}
+            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
         },
     )
     agent = EchoAgent()
@@ -219,17 +247,48 @@ async def test_backchannel_over_agent_speech_is_dropped() -> None:
     assert playback_finished_events[0].interrupted is False
     assert playback_finished_events[0].playback_position == pytest.approx(10.0, abs=0.3)
 
-    # and the acknowledgment never became a user turn or a transcription event
+    # and the acknowledgment never became a user turn
     user_messages = [
         item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
     ]
     assert [m.text_content for m in user_messages] == ["Tell me a story."]
-    # interim events may show the acknowledgment (live captions), but it never finalizes
-    assert all(
-        "thank" not in (ev.transcript or "").lower()
+    # the acknowledgment still finalizes as a transcription event: live
+    # captions publish under one segment id until an is_final flushes it, so
+    # swallowing the final would leave the caption stuck open and the next
+    # utterance would merge into the same segment
+    final_acks = [
+        ev
         for ev in user_transcription_events
-        if ev.is_final
+        if ev.is_final and "thank" in (ev.transcript or "").lower()
+    ]
+    assert len(final_acks) == 1
+
+
+async def test_callable_filter_drops_backchannel() -> None:
+    # the callable form gives the user full control over classification;
+    # here composing the built-in matcher (partial=True so live interims
+    # with a trailing phrase prefix defer the cut instead of committing it)
+    def acknowledgments_only(text: str) -> bool:
+        return is_backchannel_only(text, DEFAULT_BACKCHANNEL_PHRASES, partial=True)
+
+    session = create_session(
+        _story_actions("Okay, thank you."),
+        turn_handling={
+            "interruption": {"min_words": 1, "backchannel_filter": acknowledgments_only}
+        },
     )
+    agent = EchoAgent()
+    playback_finished_events, _ = _collect_session_events(session)
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(playback_finished_events) == 1
+    assert playback_finished_events[0].interrupted is False
+
+    user_messages = [
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "user"
+    ]
+    assert [m.text_content for m in user_messages] == ["Tell me a story."]
 
 
 async def test_backchannel_interrupts_without_phrase_filter() -> None:
@@ -250,7 +309,7 @@ async def test_real_barge_in_still_interrupts() -> None:
     session = create_session(
         _story_actions("Wait, I have a question."),
         turn_handling={
-            "interruption": {"min_words": 1, "backchannel_phrases": DEFAULT_BACKCHANNEL_PHRASES}
+            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
         },
     )
     agent = EchoAgent()
@@ -281,7 +340,7 @@ async def test_backchannel_while_listening_commits_turn() -> None:
     session = create_session(
         actions,
         turn_handling={
-            "interruption": {"min_words": 1, "backchannel_phrases": DEFAULT_BACKCHANNEL_PHRASES}
+            "interruption": {"min_words": 1, "backchannel_filter": DEFAULT_BACKCHANNEL_PHRASES}
         },
     )
     agent = EchoAgent()

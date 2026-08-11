@@ -140,7 +140,13 @@ class RecognitionHooks(Protocol):
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
-    def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
+    def on_final_transcript(
+        self,
+        ev: stt.SpeechEvent,
+        *,
+        speaking: bool | None = None,
+        backchannel_discarded: bool = False,
+    ) -> None: ...
     def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
@@ -616,8 +622,8 @@ class AudioRecognition:
         return self._agent_speaking or self._session.agent_state == "thinking"
 
     def _should_drop_backchannel_final(self, transcript: str) -> bool:
-        """True when a final transcript is a phrase-based backchannel over the
-        agent's turn and must not be accumulated or committed.
+        """True when a final transcript is a backchannel over the agent's
+        turn and must not be accumulated or committed.
 
         The overlap is judged at EITHER boundary of the utterance: at its
         onset (``_speech_overlapped_agent``, sticky because the final usually
@@ -633,14 +639,14 @@ class AudioRecognition:
         already consistent with this — it judges the accumulated
         ``_current_transcript``, not the chunk.)
         """
-        backchannel_phrases = self._session.options.interruption.get("backchannel_phrases")
-        if not backchannel_phrases:
+        backchannel_filter = self._session.options.interruption.get("backchannel_filter")
+        if not backchannel_filter:
             return False
         if self._audio_transcript:
             return False
         if not (self._speech_overlapped_agent or self._agent_mid_utterance):
             return False
-        return is_backchannel_only(transcript, backchannel_phrases)
+        return is_backchannel_only(transcript, backchannel_filter)
 
     @property
     def _speaking(self) -> bool:
@@ -1252,12 +1258,18 @@ class AudioRecognition:
 
             if self._should_drop_backchannel_final(transcript):
                 # the user acknowledged ("okay", "thank you") over the agent's
-                # turn — discard it entirely: no interruption attempt, no user
-                # turn, no transcription event. the agent keeps talking
+                # turn — discard it: no interruption attempt, no user turn.
+                # the agent keeps talking
                 logger.debug(
                     "dropping backchannel transcript overlapping agent speech",
                     extra={"user_transcript": transcript},
                 )
+                # the final transcription event is still delivered: live
+                # captions publish under one segment id until an is_final
+                # flushes it, so swallowing the final would leave the
+                # acknowledgment as a stuck open caption that the next
+                # utterance merges into
+                self._hooks.on_final_transcript(ev, backchannel_discarded=True)
                 # also drop the utterance's partial text, mirroring the reset
                 # below — left in place it would keep feeding _current_transcript
                 # (suppressing a later real barge-in if no interim overwrites it)
