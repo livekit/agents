@@ -289,26 +289,11 @@ async def test_generate_reply_allowed_without_mutable_chat_context(
         fut.cancel()
 
 
-async def test_generation_completed_flag_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_generation_completed tracks the turn lifecycle so trailing model_turns can be guarded."""
-    async with _make_session(monkeypatch) as session:
-        # idle before any generation
-        assert session._generation_completed is True
-
-        session._start_new_generation()
-        # a generation is now in flight
-        assert session._generation_completed is False
-
-        session._handle_server_content(types.LiveServerContent(turn_complete=True))
-        # completion signal flips it back
-        assert session._generation_completed is True
-
-
-async def test_tool_call_marks_generation_completed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tool call completes the current generation so the post-tool reply starts a fresh one."""
+async def test_tool_call_finalizes_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool call finalizes the current generation so the post-tool reply starts a fresh one."""
     async with _make_session(monkeypatch) as session:
         session._start_new_generation()
-        assert session._generation_completed is False
+        assert session._current_generation is not None and not session._current_generation._done
 
         session._handle_tool_calls(
             types.LiveServerToolCall(
@@ -316,5 +301,4 @@ async def test_tool_call_marks_generation_completed(monkeypatch: pytest.MonkeyPa
             )
         )
 
-        assert session._generation_completed is True
         assert session._current_generation is not None and session._current_generation._done

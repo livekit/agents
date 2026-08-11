@@ -511,11 +511,6 @@ class RealtimeSession(llm.RealtimeSession):
         # agent handoff before the first connect (where the chat context legitimately holds
         # historical tool outputs that must NOT be resent).
         self._connected_once = False
-        # tracks whether the current generation has reached its completion signal. it lets us
-        # drop trailing `model_turn` frames that some Live preview models emit after a
-        # generation completed, instead of attaching them to the wrong (finished) generation.
-        # True means "idle / completed"; set False when a new generation starts.
-        self._generation_completed = True
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
@@ -923,8 +918,6 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
-            # a fresh session starts idle, with no generation in flight
-            self._generation_completed = True
             config = self._build_connect_config()
             session = None
             try:
@@ -1159,25 +1152,6 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
-                    if (
-                        (not self._current_generation or self._current_generation._done)
-                        and not self._generation_completed
-                        and response.server_content
-                        and response.server_content.model_turn
-                    ):
-                        # A `model_turn` arrived for a generation that was already torn down but
-                        # never saw a completion signal (`_generation_completed` is still False).
-                        # There is no active, incomplete generation to attach it to, so
-                        # processing it would double-process the content or spin up a spurious
-                        # generation. Strip just the stray model_turn and let the rest of the
-                        # message (turn_complete, usage_metadata, go_away, session resumption)
-                        # flow through the handlers below instead of dropping it wholesale.
-                        if lk_google_debug:
-                            logger.debug(
-                                "dropping trailing model_turn without an active generation"
-                            )
-                        response.server_content.model_turn = None
-
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1297,8 +1271,6 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
-        # a generation is now in flight; its completion signal will flip this back to True
-        self._generation_completed = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1415,7 +1387,6 @@ class RealtimeSession(llm.RealtimeSession):
                 current_gen.push_text(text)
 
         if server_content.generation_complete or server_content.turn_complete:
-            self._generation_completed = True
             current_gen._completed_timestamp = time.time()
 
         # gemini delays turn_complete until it thinks client-side playback finished, so end
@@ -1542,11 +1513,6 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
-        # A tool call completes the current generation regardless of model family (some Live
-        # preview models don't emit a separate generation_complete afterwards). Recording the
-        # completion here keeps the model's post-tool reply flowing as a fresh generation and
-        # keeps the trailing-model_turn guard in _recv_task from misfiring on it.
-        self._generation_completed = True
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
