@@ -57,6 +57,25 @@ class _ActiveSessionStub:
         await self.close_release.wait()
 
 
+class _RecordingInputSession(_ActiveSessionStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.realtime_inputs: list[dict[str, object]] = []
+        self.client_contents: list[dict[str, object]] = []
+
+    async def send_realtime_input(self, **kwargs: object) -> None:
+        self.realtime_inputs.append(kwargs)
+
+    async def send_client_content(self, **kwargs: object) -> None:
+        self.client_contents.append(kwargs)
+
+
+async def _drain_queued_events(session: RealtimeSession, active: _RecordingInputSession) -> None:
+    channel = session._msg_ch
+    channel.close()
+    await session._send_task(cast(Any, active), session._session_epoch, channel)
+
+
 class _ControlledReceiveSession(_ActiveSessionStub):
     def __init__(self, response: types.LiveServerMessage) -> None:
         super().__init__()
@@ -613,15 +632,19 @@ async def test_discard_restart_clears_resumption_handle_and_aborts_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async with _make_session(monkeypatch, manual_activity_detection=True) as session:
-        sent: list[object] = []
-        monkeypatch.setattr(session, "_send_client_event", sent.append)
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
         session._session_resumption_handle = "resume-me"
         session.start_user_activity()
+        await _drain_queued_events(session, active)
 
         session.clear_audio()
 
         assert session.session_resumption_handle is None
-        sent.clear()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
         with pytest.raises(llm.RealtimeError, match="discarded during a session restart"):
             await session.generate_reply()
         assert sent == []
@@ -1338,3 +1361,514 @@ async def test_fatal_connect_error_completes_main_task_without_exception(
         assert session._main_atask.exception() is None
         assert session._terminal_error is not None
         assert session._msg_ch.closed
+
+
+async def test_quarantined_manual_audio_follows_activity_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
+
+        session.push_audio(_input_frame(50, fill=2))
+        session.start_user_activity()
+
+        assert len(sent) == 2
+        assert isinstance(sent[0], types.LiveClientRealtimeInput)
+        assert sent[0].activity_start is not None
+        assert isinstance(sent[1], types.LiveClientRealtimeInput)
+        assert sent[1].audio is not None
+        assert sent[1].audio.data == bytes([2]) * 1600
+
+
+async def test_local_manual_audio_clear_preserves_active_output_and_resumption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        session._session_resumption_handle = "resume-current-output"
+        initial_epoch = session._session_epoch
+
+        # This tail has not reached the provider and needs no transport restart.
+        session.push_audio(_input_frame(20, fill=1))
+        session.clear_audio()
+
+        assert not generation._done
+        assert session._session_epoch == initial_epoch
+        assert session.session_resumption_handle == "resume-current-output"
+
+
+async def test_provider_visible_manual_clear_waits_for_active_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        session._session_resumption_handle = "resume-current-output"
+        initial_epoch = session._session_epoch
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+
+        assert not generation._done
+        assert session._session_epoch == initial_epoch
+        assert session.session_resumption_handle == "resume-current-output"
+
+        session._handle_server_content(
+            _audio_content(output_transcription=types.Transcription(text="still complete"))
+        )
+        assert generation.output_text == "still complete"
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
+        assert session.session_resumption_handle is None
+
+
+async def test_new_manual_activity_replays_only_post_clear_audio_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
+
+        # A repeated discard drops quarantined input but retains the one deferred restart.
+        session.push_audio(_input_frame(50, fill=2))
+        session.clear_audio()
+        session.push_audio(_input_frame(50, fill=3))
+        session.start_user_activity()
+
+        assert len(sent) == 2
+        assert isinstance(sent[0], types.LiveClientRealtimeInput)
+        assert sent[0].activity_start is not None
+        assert isinstance(sent[1], types.LiveClientRealtimeInput)
+        assert sent[1].audio is not None
+        assert sent[1].audio.data == bytes([3]) * 1600
+
+
+async def test_manual_clear_invalidates_queued_input_while_send_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BlockingSendSession(_ActiveSessionStub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_send_started = asyncio.Event()
+            self.release_first_send = asyncio.Event()
+            self.realtime_inputs: list[dict[str, object]] = []
+
+        async def send_realtime_input(self, **kwargs: object) -> None:
+            if not self.realtime_inputs:
+                self.first_send_started.set()
+                await self.release_first_send.wait()
+            self.realtime_inputs.append(kwargs)
+
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _BlockingSendSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        initial_epoch = session._session_epoch
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), initial_epoch, session._msg_ch)
+        )
+        await asyncio.wait_for(active.first_send_started.wait(), timeout=0.1)
+
+        session.clear_audio()
+        assert session._session_epoch == initial_epoch
+
+        active.release_first_send.set()
+        session._msg_ch.close()
+        await asyncio.wait_for(send_task, timeout=0.1)
+
+        assert len(active.realtime_inputs) == 1
+        assert active.realtime_inputs[0].get("activity_start") is not None
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._session_epoch == initial_epoch + 1
+        session._active_session = None
+
+
+async def test_manual_clear_removes_exact_pending_text_before_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        initial_epoch = session._session_epoch
+
+        chat_ctx = llm.ChatContext.empty()
+        kept_user = chat_ctx.add_message(role="user", content="keep user")
+        kept_assistant = chat_ctx.add_message(role="assistant", content="keep assistant")
+        discarded = chat_ctx.add_message(role="user", content="discard exact pending input")
+        await session.update_chat_ctx(chat_ctx)
+        await _drain_queued_events(session, active)
+        assert len(active.client_contents) == 1
+
+        session.clear_audio()
+
+        assert session.chat_ctx.get_by_id(kept_user.id) is not None
+        assert session.chat_ctx.get_by_id(kept_assistant.id) is not None
+        assert session.chat_ctx.get_by_id(discarded.id) is None
+        assert session._session_epoch == initial_epoch
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._session_epoch == initial_epoch + 1
+        assert session.chat_ctx.get_by_id(discarded.id) is None
+
+
+async def test_deferred_clear_waits_for_provider_turn_after_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        initial_epoch = session._session_epoch
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="lookup", args={})]
+            )
+        )
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._session_epoch == initial_epoch + 1
+
+
+async def test_recoverable_restart_preserves_quarantined_manual_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+        session.push_audio(_input_frame(50, fill=2))
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
+
+        session._mark_restart_needed(on_error=True, resume_session=True)
+        session.start_user_activity()
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 2
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([2]) * 1600
+
+
+async def test_manual_audio_quarantine_truncation_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+
+        with caplog.at_level(logging.WARNING):
+            for fill in range(2, 23):
+                session.push_audio(_input_frame(50, fill=fill))
+
+        assert "manual audio quarantine exceeded" in caplog.text
+
+
+async def test_manual_clear_invalidates_dequeued_input_before_second_send_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ObservedChannel:
+        def __init__(self) -> None:
+            self._inner = utils.aio.Chan[Any]()
+            self.recv_started = asyncio.Event()
+            self.dequeued = asyncio.Event()
+
+        @property
+        def closed(self) -> bool:
+            return self._inner.closed
+
+        def empty(self) -> bool:
+            return self._inner.empty()
+
+        def send_nowait(self, value: object) -> None:
+            self._inner.send_nowait(value)
+
+        def recv_nowait(self) -> object:
+            return self._inner.recv_nowait()
+
+        async def recv(self) -> object:
+            self.recv_started.set()
+            value = await self._inner.recv()
+            self.dequeued.set()
+            return value
+
+        def close(self) -> None:
+            self._inner.close()
+
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        channel = _ObservedChannel()
+        session._active_session = cast(Any, active)
+        session._msg_ch = cast(Any, channel)
+        session._session_should_close.clear()
+        initial_epoch = session._session_epoch
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), initial_epoch, cast(Any, channel))
+        )
+        await asyncio.wait_for(channel.recv_started.wait(), timeout=0.1)
+
+        await session._session_lock.acquire()
+        try:
+            session.start_user_activity()
+            await asyncio.wait_for(channel.dequeued.wait(), timeout=0.1)
+            session.clear_audio()
+        finally:
+            session._session_lock.release()
+
+        channel.close()
+        await asyncio.wait_for(send_task, timeout=0.1)
+
+        assert active.realtime_inputs == []
+        assert session._session_epoch == initial_epoch + 1
+        session._active_session = None
+
+
+async def test_tool_continuation_preserves_concurrent_manual_input_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        first_generation = session._current_generation
+        assert first_generation is not None
+        initial_epoch = session._session_epoch
+
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="lookup", args={})]
+            )
+        )
+        assert first_generation._done
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+
+        session._start_new_generation()
+        continuation = session._current_generation
+        assert continuation is not None
+        assert continuation is not first_generation
+
+        session.clear_audio()
+        assert session._session_epoch == initial_epoch
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert continuation._done
+        assert session._session_epoch == initial_epoch + 1
+
+
+async def test_tool_cancellation_does_not_preserve_committed_input_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        first_generation = session._current_generation
+        assert first_generation is not None
+        initial_epoch = session._session_epoch
+
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="lookup", args={})]
+            )
+        )
+        assert first_generation._done
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        reply_fut = session.generate_reply()
+        await _drain_queued_events(session, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        assert active.realtime_inputs[-1].get("activity_end") is not None
+
+        session._handle_tool_call_cancellation(types.LiveServerToolCallCancellation(ids=["call-1"]))
+        session._start_new_generation()
+        generation_event = await asyncio.wait_for(reply_fut, timeout=0.1)
+        assert generation_event.user_initiated
+
+        session.start_user_activity()
+
+        assert session._session_epoch == initial_epoch
+        session._active_session = None
+
+
+async def test_tool_continuation_preserves_pre_activity_audio_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        first_generation = session._current_generation
+        assert first_generation is not None
+        initial_epoch = session._session_epoch
+
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id="call-1", name="lookup", args={})]
+            )
+        )
+        assert first_generation._done
+
+        # Manual mode accepts provider-bound audio before an explicit ActivityStart.
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        assert active.realtime_inputs[-1].get("audio") is not None
+
+        session._start_new_generation()
+        continuation = session._current_generation
+        assert continuation is not None
+        session.clear_audio()
+        assert session._session_epoch == initial_epoch
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert continuation._done
+        assert session._session_epoch == initial_epoch + 1
+        session._active_session = None
+
+
+async def test_legacy_generation_preserves_pre_activity_audio_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        initial_epoch = session._session_epoch
+
+        session.push_audio(_input_frame(50, fill=1))
+        reply_fut = session.generate_reply()
+        await _drain_queued_events(session, active)
+        assert active.realtime_inputs[-1].get("audio") is not None
+        assert active.client_contents[-1].get("turn_complete") is True
+
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        generation_event = await asyncio.wait_for(reply_fut, timeout=0.1)
+        assert generation_event.user_initiated
+
+        session.clear_audio()
+        assert session._session_epoch == initial_epoch
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
+        session._active_session = None
+
+
+async def test_generation_preserves_next_sequence_pre_activity_audio_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        initial_epoch = session._session_epoch
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        reply_fut = session.generate_reply()
+        await _drain_queued_events(session, active)
+
+        # Turn S is committed, but pre-activity audio for S+1 can reach the provider before
+        # generation S starts.
+        session._msg_ch = utils.aio.Chan[Any]()
+        session.push_audio(_input_frame(50, fill=2))
+        await _drain_queued_events(session, active)
+        assert active.realtime_inputs[-1].get("audio") is not None
+        assert active.realtime_inputs[-1]["audio"].data == bytes([2]) * 1600
+
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        generation_event = await asyncio.wait_for(reply_fut, timeout=0.1)
+        assert generation_event.user_initiated
+
+        session.clear_audio()
+        assert session._session_epoch == initial_epoch
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
+        session._active_session = None

@@ -13,6 +13,7 @@ from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _EndOfTurnInfo,
     _EndOfTurnMetrics,
+    _TurnDisposition,
 )
 
 from .fake_llm import FakeLLM
@@ -303,6 +304,9 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._interruption_enabled = True
     ar._interruption_ch = ch  # type: ignore[assignment]
     ar._agent_speaking = False
+    ar._end_of_turn_task = None
+    ar._commit_user_turn_atask = None
+    ar._turn_disposition = _TurnDisposition()
     ar._agent_speech_started_at = None
     ar._endpointing = MagicMock()
     ar._backchannel_boundary = None

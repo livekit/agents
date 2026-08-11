@@ -183,10 +183,18 @@ class _PausedSpeechInfo:
     timeout: float
 
 
+class _RealtimeAudioInputToken:
+    """Identity for one logical realtime-model audio input."""
+
+
+_RealtimeAudioInputOwner = _RealtimeAudioInputToken | asyncio.Future[_RealtimeAudioInputToken]
+
+
 @dataclass
 class _DeferredRealtimeAudioInput:
     frames: list[rtc.AudioFrame]
-    ready_fut: asyncio.Future[None]
+    token: _RealtimeAudioInputToken
+    ready_fut: asyncio.Future[_RealtimeAudioInputToken]
     activity_started: bool = False
     turn_complete: bool = False
 
@@ -203,6 +211,7 @@ class AgentActivity(RecognitionHooks):
         self._pending_realtime_user_message_ids: set[str] = set()
         self._rt_user_activity_started = False
         self._rt_audio_input_sealed = False
+        self._rt_audio_input_token = _RealtimeAudioInputToken()
         self._deferred_realtime_audio_inputs: deque[_DeferredRealtimeAudioInput] = deque()
         self._tool_choice: llm.ToolChoice | None = None
 
@@ -392,6 +401,22 @@ class AgentActivity(RecognitionHooks):
     def _validate_turn_detection(
         self, turn_detection: TurnDetectionMode | None
     ) -> TurnDetectionMode | None:
+        turn_detection_explicit = (
+            is_given(self._agent.turn_detection) or self._session._turn_detection_explicit
+        )
+        if (
+            self._realtime_input_mode == "text"
+            and self.vad is None
+            and self.stt is not None
+            and self.stt.capabilities.streaming
+            and not turn_detection_explicit
+            and (turn_detection is None or isinstance(turn_detection, _StreamingTurnDetector))
+        ):
+            logger.info(
+                "using streaming STT end-of-speech events for realtime text input because "
+                "no VAD or turn detector was explicitly configured"
+            )
+            return "stt"
         if turn_detection is not None and not isinstance(turn_detection, str):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
@@ -1389,7 +1414,7 @@ class AgentActivity(RecognitionHooks):
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
-        self._abort_deferred_realtime_audio()
+        self._reset_realtime_audio_input_state()
 
         # Stop recognition first so a transcription timeout cannot schedule provider work
         # while the realtime transport is closing.
@@ -1576,6 +1601,8 @@ class AgentActivity(RecognitionHooks):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
+        realtime_audio_input_owner: _RealtimeAudioInputOwner | None = None,
+        commit_realtime_audio: bool = False,
     ) -> SpeechHandle:
         if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
@@ -1624,9 +1651,19 @@ class AgentActivity(RecognitionHooks):
         )
 
         if isinstance(self.llm, llm.RealtimeModel):
+            if (
+                realtime_audio_input_owner is None
+                and self._rt_session is not None
+                and self._realtime_input_mode == "audio"
+                and input_details.modality == "audio"
+                and (self._rt_user_activity_started or self._rt_audio_input_sealed)
+            ):
+                realtime_audio_input_owner = self._rt_audio_input_token
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
+                    realtime_audio_input_owner=realtime_audio_input_owner,
+                    commit_realtime_audio=commit_realtime_audio,
                     user_message=user_message if is_given(user_message) else None,
                     instructions=self._render_realtime_instructions(instructions)
                     if instructions
@@ -1770,17 +1807,18 @@ class AgentActivity(RecognitionHooks):
         ):
             self._deferred_realtime_audio_inputs.append(
                 _DeferredRealtimeAudioInput(
+                    token=_RealtimeAudioInputToken(),
                     frames=[],
                     ready_fut=asyncio.get_running_loop().create_future(),
                 )
             )
         return self._deferred_realtime_audio_inputs[-1]
 
-    def _seal_realtime_audio_input(self) -> asyncio.Future[None]:
+    def _seal_realtime_audio_input(self) -> asyncio.Future[_RealtimeAudioInputToken]:
         if not self._rt_audio_input_sealed:
             self._rt_audio_input_sealed = True
             ready_fut = asyncio.get_running_loop().create_future()
-            ready_fut.set_result(None)
+            ready_fut.set_result(self._rt_audio_input_token)
             return ready_fut
 
         deferred = self._get_deferred_realtime_audio_input()
@@ -1790,25 +1828,39 @@ class AgentActivity(RecognitionHooks):
     def _advance_realtime_audio_input(self) -> None:
         self._rt_user_activity_started = False
         if self._rt_session is None or not self._deferred_realtime_audio_inputs:
+            self._rt_audio_input_token = _RealtimeAudioInputToken()
             self._rt_audio_input_sealed = False
             return
 
         deferred = self._deferred_realtime_audio_inputs.popleft()
+        self._rt_audio_input_token = deferred.token
         try:
             if deferred.activity_started:
                 # Advance to the already-observed next VAD turn only after the previous
                 # provider input was completed or discarded.
                 self._rt_session.start_user_activity()
                 self._rt_user_activity_started = True
-                for frame in deferred.frames:
-                    self._rt_session.push_audio(frame)
+            # Audio reaches this path before external VAD can report activity. Preserve those
+            # frames just as the unsealed path forwards frames before start_user_activity().
+            for frame in deferred.frames:
+                self._rt_session.push_audio(frame)
             self._rt_audio_input_sealed = deferred.turn_complete
             if not deferred.ready_fut.done():
-                deferred.ready_fut.set_result(None)
+                deferred.ready_fut.set_result(deferred.token)
         except BaseException as e:
+            try:
+                self._rt_session.clear_audio()
+            except BaseException:
+                logger.exception("failed to clear realtime input after deferred replay failure")
+
+            self._rt_audio_input_token = _RealtimeAudioInputToken()
+            self._rt_user_activity_started = False
             self._rt_audio_input_sealed = False
             if not deferred.ready_fut.done():
                 deferred.ready_fut.set_exception(e)
+                # Replay can fail before EOU owns this future. Mark it observed while retaining
+                # the same exception for any waiter that already captured it.
+                deferred.ready_fut.exception()
             self._abort_deferred_realtime_audio()
             raise
 
@@ -1819,24 +1871,66 @@ class AgentActivity(RecognitionHooks):
             if not deferred.ready_fut.done():
                 deferred.ready_fut.cancel()
 
+    def _reset_realtime_audio_input_state(self) -> None:
+        self._rt_audio_input_token = _RealtimeAudioInputToken()
+        self._rt_user_activity_started = False
+        self._abort_deferred_realtime_audio()
+
+    def _discard_latest_realtime_audio_input(self) -> None:
+        """Discard the newest logical input without disturbing older provider-current audio."""
+
+        if self._deferred_realtime_audio_inputs:
+            deferred = self._deferred_realtime_audio_inputs.pop()
+            if not deferred.ready_fut.done():
+                deferred.ready_fut.cancel()
+            return
+        self._clear_realtime_input()
+
     def _clear_realtime_input(self, *, advance_deferred: bool = True) -> None:
         if self._rt_session is None:
+            self._rt_audio_input_token = _RealtimeAudioInputToken()
             self._rt_user_activity_started = False
             self._abort_deferred_realtime_audio()
             return
         try:
             self._rt_session.clear_audio()
         finally:
-            self._rt_user_activity_started = False
             if advance_deferred and self._realtime_input_mode == "audio":
                 self._advance_realtime_audio_input()
+            else:
+                self._rt_audio_input_token = _RealtimeAudioInputToken()
+                self._rt_user_activity_started = False
+
+    def _clear_realtime_input_if_owned(self, input_owner: _RealtimeAudioInputOwner | None) -> None:
+        if input_owner is None:
+            return
+
+        input_token: _RealtimeAudioInputToken
+        if isinstance(input_owner, asyncio.Future):
+            if not input_owner.done():
+                for deferred in tuple(self._deferred_realtime_audio_inputs):
+                    if deferred.ready_fut is input_owner:
+                        self._deferred_realtime_audio_inputs.remove(deferred)
+                        input_owner.cancel()
+                        return
+                return
+            try:
+                input_token = input_owner.result()
+            except BaseException:
+                return
+        else:
+            input_token = input_owner
+
+        if input_token is not self._rt_audio_input_token:
+            return
+        self._clear_realtime_input()
 
     def clear_user_turn(self) -> None:
         if self._audio_recognition:
             self._audio_recognition._clear_user_turn()
 
         if self._rt_session is not None and self._realtime_input_mode == "audio":
-            self._clear_realtime_input()
+            self._discard_latest_realtime_audio_input()
 
     def commit_user_turn(
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
@@ -1846,14 +1940,37 @@ class AgentActivity(RecognitionHooks):
             if skip_reply:
                 # Do not make deliberately skipped input model-visible. This also handles the
                 # no-STT case, where no end-of-turn callback will arrive to discard the buffer.
-                self._clear_realtime_input()
+                # Mark the provider disposition complete so a later external-STT callback keeps
+                # the transcript but does not claim another realtime audio input.
+                self._discard_latest_realtime_audio_input()
+                reply_already_triggered = True
             else:
                 # Commit the provider audio and trigger the reply before waiting for an external
                 # STT flush. The EOT marker below prevents a second trigger without overloading
-                # the caller's skip_reply intent.
+                # the caller's skip_reply intent. A consecutive turn stays bound to its deferred
+                # input until the preceding generation releases the provider buffer.
                 self._start_realtime_user_activity()
-                self._rt_session.commit_audio()
-                self._session.generate_reply()
+                input_ready_fut = self._seal_realtime_audio_input()
+                try:
+                    if input_ready_fut.done():
+                        # The current input is ready, so preserve the established synchronous
+                        # manual-commit behavior and let AgentSession track the returned handle.
+                        input_ready_fut.result()
+                        self._rt_session.commit_audio()
+                        self._session.generate_reply(input_modality="audio")
+                    else:
+                        # A reply handle must exist now so interruption/cancellation can discard
+                        # this exact deferred input before it becomes provider-visible.
+                        handle = self._generate_reply(
+                            input_details=InputDetails(modality="audio"),
+                            realtime_audio_input_owner=input_ready_fut,
+                            commit_realtime_audio=True,
+                        )
+                        if run_state := self._session._global_run_state:
+                            run_state._watch_handle(handle)
+                except BaseException:
+                    self._clear_realtime_input_if_owned(input_ready_fut)
+                    raise
                 reply_already_triggered = True
 
         assert self._audio_recognition is not None
@@ -2381,7 +2498,7 @@ class AgentActivity(RecognitionHooks):
             and self._realtime_input_mode == "audio"
             and self._turn_detection not in ("manual", "realtime_llm")
         ):
-            self._clear_realtime_input()
+            self._discard_latest_realtime_audio_input()
 
     def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
         # restore interruption by audio activity and then immediately interrupt
@@ -2545,10 +2662,14 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
-            if self._rt_session is not None and self._realtime_input_mode == "audio":
+            if (
+                not info.reply_already_triggered
+                and self._rt_session is not None
+                and self._realtime_input_mode == "audio"
+            ):
                 # External activity may already have streamed provider audio. Discard it when
                 # this turn cannot be scheduled so it cannot prefix the next turn.
-                self._clear_realtime_input()
+                self._discard_latest_realtime_audio_input()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
@@ -2580,8 +2701,12 @@ class AgentActivity(RecognitionHooks):
             < self._session.options.interruption["min_words"]
         ):
             self._cancel_preemptive_generation()
-            if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input()
+            if (
+                not info.reply_already_triggered
+                and self._rt_session is not None
+                and self._realtime_input_mode == "audio"
+            ):
+                self._discard_latest_realtime_audio_input()
             return False
 
         # avoid interruption if backchannel is detected with realtime model. an unjudged overlap
@@ -2598,8 +2723,8 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             # no transcript to gatekeep for realtime barge-in — drop the backchannel turn
             # and clear the buffered audio so it can't leak into the next committed turn
-            if self._rt_session is not None:
-                self._clear_realtime_input()
+            if not info.reply_already_triggered and self._rt_session is not None:
+                self._discard_latest_realtime_audio_input()
             return False
 
         # a replying turn interrupts the paused speech, so cancel the resume that would race it —
@@ -2607,7 +2732,7 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
-        audio_input_ready_fut: asyncio.Future[None] | None = None
+        audio_input_ready_fut: asyncio.Future[_RealtimeAudioInputToken] | None = None
         if (
             self._rt_session is not None
             and self._realtime_input_mode == "audio"
@@ -2628,17 +2753,22 @@ class AgentActivity(RecognitionHooks):
         self,
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
-        audio_input_ready_fut: asyncio.Future[None] | None = None,
+        audio_input_ready_fut: asyncio.Future[_RealtimeAudioInputToken] | None = None,
     ) -> None:
-        if old_task is not None:
-            # We never cancel user code as this is very confusing.
-            # So we wait for the old execution of on_user_turn_completed to finish.
-            # In practice this is OK because most speeches will be interrupted if a new turn
-            # is detected. So the previous execution should complete quickly.
-            await old_task
+        audio_input_token: _RealtimeAudioInputToken | None = None
+        try:
+            if old_task is not None:
+                # We never cancel user code as this is very confusing.
+                # So we wait for the old execution of on_user_turn_completed to finish.
+                # In practice this is OK because most speeches will be interrupted if a new turn
+                # is detected. So the previous execution should complete quickly.
+                await old_task
 
-        if audio_input_ready_fut is not None:
-            await audio_input_ready_fut
+            if audio_input_ready_fut is not None:
+                audio_input_token = await asyncio.shield(audio_input_ready_fut)
+        except BaseException:
+            self._clear_realtime_input_if_owned(audio_input_ready_fut)
+            raise
         self._preemptive_generation_count = 0
 
         # When the audio recognition detects the end of a user turn:
@@ -2667,6 +2797,16 @@ class AgentActivity(RecognitionHooks):
                 return
 
             if self._rt_session is not None:
+                if info.skip_reply:
+                    if self._realtime_input_mode == "audio":
+                        self._clear_realtime_input_if_owned(audio_input_token)
+                        # Preserve the established default-audio behavior: the provider input is
+                        # discarded, while a finalized external transcript remains observable in
+                        # local conversation history.
+                    if self._realtime_input_mode == "audio" and info.new_transcript != "":
+                        self._agent._chat_ctx.items.append(user_message)
+                        self._session._conversation_item_added(user_message)
+                    return
                 if info.reply_already_triggered:
                     # Manual audio commit already started exactly one provider generation. Keep
                     # the finalized external transcript for local observability, but do not touch
@@ -2679,18 +2819,14 @@ class AgentActivity(RecognitionHooks):
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
                     return
-                if info.skip_reply:
-                    if self._realtime_input_mode == "audio":
-                        self._clear_realtime_input()
-                        # Preserve the established default-audio behavior: the provider input is
-                        # discarded, while a finalized external transcript remains observable in
-                        # local conversation history.
-                        if info.new_transcript != "":
-                            self._agent._chat_ctx.items.append(user_message)
-                            self._session._conversation_item_added(user_message)
-                    return
                 if self._realtime_input_mode == "audio":
-                    self._rt_session.commit_audio()
+                    if audio_input_token is not self._rt_audio_input_token:
+                        return
+                    try:
+                        self._rt_session.commit_audio()
+                    except BaseException:
+                        self._clear_realtime_input_if_owned(audio_input_token)
+                        raise
 
         if info.skip_reply:
             if info.new_transcript != "":
@@ -2705,7 +2841,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": info.new_transcript},
                 )
                 if self._rt_session is not None and self._realtime_input_mode == "audio":
-                    self._clear_realtime_input()
+                    self._clear_realtime_input_if_owned(audio_input_token)
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
@@ -2727,7 +2863,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input()
+                self._clear_realtime_input_if_owned(audio_input_token)
             return
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
@@ -2741,12 +2877,12 @@ class AgentActivity(RecognitionHooks):
             )
         except StopResponse:
             if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input()
+                self._clear_realtime_input_if_owned(audio_input_token)
             return  # ignore this turn
         except Exception:
             logger.exception("error occurred during on_user_turn_completed")
             if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input()
+                self._clear_realtime_input_if_owned(audio_input_token)
             return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
@@ -2772,7 +2908,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input()
+                self._clear_realtime_input_if_owned(audio_input_token)
             return
 
         speech_handle: SpeechHandle | None = None
@@ -2818,6 +2954,7 @@ class AgentActivity(RecognitionHooks):
                 input_details=InputDetails(
                     modality="text" if self._realtime_input_mode == "text" else "audio"
                 ),
+                realtime_audio_input_owner=audio_input_token,
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():
@@ -3937,6 +4074,8 @@ class AgentActivity(RecognitionHooks):
         *,
         speech_handle: SpeechHandle,
         model_settings: ModelSettings,
+        realtime_audio_input_owner: _RealtimeAudioInputOwner | None = None,
+        commit_realtime_audio: bool = False,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         user_message: llm.ChatMessage | None = None,
         instructions: str | None = None,
@@ -3945,7 +4084,7 @@ class AgentActivity(RecognitionHooks):
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
 
-        # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
+        # Native server-detected audio responses are handled by _realtime_generation_task.
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
@@ -3955,14 +4094,36 @@ class AgentActivity(RecognitionHooks):
         try:
             await speech_handle.wait_if_not_interrupted(authorization_tasks)
         except asyncio.CancelledError:
-            if self._rt_user_activity_started:
-                self._clear_realtime_input()
+            if realtime_audio_input_owner is not None:
+                self._clear_realtime_input_if_owned(realtime_audio_input_owner)
             raise
         finally:
             await utils.aio.cancel_and_wait(*authorization_tasks)
         if speech_handle.interrupted:
-            if self._rt_user_activity_started:
-                self._clear_realtime_input()
+            if realtime_audio_input_owner is not None:
+                self._clear_realtime_input_if_owned(realtime_audio_input_owner)
+            return
+
+        realtime_audio_input_token: _RealtimeAudioInputToken | None
+        if isinstance(realtime_audio_input_owner, asyncio.Future):
+            try:
+                await speech_handle.wait_if_not_interrupted([realtime_audio_input_owner])
+            except asyncio.CancelledError:
+                self._clear_realtime_input_if_owned(realtime_audio_input_owner)
+                raise
+            if speech_handle.interrupted:
+                self._clear_realtime_input_if_owned(realtime_audio_input_owner)
+                return
+            if realtime_audio_input_owner.cancelled():
+                return
+            realtime_audio_input_token = realtime_audio_input_owner.result()
+        else:
+            realtime_audio_input_token = realtime_audio_input_owner
+
+        if (
+            realtime_audio_input_token is not None
+            and realtime_audio_input_token is not self._rt_audio_input_token
+        ):
             return
 
         if text is not None:
@@ -4014,6 +4175,11 @@ class AgentActivity(RecognitionHooks):
             async def _sync_and_start_generation() -> (
                 asyncio.Future[llm.GenerationCreatedEvent] | None
             ):
+                if (
+                    realtime_audio_input_token is not None
+                    and realtime_audio_input_token is not self._rt_audio_input_token
+                ):
+                    return None
                 # Provider text is sent only after authorization and all awaited configuration
                 # work. Once synchronized, call generate_reply without another scheduling point so
                 # the provider can never retain a pending text turn without a settled request.
@@ -4021,6 +4187,14 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=speech_handle, user_message=user_message
                 ):
                     return None
+                if (
+                    realtime_audio_input_token is not None
+                    and realtime_audio_input_token is not self._rt_audio_input_token
+                ):
+                    return None
+                if commit_realtime_audio:
+                    assert realtime_audio_input_token is not None
+                    rt_session.commit_audio()
                 generation_fut = rt_session.generate_reply(
                     instructions=instructions or NOT_GIVEN,
                     tool_choice=(
@@ -4028,14 +4202,18 @@ class AgentActivity(RecognitionHooks):
                     ),
                     tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
                 )
-                if getattr(self, "_realtime_input_mode", "audio") == "audio" and getattr(
-                    self, "_rt_audio_input_sealed", False
-                ):
-                    # The provider call above completes exactly the currently sealed input.
-                    # Only now can buffered frames be exposed as the next provider activity.
-                    self._advance_realtime_audio_input()
-                else:
-                    self._rt_user_activity_started = False
+                try:
+                    if realtime_audio_input_token is not None:
+                        # The synchronous provider call consumes only the input this task owns.
+                        # Retire that ownership before another event-loop turn can expose new audio.
+                        if realtime_audio_input_token is self._rt_audio_input_token:
+                            self._advance_realtime_audio_input()
+                except BaseException:
+                    if not generation_fut.done():
+                        generation_fut.cancel()
+                    elif not generation_fut.cancelled():
+                        generation_fut.exception()
+                    raise
                 return generation_fut
 
             start_generation_task = asyncio.create_task(
@@ -4107,11 +4285,10 @@ class AgentActivity(RecognitionHooks):
                 except Exception:
                     logger.exception("failed to reset tools")
 
-            # A provider/configuration exception before generate_reply returns must not suppress
-            # the next turn's activity start or leave the failed audio turn buffered.
-            if self._rt_user_activity_started:
+            # A setup failure may discard only the audio input captured by this reply task.
+            if realtime_audio_input_token is not None:
                 try:
-                    self._clear_realtime_input()
+                    self._clear_realtime_input_if_owned(realtime_audio_input_token)
                 except Exception:
                     logger.exception(
                         "failed to clear realtime input after generation setup failure"

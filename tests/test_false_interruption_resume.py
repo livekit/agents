@@ -19,6 +19,7 @@ from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _EndOfTurnInfo,
     _EndOfTurnMetrics,
+    _TurnDisposition,
 )
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
@@ -98,8 +99,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
-    ar._turn_skip_reply = False
-    ar._turn_reply_already_triggered = False
+    ar._turn_disposition = _TurnDisposition()
     ar._vad = None
     ar._last_language = None
     ar._last_emitted_prediction = None

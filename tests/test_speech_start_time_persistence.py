@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit.agents.vad import VADEvent, VADEventType
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import AudioRecognition, _TurnDisposition
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -49,6 +49,8 @@ class TestUserTurnStartPersistence:
         audio_recognition._agent_speaking = False
         audio_recognition._turn_detector_stream = None
         audio_recognition._end_of_turn_task = None
+        audio_recognition._commit_user_turn_atask = None
+        audio_recognition._turn_disposition = _TurnDisposition()
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
         audio_recognition._user_turn_committed = False

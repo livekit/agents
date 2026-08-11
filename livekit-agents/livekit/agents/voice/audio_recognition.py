@@ -79,6 +79,19 @@ class _EndOfTurnInfo:
     """A reply was scheduled before this turn's transcript finished flushing."""
 
 
+@dataclass
+class _TurnDisposition:
+    """Reply disposition owned by one logical user turn."""
+
+    skip_reply: bool = False
+    reply_already_triggered: bool = False
+    bounce_generation: int = 0
+
+    def merge(self, *, skip_reply: bool, reply_already_triggered: bool) -> None:
+        self.skip_reply = self.skip_reply or skip_reply
+        self.reply_already_triggered = self.reply_already_triggered or reply_already_triggered
+
+
 def _compute_end_of_turn_metrics(
     *,
     speech_start_time: float | None,
@@ -265,8 +278,7 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
-        self._turn_skip_reply = False
-        self._turn_reply_already_triggered = False
+        self._turn_disposition = _TurnDisposition()
         self._finalize_empty_transcript_on_timeout = finalize_empty_transcript_on_timeout
 
         self._sample_rate: int | None = None
@@ -379,6 +391,7 @@ class AudioRecognition:
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
                     self._user_turn_committed = False
+                    self._abandon_turn_disposition()
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
@@ -542,6 +555,7 @@ class AudioRecognition:
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
     ) -> None:
+        self._abandon_turn_disposition()
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
         )
@@ -1016,6 +1030,26 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
+    def _advance_turn_disposition(self) -> None:
+        self._turn_disposition = _TurnDisposition()
+
+    def _abandon_turn_disposition(self) -> None:
+        """Detach disposition from work abandoned before its turn can settle."""
+        self._advance_turn_disposition()
+        if self._end_of_turn_task is not None and not self._end_of_turn_task.done():
+            self._end_of_turn_task.cancel()
+        if self._commit_user_turn_atask is not None and not self._commit_user_turn_atask.done():
+            self._commit_user_turn_atask.cancel()
+
+    def _finish_turn_disposition(
+        self, disposition: _TurnDisposition, bounce_generation: int
+    ) -> None:
+        if (
+            self._turn_disposition is disposition
+            and disposition.bounce_generation == bounce_generation
+        ):
+            self._advance_turn_disposition()
+
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
@@ -1026,8 +1060,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
-        self._turn_skip_reply = False
-        self._turn_reply_already_triggered = False
+        self._abandon_turn_disposition()
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1065,18 +1098,17 @@ class AudioRecognition:
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
-        # A late STT final can replace the current EOU bounce task. Preserve the manual turn's
-        # disposition monotonically until that logical turn is committed, dropped, or cleared.
-        self._turn_skip_reply = self._turn_skip_reply or skip_reply
-        self._turn_reply_already_triggered = (
-            self._turn_reply_already_triggered or reply_already_triggered
-        )
 
         if not self._stt or self._closing.is_set():
-            self._turn_skip_reply = False
-            self._turn_reply_already_triggered = False
             fut.set_result("")
             return fut
+
+        # A late STT final can replace the current EOU bounce task. Preserve the manual turn's
+        # disposition on its owned object until that logical turn is committed or abandoned.
+        turn_disposition = self._turn_disposition
+        turn_disposition.merge(
+            skip_reply=skip_reply, reply_already_triggered=reply_already_triggered
+        )
 
         async def _commit_user_turn() -> None:
             if self._last_final_transcript_time is None or (
@@ -1110,6 +1142,11 @@ class AudioRecognition:
                             },
                         )
 
+            if turn_disposition is not self._turn_disposition:
+                if not fut.done():
+                    fut.cancel()
+                return
+
             if self._audio_interim_transcript:
                 # emit interim transcript as final for frontend display
                 self._hooks.on_final_transcript(
@@ -1135,6 +1172,7 @@ class AudioRecognition:
                 chat_ctx,
                 skip_reply=skip_reply,
                 reply_already_triggered=reply_already_triggered,
+                turn_disposition=turn_disposition,
                 trigger="manual",
             )
             self._user_turn_committed = True
@@ -1142,12 +1180,22 @@ class AudioRecognition:
                 fut.set_result(transcript)
 
         def _on_task_done(task: asyncio.Task[None]) -> None:
-            if fut.done():
-                return
             if task.cancelled():
-                fut.cancel()
+                if (
+                    self._commit_user_turn_atask is task
+                    and self._turn_disposition is turn_disposition
+                ):
+                    self._advance_turn_disposition()
+                if not fut.done():
+                    fut.cancel()
             elif exc := task.exception():
-                fut.set_exception(exc)
+                if (
+                    self._commit_user_turn_atask is task
+                    and self._turn_disposition is turn_disposition
+                ):
+                    self._advance_turn_disposition()
+                if not fut.done():
+                    fut.set_exception(exc)
 
         if self._commit_user_turn_atask is not None:
             self._commit_user_turn_atask.cancel()
@@ -1396,9 +1444,6 @@ class AudioRecognition:
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
 
-            if self._end_of_turn_task is not None:
-                self._end_of_turn_task.cancel()
-
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -1418,9 +1463,6 @@ class AudioRecognition:
                 self._turn_detector_stream.cancel_inference()
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
-
-            if self._end_of_turn_task is not None:
-                self._end_of_turn_task.cancel()
 
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_started()
@@ -1514,12 +1556,13 @@ class AudioRecognition:
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
         reply_already_triggered: bool = False,
+        turn_disposition: _TurnDisposition | None = None,
         allow_empty_transcript: bool = False,
     ) -> None:
-        self._turn_skip_reply = self._turn_skip_reply or skip_reply
-        self._turn_reply_already_triggered = (
-            self._turn_reply_already_triggered or reply_already_triggered
-        )
+        disposition = turn_disposition if turn_disposition is not None else self._turn_disposition
+        if disposition is not self._turn_disposition:
+            return
+        disposition.merge(skip_reply=skip_reply, reply_already_triggered=reply_already_triggered)
 
         if (
             self._stt
@@ -1544,6 +1587,9 @@ class AudioRecognition:
             and (self._audio_transcript or isinstance(self._turn_detector, _StreamingTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
+
+        disposition.bounce_generation += 1
+        bounce_generation = disposition.bounce_generation
 
         @utils.log_exceptions(logger=logger)
         async def _bounce_eou_task(
@@ -1746,12 +1792,12 @@ class AudioRecognition:
             )
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
-                    skip_reply=self._turn_skip_reply,
+                    skip_reply=disposition.skip_reply,
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
                     metrics=metrics,
                     backchannel_over_agent=self._turn_backchannel_over_agent,
-                    reply_already_triggered=self._turn_reply_already_triggered,
+                    reply_already_triggered=disposition.reply_already_triggered,
                 )
             )
             if committed:
@@ -1811,19 +1857,25 @@ class AudioRecognition:
             self._turn_backchannel_over_agent = False
             self._overlap_in_current_turn = False
             self._user_turn_committed = False
-            self._turn_skip_reply = False
-            self._turn_reply_already_triggered = False
+            self._finish_turn_disposition(disposition, bounce_generation)
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
         # copy the last_speaking_time before awaiting (the value can change)
-        self._end_of_turn_task = asyncio.create_task(
+        task = asyncio.create_task(
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
                 self._user_turn_start,
             )
+        )
+        self._end_of_turn_task = task
+
+        # A bounce can also terminate through cancellation or an exception before its tail.
+        # Generation ownership prevents an older same-turn bounce from resetting its successor.
+        task.add_done_callback(
+            lambda _: self._finish_turn_disposition(disposition, bounce_generation)
         )
 
     def _check_user_turn_limit(self, transcript: str) -> None:
