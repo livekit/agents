@@ -1279,9 +1279,11 @@ class HotelDB:
         arrangement_id: str,
         guest_name: str,
         guest_phone: str,
-        deliver_to: str,
         on_date: date,
         card_message: str,
+        room_id: str | None = None,
+        recipient_name: str | None = None,
+        delivery_instructions: str = "",
     ) -> tuple[str, FloralArrangement, int]:
         arrangement = FLORIST_ARRANGEMENTS.get(arrangement_id)
         if arrangement is None:
@@ -1291,6 +1293,17 @@ class HotelDB:
             )
         if on_date < TODAY:
             raise Unavailable(f"{on_date.isoformat()} is in the past")
+        room_id = (room_id or "").strip() or None
+        recipient_name = (recipient_name or "").strip() or None
+        if room_id is None and recipient_name is None:
+            raise Unavailable(
+                "no delivery destination: a room/suite or a recipient name is required"
+            )
+        if room_id is not None:
+            room_id = self._normalize_room(room_id)
+            if not self._room_exists(room_id):
+                raise NotFound(f"no such room: {room_id}")
+            recipient_name = None  # the room is the destination; exactly one is stored
         total = arrangement.price
         code = _new_code("FLR-")
         with self.connection as conn:
@@ -1302,15 +1315,29 @@ class HotelDB:
                     "arrangement_id": arrangement_id,
                     "guest_name": guest_name,
                     "guest_phone": "".join(c for c in guest_phone if c.isdigit()),
-                    "deliver_to": deliver_to,
+                    "room_id": room_id,
+                    "recipient_name": recipient_name,
                     "date": on_date.isoformat(),
                     "message": card_message,
+                    "delivery_instructions": delivery_instructions,
                     "total": total,
                 },
             )
         if self.on_change:
             await self.on_change()
         return code, arrangement, total
+
+    async def amend_florist_order(self, *, code: str, delivery_instructions: str) -> None:
+        changed = _update(
+            self.connection,
+            "florist_orders",
+            {"delivery_instructions": delivery_instructions},
+            {"code": code, "status": "confirmed"},
+        )
+        if changed == 0:
+            raise NotFound(f"florist order not found: {code}")
+        if self.on_change:
+            await self.on_change()
 
     async def send_email(self, *, recipient: str, kind: str) -> str:
         """Stub email send: records that a document of `kind` was sent to `recipient`
@@ -1863,16 +1890,19 @@ CREATE TABLE IF NOT EXISTS business_center_bookings (
 );
 
 CREATE TABLE IF NOT EXISTS florist_orders (
-    id             INTEGER PRIMARY KEY,
-    code           TEXT    NOT NULL UNIQUE,
-    arrangement_id TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
-    guest_name     TEXT    NOT NULL,
-    guest_phone    TEXT    NOT NULL,
-    deliver_to     TEXT    NOT NULL,
-    date           DATE    NOT NULL,
-    message        TEXT    NOT NULL DEFAULT '',
-    total          INTEGER NOT NULL,
-    status         TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled'))
+    id                    INTEGER PRIMARY KEY,
+    code                  TEXT    NOT NULL UNIQUE,
+    arrangement_id        TEXT    NOT NULL CHECK (arrangement_id IN ('bouquet','roses','centerpiece')),
+    guest_name            TEXT    NOT NULL,
+    guest_phone           TEXT    NOT NULL,
+    room_id               TEXT    REFERENCES hotel_rooms(id),
+    recipient_name        TEXT,
+    date                  DATE    NOT NULL,
+    message               TEXT    NOT NULL DEFAULT '',
+    delivery_instructions TEXT    NOT NULL DEFAULT '',
+    total                 INTEGER NOT NULL,
+    status                TEXT    NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled')),
+    CHECK ((room_id IS NULL) <> (recipient_name IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS emails_sent (

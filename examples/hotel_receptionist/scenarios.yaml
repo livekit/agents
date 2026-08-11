@@ -1224,7 +1224,7 @@ scenarios:
     - your name: Marcus Webb
     - your callback number: 415-555-0182
     - which arrangement: the dozen long-stem roses
-    - where it goes: room 412
+    - where it goes: room 304
     - the delivery day: this Friday, June 12th
     - the gift-card message: "Happy ten years, my love. Yours always, Marcus."
     DO, IN ORDER:
@@ -1251,8 +1251,8 @@ scenarios:
     expected_state:
     - |
       INSERT INTO florist_orders
-        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
-      VALUES ('IGNORED', 'roses', 'Marcus Webb', '4155550182', '412', '2026-06-12',
+        (code, arrangement_id, guest_name, guest_phone, room_id, date, message, total, status)
+      VALUES ('IGNORED', 'roses', 'Marcus Webb', '4155550182', 'RM_304', '2026-06-12',
               'IGNORED', 'IGNORED', 'confirmed')
 
   # --- 35: Re-send an itemized folio to the address on file (deterministic: emails_sent row)
@@ -1437,8 +1437,8 @@ scenarios:
     expected_state:
     - |
       INSERT INTO florist_orders
-        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
-      VALUES ('IGNORED', 'centerpiece', 'Renata Cole', '4155550193', 'Penthouse Suite',
+        (code, arrangement_id, guest_name, guest_phone, room_id, date, message, total, status)
+      VALUES ('IGNORED', 'centerpiece', 'Renata Cole', '4155550193', 'RM_PH',
               '2026-06-10', 'IGNORED', 'IGNORED', 'confirmed')
 
   # --- 40: VIP pre-arrival -> noted preference via record_followup (NL-only; kind non-deterministic)
@@ -1519,7 +1519,7 @@ scenarios:
     expected_state:
     - |
       INSERT INTO florist_orders
-        (code, arrangement_id, guest_name, guest_phone, deliver_to, date, message, total, status)
+        (code, arrangement_id, guest_name, guest_phone, recipient_name, date, message, total, status)
       VALUES ('IGNORED', 'roses', 'Theodore Lansing', '6285550147', 'Theodore Lansing',
               '2026-06-11', 'IGNORED', 'IGNORED', 'confirmed')
     - |

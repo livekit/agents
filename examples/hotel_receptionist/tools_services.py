@@ -346,37 +346,67 @@ class ServicesToolsMixin:
         ctx: RunContext[Userdata],
         arrangement: Literal["bouquet", "roses", "centerpiece"],
         on_date: date,
-        deliver_to: str,
         card_message: str,
         guest_name: str,
         guest_phone: str,
+        room: str | None = None,
+        recipient: str | None = None,
+        delivery_instruction: str = "",
     ) -> str:
-        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes (room number or recipient name), and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
+        """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instruction here, or via amend_florist_order after placing - never in a followup.
 
         Args:
             arrangement: The arrangement the caller picked.
             on_date: Delivery date in ISO YYYY-MM-DD format.
-            deliver_to: Where it goes - the number of the room or the recipient's name. Prefer room number when available.
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
+            room: The destination room number here ("412"), or "PH" for the penthouse suite. Use this whenever the room is known - it is checked against the hotel's rooms.
+            recipient: The recipient's name, ONLY when no room is known yet (an arriving guest whose room isn't assigned). Leave unset when you pass room.
+            delivery_instruction: How the delivery should be handled ("before the guest arrives", "leave with the concierge") if the caller says. Empty otherwise.
         """
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
                 arrangement_id=arrangement,
                 guest_name=guest_name,
                 guest_phone=guest_phone,
-                deliver_to=deliver_to,
+                room_id=room,
+                recipient_name=recipient,
                 on_date=on_date,
                 card_message=card_message,
+                delivery_instructions=delivery_instruction,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
+        destination = speak_room(room) if room else recipient
         return (
-            f"{a.name} ordered for delivery to {deliver_to} on "
+            f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
             f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
             "total to the caller - no further tool call is needed for this order."
+        )
+
+    @function_tool
+    async def amend_florist_order(
+        self, ctx: RunContext[Userdata], order_code: str, delivery_instruction: str
+    ) -> str:
+        """Attach or replace the delivery handling note on a florist order already placed. Use it when the caller adds a handling request after the order ("make sure it's there before she arrives") - the note belongs on the order the florist reads, not in a followup nobody routes.
+
+        Args:
+            order_code: The florist order reference from order_flowers (e.g. "FLR-...").
+            delivery_instruction: How the delivery should be handled, in one line.
+        """
+        try:
+            await ctx.userdata.db.amend_florist_order(
+                code=order_code, delivery_instructions=delivery_instruction
+            )
+        except NotFound:
+            raise ToolError(
+                f"no florist order {order_code} - re-confirm the reference with the caller"
+            ) from None
+        return (
+            f'noted on the order: "{delivery_instruction}" | confirm to the caller that the '
+            "florist has it; no further tool call is needed."
         )
 
     @function_tool
