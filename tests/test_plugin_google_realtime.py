@@ -181,10 +181,16 @@ async def _drain_sent(session: RealtimeSession) -> list[object]:
     return sent
 
 
-async def test_tool_response_wanting_no_reply_is_silent(
+@pytest.mark.parametrize(
+    "reply_required, scheduling",
+    [(False, types.FunctionResponseScheduling.SILENT), (True, None)],
+)
+async def test_tool_response_scheduling_follows_the_output(
     monkeypatch: pytest.MonkeyPatch,
+    reply_required: bool,
+    scheduling: types.FunctionResponseScheduling | None,
 ) -> None:
-    """A tool result owed by an interrupted turn still reaches Gemini, silently.
+    """A result owed by an interrupted turn goes out SILENT; a normal one keeps the default.
 
     Gemini blocks the turn until every call is answered and offers no cancel, so dropping the
     result strands the session (issue #6569). SILENT records it without prompting speech.
@@ -195,7 +201,7 @@ async def test_tool_response_wanting_no_reply_is_silent(
         await _drain_sent(session)
 
         chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output(reply_required=False))
+        chat_ctx.items.append(_tool_output(reply_required=reply_required))
         await session.update_chat_ctx(chat_ctx)
 
         sent = await _drain_sent(session)
@@ -203,30 +209,7 @@ async def test_tool_response_wanting_no_reply_is_silent(
         assert len(responses) == 1, f"expected the tool response to be sent, got {sent}"
         assert responses[0].function_responses is not None
         assert responses[0].function_responses[0].id == "fc_1"
-        assert (
-            responses[0].function_responses[0].scheduling == types.FunctionResponseScheduling.SILENT
-        )
-
-
-async def test_tool_response_wanting_a_reply_uses_configured_scheduling(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The normal path keeps the configured scheduling; SILENT is only for a withheld reply."""
-    async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
-        session._start_new_generation()
-        session._handle_tool_calls(_tool_call())
-        await _drain_sent(session)
-
-        chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(_tool_output())
-        await session.update_chat_ctx(chat_ctx)
-
-        responses = [
-            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
-        ]
-        assert len(responses) == 1
-        assert responses[0].function_responses is not None
-        assert responses[0].function_responses[0].scheduling is None
+        assert responses[0].function_responses[0].scheduling == scheduling
 
 
 async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(

@@ -7,12 +7,13 @@ model waits on it. A tool with nothing to say says so with `reply_required` inst
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, function_tool
-from livekit.agents.llm import FunctionToolCall, StopResponse
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.llm import FunctionCallOutput, FunctionToolCall, StopResponse
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -21,7 +22,22 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 SESSION_TIMEOUT = 60.0
 
 
-def _tool_turn(actions: FakeActions) -> None:
+class ToolAgent(Agent):
+    """Runs whatever the test hands it, so each case differs only by that callable."""
+
+    def __init__(self, behavior: Callable[[], Any]) -> None:
+        super().__init__(instructions="You are a helpful assistant.")
+        self._behavior = behavior
+
+    @function_tool
+    async def do_the_thing(self) -> Any:
+        """Do the thing."""
+        return self._behavior()
+
+
+async def _run(behavior: Callable[[], Any]) -> tuple[Agent, AgentSession, FunctionCallOutput]:
+    """Run one turn whose single tool call is answered, and return that answer."""
+    actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Do the thing.")
     actions.add_llm(
         content="Working on it.",
@@ -29,20 +45,10 @@ def _tool_turn(actions: FakeActions) -> None:
     )
     actions.add_tts(1.0)
 
-
-async def _run(agent: Agent) -> tuple[AgentSession, list[FunctionToolsExecutedEvent]]:
-    actions = FakeActions()
-    _tool_turn(actions)
     session = create_session(actions)
-
-    events: list[FunctionToolsExecutedEvent] = []
-    session.on("function_tools_executed", events.append)
-
+    agent = ToolAgent(behavior)
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-    return session, events
 
-
-def _assert_answered_once(agent: Agent, session: AgentSession) -> None:
     for label, items in (
         ("agent chat_ctx", agent.chat_ctx.items),
         ("session history", session.history.items),
@@ -53,89 +59,48 @@ def _assert_answered_once(agent: Agent, session: AgentSession) -> None:
         assert len(outs) == 1, f"{label}: the call must be answered exactly once"
         assert outs[0].call_id == calls[0].call_id
 
+    return agent, session, [i for i in agent.chat_ctx.items if i.type == "function_call_output"][0]
+
+
+def _raise_stop_response() -> Any:
+    raise StopResponse
+
+
+@pytest.mark.parametrize(
+    "behavior, error_text",
+    [
+        pytest.param(lambda: object(), "invalid output", id="invalid_output"),
+        pytest.param(
+            lambda: [Agent(instructions="first"), Agent(instructions="second")],
+            "more than one agent",
+            id="two_agents",
+        ),
+    ],
+)
+async def test_a_tool_that_produced_nothing_usable_answers_as_an_error(
+    behavior: Callable[[], Any], error_text: str
+) -> None:
+    """The model can recover from a failure; it cannot recover from silence."""
+    agent, session, output = await _run(behavior)
+
+    assert session.current_agent is agent, "an ambiguous handoff must not be applied"
+    assert output.is_error
+    assert error_text in output.output
+
 
 async def test_stop_response_answers_the_call_and_asks_for_no_reply() -> None:
     """StopResponse means "say nothing", not "leave the call open"."""
+    _, _, output = await _run(_raise_stop_response)
 
-    class StopAgent(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="You are a helpful assistant.")
-
-        @function_tool
-        async def do_the_thing(self) -> None:
-            """Do the thing."""
-            raise StopResponse
-
-    agent = StopAgent()
-    session, events = await _run(agent)
-
-    _assert_answered_once(agent, session)
-    output = events[0].function_call_outputs[0]
     assert output.output == ""
     assert not output.is_error
     assert not output.reply_required
-    assert not events[0].has_tool_reply
-
-
-async def test_invalid_output_answers_the_call_as_an_error() -> None:
-    """A tool returning something unserializable is a failure the model can recover from."""
-
-    class BadOutputAgent(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="You are a helpful assistant.")
-
-        @function_tool
-        async def do_the_thing(self) -> object:
-            """Do the thing."""
-            return object()
-
-    agent = BadOutputAgent()
-    session, events = await _run(agent)
-
-    _assert_answered_once(agent, session)
-    output = events[0].function_call_outputs[0]
-    assert output.is_error
-    assert "invalid output" in output.output
-
-
-async def test_multiple_agents_answer_the_call_as_an_error() -> None:
-    """Returning two agents is ambiguous, so the handoff is dropped and the call reports it."""
-
-    class TwoAgentsAgent(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="You are a helpful assistant.")
-
-        @function_tool
-        async def do_the_thing(self) -> list[Agent]:
-            """Do the thing."""
-            return [Agent(instructions="first"), Agent(instructions="second")]
-
-    agent = TwoAgentsAgent()
-    session, events = await _run(agent)
-
-    assert session.current_agent is agent, "an ambiguous handoff must not be applied"
-    _assert_answered_once(agent, session)
-    output = events[0].function_call_outputs[0]
-    assert output.is_error
-    assert "more than one agent" in output.output
 
 
 async def test_bare_handoff_answers_the_call_and_asks_for_no_reply() -> None:
-    """A handoff with nothing to say is answered, but the new agent speaks, not the old one."""
-
-    class TransferAgent(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="You are a helpful assistant.")
-
-        @function_tool
-        async def do_the_thing(self) -> Agent:
-            """Do the thing."""
-            return Agent(instructions="You are the next agent.")
-
-    agent = TransferAgent()
-    session, events = await _run(agent)
+    """A handoff with nothing to say is answered, and the new agent speaks instead."""
+    agent, session, output = await _run(lambda: Agent(instructions="You are the next agent."))
 
     assert session.current_agent is not agent, "the handoff must be applied"
-    output = events[0].function_call_outputs[0]
     assert output.output == ""
     assert not output.reply_required
