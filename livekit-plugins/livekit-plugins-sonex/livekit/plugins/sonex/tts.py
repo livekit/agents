@@ -231,7 +231,7 @@ class ChunkedStream(tts.ChunkedStream):
                     logger.error("SonexLabs returned non-audio data: %s", content[:300])
                     return
 
-                async def _iter_chunks():
+                async def _iter_chunks() -> AsyncIterator[bytes]:
                     async for chunk in resp.content.iter_chunked(8192):
                         yield chunk
 
