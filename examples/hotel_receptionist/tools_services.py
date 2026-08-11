@@ -104,8 +104,8 @@ class ServicesToolsMixin:
 
         Args:
             kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
-            caller_name: Caller's name (ask if you don't already have it).
-            caller_phone: Caller's callback number - for an in-house guest, the room number works.
+            caller_name: The caller's actual name - ask for it if you don't already have it, for every kind of followup. Never a placeholder or a description standing in for one: a followup is a note for a human about a person, and a room number identifies the room, not the person.
+            caller_phone: Caller's callback number - for an in-house guest, the room number works (as the number, never as the name).
             summary: One sentence describing what they want, with enough detail for a human to act on it.
         """
         code = await ctx.userdata.db.record_followup(
