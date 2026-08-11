@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any, cast
 
 import pytest
@@ -16,6 +17,7 @@ from livekit.agents import (
     StopResponse,
     TurnHandlingOptions,
     llm,
+    stt,
 )
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.voice.agent_activity import AgentActivity
@@ -85,6 +87,21 @@ class _EditingAgent(Agent):
         if self._stop_first_turn and self.completed_turns == 1:
             raise StopResponse()
         new_message.content = [f"edited: {new_message.raw_text_content}"]
+
+
+class _CustomSTTNodeAgent(Agent):
+    async def stt_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterator[SpeechEvent]:
+        del model_settings
+        async for _ in audio:
+            yield SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+            yield SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[SpeechData(text="custom text", language=LanguageCode("en"))],
+            )
+            yield SpeechEvent(type=SpeechEventType.END_OF_SPEECH)
+            return
 
 
 def _session(
@@ -716,6 +733,118 @@ def test_text_mode_requires_external_stt() -> None:
 
     with pytest.raises(ValueError, match="STT"):
         AgentActivity(Agent(instructions="test"), session)
+
+
+def test_text_mode_rejects_non_streaming_stt_without_vad_for_default_node() -> None:
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+                mutable_chat_context=True,
+            )
+        ),
+        stt=FakeSTT(streaming=False),
+        vad=None,
+        turn_handling=TurnHandlingOptions(realtime_input_mode="text"),
+    )
+
+    with pytest.raises(ValueError, match="non-streaming STT.*VAD"):
+        AgentActivity(Agent(instructions="test"), session)
+
+
+def test_text_mode_without_vad_accepts_pre_wrapped_stt() -> None:
+    wrapped_stt = stt.StreamAdapter(
+        stt=FakeSTT(streaming=False), vad=FakeVAD(fake_user_speeches=[])
+    )
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+                mutable_chat_context=True,
+            )
+        ),
+        stt=wrapped_stt,
+        vad=None,
+        turn_handling=TurnHandlingOptions(realtime_input_mode="text"),
+    )
+
+    activity = AgentActivity(Agent(instructions="test"), session)
+
+    assert activity.stt is wrapped_stt
+    assert activity._turn_detection == "stt"
+
+
+@pytest.mark.parametrize("turn_detection", [None, "manual", "stt"])
+def test_text_mode_without_vad_accepts_custom_stt_node(
+    turn_detection: Any,
+) -> None:
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+                mutable_chat_context=True,
+            )
+        ),
+        stt=FakeSTT(streaming=False),
+        vad=None,
+        turn_handling=TurnHandlingOptions(
+            realtime_input_mode="text", turn_detection=turn_detection
+        ),
+    )
+
+    activity = AgentActivity(_CustomSTTNodeAgent(instructions="test"), session)
+
+    assert activity._turn_detection == turn_detection
+
+
+def test_text_mode_without_vad_requires_explicit_detection_for_custom_stt_node() -> None:
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+                mutable_chat_context=True,
+            )
+        ),
+        stt=FakeSTT(streaming=False),
+        vad=None,
+        turn_handling=TurnHandlingOptions(realtime_input_mode="text"),
+    )
+
+    with pytest.raises(ValueError, match="custom Agent.stt_node.*explicit turn_detection"):
+        AgentActivity(_CustomSTTNodeAgent(instructions="test"), session)
+
+
+async def test_custom_stt_node_preserves_resolved_stt_boundary_on_runtime_swap() -> None:
+    old_stt = FakeSTT()
+    new_stt = FakeSTT(streaming=False)
+    agent = _CustomSTTNodeAgent(instructions="test", stt=old_stt)
+    session = AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+                mutable_chat_context=True,
+            )
+        ),
+        vad=None,
+        turn_handling=TurnHandlingOptions(realtime_input_mode="text"),
+    )
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        assert activity._turn_detection == "stt"
+
+        agent.update_options(stt=new_stt)
+
+        assert activity.stt is new_stt
+        assert activity._turn_detection == "stt"
+    finally:
+        await session.aclose()
 
 
 def test_text_mode_requires_mutable_realtime_context() -> None:

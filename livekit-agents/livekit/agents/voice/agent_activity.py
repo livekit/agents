@@ -333,8 +333,11 @@ class AgentActivity(RecognitionHooks):
 
         if not isinstance(self.llm, llm.RealtimeModel):
             raise ValueError("realtime_input_mode='text' requires a RealtimeModel")
-        if self.stt is None:
-            raise ValueError("realtime_input_mode='text' requires an external STT")
+        self._validate_text_mode_stt_path(
+            resolved_stt=self.stt,
+            resolved_vad=self.vad,
+            resolved_turn_detection=None,
+        )
         if not self.llm.capabilities.mutable_chat_context:
             raise ValueError(
                 "realtime_input_mode='text' requires a RealtimeModel with mutable chat context"
@@ -348,6 +351,43 @@ class AgentActivity(RecognitionHooks):
         if turn_detection == "realtime_llm" or self._rt_turn_detection_enabled:
             raise ValueError(
                 "realtime_input_mode='text' requires server-side turn detection to be disabled"
+            )
+
+    def _validate_text_mode_stt_path(
+        self,
+        *,
+        resolved_stt: stt.STT | None,
+        resolved_vad: vad.VAD | None,
+        resolved_turn_detection: TurnDetectionMode | None,
+    ) -> None:
+        if resolved_stt is None:
+            raise ValueError("realtime_input_mode='text' requires an external STT")
+        if resolved_stt.capabilities.streaming or resolved_vad is not None:
+            return
+        if type(self._agent).stt_node is Agent.stt_node:
+            raise ValueError(
+                "realtime_input_mode='text' with a non-streaming STT requires a VAD when "
+                "using the default Agent.stt_node; add a VAD, pass a streaming or "
+                "stt.StreamAdapter-wrapped STT, or override Agent.stt_node and explicitly "
+                "configure turn_detection"
+            )
+        configured_turn_detection = (
+            self._agent.turn_detection
+            if is_given(self._agent.turn_detection)
+            else self._session.turn_detection
+        )
+        turn_detection_explicit = (
+            is_given(self._agent.turn_detection) or self._session._turn_detection_explicit
+        )
+        compatible_explicit_detection = turn_detection_explicit and configured_turn_detection in (
+            None,
+            "manual",
+            "stt",
+        )
+        if resolved_turn_detection != "stt" and not compatible_explicit_detection:
+            raise ValueError(
+                "realtime_input_mode='text' with a custom Agent.stt_node, non-streaming STT, "
+                "and no VAD requires explicit turn_detection"
             )
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
@@ -750,8 +790,14 @@ class AgentActivity(RecognitionHooks):
         new_llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         new_tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        if is_given(new_stt) and new_stt is None and self._realtime_input_mode == "text":
-            raise ValueError("realtime_input_mode='text' requires an external STT")
+        if self._realtime_input_mode == "text":
+            prospective_stt = new_stt if is_given(new_stt) else self.stt
+            prospective_vad = new_vad if is_given(new_vad) else self.vad
+            self._validate_text_mode_stt_path(
+                resolved_stt=prospective_stt,
+                resolved_vad=prospective_vad,
+                resolved_turn_detection=self._turn_detection,
+            )
         if (
             is_given(new_vad)
             and new_vad is None

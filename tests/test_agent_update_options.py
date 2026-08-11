@@ -215,6 +215,106 @@ async def test_update_options_running_rejects_disabling_text_mode_vad() -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_mode_rejects_runtime_non_streaming_stt_without_vad() -> None:
+    old_stt = FakeSTT()
+    new_stt = FakeSTT(streaming=False)
+    agent = Agent(
+        instructions="test",
+        stt=old_stt,
+        vad=None,
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+            )
+        ),
+    )
+    session = AgentSession(turn_handling={"realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        old_pipeline = recognition._stt_pipeline
+
+        with pytest.raises(ValueError, match="non-streaming STT.*VAD"):
+            agent.update_options(stt=new_stt)
+
+        assert agent.stt is old_stt
+        assert activity.stt is old_stt
+        assert recognition._stt_pipeline is old_pipeline
+        assert activity._on_metrics_collected in old_stt._events.get("metrics_collected", set())
+        assert activity._on_metrics_collected not in new_stt._events.get("metrics_collected", set())
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_text_mode_rejects_runtime_vad_removal_from_non_streaming_stt() -> None:
+    old_stt = FakeSTT(streaming=False)
+    old_vad = FakeVAD()
+    agent = Agent(
+        instructions="test",
+        stt=old_stt,
+        vad=old_vad,
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+            )
+        ),
+    )
+    session = AgentSession(turn_handling={"turn_detection": "stt", "realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        old_pipeline = recognition._stt_pipeline
+
+        with pytest.raises(ValueError, match="non-streaming STT.*VAD"):
+            agent.update_options(vad=None)
+
+        assert agent.vad is old_vad
+        assert activity.vad is old_vad
+        assert recognition._stt_pipeline is old_pipeline
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_text_mode_accepts_atomic_non_streaming_stt_and_vad_update() -> None:
+    old_stt = FakeSTT()
+    new_stt = FakeSTT(streaming=False)
+    new_vad = FakeVAD()
+    agent = Agent(
+        instructions="test",
+        stt=old_stt,
+        vad=None,
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+            )
+        ),
+    )
+    session = AgentSession(turn_handling={"realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+
+        agent.update_options(stt=new_stt, vad=new_vad)
+
+        assert activity.stt is new_stt
+        assert activity.vad is new_vad
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_update_options_running_rejects_swap_to_realtime() -> None:
     agent = Agent(instructions="test", llm=FakeLLM())
     session = AgentSession(turn_handling={"turn_detection": None})

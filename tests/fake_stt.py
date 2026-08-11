@@ -46,6 +46,7 @@ class FakeSTT(STT):
     def __init__(
         self,
         *,
+        streaming: bool = True,
         fake_exception: Exception | None = None,
         fake_transcript: str | None = None,
         fake_timeout: float | None = None,
@@ -53,7 +54,7 @@ class FakeSTT(STT):
         fake_require_audio: bool = False,
     ) -> None:
         super().__init__(
-            capabilities=STTCapabilities(streaming=True, interim_results=False),
+            capabilities=STTCapabilities(streaming=streaming, interim_results=False),
         )
 
         self._fake_exception = fake_exception
