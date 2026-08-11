@@ -16,6 +16,8 @@ import pytest
 from livekit.agents import stt
 from livekit.plugins.sarvam.stt import SpeechStream
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers — build a minimal STT instance + fake the channel/logger/state that
 # `_handle_transcript_data` touches. We bypass __init__ so the test doesn't

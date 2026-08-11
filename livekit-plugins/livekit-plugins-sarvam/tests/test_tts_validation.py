@@ -6,6 +6,8 @@ import pytest
 
 from livekit.plugins.sarvam import TTS
 
+pytestmark = pytest.mark.unit
+
 
 def test_v3_speaker_validation() -> None:
     """Test that all newly added v3 male speakers pass validation and amelia/sophia are rejected."""
