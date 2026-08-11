@@ -127,7 +127,8 @@ class RestaurantToolsMixin:
         """Move an existing confirmed restaurant reservation to a new date/time (and
         optionally a new party size), keeping the same confirmation code. Restaurants
         verify with last name + confirmation code (no card, no email). Read the new
-        details back to the caller before calling this.
+        details back to the caller before calling this, and relay the party size from
+        this tool's return when confirming - it's how a wrong count gets caught.
 
         Args:
             last_name: caller's last name.
@@ -164,5 +165,7 @@ class RestaurantToolsMixin:
             f"Done - your reservation is now {speak_time(updated.time)} on "
             f"{updated.date.strftime('%A, %B %-d')} for "
             f"{updated.party_size} guest{'s' if updated.party_size != 1 else ''}, "
-            f"under confirmation code {_speak_code(updated.code)}."
+            f"under confirmation code {_speak_code(updated.code)}. "
+            "| confirm the new date, time, AND the party size above to the caller - if the "
+            "party size isn't what they expect, this is their chance to catch it."
         )
