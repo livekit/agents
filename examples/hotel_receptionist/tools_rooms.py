@@ -132,12 +132,16 @@ class RoomToolsMixin:
         return (
             f"no room in the house fits (every room was checked) - walk arranged at "
             f"{r.walk_partner} (two blocks away, room and taxi both on us), guest's room back "
-            f"here {r.walk_return_date.strftime('%A, %B %-d')} | deliver this per the guest_walks "
-            "policy: own the overbooking and explain plainly why it happened, then the plan above, "
-            "all at no extra cost to them. The guest is angry and will interrupt - give it in short "
-            "pieces and make sure every piece lands before the call ends, resuming any that got "
-            "talked over. If still upset after the full plan, record a manager callback "
-            '(record_followup, kind="callback") before wrapping up.'
+            f"here {r.walk_return_date.strftime('%A, %B %-d')} | say all four parts of this in "
+            "THIS turn, as short clauses in one reply: that we oversold the night and you're "
+            f"sorry, tonight's room at {r.walk_partner}, that the room and the taxi are both "
+            "paid by us, and that their own room here is theirs again "
+            f"{r.walk_return_date.strftime('%A, %B %-d')} - with \"at no extra cost to you\" in "
+            "those words. One sentence per reply does not apply here, and a part saved for a "
+            "later turn is a part the guest never hears. The guest is angry and will interrupt: "
+            "repeat any part that got talked over, stay calm, and don't argue. This walk IS the "
+            "resolution - deliver it rather than offering a manager, and no further tool call "
+            "is needed."
         )
 
     @function_tool
