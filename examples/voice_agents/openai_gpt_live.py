@@ -6,9 +6,6 @@ backend Responses model (``gpt-5.6-sol``), so ordinary ``@function_tool`` method
 the hosted ``web_search`` tool work as usual.
 
 Notes for this alpha:
-- ``generate_reply`` asks rather than tells: it places a spoken instruction in the
-  model's context, which is how ``on_enter`` greets first. The model may decline, and
-  the call then fails rather than waiting forever.
 - Barge-in is the model's own: it keeps listening while it speaks and decides when to yield,
   so the framework does not cut playback when you start talking.
 - A ``chat_ctx`` passed before the session starts seeds the conversation as history;
