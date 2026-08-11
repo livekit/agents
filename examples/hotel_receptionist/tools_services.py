@@ -153,7 +153,10 @@ class ServicesToolsMixin:
         return (
             f"group inquiry recorded; reference {_speak_code(code)} | nothing is confirmed yet: "
             "tell the caller the group desk will call them back within two business days, "
-            "after credit review, to confirm the block."
+            "after credit review, to confirm the block. Then go back and answer whatever the "
+            "caller asked while you were collecting these arguments - you deferred those to "
+            "record the inquiry first, and nothing being confirmed yet doesn't make the "
+            "group_bookings terms unquotable."
         )
 
     @function_tool
