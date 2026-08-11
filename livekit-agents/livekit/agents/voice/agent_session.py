@@ -2047,15 +2047,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _text_only(self) -> bool:
         """True when running under a text simulation: the session uses no audio
         I/O and no audio models (STT/TTS/VAD)."""
-        from ..job import get_job_context
-
-        job_ctx = get_job_context(required=False)
-        if job_ctx is None or (sim_ctx := job_ctx.simulation_context()) is None:
-            return False
-
+        from ..job import current_simulation
         from ..simulation import SimulationMode
 
-        return sim_ctx.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
+        sim = current_simulation()
+        return sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
 
     @property
     def stt(self) -> stt.STT | None:
