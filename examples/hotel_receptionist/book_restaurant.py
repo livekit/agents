@@ -34,10 +34,6 @@ Caller cannot provide the phone number or does not have it handy: call
 """
 
 
-class RestaurantReservationNotCreatedError(ToolError):
-    """The restaurant flow ended before a reservation was written."""
-
-
 class BookRestaurantTask(AgentTask[RestaurantReservation]):
     """Restaurant booking as one focused task, mirroring BookRoomTask: `set_party`
     / `choose_time` handle the date <-> slot-availability coupling, the
@@ -155,9 +151,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
                 extra_instructions=(f"{COMMON_INSTRUCTIONS}\n\n{_RESTAURANT_PHONE_INSTRUCTIONS}"),
             )
         except beta.workflows.PhoneNumberCaptureDeclinedError:
-            error = RestaurantReservationNotCreatedError(
-                "reservation not created: a phone number is required"
-            )
+            error = ToolError("reservation not created: a phone number is required")
             if not self.done():
                 self.complete(error)
             return f"{error} | never tell the caller the table is reserved"
