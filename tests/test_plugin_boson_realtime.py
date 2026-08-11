@@ -22,7 +22,7 @@ from openai.types.realtime import (
     ResponseTextDoneEvent,
 )
 
-from livekit.agents import llm, utils
+from livekit.agents import APIError, llm, utils
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.boson import realtime
 
@@ -1693,6 +1693,81 @@ async def test_boson_realtime_server_error_fails_pending_generate_reply(monkeypa
         with pytest.raises(llm.RealtimeError, match="response.create failed"):
             await generation_fut
         assert session._response_created_futures == {}
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["insufficient_quota", "monthly_cap_reached", "contract_ended", "no_billing_account"],
+)
+@pytest.mark.asyncio
+async def test_boson_realtime_entitlement_refusal_is_not_recoverable(monkeypatch, code):
+    # The server sends this error just before closing with 4429, which
+    # _NON_RETRYABLE_CLOSE_CODES already ends the session on. Emitting the error
+    # ahead of it as recoverable would promise the application a recovery the
+    # close is about to rule out, so it is raised instead: the base recv loop
+    # lets a non-retryable APIError through and _main_task reports it with
+    # recoverable=False.
+    #
+    # Note all four carry type "insufficient_quota" but only one of the codes
+    # matches the base's own fatal set, which reads code ahead of type -- hence a
+    # Boson-specific set rather than deferring to it.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        with pytest.raises(APIError) as exc_info:
+            _server_event(
+                session,
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "insufficient_quota",
+                        "code": code,
+                        "message": "monthly cap reached",
+                    },
+                },
+            )
+        assert exc_info.value.retryable is False
+        # Raised, not emitted: emitting here is what would have labelled it
+        # recoverable. _main_task emits it with recoverable=False as it unwinds.
+        assert errors == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_ordinary_error_stays_recoverable(monkeypatch):
+    # The counterpart to the refusal above: an error that is merely a bad request
+    # must not end the session.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "bad_request",
+                    "message": "unknown field",
+                },
+            },
+        )
+        assert [e.recoverable for e in errors] == [True]
     finally:
         await session.aclose()
         await model.aclose()
