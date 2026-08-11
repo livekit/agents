@@ -462,6 +462,13 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 transcript=event.transcript,
                 is_final=True,
                 confidence=confidence,
+                # Read rather than popped as the base does: a merged item is
+                # re-emitted with its accumulated text, and every one of those
+                # revisions has to carry the same turn start -- popping would
+                # leave all but the first with None, which is exactly the case
+                # this timestamp exists for. The entry goes when the item does;
+                # the base clears it in _handle_conversion_item_deleted.
+                turn_started_at=self._input_speech_started_at.get(event.item_id),
             ),
         )
 
@@ -814,12 +821,19 @@ class RealtimeSession(openai_rt.RealtimeSession):
         await utils.aio.cancel_and_wait(self._main_atask)
 
     def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
+        self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
         self._suppress_next_response_cancel = _server_vad_auto_interrupts_response(
             self._boson_opts.turn_detection
         )
         try:
+            if event.item_id:
+                # setdefault rather than the base's assignment: the server merges
+                # consecutive user speech into a single item, so this fires once
+                # per fragment under the same id. The turn began at the first of
+                # them; assigning would walk the timestamp forward to whichever
+                # fragment happened to be last.
+                self._input_speech_started_at.setdefault(event.item_id, time.time())
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
         finally:
             self._suppress_next_response_cancel = False
@@ -949,6 +963,30 @@ class RealtimeSession(openai_rt.RealtimeSession):
             event.error if isinstance(event.error, dict) else event.error.model_dump()
         )
         event_id = error.get("event_id") or event.event_id
+
+        # A rejected conversation.item.create/delete never gets the added/deleted
+        # reply its future waits on, so settle it here rather than let
+        # update_chat_ctx() sit out the base's 5s timeout and then report a
+        # generic one in place of the server's message. The event id is what
+        # picks the right future: an updated item sends a delete and a create
+        # under the same item id, so only it says which of the two was rejected.
+        #
+        # Kept ahead of every branch below because it is orthogonal to them --
+        # the same error may also name a generate_reply, and the specific
+        # invalid_previous_item_id handling further down stays as the fallback
+        # for servers that report no event id. Both settle the same future
+        # object, and neither overwrites a future the other already failed.
+        if event_id and (chat_ctx_fut := self._chat_ctx_event_futures.pop(event_id, None)):
+            if not chat_ctx_fut.done():
+                # Not recorded in _chat_ctx_sync_error: the base gathers these
+                # with return_exceptions=True and warns, on the grounds that one
+                # rejected item is not worth failing the turn over. Unblocking is
+                # the fix here; which rejections should escalate to the caller is
+                # a separate question, and invalid_previous_item_id is the only
+                # one this plugin has answered yes to.
+                chat_ctx_fut.set_exception(
+                    llm.RealtimeError(_format_error_message(error, event_id))
+                )
 
         if error.get("code") in _BOSON_NONFATAL_ERROR_CODES or (
             error.get("type") in _BOSON_NONFATAL_ERROR_TYPES
