@@ -759,6 +759,19 @@ class RealtimeSession(openai_rt.RealtimeSession):
     def _rebuild_chat_ctx_events(
         self, boson_ctx: llm.ChatContext, remote_items: list[llm.ChatItem]
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        """Delete the server's conversation and send it back in the target order.
+
+        The cost is any item this client cannot put back. A user turn whose
+        transcript has not arrived has no text to resend, and no audio is kept
+        client-side, so it is deleted with the rest and not recreated: the server
+        loses it for as long as it stays untranscribed. It is not lost for good --
+        the delete drops it from the remote mirror too, so a later
+        update_chat_ctx() recreates it once its text exists, at the tail -- but
+        until then the model answers without it. Warned about rather than done
+        quietly, since this branch is strictly more destructive than the
+        incremental diff it stands in for.
+        """
+        remote_ids = {remote_item.id for remote_item in remote_items}
         events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = [
             ConversationItemDeleteEvent(
                 type="conversation.item.delete",
@@ -767,12 +780,17 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
             for remote_item in remote_items
         ]
+        # Wanted by the target context and held by the server, but with nothing
+        # this client can send to put it back.
+        unrecreatable: list[str] = []
         previous_item_id: str | None = None
         for item in boson_ctx.items:
             payload = _livekit_item_to_boson_item(item)
             if payload is None:
                 # Not addressable on the wire (unsupported role, no text,
                 # etc.); skip without advancing previous_item_id to it.
+                if item.id in remote_ids:
+                    unrecreatable.append(item.id)
                 continue
             events.append(
                 _BosonConversationItemCreateEvent(
@@ -783,6 +801,14 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 )
             )
             previous_item_id = item.id
+        if unrecreatable:
+            logger.warning(
+                "reordering the conversation dropped %d item(s) the server was holding "
+                "that this client cannot resend; each returns on a later sync once its "
+                "transcript arrives",
+                len(unrecreatable),
+                extra={"item_ids": unrecreatable},
+            )
         return events
 
     def _build_session_update_event(
