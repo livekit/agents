@@ -145,7 +145,7 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
         return f"name recorded: {self._first_name} {self._last_name} | {self._status()}"
 
     @function_tool()
-    async def open_phone_dialog(self) -> str | None:
+    async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
         try:
             r = await beta.workflows.GetPhoneNumberTask(
