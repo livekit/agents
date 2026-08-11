@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -8,6 +9,8 @@ from livekit.agents import llm
 
 from ...log import logger
 from ...utils.aio.debounce import Debounced
+
+_TOKEN_PATTERN = re.compile(r"(?u)\b\w\w+\b")
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -132,26 +135,12 @@ class TfidfLoopDetector:
             self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
     def check_loop_detection(self) -> bool:
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
-            from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
-        except ImportError:
-            logger.warning(
-                "TfidfLoopDetector: sklearn is not installed; loop detection is disabled. Please install the 'scikit-learn' package to enable loop detection."
-            )
-            return False
-
-        vectorizer = TfidfVectorizer()
-
         # Need at least two chunks to compute similarity against the last chunk
         if len(self._transcribed_chunks) < 2:
             return False
 
-        # NOTE: currently this is O(n^2) in the number of chunks, let's figure out a more efficient
-        # way if this become a bottleneck later.
-        doc_matrix = vectorizer.fit_transform(self._transcribed_chunks)
-        doc_similarity = cosine_similarity(doc_matrix)
-        last_chunk_similarity = doc_similarity[-1][:-1]
+        doc_matrix = self._tfidf_matrix(self._transcribed_chunks)
+        last_chunk_similarity = doc_matrix[:-1] @ doc_matrix[-1]
 
         if (
             last_chunk_similarity.size > 0
@@ -162,3 +151,27 @@ class TfidfLoopDetector:
             self._num_consecutive_similar_chunks = 0
 
         return self._num_consecutive_similar_chunks >= self._consecutive_threshold
+
+    @staticmethod
+    def _tfidf_matrix(chunks: list[str]) -> np.ndarray:
+        """Build an L2-normalized TF-IDF matrix for the transcribed chunks."""
+
+        tokenized_chunks = [_TOKEN_PATTERN.findall(chunk.lower()) for chunk in chunks]
+        vocabulary = sorted({token for tokens in tokenized_chunks for token in tokens})
+        if not vocabulary:
+            return np.zeros((len(chunks), 0))
+
+        token_indexes = {token: index for index, token in enumerate(vocabulary)}
+        term_frequency = np.zeros((len(chunks), len(vocabulary)))
+        for chunk_index, tokens in enumerate(tokenized_chunks):
+            for token in tokens:
+                term_frequency[chunk_index, token_indexes[token]] += 1
+
+        document_frequency = np.count_nonzero(term_frequency, axis=0)
+        inverse_document_frequency = np.log((1 + len(chunks)) / (1 + document_frequency)) + 1
+        tfidf = term_frequency * inverse_document_frequency
+        norms = np.linalg.norm(tfidf, axis=1, keepdims=True)
+        normalized_tfidf: np.ndarray = np.divide(
+            tfidf, norms, out=np.zeros_like(tfidf), where=norms != 0
+        )
+        return normalized_tfidf

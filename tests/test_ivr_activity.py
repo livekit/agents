@@ -1,3 +1,5 @@
+import builtins
+
 import pytest
 
 from livekit.agents.voice.ivr.ivr_activity import TfidfLoopDetector
@@ -49,6 +51,32 @@ def test_tfidf_detects_loop_on_repeated_user_speech() -> None:
     ]
 
     assert _count_loops(transcripts) == 3
+
+
+def test_tfidf_detects_loop_without_scikit_learn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Detects loops on a default install without the optional scikit-learn package."""
+
+    real_import = builtins.__import__
+
+    def import_without_scikit_learn(name: str, *args: object, **kwargs: object) -> object:
+        if name == "sklearn" or name.startswith("sklearn."):
+            raise ImportError("scikit-learn is not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_scikit_learn)
+
+    transcripts = [
+        "Welcome to automated phone system",
+        "Type 1 for sales",
+        "Type 2 for support",
+        "Type 3 for billing",
+        "Welcome to automated phone system",
+        "Type 1 for sales",
+        "Type 2 for support",
+        "Type 3 for billing",
+    ]
+
+    assert _count_loops(transcripts) == 2
 
 
 def test_tfidf_resets_after_novel_speech() -> None:
