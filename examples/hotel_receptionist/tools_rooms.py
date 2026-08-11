@@ -449,10 +449,19 @@ class RoomToolsMixin:
         """Verify the caller, fetch their invoice, and read it back."""
         booking = await self._verified_booking(ctx)
         invoice = await ctx.userdata.db.get_invoice(booking.code)
-        items = ", ".join(f"{li.label} {speak_usd(li.amount_cents)}" for li in invoice.line_items)
+        # Quote each label so the label/amount boundary is unambiguous: rendered as
+        # "Room (2 nights) 560 dollars", the model copies the merged string into
+        # dispute_charge's line_item_label and the exact-label match fails.
+        items = ", ".join(
+            f'"{li.label}" at {speak_usd(li.amount_cents)}' for li in invoice.line_items
+        )
         return (
             f"That booking's total is {speak_usd(invoice.total)}, with line items: "
-            f"{items}. I can email an itemized copy to the address on file, {booking.email}, if you'd like - just say the word."
+            f"{items}. The quoted labels are the exact line-item names dispute_charge takes - "
+            "the label only, never with the amount appended. I can email an itemized copy to "
+            f"the address on file, {booking.email}, "
+            "if you'd like - just say the word. | This turn: read the total and every line "
+            "item and offer to email the itemized folio; do not call dispute_charge yet."
         )
 
     @function_tool
@@ -468,7 +477,7 @@ class RoomToolsMixin:
 
         Args:
             category: Pick the category that best matches what the caller is disputing.
-            line_item_label: The label of the line item on the invoice, as it appears.
+            line_item_label: The label of the line item exactly as lookup_invoice quoted it - the label only, never with the amount appended to it.
             caller_note: A short summary of what the caller said about the charge.
             accepts_offered_resolution: Required. Set true ONLY after the caller has actually
                 accepted the policy outcome you offered (a goodwill waiver, a credit, etc.).
@@ -487,9 +496,15 @@ class RoomToolsMixin:
         target = line_item_label.casefold()
         item = next((li for li in invoice.line_items if li.label.casefold() == target), None)
         if item is None:
+            labels = ", ".join(f'"{li.label}"' for li in invoice.line_items)
             raise ToolError(
-                f"No line item labelled {line_item_label!r} on that invoice. "
-                "Read the line items back and ask the caller to pick one."
+                f"No line item labelled {line_item_label!r} on that invoice - do NOT retry "
+                f"the same value. The invoice's exact labels are: {labels}. If one of those "
+                "is the charge the caller is contesting, call again with it exactly as quoted "
+                "(no amount appended). If the charge they described is not among them, there "
+                "is no line to dispute: tell them plainly it isn't on their invoice, then "
+                'record_followup (kind="other") so a human investigates. '
+                "Don't call lookup_invoice or dispute_charge again."
             )
 
         amount = item.amount_cents
