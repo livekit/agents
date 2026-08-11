@@ -173,7 +173,9 @@ XAIModels = Literal[
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
-InferenceClass = Literal["priority", "standard"]
+InferenceClass = Literal["priority", "standard", "low"]
+"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
+appropriate for work no caller is waiting on."""
 
 
 class ChatCompletionOptions(TypedDict, total=False):
