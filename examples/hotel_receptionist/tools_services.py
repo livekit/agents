@@ -300,7 +300,7 @@ class ServicesToolsMixin:
         guest_name: str,
         guest_phone: str,
     ) -> str:
-        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Quote the chosen service's price and duration from the catalog BEFORE booking, not only after. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
 
         Args:
             service: The spa service the caller picked.
@@ -324,8 +324,9 @@ class ServicesToolsMixin:
         return (
             f"{s.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')} at "
             f"{speak_time(at_time)}; reference {_speak_code(code)}. {s.duration_min} minutes, "
-            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, and "
-            "total to the caller; no further tool call is needed for this appointment."
+            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, "
+            "duration, total, and reference to the caller; no further tool call is needed for "
+            "this appointment."
         )
 
     @function_tool
