@@ -197,3 +197,86 @@ async def test_create_ws_enables_heartbeat() -> None:
     assert await transport._create_ws(timeout=1.0) is fake_ws
     _, kwargs = session.ws_connect.call_args
     assert kwargs["heartbeat"] == _WS_HEARTBEAT
+
+
+_RESPONSE_CREATED = {
+    "type": "response.created",
+    "sequence_number": 0,
+    "response": {
+        "id": "resp_1",
+        "created_at": 0,
+        "model": "gpt-4.1",
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+    },
+}
+_TEXT_DELTA = {
+    "type": "response.output_text.delta",
+    "sequence_number": 1,
+    "content_index": 0,
+    "delta": "hello",
+    "item_id": "msg_1",
+    "output_index": 0,
+    "logprobs": [],
+}
+
+
+class _StallingResponsesWS:
+    """Replays raw response frames, then dies the way a socket going quiet does."""
+
+    # read by LLM.provider
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, frames: list[dict]) -> None:
+        self._frames = frames
+        self.attempts = 0
+
+    def generate_response(self, payload: dict):  # noqa: ANN201
+        self.attempts += 1
+        frames = self._frames
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+            raise ConnectionResetError("stalled mid-stream")
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _attempts_until_stall(frames: list[dict], *, max_retry: int) -> int:
+    from livekit.agents import APIConnectOptions, llm as agents_llm
+    from livekit.plugins.openai.responses.llm import LLM as ResponsesLLM
+
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    ws = _StallingResponsesWS(frames)
+    llm_model._ws = ws  # type: ignore[assignment]
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    with pytest.raises(Exception):  # noqa: PT011, B017
+        async with llm_model.chat(
+            chat_ctx=chat_ctx,
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0, timeout=5.0),
+        ) as stream:
+            async for _ in stream:
+                pass
+
+    return ws.attempts
+
+
+async def test_response_created_alone_stays_retryable() -> None:
+    """`response.created` opens every stream and carries no output, so a stall
+    right after it has surfaced nothing a retry could duplicate."""
+    assert await _attempts_until_stall([_RESPONSE_CREATED], max_retry=2) == 3
+
+
+async def test_generated_text_is_not_retried() -> None:
+    """Text already delivered must not be regenerated."""
+    assert await _attempts_until_stall([_RESPONSE_CREATED, _TEXT_DELTA], max_retry=2) == 1

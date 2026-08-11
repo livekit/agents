@@ -31,6 +31,7 @@ from ._utils import (
     HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
+    extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -465,20 +466,20 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            retryable = False
+                            if chat_chunk.has_response():
+                                retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
-                        retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
                         usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
-                                completion_tokens=chunk.usage.completion_tokens,
-                                prompt_tokens=chunk.usage.prompt_tokens,
+                                completion_tokens=chunk.usage.completion_tokens or 0,
+                                prompt_tokens=chunk.usage.prompt_tokens or 0,
                                 prompt_cached_tokens=cached_tokens or 0,
-                                total_tokens=chunk.usage.total_tokens,
+                                total_tokens=chunk.usage.total_tokens or 0,
                                 service_tier=getattr(chunk, "service_tier", None),
                             ),
                         )
@@ -486,7 +487,13 @@ class LLMStream(llm.LLMStream):
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except httpx.TimeoutException as e:
+            # Only the request call runs inside the openai client's error mapping, so a
+            # timeout waiting on the stream body arrives as the raw httpx exception.
+            raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
+            if e.status_code == 429:
+                self._log_rate_limited(e)
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
@@ -496,6 +503,16 @@ class LLMStream(llm.LLMStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
+
+    def _log_rate_limited(self, e: openai.APIStatusError) -> None:
+        """Log the gateway's quota snapshot when a request is rejected with 429.
+
+        The gateway stamps X-LiveKit-Inference-{RPM,TPM,Credits}-{Limit,Used}
+        on rejections so customers can see which limit they hit and by how much.
+        """
+        extra: dict[str, Any] = {"model": self._model, "request_id": e.request_id}
+        extra.update(extract_quota_usage(e.response.headers))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
 
     def _parse_choice(
         self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter

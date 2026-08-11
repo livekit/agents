@@ -122,6 +122,13 @@ class AnamAPI:
                 "videoHeight": session_options.video_height,
             }
 
+        if session_options is not None and session_options.show_ai_avatar_disclosure is not None:
+            if "sessionOptions" not in payload:
+                payload["sessionOptions"] = {}
+            payload["sessionOptions"]["showAIAvatarDisclosure"] = (
+                session_options.show_ai_avatar_disclosure
+            )
+
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",

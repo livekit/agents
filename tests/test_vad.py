@@ -1,6 +1,6 @@
 import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -81,17 +81,34 @@ async def test_chunks_vad(sample_rate) -> None:
 async def test_vad_uses_configured_executor() -> None:
     frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
     executor = _RecordingExecutor()
-    stream = InferenceVAD(model="silero", executor=executor).stream()
     try:
-        for frame in frames:
-            stream.push_frame(frame)
-        stream.end_input()
-        _ = [event async for event in stream]
+        stream = InferenceVAD(model="silero", executor=executor).stream()
+        try:
+            for frame in frames:
+                stream.push_frame(frame)
+            stream.end_input()
+            _ = [event async for event in stream]
+        finally:
+            await stream.aclose()
+
+        assert executor.submissions > 0
+        assert not executor._shutdown
     finally:
-        await stream.aclose()
         executor.shutdown()
 
-    assert executor.submissions > 0
+
+async def test_vad_uses_owned_single_thread_executor_by_default() -> None:
+    stream = InferenceVAD(model="silero").stream()
+    executor = cast(Any, stream)._executor
+
+    assert isinstance(executor, ThreadPoolExecutor)
+    assert executor._max_workers == 1
+    assert executor._thread_name_prefix == "inference.vad"
+    assert not executor._shutdown
+
+    await stream.aclose()
+
+    assert executor._shutdown
 
 
 async def _drain_speech_segment(
