@@ -543,7 +543,7 @@ class ServicesToolsMixin:
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
-        departure_time: time | None = None,
+        departure_time: time | None,
     ) -> str:
         """Log a flight-reconfirmation request for an in-house guest: the concierge calls the carrier and rings the guest's room with the result. Collect ALL the flight details first and read the booking reference back before calling - a wrong reference makes the whole request useless.
 
@@ -554,7 +554,7 @@ class ServicesToolsMixin:
             flight_date: Flight date in ISO YYYY-MM-DD format. When the caller says a weekday ("Thursday"), resolve it against today and say the concrete date back ("Thursday - that's June eleventh?") BEFORE calling; a one-day slip sends the whole request to the wrong flight.
             booking_reference: The airline booking reference, letters and digits only.
             seat_check: True if the guest also wants their seat assignment checked - it's handled in the same carrier call.
-            departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
+            departure_time: Scheduled departure in 24-hour HH:MM format. ASK the caller for it before logging - it's what any airport-car pickup gets sanity-checked against, and nothing else on this call collects it. Pass null only when they say they don't know it.
         """
         room_id = room_to_id(room)
         # The carrier only takes the reference itself; spacing and case are how the caller
