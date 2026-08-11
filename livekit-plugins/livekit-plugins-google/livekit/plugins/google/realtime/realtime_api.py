@@ -506,6 +506,11 @@ class RealtimeSession(llm.RealtimeSession):
         # is stashed here and replayed once the new session is established, otherwise it would
         # be sent on the dying session and never reach the model (the turn would hang).
         self._pending_tool_result: types.LiveClientToolResponse | None = None
+        # whether a websocket session has ever been established. used to tell an in-flight
+        # restart (buffer the tool result for replay) apart from the initial context sync /
+        # agent handoff before the first connect (where the chat context legitimately holds
+        # historical tool outputs that must NOT be resent).
+        self._connected_once = False
         # tracks whether the current generation has reached its completion signal. it lets us
         # drop trailing `model_turn` frames that some Live preview models emit after a
         # generation completed, instead of attaching them to the wrong (finished) generation.
@@ -671,20 +676,18 @@ class RealtimeSession(llm.RealtimeSession):
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            # There is no live socket to send on when either no session is established yet
-            # (initial startup or mid-reconnect, when _main_task has nulled _active_session) or
-            # the socket is tearing down (e.g. update_tools() mid-turn). In those cases the
-            # (re)connect replays self._chat_ctx for us, so the plain turns land there — but that
-            # replay excludes function_call/function_call_output items, so a tool result would be
-            # dropped forever and the turn would hang. Buffer it for _main_task to replay once the
-            # new session is established.
-            if active_session is None or self._session_should_close.is_set():
-                if tool_results:
-                    logger.debug(
-                        "no live session; buffering tool result to replay after (re)connect"
-                    )
-                    self._buffer_pending_tool_result(tool_results)
-            else:
+            # A restart is in flight when the socket is tearing down (e.g. update_tools()
+            # mid-turn, _active_session still set) or an already-established session has been
+            # closed for reconnect (_main_task nulled _active_session). Only in that window can a
+            # tool result correspond to a call the session being replaced issued: the (re)connect
+            # replays self._chat_ctx for the plain turns, but that replay excludes
+            # function_call/function_call_output items, so the tool result must be buffered and
+            # replayed by _main_task or the turn hangs.
+            restarting = self._session_should_close.is_set() or (
+                active_session is None and self._connected_once
+            )
+            if active_session is not None and not self._session_should_close.is_set():
+                # healthy live session: send immediately
                 if self._realtime_model.capabilities.mutable_chat_context:
                     turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
                         format="google", inject_dummy_user_message=False
@@ -696,6 +699,16 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                 if tool_results:
                     self._send_client_event(tool_results)
+            elif restarting:
+                if tool_results:
+                    logger.debug(
+                        "session restarting; buffering tool result to replay after reconnect"
+                    )
+                    self._buffer_pending_tool_result(tool_results)
+            # else: initial context sync / agent handoff before the first connect. The
+            # connect-time replay of self._chat_ctx delivers the turns; historical tool outputs
+            # in that context belong to a prior session and must not be resent (doing so would
+            # make the model reply to stale results), so they are intentionally dropped here.
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -923,6 +936,7 @@ class RealtimeSession(llm.RealtimeSession):
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
+                        self._connected_once = True
 
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
@@ -1155,13 +1169,14 @@ class RealtimeSession(llm.RealtimeSession):
                         # never saw a completion signal (`_generation_completed` is still False).
                         # There is no active, incomplete generation to attach it to, so
                         # processing it would double-process the content or spin up a spurious
-                        # generation. Drop this frame; a genuine next turn will start its own
-                        # generation once a completion signal has been recorded.
+                        # generation. Strip just the stray model_turn and let the rest of the
+                        # message (turn_complete, usage_metadata, go_away, session resumption)
+                        # flow through the handlers below instead of dropping it wholesale.
                         if lk_google_debug:
                             logger.debug(
                                 "dropping trailing model_turn without an active generation"
                             )
-                        continue
+                        response.server_content.model_turn = None
 
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:

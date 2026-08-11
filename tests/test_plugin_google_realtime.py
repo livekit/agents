@@ -190,16 +190,39 @@ async def test_tool_result_buffered_when_no_active_session(
     function_call_output items, so it has to be buffered for replay (issue #6479 follow-up).
     """
     async with _make_session(monkeypatch) as session:
-        # mid-reconnect: no live socket, and no restart flag set yet
+        # mid-reconnect: a session was established before, the socket is momentarily gone
+        session._connected_once = True
         assert session._active_session is None
         assert not session._session_should_close.is_set()
         session._msg_ch = utils.aio.Chan()
 
         await session.update_chat_ctx(_tool_result_ctx())
 
-        # buffered for replay rather than silently dropped by the early return
+        # buffered for replay rather than silently dropped
         assert session._pending_tool_result is not None
         assert session._pending_tool_result.function_responses
+        assert session._msg_ch.empty()
+
+
+async def test_initial_context_sync_does_not_buffer_historical_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first context push (before any connect) must not resend historical tool outputs.
+
+    At activity start / agent handoff the framework pushes the full chat context while no
+    session exists yet. That context routinely holds function_call_output items from earlier
+    turns; buffering+replaying them would make the model reply to stale results and speak
+    unprompted, so they must be dropped, not buffered.
+    """
+    async with _make_session(monkeypatch) as session:
+        # never connected: this is the initial context sync, not a restart
+        assert session._connected_once is False
+        assert session._active_session is None
+        session._msg_ch = utils.aio.Chan()
+
+        await session.update_chat_ctx(_tool_result_ctx())
+
+        assert session._pending_tool_result is None
         assert session._msg_ch.empty()
 
 
