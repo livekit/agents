@@ -253,7 +253,20 @@ class RoomToolsMixin:
             raise ToolError(
                 f"booking {booking.code} is {booking.status} - there's no active booking to update"
             )
-        card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        try:
+            card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        except ToolError as e:
+            # The capture ended without a usable card (refused, or their only card is
+            # expired/failing). The card on file stays; hand the agent the resolution.
+            # The callback offer is spoken, not recorded: record_followup is not in the
+            # billing area, and naming it here made the model drop the clause instead.
+            raise ToolError(
+                f"{e} - the booking stays held on the current card and a working card "
+                "isn't needed until check-in. Reassure the caller of that, and make the "
+                "question for this turn the callback offer: ask whether they'd like the "
+                "desk to call them back to retry the card once they've had a chance to "
+                "check with their card issuer. Speaking that offer is the whole action."
+            ) from None
         await ctx.userdata.db.update_booking_card(
             booking_code=booking.code, card_last4=card.card_number[-4:]
         )
