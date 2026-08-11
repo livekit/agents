@@ -71,6 +71,7 @@ from .generation import (
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
+    _interrupted_tool_output,
     _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
@@ -3476,14 +3477,13 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # commit results of tools that finished despite the interruption (#3702);
-            # handoffs excluded: not applied when interrupted, must stay retryable
+            # commit results of tools that finished despite the interruption (#3702), so
+            # the next inference doesn't run them again
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
-                if sanitized_out.agent_task is None:
-                    interrupted_calls.append(sanitized_out.fnc_call)
-                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
                 self._agent._chat_ctx.insert(interrupted_tool_messages)
@@ -4113,21 +4113,11 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # commit results of tools that finished despite the interruption, similar to the
-            # pipeline task. the call is already in the chat context (see the started callback),
-            # so every one of them answers, or the model waits on a call it never gets back
-            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
-                fnc_call_out = sanitized_out.fnc_call_out
-                if sanitized_out.agent_task is not None:
-                    # an interruption leaves the handoff unapplied, so the model is told it
-                    # failed and can ask again, instead of reading an empty success
-                    fnc_call_out.output = "the agent handoff was interrupted and did not happen"
-                    fnc_call_out.is_error = True
-
-                # the model is still owed the result, but the user cut its turn short
-                fnc_call_out.reply_required = False
-                interrupted_fnc_outputs.append(fnc_call_out)
+            # commit results of tools that finished despite the interruption, as the pipeline
+            # task does. the calls are already recorded, so each one answers or the model waits
+            interrupted_fnc_outputs = [
+                _interrupted_tool_output(sanitized_out) for sanitized_out in tool_output.output
+            ]
 
             if interrupted_fnc_outputs:
                 self._agent._chat_ctx.insert(interrupted_fnc_outputs)

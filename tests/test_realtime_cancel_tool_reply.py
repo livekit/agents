@@ -1,8 +1,7 @@
 """`cancel_tool_reply()` must reach the realtime session, not just the pipeline.
 
-A realtime model still has to receive the result — the call it emitted stays open until it
-does — so the request to stay quiet travels with the output and each plugin honours it the
-way its provider allows.
+The result is still delivered, since the call stays open until it is; the request to stay
+quiet travels with it.
 """
 
 from __future__ import annotations

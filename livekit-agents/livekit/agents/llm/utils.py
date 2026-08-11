@@ -933,8 +933,7 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
-        # the tool asked for silence, not for its call to go unanswered: an LLM re-issues a
-        # call it never got back, and a realtime model waits on it
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(

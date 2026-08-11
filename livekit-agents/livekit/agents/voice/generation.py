@@ -1016,7 +1016,7 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
-    # a tool that returned nothing to say, such as a bare handoff, expects no reply
+    # a tool with nothing to say, such as a bare handoff, expects no reply
     base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
@@ -1026,6 +1026,20 @@ def make_tool_output(
         raw_output=output,
         raw_exception=exception,
     )
+
+
+def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
+    """The output to record for a tool that finished on an interrupted turn.
+
+    A handoff answers as a failure, since the interruption left it unapplied.
+    """
+    fnc_call_out = out.fnc_call_out
+    if out.agent_task is not None:
+        fnc_call_out.output = "the agent handoff was interrupted and did not happen"
+        fnc_call_out.is_error = True
+
+    fnc_call_out.reply_required = False
+    return fnc_call_out
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change

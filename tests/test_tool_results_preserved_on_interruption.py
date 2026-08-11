@@ -152,9 +152,11 @@ async def test_tool_results_preserved_when_tool_in_flight_at_interruption() -> N
     _assert_weather_tool_preserved(agent, session)
 
 
-async def test_handoff_tool_not_recorded_when_interrupted() -> None:
-    """Handoffs aren't applied on interrupted speech, so their calls must not be
-    recorded as completed — the LLM needs to retry them."""
+async def test_handoff_tool_reports_its_cancellation_when_interrupted() -> None:
+    """An interrupted handoff is recorded as failed, and the agent does not switch.
+
+    The tool ran, so dropping its call would let the next inference run it again.
+    """
 
     class TransferAgent(Agent):
         def __init__(self) -> None:
@@ -181,8 +183,19 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    for items in (agent.chat_ctx.items, session.history.items):
-        assert not any(i.type in ("function_call", "function_call_output") for i in items)
+    assert session.current_agent is agent, "the handoff must not be applied"
+
+    for label, items in (
+        ("agent chat_ctx", agent.chat_ctx.items),
+        ("session history", session.history.items),
+    ):
+        calls = [i for i in items if i.type == "function_call"]
+        outs = [i for i in items if i.type == "function_call_output"]
+        assert len(calls) == 1, f"{label}: the attempted transfer must be recorded"
+        assert len(outs) == 1, f"{label}: the interrupted handoff must be answered once"
+        assert outs[0].call_id == calls[0].call_id
+        assert outs[0].is_error
+        assert not outs[0].reply_required
 
 
 # --- realtime models -------------------------------------------------------------------
@@ -260,11 +273,7 @@ async def _realtime_turn_interrupted_after_tool(agent: Agent) -> FakeRealtimeMod
 
 
 async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> None:
-    """The result reaches both the local context and the realtime session, wanting no reply.
-
-    The model is owed the result, but the user cut its turn short, so it must not answer. Each
-    plugin reads `reply_required` and stays quiet the way its provider allows.
-    """
+    """The result reaches both the local context and the realtime session, wanting no reply."""
 
     class RealtimeWeatherAgent(WeatherAgent):
         @function_tool
@@ -284,10 +293,8 @@ async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> 
 async def test_realtime_handoff_tool_reports_its_cancellation_when_interrupted() -> None:
     """An interrupted handoff is answered as failed, and the agent does not switch.
 
-    The model emitted the call and a realtime session holds it open until it is answered, so
-    staying silent strands the session. Withholding it is not an option, and an empty success
-    would claim a transfer that never happened, so it is answered as an error the model can
-    act on by asking again.
+    The session holds the call open until it is answered, and an empty success would claim a
+    transfer that never happened.
     """
 
     class RealtimeTransferAgent(Agent):

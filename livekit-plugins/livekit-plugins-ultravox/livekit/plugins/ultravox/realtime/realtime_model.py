@@ -401,8 +401,7 @@ class RealtimeSession(
 
                 tool_result = ClientToolResultEvent(
                     invocationId=item.call_id,
-                    # a result no reply was wanted for, such as one owed for a turn the user
-                    # interrupted, is recorded without speech
+                    # a result that wants no reply is recorded without speech
                     agent_reaction="speaks" if item.reply_required else "listens",
                 )
 

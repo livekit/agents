@@ -1,8 +1,7 @@
 """Every tool call is answered, whatever the tool did.
 
-An unanswered call is not a neutral omission: an LLM re-issues it on the next inference and
-runs its side effects again, and a realtime model holds the turn open waiting for it. A tool
-that has nothing to say says so with `reply_required` instead of leaving its call open.
+An LLM re-issues a call it never got back, running its side effects again, and a realtime
+model waits on it. A tool with nothing to say says so with `reply_required` instead.
 """
 
 from __future__ import annotations

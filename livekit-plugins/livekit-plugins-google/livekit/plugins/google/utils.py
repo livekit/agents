@@ -86,10 +86,9 @@ def get_tool_results_for_realtime(
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     silent_scheduling: bool = False,
 ) -> types.LiveClientToolResponse | None:
-    """Build the tool responses to send, SILENT for the outputs that want no reply.
+    """Build the tool responses, SILENT for outputs that want no reply.
 
-    `silent_scheduling` says the session can honour that; Gemini reads `scheduling` only on
-    NON_BLOCKING declarations, and vertex drops it entirely.
+    `silent_scheduling` says the session can honour that; see `_RealtimeOptions.tool_behavior`.
     """
     function_responses = [
         create_function_response(

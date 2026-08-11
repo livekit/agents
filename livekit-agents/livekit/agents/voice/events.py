@@ -422,10 +422,8 @@ class FunctionToolsExecutedEvent(BaseModel):
 
     ``function_calls`` and ``function_call_outputs`` are parallel lists: the
     output at a given index belongs to the call at the same index and carries
-    the same ``call_id``. Every call has one output, including a tool that
-    raised ``StopResponse`` or returned an invalid value, since an unanswered
-    call is re-issued by an LLM and waited on by a realtime model. An output
-    that wants no reply says so with ``reply_required``.
+    the same ``call_id``. Every call has one output, even one whose tool raised
+    ``StopResponse``; such an output asks for no reply with ``reply_required``.
     """
 
     type: Literal["function_tools_executed"] = "function_tools_executed"

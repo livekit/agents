@@ -186,10 +186,8 @@ async def test_tool_response_wanting_no_reply_is_silent(
 ) -> None:
     """A tool result owed by an interrupted turn still reaches Gemini, silently.
 
-    Gemini blocks the turn until every tool call is answered and offers no cancel, so dropping
-    the result strands the session: it stops responding and `generate_reply` never gets a
-    generation (issue #6569). SILENT records the result without prompting speech the user never
-    asked for.
+    Gemini blocks the turn until every call is answered and offers no cancel, so dropping the
+    result strands the session (issue #6569). SILENT records it without prompting speech.
     """
     async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
         session._start_new_generation()
@@ -237,8 +235,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 ) -> None:
     """Gemini ignores scheduling on BLOCKING declarations, so the reply cannot be prevented.
 
-    The response is still sent — unblocking the turn matters more than the reply it prompts —
-    and the session says so once instead of failing quietly.
+    It is sent anyway, since unblocking the turn matters more, and warns once.
     """
     async with _make_connected_session(monkeypatch) as session:
         session._start_new_generation()

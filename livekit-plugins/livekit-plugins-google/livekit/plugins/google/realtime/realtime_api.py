@@ -672,8 +672,7 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling` and Gemini reads it only on NON_BLOCKING declarations,
-            # so only those sessions can record a result without prompting speech
+            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
             silent_scheduling = (
                 not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             )
