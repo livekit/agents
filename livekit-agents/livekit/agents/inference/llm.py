@@ -466,11 +466,11 @@ class LLMStream(llm.LLMStream):
                     for choice in chunk.choices:
                         chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            retryable = False
+                            if chat_chunk.has_response():
+                                retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
-                        retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
                         usage_chunk = llm.ChatChunk(
@@ -487,6 +487,10 @@ class LLMStream(llm.LLMStream):
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except httpx.TimeoutException as e:
+            # Only the request call runs inside the openai client's error mapping, so a
+            # timeout waiting on the stream body arrives as the raw httpx exception.
+            raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
             if e.status_code == 429:
                 self._log_rate_limited(e)

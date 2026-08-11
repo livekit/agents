@@ -238,20 +238,21 @@ async def _llm_inference_task(
     last_content_at = 0.0
     try:
         async for chunk in llm_node:
-            if data.ttft is None:
-                data.ttft = time.perf_counter() - start_time
-
             # extract text content from either str or ChatChunk
             content: str | None = None
+            generated = False
 
             if isinstance(chunk, str):
                 content = chunk
+                generated = bool(chunk)
 
             elif isinstance(chunk, ChatChunk):
                 if chunk.usage is not None:
                     usage = chunk.usage
                 if not chunk.delta:
                     continue
+
+                generated = chunk.has_response()
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
@@ -288,6 +289,9 @@ async def _llm_inference_task(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
                 content = None
+
+            if generated and data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
 
             # route text content to output channels
             if content:

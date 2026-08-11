@@ -24,6 +24,7 @@ class LLMMetrics(_BaseMetrics):
     timestamp: float
     duration: float
     ttft: float
+    """Time to first generated token in seconds. -1 if the response generated none."""
     cancelled: bool
     completion_tokens: int
     prompt_tokens: int
