@@ -5,7 +5,12 @@ import asyncio
 import pytest
 
 from livekit import rtc
-from livekit.agents.llm import ChatContext, RealtimeModelFallbackAdapter
+from livekit.agents.llm import (
+    ChatContext,
+    FallbackRealtimeSession,
+    RealtimeModelFallbackAdapter,
+    _FallbackRealtimeSession,
+)
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -618,3 +623,13 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+def test_fallback_realtime_session_is_public() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+
+    assert isinstance(session, FallbackRealtimeSession)
+    assert isinstance(session, _FallbackRealtimeSession)
+    assert FallbackRealtimeSession is _FallbackRealtimeSession

@@ -118,7 +118,7 @@ class RealtimeModelFallbackAdapter(
         self._models = models
         self._cooldown = cooldown
         self._regenerate_on_swap = regenerate_on_swap
-        self._sessions: weakref.WeakSet[_FallbackRealtimeSession] = weakref.WeakSet()
+        self._sessions: weakref.WeakSet[FallbackRealtimeSession] = weakref.WeakSet()
 
         # the model currently serving sessions; used to label metrics & traces
         self._active_instance: RealtimeModel = models[0]
@@ -136,8 +136,8 @@ class RealtimeModelFallbackAdapter(
         """Metadata of the model currently serving sessions (the primary until a swap)."""
         return self._active_instance.metrics_metadata
 
-    def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
-        sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+    def session(self, *, turn_detection_disabled: bool = False) -> FallbackRealtimeSession:
+        sess = FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -156,7 +156,7 @@ class RealtimeModelFallbackAdapter(
             await model.aclose()
 
 
-class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
+class FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
     def __init__(
@@ -455,3 +455,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             await aio.cancel_and_wait(self._swap_task)
         self._unbind(self._active)
         await self._active.aclose()
+
+
+# Backward compatibility alias
+_FallbackRealtimeSession = FallbackRealtimeSession
