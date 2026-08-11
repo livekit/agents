@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 import time
 from abc import ABC, abstractmethod
@@ -405,6 +406,10 @@ class SessionHost:
         self._tasks = utils.aio.TaskSet()
         self._session: AgentSession | None = None
         self._events_registered = False
+        # events are emitted from sync callbacks and nobody awaits them, so they
+        # queue here and one long-lived writer drains them in emission order
+        self._event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] | None = None
+        self._event_writer_task: asyncio.Task[None] | None = None
 
     def register_session(self, session: AgentSession) -> None:
         self._session = session
@@ -427,6 +432,10 @@ class SessionHost:
             return
         self._started = True
         await self._transport.start()
+        self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
+        self._event_writer_task = asyncio.create_task(
+            self._event_writer_loop(self._event_ch), name="SessionHost._event_writer"
+        )
         self._recv_task = asyncio.create_task(self._recv_loop())
 
     async def aclose(self) -> None:
@@ -455,6 +464,7 @@ class SessionHost:
         # let in-flight handlers finish. Cancelling here drops the response of a
         # request that already did its work — the caller then waits out its full
         # timeout for an answer the session had ready.
+        deadline = asyncio.get_event_loop().time() + _SHUTDOWN_DRAIN_TIMEOUT
         if handlers := self._tasks.tasks:
             _, pending = await asyncio.wait(handlers, timeout=_SHUTDOWN_DRAIN_TIMEOUT)
             if pending:
@@ -463,6 +473,18 @@ class SessionHost:
                     extra={"pending_handlers": len(pending)},
                 )
                 await utils.aio.cancel_and_wait(*pending)
+
+        # closing the channel lets the writer send what the handlers just queued
+        # and then exit; handlers and writer share one budget so aclose cannot
+        # stack two full grace periods
+        if self._event_ch is not None:
+            self._event_ch.close()
+        if self._event_writer_task is not None:
+            remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+            _, pending = await asyncio.wait({self._event_writer_task}, timeout=remaining)
+            if pending:
+                await utils.aio.cancel_and_wait(self._event_writer_task)
+            self._event_writer_task = None
 
         await self._transport.close()
 
@@ -494,15 +516,22 @@ class SessionHost:
         ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
-        self._tasks.create_task(self._send_event_message(msg))
+        if self._event_ch is None:
+            return
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._event_ch.send_nowait(msg)
 
-    async def _send_event_message(self, msg: agent_pb.AgentSessionMessage) -> None:
-        # events are fire-and-forget: nobody is waiting on one, so a failure is
-        # logged here instead of surfacing as an unhandled task exception
-        try:
-            await self._transport.send_message(msg)
-        except Exception:
-            logger.warning("failed to send session event", exc_info=True)
+    async def _event_writer_loop(
+        self, event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage]
+    ) -> None:
+        # nobody awaits an event, so a failed one is logged rather than raised.
+        # Draining them from a single task keeps their emission order and avoids
+        # spawning a task per event.
+        async for msg in event_ch:
+            try:
+                await self._transport.send_message(msg)
+            except Exception:
+                logger.warning("failed to send session event", exc_info=True)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)

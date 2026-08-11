@@ -347,3 +347,34 @@ async def test_event_send_failure_does_not_escape_as_task_exception(
     assert [r for r in caplog.records if "failed to send session event" in r.message]
 
     await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_are_written_by_one_task_in_emission_order():
+    """Events queue to a single writer rather than a task each."""
+    sent: list[str] = []
+
+    class _RecordingTransport(PairedTransport):
+        async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+            await asyncio.sleep(0.005)  # a real send yields
+            sent.append(msg.event.user_input_transcribed.transcript)
+
+    host = SessionHost(_RecordingTransport())
+    host.register_session(_make_mock_session())
+    await host.start()
+
+    before = len(host._tasks.tasks)
+    for i in range(10):
+        host._send_event(
+            agent_pb.AgentSessionEvent(
+                user_input_transcribed=agent_pb.AgentSessionEvent.UserInputTranscribed(
+                    transcript=str(i)
+                )
+            )
+        )
+
+    # emitting events must not spawn tasks
+    assert len(host._tasks.tasks) == before
+
+    await host.aclose()  # closing drains what is still queued
+    assert sent == [str(i) for i in range(10)]
