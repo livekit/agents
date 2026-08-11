@@ -437,7 +437,15 @@ class RealtimeSession(openai_rt.RealtimeSession):
             ):
                 _set_message_text(remote_item.item, lk_item.text_content)
             if fut := self._item_create_future.pop(item_id, None):
-                if not fut.cancelled():
+                # done(), not cancelled(): _handle_error may already have failed
+                # this very future -- it settles by event id, and the
+                # invalid_previous_item_id path reads _item_create_future without
+                # removing the entry, so a rejected create stays registered here
+                # until update_chat_ctx() clears it. A server that rejects an item
+                # and then echoes it anyway would land on a future that is done
+                # with an exception, where cancelled() is False and set_result
+                # raises InvalidStateError.
+                if not fut.done():
                     fut.set_result(None)
             return
 
