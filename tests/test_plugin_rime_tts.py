@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.plugin("rime")
+pytestmark = pytest.mark.unit
 
 
 def test_model_and_speaker_defaults() -> None:
