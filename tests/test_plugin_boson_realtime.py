@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import contextlib
+import gc
 import json
 import logging
 import time
@@ -3165,3 +3166,45 @@ async def test_boson_realtime_pending_reply_fails_recoverably_on_reconnect():
     finally:
         await session.aclose()
         await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_aclose_does_not_report_the_main_task_error_twice(monkeypatch):
+    # aclose cancels the main task instead of awaiting it, so closing never waits
+    # out a retry backoff or a connect in flight. _main_task re-raises on terminal
+    # failure, and cancel_and_wait reads no task's outcome -- which looks like it
+    # would leave asyncio to report "Task exception was never retrieved" on
+    # collection, for an error already delivered through the error event.
+    #
+    # It does not, for a reason easy to miss: Task.cancel() clears the flag that
+    # report is driven by as its first statement, before the done() check that
+    # makes it a no-op for an already-finished task. So the exception is never
+    # read, but the report is suppressed all the same. Asserted through the
+    # exception handler rather than that flag, since the flag is an
+    # implementation detail and the absence of the report is the actual contract.
+    async def _failing_run(self):
+        raise APIError("refused service", retryable=False)
+
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _failing_run)
+
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    reports: list[str] = []
+    loop.set_exception_handler(lambda _loop, ctx: reports.append(ctx.get("message", "")))
+    try:
+        model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+        session = model.session()
+        for _ in range(50):
+            if session._main_atask.done():
+                break
+            await asyncio.sleep(0.01)
+        assert session._main_atask.done()
+
+        await session.aclose()
+        await model.aclose()
+
+        del session, model
+        gc.collect()
+        assert [r for r in reports if "never retrieved" in r] == []
+    finally:
+        loop.set_exception_handler(previous_handler)
