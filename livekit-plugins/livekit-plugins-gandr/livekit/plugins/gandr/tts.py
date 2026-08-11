@@ -306,6 +306,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
 
                 truncated = False
+                done_seen = False
                 async for raw in resp.content:
                     line = raw.decode("utf-8", "replace").strip()
                     if not line.startswith("data:"):
@@ -321,6 +322,7 @@ class ChunkedStream(tts.ChunkedStream):
                     except json.JSONDecodeError:
                         continue
                     if evt.get("done"):
+                        done_seen = True
                         truncated = bool(evt.get("truncated"))
                         break
                     data = evt.get("data")
@@ -332,7 +334,11 @@ class ChunkedStream(tts.ChunkedStream):
                 # silent half-utterance into a retry livekit-agents can
                 # see, and into a provider switch if you have wrapped
                 # this in a FallbackAdapter.
-                if truncated:
+                # A stream that ends without a `done` event is the same
+                # failure: the connection closed cleanly but the render
+                # never finished, so what we hold is a partial utterance,
+                # not the sentence.
+                if truncated or not done_seen:
                     raise APIStatusError(
                         message="Gandr stream ended early (truncated); retrying",
                         status_code=503,
