@@ -220,6 +220,7 @@ class JobContext:
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
+        self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
 
     def _on_setup(self) -> None:
@@ -764,6 +765,7 @@ class JobContext:
             return
 
         self._recording_initialized = True
+        self._redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
 
         needs_cloud = (
             options.get("traces", True)

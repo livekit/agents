@@ -516,13 +516,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 elif data.get("event") == "task_failed":
-                    error_msg = (
-                        f"MiniMax returned task failed (trace_id: {current_trace_id}): {msg.data}"
-                    )
-                    logger.error(
-                        f"MiniMax returned task failed (trace_id: {current_trace_id})",
-                        extra={"lk.pii.data": msg.data},
-                    )
+                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
+                    logger.error(error_msg, extra={"lk.pii.data": msg.data})
                     raise APIError(error_msg)
 
                 else:

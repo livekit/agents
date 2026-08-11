@@ -78,11 +78,11 @@ def test_record_exception_omits_details_when_redacted() -> None:
     assert span.status.description == telemetry_utils.REDACTED_EXCEPTION_MESSAGE
 
 
-def test_record_exception_uses_job_enable_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_record_exception_uses_resolved_redaction_state(monkeypatch: pytest.MonkeyPatch) -> None:
     span = _FakeSpan()
 
     def get_job_context(*, required: bool = True) -> SimpleNamespace:
-        return SimpleNamespace(job=SimpleNamespace(enable_redaction=True))
+        return SimpleNamespace(_redaction_enabled=True)
 
     monkeypatch.setattr("livekit.agents.job.get_job_context", get_job_context)
     _capture_exception(span, redacted=NOT_GIVEN)

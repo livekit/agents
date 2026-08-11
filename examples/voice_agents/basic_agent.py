@@ -25,11 +25,7 @@ from livekit.agents.llm import function_tool
 logger = logging.getLogger("basic-agent")
 
 load_dotenv()
-import os
 
-os.environ["LIVEKIT_API_KEY"] = os.environ["LIVEKIT_API_KEY_STAGING"]
-os.environ["LIVEKIT_API_SECRET"] = os.environ["LIVEKIT_API_SECRET_STAGING"]
-os.environ["LIVEKIT_URL"] = os.environ["LIVEKIT_URL_STAGING"]
 
 class MyAgent(Agent):
     def __init__(self) -> None:

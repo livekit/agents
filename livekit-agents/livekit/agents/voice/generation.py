@@ -1003,7 +1003,7 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "output": output},
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),

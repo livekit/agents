@@ -480,6 +480,31 @@ def test_job_context_otel_metadata_includes_redaction_option() -> None:
     assert ctx._otel_metadata({"redaction": True}) == {"lk.redaction.enabled": True}
 
 
+def test_job_context_init_recording_enables_session_redaction() -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(
+        job=SimpleNamespace(enable_redaction=False),
+        url="",
+    )
+    ctx._recording_initialized = False
+    ctx._redaction_enabled = False
+    ctx._early_log_handler = None
+
+    ctx.init_recording(
+        {
+            "audio": False,
+            "traces": False,
+            "logs": False,
+            "transcript": False,
+            "redaction": True,
+        }
+    )
+
+    assert ctx._redaction_enabled is True
+
+
 async def test_upload_session_report_omits_simulation_metadata_for_normal_session() -> None:
     report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
 

@@ -16,20 +16,20 @@ if TYPE_CHECKING:
 REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
 
 
-def _job_redaction_enabled() -> bool:
+def _redaction_enabled() -> bool:
     from ..job import get_job_context
 
     job_ctx = get_job_context(required=False)
     if job_ctx is None:
         return False
-    return job_ctx.job.enable_redaction
+    return job_ctx._redaction_enabled
 
 
 def record_exception(
     span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
 ) -> None:
     if redacted is NOT_GIVEN:
-        redacted = _job_redaction_enabled()
+        redacted = _redaction_enabled()
 
     if redacted:
         attrs = {
