@@ -278,6 +278,8 @@ class Agent:
         Raises:
             RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
                 running; use ``AgentSession.update_agent`` instead.
+            ValueError: When disabling the external STT or VAD required by realtime
+                text-input mode while the agent is running.
         """
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -319,6 +321,9 @@ class Agent:
 
         This is a good opportunity to update the chat context or edit the new message before it is
         sent to the LLM.
+
+        With a realtime model, edit ``new_message`` to change an externally transcribed
+        turn. Changes made only to ``turn_ctx`` are not persisted to the realtime session.
         """
         pass
 

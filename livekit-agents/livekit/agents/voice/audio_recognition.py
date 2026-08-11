@@ -69,12 +69,14 @@ class _EndOfTurnMetrics:
 @dataclass
 class _EndOfTurnInfo:
     skip_reply: bool
-    """If True, a reply was already triggered and should be skipped after end of turn detection."""
+    """If True, do not schedule a reply for this turn."""
     new_transcript: str
     transcript_confidence: float
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
+    reply_already_triggered: bool = False
+    """A reply was scheduled before this turn's transcript finished flushing."""
 
 
 def _compute_end_of_turn_metrics(
@@ -244,6 +246,7 @@ class AudioRecognition:
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
         stt_provider: str | None = None,
+        finalize_empty_transcript_on_timeout: bool = False,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -262,6 +265,9 @@ class AudioRecognition:
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
+        self._turn_skip_reply = False
+        self._turn_reply_already_triggered = False
+        self._finalize_empty_transcript_on_timeout = finalize_empty_transcript_on_timeout
 
         self._sample_rate: int | None = None
 
@@ -284,6 +290,7 @@ class AudioRecognition:
         self._last_language: LanguageCode | None = None
 
         self._stt_pipeline: _STTPipeline | None = None
+        self._stt_pipeline_epoch = 0
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_stream: VADStream | None = None
 
@@ -792,8 +799,12 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
+        self._cancel_transcription_timeout()
         if self._commit_user_turn_atask is not None:
             await aio.cancel_and_wait(self._commit_user_turn_atask)
+        if self._end_of_turn_task is not None:
+            await aio.cancel_and_wait(self._end_of_turn_task)
+            self._end_of_turn_task = None
 
         if self._stt_pipeline is not None:
             await self._stt_pipeline.aclose()
@@ -809,9 +820,6 @@ class AudioRecognition:
 
         if self._interruption_atask is not None:
             await aio.cancel_and_wait(self._interruption_atask)
-
-        if self._end_of_turn_task is not None:
-            await aio.cancel_and_wait(self._end_of_turn_task)
 
         if self._turn_detector_stream is not None:
             await self._turn_detector_stream.aclose()
@@ -834,6 +842,8 @@ class AudioRecognition:
         provider: NotGivenOr[str | None] = NOT_GIVEN,
         reset_context: bool = False,
     ) -> None:
+        self._stt_pipeline_epoch += 1
+        pipeline_epoch = self._stt_pipeline_epoch
         self._stt = stt
         # model/provider drive the user_turn span attributes; swapping to a different STT must
         # refresh them (they default to unchanged for same-STT resets like _clear_user_turn)
@@ -855,6 +865,7 @@ class AudioRecognition:
             self._stt_consumer_atask = asyncio.create_task(
                 self._stt_consumer(
                     event_ch=pipeline.event_ch,
+                    pipeline_epoch=pipeline_epoch,
                     old_pipeline=self._stt_pipeline,
                     old_consumer=self._stt_consumer_atask,
                 )
@@ -926,6 +937,7 @@ class AudioRecognition:
         The caller is responsible for passing it to the new AudioRecognition
         via start(..., stt_pipeline=pipeline).
         """
+        self._stt_pipeline_epoch += 1
         pipeline = self._stt_pipeline
         self._stt_pipeline = None
 
@@ -1014,6 +1026,8 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._turn_skip_reply = False
+        self._turn_reply_already_triggered = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1030,7 +1044,12 @@ class AudioRecognition:
         self._stt_request_ids = []
         self._reset_transcription_timeout()
 
-        # reset stt to clear the buffer from previous user turn
+        self._restart_stt_input()
+
+    def _restart_stt_input(self) -> None:
+        """Replace the STT stream so buffered or late input cannot cross a turn boundary."""
+        if self._closing.is_set():
+            return
         stt = self._stt
         self._update_stt(None)
         self._update_stt(stt)
@@ -1042,11 +1061,20 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        reply_already_triggered: bool = False,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
+        # A late STT final can replace the current EOU bounce task. Preserve the manual turn's
+        # disposition monotonically until that logical turn is committed, dropped, or cleared.
+        self._turn_skip_reply = self._turn_skip_reply or skip_reply
+        self._turn_reply_already_triggered = (
+            self._turn_reply_already_triggered or reply_already_triggered
+        )
 
         if not self._stt or self._closing.is_set():
+            self._turn_skip_reply = False
+            self._turn_reply_already_triggered = False
             fut.set_result("")
             return fut
 
@@ -1106,6 +1134,7 @@ class AudioRecognition:
             self._run_eou_detection(
                 chat_ctx,
                 skip_reply=skip_reply,
+                reply_already_triggered=reply_already_triggered,
                 trigger="manual",
             )
             self._user_turn_committed = True
@@ -1161,7 +1190,7 @@ class AudioRecognition:
         if (
             ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
             and ev.alternatives
-            and ev.alternatives[0].text
+            and ev.alternatives[0].text.strip()
         ):
             self._mark_turn_transcribed()
 
@@ -1209,7 +1238,7 @@ class AudioRecognition:
             self._update_last_language(language, transcript)
 
             self._final_transcript_received.set()
-            if not transcript:
+            if not transcript.strip():
                 return
 
             self._hooks.on_final_transcript(
@@ -1351,6 +1380,8 @@ class AudioRecognition:
             self._run_eou_detection(
                 chat_ctx,
                 trigger="stt",
+                allow_empty_transcript=self._finalize_empty_transcript_on_timeout
+                and not self._audio_transcript.strip(),
             )
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
@@ -1482,8 +1513,20 @@ class AudioRecognition:
         *,
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
+        reply_already_triggered: bool = False,
+        allow_empty_transcript: bool = False,
     ) -> None:
-        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
+        self._turn_skip_reply = self._turn_skip_reply or skip_reply
+        self._turn_reply_already_triggered = (
+            self._turn_reply_already_triggered or reply_already_triggered
+        )
+
+        if (
+            self._stt
+            and not self._audio_transcript
+            and trigger != "manual"
+            and not allow_empty_transcript
+        ):
             # stt enabled but no transcript yet
             return
 
@@ -1703,11 +1746,12 @@ class AudioRecognition:
             )
             committed = self._hooks.on_end_of_turn(
                 _EndOfTurnInfo(
-                    skip_reply=skip_reply,
+                    skip_reply=self._turn_skip_reply,
                     new_transcript=self._audio_transcript,
                     transcript_confidence=confidence_avg,
                     metrics=metrics,
                     backchannel_over_agent=self._turn_backchannel_over_agent,
+                    reply_already_triggered=self._turn_reply_already_triggered,
                 )
             )
             if committed:
@@ -1723,6 +1767,8 @@ class AudioRecognition:
                         "unlikely_threshold": unlikely_threshold,
                     },
                 )
+
+            if committed or allow_empty_transcript:
                 user_turn_span.set_attributes(
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
@@ -1744,6 +1790,10 @@ class AudioRecognition:
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
+                if allow_empty_transcript:
+                    self._audio_interim_transcript = ""
+                    self._audio_preflight_transcript = ""
+                    self._restart_stt_input()
                 self._last_final_transcript_time = None
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
@@ -1761,6 +1811,8 @@ class AudioRecognition:
             self._turn_backchannel_over_agent = False
             self._overlap_in_current_turn = False
             self._user_turn_committed = False
+            self._turn_skip_reply = False
+            self._turn_reply_already_triggered = False
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
@@ -1811,6 +1863,7 @@ class AudioRecognition:
     async def _stt_consumer(
         self,
         event_ch: aio.Chan[stt.SpeechEvent],
+        pipeline_epoch: int,
         old_pipeline: _STTPipeline | None,
         old_consumer: asyncio.Task[None] | None,
     ) -> None:
@@ -1823,7 +1876,13 @@ class AudioRecognition:
             await aio.cancel_and_wait(old_consumer)
 
         async for ev in event_ch:
+            # Invalidated synchronously before the old stream is cancelled, so an event
+            # already queued on that stream cannot repopulate the following turn.
+            if pipeline_epoch != self._stt_pipeline_epoch:
+                return
             await self._on_stt_event(ev)
+            if pipeline_epoch != self._stt_pipeline_epoch:
+                return
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
@@ -1906,8 +1965,14 @@ class AudioRecognition:
 
     def _arm_transcription_timeout(self, speech_duration: float, *, delay: float) -> None:
         timeout = self._session.options.transcription_timeout
-        if timeout is None or self._turn_transcript_received:
+        if self._turn_transcript_received:
             return
+        if timeout is None:
+            if not self._finalize_empty_transcript_on_timeout:
+                return
+            # A client-controlled realtime activity must have a finite boundary even when
+            # STT produces no event. Reuse the configured maximum endpointing delay.
+            timeout = self._endpointing.max_delay
 
         self._turn_speech_duration += speech_duration
         self._cancel_transcription_timeout()
@@ -1924,6 +1989,15 @@ class AudioRecognition:
         self._hooks.on_transcription_timeout(
             speech_duration=self._turn_speech_duration, turn_start=self._user_turn_start
         )
+        if self._finalize_empty_transcript_on_timeout:
+            # External VAD has already supplied the turn boundary. The configured STT
+            # timeout is the authoritative signal that no model-consumable transcript
+            # will arrive for this turn.
+            self._run_eou_detection(
+                self._hooks.retrieve_chat_ctx().copy(),
+                trigger="vad",
+                allow_empty_transcript=True,
+            )
 
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():

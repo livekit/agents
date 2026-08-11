@@ -5,7 +5,7 @@ import pytest
 from livekit.agents import Agent, AgentSession
 
 from .fake_llm import FakeLLM
-from .fake_realtime import FakeRealtimeModel
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_stt import FakeSTT
 from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
@@ -147,6 +147,74 @@ async def test_update_options_running_disable_stt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_options_running_rejects_disabling_text_mode_stt() -> None:
+    old_stt = FakeSTT()
+    agent = Agent(
+        instructions="test",
+        stt=old_stt,
+        vad=FakeVAD(),
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+            )
+        ),
+    )
+    session = AgentSession(turn_handling={"turn_detection": "vad", "realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None and activity.stt is old_stt
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        old_pipeline = recognition._stt_pipeline
+
+        with pytest.raises(ValueError, match="requires an external STT"):
+            agent.update_options(stt=None)
+
+        assert agent.stt is old_stt
+        assert activity.stt is old_stt
+        assert recognition._stt_pipeline is old_pipeline
+        assert activity._on_metrics_collected in old_stt._events.get("metrics_collected", set())
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_options_running_rejects_disabling_text_mode_vad() -> None:
+    old_vad = FakeVAD()
+    agent = Agent(
+        instructions="test",
+        stt=FakeSTT(),
+        vad=old_vad,
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(
+                turn_detection=False,
+                can_disable_turn_detection=False,
+            )
+        ),
+    )
+    session = AgentSession(turn_handling={"turn_detection": "vad", "realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None and activity.vad is old_vad
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        old_stream = recognition._vad_stream
+
+        with pytest.raises(ValueError, match="requires a VAD"):
+            agent.update_options(vad=None)
+
+        assert agent.vad is old_vad
+        assert activity.vad is old_vad
+        assert recognition._vad_stream is old_stream
+        assert activity._on_metrics_collected in old_vad._events.get("metrics_collected", set())
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_update_options_running_rejects_swap_to_realtime() -> None:
     agent = Agent(instructions="test", llm=FakeLLM())
     session = AgentSession(turn_handling={"turn_detection": None})
@@ -237,5 +305,36 @@ async def test_update_options_vad_check_is_atomic() -> None:
         # rejected before any mutation — STT and VAD are untouched
         assert agent.stt is old_stt
         assert agent.vad is old_vad
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_text_mode_cannot_remove_streaming_turn_detectors_vad() -> None:
+    from unittest.mock import MagicMock
+
+    from livekit.agents.voice.turn import _StreamingTurnDetector
+
+    old_vad = FakeVAD()
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    agent = Agent(instructions="test", stt=FakeSTT(), vad=old_vad, llm=model)
+    session = AgentSession(turn_handling={"turn_detection": "vad", "realtime_input_mode": "text"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        activity._turn_detection = MagicMock(spec=_StreamingTurnDetector)
+
+        with pytest.raises(ValueError, match="requires a VAD"):
+            agent.update_options(vad=None)
+
+        assert agent.vad is old_vad
+        assert activity.vad is old_vad
     finally:
         await session.aclose()

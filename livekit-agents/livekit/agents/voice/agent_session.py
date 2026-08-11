@@ -78,6 +78,7 @@ from .turn import (
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
+    RealtimeInputMode,
     TurnDetectionMode,
     TurnHandlingOptions,
     _migrate_turn_handling,
@@ -305,6 +306,10 @@ class AgentSessionOptions:
     def preemptive_generation(self) -> PreemptiveGenerationOptions:
         return self.turn_handling["preemptive_generation"]
 
+    @property
+    def realtime_input_mode(self) -> RealtimeInputMode:
+        return self.turn_handling["realtime_input_mode"]
+
 
 Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
@@ -486,7 +491,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 it to prompt the user to repeat themselves. A non-empty final transcript
                 satisfies the timeout for the current turn even if adaptive interruption
                 detection later discards it as part of a backchannel. Requires both VAD
-                and STT. Disabled by default.
+                and STT. Disabled by default for pipeline and server-turn-detected sessions.
+                For a realtime model using client-side turn detection, an unset timeout
+                uses ``turn_handling.endpointing.max_delay`` as the bound and
+                finalizes a turn for which STT produced no usable text. Native-audio mode
+                settles the provider's buffered audio turn; explicit text-input mode gives
+                ``on_user_turn_completed`` an opportunity to supply text and otherwise
+                drops the empty turn.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -532,6 +543,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else turn_handling
         )
 
+        realtime_input_mode = turn_handling.get("realtime_input_mode", "audio")
+        if realtime_input_mode not in ("audio", "text"):
+            raise ValueError("turn_handling.realtime_input_mode must be either 'audio' or 'text'")
+
         raw_turn_detection: TurnDetectionMode | None = turn_handling.get(
             "turn_detection", inference.TurnDetector()
         )
@@ -557,6 +572,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
             turn_handling=TurnHandlingOptions(
+                realtime_input_mode=realtime_input_mode,
                 endpointing=endpointing,
                 interruption=interruption,
                 turn_detection=raw_turn_detection,

@@ -110,6 +110,9 @@ If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to th
 """
 
 
+RealtimeInputMode = Literal["audio", "text"]
+
+
 class EndpointingOptions(TypedDict, total=False):
     """Configuration for endpointing.
 
@@ -271,6 +274,16 @@ class TurnHandlingOptions(TypedDict, total=False):
         )
 
     All keys are optional and default to sensible values.
+    """
+
+    realtime_input_mode: RealtimeInputMode
+    """How speech-derived user turns are sent to a realtime model.
+
+    ``"audio"`` preserves native realtime audio and is the default. ``"text"`` routes
+    microphone audio only through the external VAD/STT pipeline, then sends the finalized
+    transcript after :meth:`Agent.on_user_turn_completed`. Text mode requires an external STT,
+    mutable realtime chat context, and disabled provider-side turn detection. It is never
+    inferred from the presence of an STT or from the provider's activity-detection setting.
     """
 
     turn_detection: TurnDetectionMode | None

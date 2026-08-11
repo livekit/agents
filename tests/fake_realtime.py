@@ -55,6 +55,7 @@ class FakeRealtimeSession(RealtimeSession):
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
         self.user_activity_started = False
+        self.user_activity_start_calls = 0
         self._reply_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         # test hooks to pause or fail aclose() mid-swap
         self.aclose_entered = asyncio.Event()
@@ -124,6 +125,7 @@ class FakeRealtimeSession(RealtimeSession):
 
     def start_user_activity(self) -> None:
         self.user_activity_started = True
+        self.user_activity_start_calls += 1
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         self.say_calls.append(text)

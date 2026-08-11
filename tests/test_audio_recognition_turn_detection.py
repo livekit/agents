@@ -111,6 +111,10 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
+    ar._turn_backchannel_over_agent = False
+    ar._overlap_in_current_turn = False
+    ar._turn_skip_reply = False
+    ar._turn_reply_already_triggered = False
     ar._vad = None
     ar._last_language = None
     ar._last_emitted_prediction = None
@@ -352,6 +356,93 @@ class TestEotPredictionDedup:
         ar.clear_user_turn()
 
         assert ar._last_emitted_prediction is None
+
+
+class TestTurnDispositionLifecycle:
+    async def test_late_stt_final_preserves_disposition_then_resets(self) -> None:
+        """A late STT final replaces the pending manual EOU bounce without
+        losing the manual turn's reply disposition. The latches are scoped to
+        that logical turn and must not affect the following turn."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream = None
+        ar._audio_transcript = "initial transcript"
+        ar._endpointing.min_delay = 0.0
+        chat_ctx = _make_chat_ctx_stub()
+
+        prediction_started = asyncio.Event()
+        release_prediction = asyncio.Event()
+
+        async def _wait_for_prediction(_language: object) -> bool:
+            prediction_started.set()
+            await release_prediction.wait()
+            return True
+
+        detector = MagicMock()  # not a streaming detector
+        detector.supports_language = AsyncMock(side_effect=_wait_for_prediction)
+        ar._turn_detector = detector
+
+        ar._run_eou_detection(
+            chat_ctx,
+            trigger="manual",
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+        first_task = ar._end_of_turn_task
+        assert first_task is not None
+        await prediction_started.wait()
+        assert not first_task.done()
+
+        # Replacing the pending bounce models the final transcript arriving
+        # after the manually bounded turn has already selected its disposition.
+        ar._audio_transcript = "initial transcript with late final"
+        ar._turn_detector = None
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        late_final_task = ar._end_of_turn_task
+        assert late_final_task is not None
+        await late_final_task
+
+        assert first_task.cancelled()
+        ar._hooks.on_end_of_turn.assert_called_once()
+        first_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert first_turn.new_transcript == "initial transcript with late final"
+        assert first_turn.skip_reply is True
+        assert first_turn.reply_already_triggered is True
+
+        ar._hooks.on_end_of_turn.reset_mock()
+        ar._audio_transcript = "next turn"
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        next_turn_task = ar._end_of_turn_task
+        assert next_turn_task is not None
+        await next_turn_task
+
+        ar._hooks.on_end_of_turn.assert_called_once()
+        next_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert next_turn.new_transcript == "next turn"
+        assert next_turn.skip_reply is False
+        assert next_turn.reply_already_triggered is False
+
+    async def test_manual_turn_without_stt_does_not_leak_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = None
+
+        result = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=0.1,
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+
+        assert await result == ""
+        assert ar._turn_skip_reply is False
+        assert ar._turn_reply_already_triggered is False
+
+        ar._audio_transcript = "next turn"
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        next_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert next_turn.skip_reply is False
+        assert next_turn.reply_already_triggered is False
 
 
 class TestBackchannelOpportunityEmit:

@@ -8,6 +8,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Literal
 
 import google.auth.credentials
@@ -15,7 +16,7 @@ from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
-from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents import LanguageCode, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -118,6 +119,17 @@ def _get_1008_error_hint(error_message: str) -> str | None:
 class InputTranscription:
     item_id: str
     transcript: str
+
+
+class _InputState(Enum):
+    IDLE = auto()
+    AUDIO_ACTIVE = auto()
+    INTERRUPT_ONLY = auto()
+    TEXT_PENDING = auto()
+    TEXT_TRIGGER_SENT = auto()
+    AUDIO_TRIGGER_SENT = auto()
+    LEGACY_TRIGGER_SENT = auto()
+    ABORTED = auto()
 
 
 @dataclass
@@ -244,6 +256,21 @@ class RealtimeModel(llm.RealtimeModel):
         `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
         and the location defaults to "us-central1".
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+
+        To use an external STT as the model's text input, explicitly disable Gemini's automatic
+        activity detection and select ``realtime_input_mode="text"`` on ``AgentSession``::
+
+            model = RealtimeModel(
+                realtime_input_config=types.RealtimeInputConfig(
+                    automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+                )
+            )
+            session = AgentSession(
+                llm=model,
+                stt=external_stt,
+                vad=external_vad,
+                turn_handling={"realtime_input_mode": "text"},
+            )
 
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
@@ -496,6 +523,8 @@ class RealtimeSession(llm.RealtimeSession):
             http_options=http_options,
         )
 
+        self._closed = False
+        self._terminal_error: llm.RealtimeError | None = None
         self._main_atask = asyncio.create_task(self._main_task(), name="gemini-realtime-session")
 
         self._current_generation: _ResponseGeneration | None = None
@@ -504,6 +533,10 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        self._pending_generation_epoch: int | None = None
+        self._input_state = _InputState.IDLE
+        self._activity_has_realtime_input = False
+        self._session_epoch = 0
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
@@ -515,7 +548,6 @@ class RealtimeSession(llm.RealtimeSession):
             else None
         )
 
-        self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
@@ -532,20 +564,109 @@ class RealtimeSession(llm.RealtimeSession):
                 finally:
                     self._active_session = None
 
-    def _mark_restart_needed(self, on_error: bool = False) -> None:
-        if not self._session_should_close.is_set():
-            self._session_should_close.set()
-            # reset the msg_ch, do not send messages from previous session
-            if not on_error:
-                while not self._msg_ch.empty():
-                    msg = self._msg_ch.recv_nowait()
-                    if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
-                        logger.warning(
-                            "discarding client content for turn completion, may cause generate_reply timeout",
-                            extra={"content": str(msg)},
-                        )
+    @property
+    def _in_user_activity(self) -> bool:
+        return self._input_state in (_InputState.AUDIO_ACTIVE, _InputState.INTERRUPT_ONLY)
 
-            self._msg_ch = utils.aio.Chan[ClientEvents]()
+    @property
+    def _client_content_user_turn_pending(self) -> bool:
+        return self._input_state == _InputState.TEXT_PENDING
+
+    def _settle_pending_generation(self, error: llm.RealtimeError) -> None:
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            # Detach before completing the future. Its done callback otherwise interprets the
+            # completion as an external cancellation of the current provider request.
+            pending_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            self._pending_generation_epoch = None
+            pending_fut.set_exception(error)
+
+    def _set_terminal_error(self, error: llm.RealtimeError) -> None:
+        if self._terminal_error is None:
+            self._terminal_error = error
+
+        # A terminal transport failure has no reconnect loop left to consume queued work.
+        # Settle every public surface immediately while leaving aclose() responsible for
+        # releasing the active session and the owned GenAI client.
+        self._input_state = _InputState.IDLE
+        self._activity_has_realtime_input = False
+        self._bstream.clear()
+        self._input_resampler = None
+        self._mark_current_generation_done()
+        self._settle_pending_generation(self._terminal_error)
+        self._session_should_close.set()
+        self._msg_ch.close()
+
+    def _mark_restart_needed(self, *, on_error: bool = False, resume_session: bool = False) -> None:
+        if self._closed or self._terminal_error is not None:
+            return
+
+        previous_input_state = self._input_state
+        # Session resumption is safe only between input turns. If input is active, queued and
+        # already-sent realtime events cannot be distinguished; a fresh epoch must fail or replay
+        # the turn deliberately instead of silently omitting ActivityStart, audio, or text.
+        resume_session = (
+            resume_session
+            and self._session_resumption_handle is not None
+            and previous_input_state == _InputState.IDLE
+        )
+        if previous_input_state == _InputState.TEXT_TRIGGER_SENT:
+            resume_session = False
+            # Keep the exact user message as ordinary history, but clear its completion state.
+            # A later user turn owns the next (and only) generation trigger.
+            self._input_state = _InputState.IDLE
+        elif previous_input_state == _InputState.AUDIO_TRIGGER_SENT:
+            resume_session = False
+            # Raw audio cannot be replayed or correlated across Gemini connections.
+            self._input_state = _InputState.ABORTED
+        elif previous_input_state == _InputState.LEGACY_TRIGGER_SENT:
+            resume_session = False
+            self._input_state = _InputState.IDLE
+        elif resume_session:
+            # Resumption is allowed only while idle; provider and local input state remain idle.
+            self._input_state = _InputState.IDLE
+        elif previous_input_state == _InputState.TEXT_PENDING:
+            # No completion was requested yet; replay the exact user append after reconnect.
+            self._input_state = _InputState.TEXT_PENDING
+        elif previous_input_state == _InputState.AUDIO_ACTIVE:
+            # Raw audio cannot be replayed on a fresh connection. Remember that this turn was
+            # abandoned so a later EOT fails rather than manufacturing a placeholder turn.
+            self._input_state = _InputState.ABORTED
+        else:
+            self._input_state = _InputState.IDLE
+
+        if not resume_session:
+            # Session resumption restores provider-side activity/audio. Intentional restarts
+            # (clear, cancellation, config/protocol changes) must start a genuinely fresh epoch.
+            self._session_resumption_handle = None
+            self._bstream.clear()
+            self._input_resampler = None
+            self._activity_has_realtime_input = False
+            # A fresh epoch cannot continue channels belonging to the abandoned response.
+            self._mark_current_generation_done()
+        self._settle_pending_generation(
+            llm.RealtimeError("Gemini Realtime session restarted before generation started")
+        )
+
+        self._session_epoch += 1
+        self._session_should_close.set()
+        # Detach the old transport queue so a stale sender cannot consume new-epoch events.
+        # A genuine session resumption keeps provider-side input state, so migrate queued events
+        # in order. A fresh epoch reconstructs replayable text from authoritative chat context.
+        old_msg_ch = self._msg_ch
+        new_msg_ch = utils.aio.Chan[ClientEvents]()
+        while not old_msg_ch.empty():
+            msg = old_msg_ch.recv_nowait()
+            if resume_session:
+                new_msg_ch.send_nowait(msg)
+            elif not on_error:
+                if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
+                    logger.debug(
+                        "discarding client content completion during Gemini session restart",
+                        extra={"content": str(msg)},
+                    )
+        old_msg_ch.close()
+        self._msg_ch = new_msg_ch
 
     def update_options(
         self,
@@ -624,6 +745,13 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        if self._terminal_error is not None:
+            raise llm.RealtimeError(
+                f"Gemini Realtime session is unavailable: {self._terminal_error}"
+            )
+        if self._closed:
+            return
+
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
             1 for msg in chat_ctx.messages() if msg.role in ("system", "developer")
@@ -642,21 +770,56 @@ class RealtimeSession(llm.RealtimeSession):
             exclude_empty_message=True,
             exclude_config_update=True,
         )
-        async with self._session_lock:
-            if not self._active_session:
-                self._chat_ctx = chat_ctx
-                return
-
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
-
-        if diff_ops.to_remove:
-            logger.warning("Gemini Live does not support removing messages")
 
         append_ctx = llm.ChatContext.empty()
         for _, item_id in diff_ops.to_create:
             item = chat_ctx.get_by_id(item_id)
             if item:
                 append_ctx.items.append(item)
+
+        turns: list[types.Content] = []
+        if append_ctx.items and self._realtime_model.capabilities.mutable_chat_context:
+            turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                format="google", inject_dummy_user_message=False
+            )
+            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+
+        next_input_state: _InputState | None = None
+        if turns:
+            next_input_state = (
+                _InputState.TEXT_PENDING if turns[-1].role == "user" else _InputState.IDLE
+            )
+
+        async with self._session_lock:
+            if self._terminal_error is not None:
+                raise llm.RealtimeError(
+                    f"Gemini Realtime session is unavailable: {self._terminal_error}"
+                )
+            if self._closed:
+                return
+            if not self._active_session or self._session_should_close.is_set():
+                if turns and self._session_resumption_handle is not None:
+                    self._mark_restart_needed()
+                self._chat_ctx = chat_ctx
+                if next_input_state is not None:
+                    self._input_state = next_input_state
+                return
+
+        if diff_ops.to_remove:
+            logger.warning("Gemini Live does not support removing messages")
+
+        if turns and self._input_state in (
+            _InputState.AUDIO_ACTIVE,
+            _InputState.INTERRUPT_ONLY,
+        ):
+            # Client content and realtime activity are separate Gemini input protocols. Close
+            # the old transport without resumption and replay the authoritative context once.
+            self._mark_restart_needed()
+            self._chat_ctx = chat_ctx
+            assert next_input_state is not None
+            self._input_state = next_input_state
+            return
 
         if append_ctx.items:
             tool_results = get_tool_results_for_realtime(
@@ -665,14 +828,12 @@ class RealtimeSession(llm.RealtimeSession):
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
-                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                    format="google", inject_dummy_user_message=False
-                )
-                turns = [types.Content.model_validate(turn) for turn in turns_dict]
                 if turns:
                     self._send_client_event(
                         types.LiveClientContent(turns=turns, turn_complete=False)
                     )
+                    assert next_input_state is not None
+                    self._input_state = next_input_state
             if tool_results:
                 self._send_client_event(tool_results)
 
@@ -710,18 +871,50 @@ class RealtimeSession(llm.RealtimeSession):
     def session_resumption_handle(self) -> str | None:
         return self._session_resumption_handle
 
+    def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
+        self._send_client_event(
+            types.LiveClientRealtimeInput(
+                audio=types.Blob(
+                    data=frame.data.tobytes(),
+                    mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
+                )
+            )
+        )
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._closed or self._terminal_error is not None:
+            return
+
+        if frame.samples_per_channel > 0 and (
+            not self._manual_activity_detection
+            or self._input_state in (_InputState.AUDIO_ACTIVE, _InputState.INTERRUPT_ONLY)
+        ):
+            self._activity_has_realtime_input = True
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
-                realtime_input = types.LiveClientRealtimeInput(
-                    audio=types.Blob(
-                        data=nf.data.tobytes(),
-                        mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
-                    )
-                )
-                self._send_client_event(realtime_input)
+                self._send_audio_frame(nf)
+
+    def _flush_audio_input(self) -> None:
+        if self._input_resampler is not None:
+            for frame in self._input_resampler.flush():
+                for nf in self._bstream.write(frame.data.tobytes()):
+                    self._send_audio_frame(nf)
+            self._input_resampler = None
+
+        # ActivityEnd is a hard input boundary. Flush the final partial chunk before it so
+        # legitimate tail audio is delivered and can never be combined with the next turn.
+        for frame in self._bstream.flush():
+            self._send_audio_frame(frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
+        if self._closed or self._terminal_error is not None:
+            return
+
+        if not self._manual_activity_detection or self._input_state in (
+            _InputState.AUDIO_ACTIVE,
+            _InputState.INTERRUPT_ONLY,
+        ):
+            self._activity_has_realtime_input = True
         encoded_data = images.encode(
             frame, self._opts.image_encode_options or DEFAULT_IMAGE_ENCODE_OPTIONS
         )
@@ -741,6 +934,17 @@ class RealtimeSession(llm.RealtimeSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        if self._closed:
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(llm.RealtimeError("Gemini Realtime session is closed"))
+            return fut
+        if self._terminal_error is not None:
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(f"Gemini Realtime session is unavailable: {self._terminal_error}")
+            )
+            return fut
+
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
         if not self._realtime_model.capabilities.mutable_chat_context:
@@ -753,70 +957,154 @@ class RealtimeSession(llm.RealtimeSession):
             )
             return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
-            logger.warning(
-                "generate_reply called while another generation is pending, cancelling previous."
-            )
-            # clear the slot before cancelling so the done callback doesn't treat it
-            # as an external cancellation and signal the server.
-            old_fut = self._pending_generation_fut
+            logger.warning("superseding a pending Gemini generation request")
+            pending_fut = self._pending_generation_fut
             self._pending_generation_fut = None
-            old_fut.cancel("Superseded by new generate_reply call")
+            self._pending_generation_epoch = None
+            pending_fut.cancel("Superseded by a newer generate_reply request")
+            # Gemini has no request IDs, so the old response must be isolated on an abandoned
+            # epoch before a new public future can be registered.
+            self._mark_restart_needed()
+
+        if self._input_state == _InputState.ABORTED:
+            self._input_state = _InputState.IDLE
+            self._activity_has_realtime_input = False
+            fut = asyncio.Future[llm.GenerationCreatedEvent]()
+            fut.set_exception(
+                llm.RealtimeError(
+                    "Gemini Realtime user input was discarded during a session restart"
+                )
+            )
+            return fut
+
+        if self._input_state == _InputState.INTERRUPT_ONLY:
+            # Client content and realtime activities are separate Gemini input protocols. A text
+            # turn cannot be completed by ActivityEnd, and an interruption-only activity has no
+            # input to generate from. Restart closes that activity before using the legacy
+            # application-generation trigger below.
+            self._mark_restart_needed()
+
+        if self._input_state == _InputState.AUDIO_ACTIVE and not self._activity_has_realtime_input:
+            # An empty/false-positive activity cannot generate from ActivityEnd alone. Discard
+            # the unmatched ActivityStart on a fresh epoch, then preserve the legacy application
+            # generation behavior (including the placeholder) below.
+            self._mark_restart_needed()
+            self._input_state = _InputState.IDLE
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
+        self._pending_generation_epoch = self._session_epoch
+        generation_epoch = self._session_epoch
 
-        if self._in_user_activity:
+        # ActivityEnd and client-content turn completion each trigger generation. Use
+        # exactly one trigger for the input that is already pending on the provider.
+        if self._input_state == _InputState.TEXT_PENDING:
+            if is_given(instructions):
+                logger.warning(
+                    "per-response instructions are not supported when completing pending "
+                    "Gemini client content; ignoring instructions"
+                )
+            # update_chat_ctx sent the finalized user text with turn_complete=False. Complete
+            # that same turn without manufacturing another model-visible user message.
+            self._send_client_event(types.LiveClientContent(turn_complete=True))
+            self._input_state = _InputState.TEXT_TRIGGER_SENT
+        elif self._input_state == _InputState.AUDIO_ACTIVE:
+            if is_given(instructions):
+                logger.warning(
+                    "per-response instructions are not supported for an active Gemini audio "
+                    "activity; ignoring instructions"
+                )
+            self._flush_audio_input()
             self._send_client_event(
                 types.LiveClientRealtimeInput(
                     activity_end=types.ActivityEnd(),
                 )
             )
-            self._in_user_activity = False
+            self._input_state = _InputState.AUDIO_TRIGGER_SENT
+        else:
+            # Gemini requires the last message to end with a user's turn. Keep the placeholder
+            # for application/tool/instruction-only generations that have no user input pending.
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+            self._input_state = _InputState.LEGACY_TRIGGER_SENT
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        self._activity_has_realtime_input = False
 
         def _on_timeout() -> None:
-            if not fut.done():
+            if (
+                not fut.done()
+                and self._pending_generation_fut is fut
+                and self._pending_generation_epoch == generation_epoch
+            ):
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+                self._input_state = _InputState.IDLE
                 fut.set_exception(
                     llm.RealtimeError(
                         "generate_reply timed out waiting for generation_created event."
                     )
                 )
-                if self._pending_generation_fut is fut:
-                    self._pending_generation_fut = None
+                self._mark_restart_needed()
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
             timeout_handle.cancel()
-            is_current = self._pending_generation_fut is fut
+            is_current = (
+                self._pending_generation_fut is fut
+                and self._pending_generation_epoch == generation_epoch
+            )
             if is_current:
                 self._pending_generation_fut = None
+                self._pending_generation_epoch = None
             if f.cancelled() and is_current:
-                # external cancel: signal interrupt to Gemini via activity_start
-                self.interrupt()
+                self._input_state = _InputState.IDLE
+                # Gemini provides no request ID or cancel event. A fresh session epoch is the
+                # only way to prevent the abandoned response from satisfying a later request.
+                self._mark_restart_needed()
 
         fut.add_done_callback(_on_fut_done)
 
         return fut
 
-    def start_user_activity(self) -> None:
-        if not self._manual_activity_detection:
+    def _start_user_activity(self, *, expects_generation: bool) -> None:
+        if self._closed or self._terminal_error is not None or not self._manual_activity_detection:
             return
+        if self._input_state in (
+            _InputState.TEXT_TRIGGER_SENT,
+            _InputState.AUDIO_TRIGGER_SENT,
+            _InputState.LEGACY_TRIGGER_SENT,
+        ):
+            # A new manual activity supersedes a generation that has not started yet.
+            self._mark_restart_needed()
 
-        if not self._in_user_activity:
-            self._in_user_activity = True
+        if self._input_state == _InputState.ABORTED and expects_generation:
+            self._input_state = _InputState.IDLE
+
+        if self._input_state == _InputState.IDLE:
+            self._activity_has_realtime_input = False
+            self._input_state = (
+                _InputState.AUDIO_ACTIVE if expects_generation else _InputState.INTERRUPT_ONLY
+            )
             self._send_client_event(
                 types.LiveClientRealtimeInput(
                     activity_start=types.ActivityStart(),
                 )
             )
+        elif self._input_state == _InputState.INTERRUPT_ONLY and expects_generation:
+            # An activity opened only to interrupt output becomes a real user-input activity once
+            # the framework reports an external activity boundary.
+            self._input_state = _InputState.AUDIO_ACTIVE
+        elif self._input_state == _InputState.TEXT_PENDING:
+            logger.warning(
+                "cannot open a Gemini realtime audio activity while client content is pending"
+            )
+
+    def start_user_activity(self) -> None:
+        self._start_user_activity(expects_generation=True)
 
     def interrupt(self) -> None:
         # Gemini Live treats activity start as interruption, so we rely on start_user_activity
@@ -827,7 +1115,7 @@ class RealtimeSession(llm.RealtimeSession):
             == types.ActivityHandling.NO_INTERRUPTION
         ):
             return
-        self.start_user_activity()
+        self._start_user_activity(expects_generation=False)
 
     def truncate(
         self,
@@ -841,16 +1129,30 @@ class RealtimeSession(llm.RealtimeSession):
         pass
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._pending_generation_fut is not None:
+            # Settle public state before awaiting network/task shutdown, which may block.
+            pending_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            self._pending_generation_epoch = None
+            if not pending_fut.done():
+                pending_fut.cancel("Session closed")
+
         self._msg_ch.close()
         self._session_should_close.set()
+        self._session_epoch += 1
+        self._input_state = _InputState.IDLE
+        self._activity_has_realtime_input = False
+        self._bstream.clear()
+        self._input_resampler = None
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
 
         await self._close_active_session()
-
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            self._pending_generation_fut.cancel("Session closed")
 
         for fut in self._response_created_futures.values():
             if not fut.done():
@@ -876,9 +1178,14 @@ class RealtimeSession(llm.RealtimeSession):
         while not self._msg_ch.closed:
             # previous session might not be closed yet, we'll do it here.
             await self._close_active_session()
+            if self._closed:
+                break
 
             self._session_should_close.clear()
+            connect_epoch = self._session_epoch
+            connect_msg_ch = self._msg_ch
             config = self._build_connect_config()
+            resuming_session = self._session_resumption_handle is not None
             session = None
             try:
                 logger.debug("connecting to Gemini Realtime API...")
@@ -888,7 +1195,15 @@ class RealtimeSession(llm.RealtimeSession):
                 ) as session:
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
+                        if (
+                            self._closed
+                            or self._session_should_close.is_set()
+                            or connect_epoch != self._session_epoch
+                            or connect_msg_ch is not self._msg_ch
+                        ):
+                            continue
                         self._active_session = session
+                        session_epoch = connect_epoch
 
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
@@ -913,38 +1228,40 @@ class RealtimeSession(llm.RealtimeSession):
                             exclude_config_update=True,
                         ).to_provider_format(format="google", inject_dummy_user_message=False)
                         turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                        if turns:
+                        if turns and not resuming_session:
                             await session.send_client_content(
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
 
-                    # queue up existing chat context
-                    send_task = asyncio.create_task(
-                        self._send_task(session), name="gemini-realtime-send"
-                    )
-                    recv_task = asyncio.create_task(
-                        self._recv_task(session), name="gemini-realtime-recv"
-                    )
-                    restart_wait_task = asyncio.create_task(
-                        self._session_should_close.wait(), name="gemini-restart-wait"
-                    )
+                    connection_tasks: list[asyncio.Task[object]] = []
+                    try:
+                        send_task = asyncio.create_task(
+                            self._send_task(session, session_epoch, connect_msg_ch),
+                            name="gemini-realtime-send",
+                        )
+                        recv_task = asyncio.create_task(
+                            self._recv_task(session, session_epoch), name="gemini-realtime-recv"
+                        )
+                        restart_wait_task = asyncio.create_task(
+                            self._session_should_close.wait(), name="gemini-restart-wait"
+                        )
+                        connection_tasks.extend((send_task, recv_task, restart_wait_task))
 
-                    done, pending = await asyncio.wait(
-                        [send_task, recv_task, restart_wait_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
+                        done, _ = await asyncio.wait(
+                            connection_tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
 
-                    for task in done:
-                        if task is not restart_wait_task and task.exception():
-                            logger.error(f"error in task {task.get_name()}: {task.exception()}")
-                            raise task.exception() or Exception(f"{task.get_name()} failed")
+                        for task in done:
+                            if task is not restart_wait_task and task.exception():
+                                logger.error(f"error in task {task.get_name()}: {task.exception()}")
+                                raise task.exception() or Exception(f"{task.get_name()} failed")
 
-                    if restart_wait_task not in done and self._msg_ch.closed:
-                        break
-
-                    for task in pending:
-                        await utils.aio.cancel_and_wait(task)
+                        if restart_wait_task not in done and self._msg_ch.closed:
+                            break
+                    finally:
+                        await utils.aio.cancel_and_wait(*connection_tasks)
 
                     # the recv/send tasks signal restart by setting _session_should_close
                     # rather than raising. propagate any error they recorded so the handler
@@ -977,9 +1294,10 @@ class RealtimeSession(llm.RealtimeSession):
                             exc_info=e,
                         )
                         self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(
-                            message="Gemini Live session context exhausted (1007)"
-                        ) from e
+                        self._set_terminal_error(
+                            llm.RealtimeError("Gemini Live session context exhausted (1007)")
+                        )
+                        return
 
                     # we shouldn't retry when it's not connected, usually this means incorrect
                     # parameters or setup
@@ -988,14 +1306,16 @@ class RealtimeSession(llm.RealtimeSession):
                         error_msg = "Failed to connect to Gemini Live"
                         if hint:
                             error_msg += hint
-                        raise APIConnectionError(message=error_msg) from e
+                        self._set_terminal_error(llm.RealtimeError(error_msg))
+                        return
 
                     if self._num_retries == max_retries:
                         self._emit_error(e, recoverable=False)
                         error_msg = f"Failed to connect to Gemini Live after {max_retries} attempts"
                         if hint:
                             error_msg += hint
-                        raise APIConnectionError(message=error_msg) from e
+                        self._set_terminal_error(llm.RealtimeError(error_msg))
+                        return
 
                     self._emit_error(e, recoverable=True)
                     retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
@@ -1009,12 +1329,36 @@ class RealtimeSession(llm.RealtimeSession):
             finally:
                 await self._close_active_session()
 
-    async def _send_task(self, session: AsyncSession) -> None:
+    async def _send_task(
+        self,
+        session: AsyncSession,
+        session_epoch: int,
+        msg_ch: utils.aio.Chan[ClientEvents] | None = None,
+    ) -> None:
+        msg_ch = self._msg_ch if msg_ch is None else msg_ch
         try:
-            async for msg in self._msg_ch:
+            while True:
                 async with self._session_lock:
-                    if self._session_should_close.is_set() or (
-                        not self._active_session or self._active_session != session
+                    if (
+                        self._session_should_close.is_set()
+                        or not self._active_session
+                        or self._active_session != session
+                        or session_epoch != self._session_epoch
+                        or msg_ch is not self._msg_ch
+                    ):
+                        break
+                try:
+                    msg = await msg_ch.recv()
+                except utils.aio.ChanClosed:
+                    break
+
+                async with self._session_lock:
+                    if (
+                        self._session_should_close.is_set()
+                        or not self._active_session
+                        or self._active_session != session
+                        or session_epoch != self._session_epoch
+                        or msg_ch is not self._msg_ch
                     ):
                         break
                 if isinstance(msg, types.LiveClientContent):
@@ -1062,17 +1406,32 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             logger.debug("send task finished.")
 
-    async def _recv_task(self, session: AsyncSession) -> None:
+    async def _recv_task(self, session: AsyncSession, session_epoch: int) -> None:
         try:
             while True:
                 async with self._session_lock:
-                    if self._session_should_close.is_set() or (
-                        not self._active_session or self._active_session != session
+                    if (
+                        self._session_should_close.is_set()
+                        or not self._active_session
+                        or self._active_session != session
+                        or session_epoch != self._session_epoch
                     ):
                         logger.debug("receive task: Session changed or closed, stopping receive.")
                         break
 
                 async for response in session.receive():
+                    async with self._session_lock:
+                        if (
+                            self._session_should_close.is_set()
+                            or not self._active_session
+                            or self._active_session != session
+                            or session_epoch != self._session_epoch
+                        ):
+                            logger.debug(
+                                "receive task: ignoring response from an abandoned session epoch"
+                            )
+                            break
+
                     if lk_google_debug:
                         resp_copy = response.model_dump(exclude_defaults=True)
                         # remove audio from debugging logs
@@ -1112,7 +1471,7 @@ class RealtimeSession(llm.RealtimeSession):
                                     logger.debug("ignoring empty server content")
 
                         if self._is_new_generation(response):
-                            self._start_new_generation()
+                            self._start_new_generation(session_epoch)
                             if lk_google_debug:
                                 logger.debug(f"new generation started: {self._current_generation}")
 
@@ -1144,9 +1503,10 @@ class RealtimeSession(llm.RealtimeSession):
             if not self._session_should_close.is_set():
                 logger.error(f"error in receive task: {e}", exc_info=e)
                 self._session_error = e
-                self._mark_restart_needed(on_error=True)
+                self._mark_restart_needed(on_error=True, resume_session=True)
         finally:
-            self._mark_current_generation_done()
+            if session_epoch == self._session_epoch:
+                self._mark_current_generation_done()
 
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
@@ -1210,7 +1570,12 @@ class RealtimeSession(llm.RealtimeSession):
 
         return conf
 
-    def _start_new_generation(self) -> None:
+    def _start_new_generation(self, session_epoch: int | None = None) -> None:
+        session_epoch = self._session_epoch if session_epoch is None else session_epoch
+        if session_epoch != self._session_epoch:
+            return
+        self._input_state = _InputState.IDLE
+        self._activity_has_realtime_input = False
         self._rejected_tool_calls = 0
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
@@ -1249,10 +1614,15 @@ class RealtimeSession(llm.RealtimeSession):
             response_id=self._current_generation.response_id,
         )
 
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
+        if (
+            self._pending_generation_fut
+            and not self._pending_generation_fut.done()
+            and self._pending_generation_epoch == session_epoch
+        ):
             generation_event.user_initiated = True
             self._pending_generation_fut.set_result(generation_event)
             self._pending_generation_fut = None
+            self._pending_generation_epoch = None
         else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
@@ -1538,13 +1908,28 @@ class RealtimeSession(llm.RealtimeSession):
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
         # TODO(dz): this isn't a seamless reconnection just yet
-        self._session_should_close.set()
+        self._mark_restart_needed(resume_session=True)
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by Gemini Realtime API.")
 
     def clear_audio(self) -> None:
-        logger.warning("clear_audio is not supported by Gemini Realtime API.")
+        if self._closed or self._terminal_error is not None:
+            return
+
+        if self._manual_activity_detection:
+            self._bstream.clear()
+            self._activity_has_realtime_input = False
+            self._input_resampler = None
+            # Gemini has no in-session buffer-clear/cancel-activity event. Restarting is the
+            # only way to guarantee an abandoned manual turn cannot leak into the next one.
+            if self._input_state == _InputState.TEXT_PENDING:
+                # clear_audio is also the provider-neutral discard operation used by the voice
+                # layer when a synchronized text turn is explicitly abandoned.
+                self._input_state = _InputState.IDLE
+            self._mark_restart_needed()
+        else:
+            logger.warning("clear_audio is not supported by Gemini Realtime API.")
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:

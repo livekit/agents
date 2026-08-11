@@ -142,6 +142,7 @@ from .voice.turn import (
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
+    RealtimeInputMode,
     TurnHandlingOptions,
     UserTurnLimitOptions,
 )
@@ -280,6 +281,7 @@ __all__ = [
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",
+    "RealtimeInputMode",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",
