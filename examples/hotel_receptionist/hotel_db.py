@@ -1480,16 +1480,36 @@ class HotelDB:
             await self.on_change()
         return ConflictResolution(walk_partner=WALK_PARTNER_HOTEL, walk_return_date=return_date)
 
-    def _require_room(self, room: str) -> str:
-        """Normalize a spoken room number ("304") to its id and require it exists."""
+    @staticmethod
+    def _normalize_room(room: str) -> str:
+        """Normalize a spoken room number ("304") to its id."""
         room_id = room.strip().upper()
         if not room_id.startswith("RM_"):
             room_id = f"RM_{room_id}"
-        if not self.connection.execute(
-            "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
-        ).fetchone():
+        return room_id
+
+    def _room_exists(self, room_id: str) -> bool:
+        return bool(
+            self.connection.execute(
+                "SELECT 1 FROM hotel_rooms WHERE id = :id", {"id": room_id}
+            ).fetchone()
+        )
+
+    def _require_room(self, room: str) -> str:
+        """Normalize a spoken room number ("304") to its id and require it exists."""
+        room_id = self._normalize_room(room)
+        if not self._room_exists(room_id):
             raise NotFound(f"no such room: {room}")
         return room_id
+
+    def room_view(self, room_id: str) -> str:
+        """The view of a room in inventory ("city", "ocean", "garden", "interior")."""
+        row = self.connection.execute(
+            "SELECT room_view FROM hotel_rooms WHERE id = :id", {"id": room_id}
+        ).fetchone()
+        if not row:
+            raise NotFound(f"no such room: {room_id}")
+        return str(row[0])
 
     async def take_guest_message(
         self,
