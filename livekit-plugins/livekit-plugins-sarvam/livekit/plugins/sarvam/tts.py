@@ -216,6 +216,15 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
 # Model-Speaker compatibility mapping
@@ -294,8 +303,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -317,6 +324,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
         "all": [
             "shubh",
@@ -342,13 +358,20 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
             "shruti",
             "kavitha",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
     },
 }
@@ -377,6 +400,16 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
         )
         return False
     return True
+
+
+def _validate_pace(model: str, pace: float) -> None:
+    """Validate pace parameter range per model (0.5-2.0 for v3/v3-beta, 0.3-3.0 for v2)."""
+    if model in ("bulbul:v3", "bulbul:v3-beta"):
+        if not 0.5 <= pace <= 2.0:
+            raise ValueError("Pace must be between 0.5 and 2.0")
+    else:
+        if not 0.3 <= pace <= 3.0:
+            raise ValueError("Pace must be between 0.3 and 3.0")
 
 
 @dataclass
@@ -514,8 +547,7 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        _validate_pace(model, pace)
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -795,8 +827,7 @@ class TTS(tts.TTS):
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
+            _validate_pace(self._opts.model, pace)
             self._opts.pace = pace
 
         if loudness is not None:
@@ -860,6 +891,11 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        if self._opts.speech_sample_rate not in (8000, 16000, 22050, 24000):
+            raise ValueError(
+                f"Speech sample rate {self._opts.speech_sample_rate} Hz is REST-only; "
+                "streaming supports 8000, 16000, 22050, and 24000 Hz."
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
