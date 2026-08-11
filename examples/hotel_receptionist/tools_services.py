@@ -684,8 +684,11 @@ class ServicesToolsMixin:
                 "invent past preferences."
             )
         return (
-            f"On file: {prefs} | proactively offer to set these up again for the new stay, and "
-            "apply or note the ones the guest confirms. Don't add any preference beyond these."
+            f"On file: {prefs} | proactively offer to set these up again for the new stay. Saying "
+            "you'll note them notes nothing: the ones the guest confirms exist only once "
+            'record_followup (kind="other") has carried them, and that call has to happen before '
+            "a booking flow starts - it isn't reachable from inside one. Don't add any preference "
+            "beyond these."
         )
 
     @function_tool
