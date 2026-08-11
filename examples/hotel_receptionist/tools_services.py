@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from common import Userdata, _speak_code
+from common import Userdata, _count_caller_turns, _speak_code
 from hotel_db import (
     MAX_PARTY_SIZE,
     FollowupKind,
@@ -475,9 +475,25 @@ class ServicesToolsMixin:
         Args:
             kind: Which document to re-send.
         """
+        # Idempotency: the first call can suspend into booking verification and resume,
+        # and the model then sometimes re-issues it in the same turn - a second email row
+        # for one ask. With no caller turn since the last send there is no new ask, so
+        # relay the outcome it already produced instead of sending again.
+        if (
+            ctx.userdata.caller_turns_at_last_resend >= 0
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_resend
+        ):
+            return (
+                "that document already went out moments ago - do NOT send it again. "
+                f"Relay the outcome to the caller: {ctx.userdata.last_resend_message}"
+            )
         booking = await self._verified_booking(ctx)
         await ctx.userdata.db.send_email(recipient=booking.email, kind=kind)
-        return f"Sent to the address on file, {booking.email.strip().lower()}."
+        msg = f"Sent to the address on file, {booking.email.strip().lower()}."
+        ctx.userdata.last_resend_message = msg
+        ctx.userdata.caller_turns_at_last_resend = _count_caller_turns(self.session.history)
+        return msg
 
     @function_tool
     async def transfer_call(
