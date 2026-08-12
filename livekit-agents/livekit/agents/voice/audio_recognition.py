@@ -563,6 +563,9 @@ class AudioRecognition:
         # overlap over agent speech started this turn; gates verdict acceptance below
         self._overlap_in_current_turn = True
         self._overlap_open = True
+        # a prior release (e.g. a failed interrupt attempt) must not leave later overlaps
+        # un-gated; each overlap holds its transcripts until its own verdict
+        self._transcript_gate_active = True
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
