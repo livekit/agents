@@ -1296,6 +1296,22 @@ class RealtimeSession(openai_rt.RealtimeSession):
         if event_id and (chat_ctx_fut := self._chat_ctx_event_futures.pop(event_id, None)):
             self._settle_chat_ctx_wait(chat_ctx_fut, error, event_id)
 
+        if (
+            error.get("code") == "input_audio_buffer_commit_empty"
+            and self._boson_opts.turn_detection is not None
+        ):
+            # commit_user_turn() commits the buffer whether or not server VAD is
+            # on, and with it on the server has already committed each segment
+            # itself, so ours lands on an emptied one. The base suppresses this
+            # too, but keys it on the turn detection in its own opts -- which is
+            # always None here, because Boson's lives in _boson_opts and is sent
+            # separately. Reading the base's copy would silently never match.
+            logger.debug(
+                "Ignoring empty commit; server VAD had already committed the turn",
+                extra={"error": error, "event_id": event_id},
+            )
+            return
+
         if error.get("code") in _BOSON_NONFATAL_ERROR_CODES or (
             error.get("type") in _BOSON_NONFATAL_ERROR_TYPES
         ):
