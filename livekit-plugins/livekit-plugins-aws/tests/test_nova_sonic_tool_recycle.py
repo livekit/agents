@@ -315,6 +315,74 @@ async def test_tool_recycle_times_out_on_stuck_generation(monkeypatch: pytest.Mo
     assert recycle_calls == 1
 
 
+async def test_tool_recycle_timeout_does_not_close_restored_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = _session()
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_GENERATION_TIMEOUT", 0.01)
+
+    wait_started = asyncio.Event()
+
+    class _TrackingFuture(asyncio.Future[None]):
+        def add_done_callback(self, callback, *, context=None):  # type: ignore[no-untyped-def]
+            wait_started.set()
+            return super().add_done_callback(callback, context=context)
+
+    generation_done = _TrackingFuture()
+    session._current_generation = SimpleNamespace(_done_fut=generation_done)
+    session._close_current_generation = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: setattr(session, "_current_generation", None)
+    )
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await wait_started.wait()
+
+    await session.update_tools([first_tool])
+    await recycle_task
+
+    session._close_current_generation.assert_not_called()
+    assert session._current_generation is not None
+
+
+async def test_aclose_cleans_up_after_cancelling_recycle() -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = object.__new__(realtime_model.RealtimeSession)
+    session._is_sess_active = asyncio.Event()
+    session._is_sess_active.set()
+    recycle_started = asyncio.Event()
+
+    async def _recycle() -> None:
+        recycle_started.set()
+        session._is_sess_active.clear()
+        await asyncio.Future()
+
+    session._tool_recycle_task = asyncio.create_task(_recycle())
+    await recycle_started.wait()
+
+    session._pending_generation_fut = None
+    session._event_builder = SimpleNamespace(create_prompt_end_block=lambda: [])
+    session._send_raw_event = AsyncMock()
+    session._stream_response = SimpleNamespace(
+        output_stream=SimpleNamespace(closed=False, close=AsyncMock()),
+        input_stream=SimpleNamespace(closed=False, close=AsyncMock()),
+    )
+    session._session_recycle_task = None
+    session._response_task = None
+    session._audio_input_task = None
+    session._main_atask = None
+    session._chat_ctx = SimpleNamespace(items=[])
+
+    await session.aclose()
+
+    session._stream_response.output_stream.close.assert_awaited_once()
+    session._stream_response.input_stream.close.assert_awaited_once()
+
+
 async def test_tool_changes_during_recycle_are_applied() -> None:
     session = _session()
     first_recycle_started = asyncio.Event()

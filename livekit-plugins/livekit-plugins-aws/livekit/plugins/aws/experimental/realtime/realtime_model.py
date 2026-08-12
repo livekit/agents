@@ -1922,6 +1922,14 @@ class RealtimeSession(  # noqa: F811
                     logger.warning(
                         "[SESSION] Timeout waiting for active generation, proceeding with tool recycle"
                     )
+                    if not self._is_sess_active.is_set():
+                        logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+                        return
+
+                    if set(self._tools.function_tools) == self._active_tool_names:
+                        logger.debug("[SESSION] Tool changes were restored before tool recycle")
+                        return
+
                     if self._current_generation is generation:
                         self._close_current_generation()
 
@@ -2338,14 +2346,18 @@ class RealtimeSession(  # noqa: F811
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")
 
-        if self._tool_recycle_task and not self._tool_recycle_task.done():
+        was_active = self._is_sess_active.is_set()
+        recycle_in_progress = (
+            self._tool_recycle_task is not None and not self._tool_recycle_task.done()
+        )
+        if recycle_in_progress:
             self._tool_recycle_task.cancel()
             try:
                 await self._tool_recycle_task
             except asyncio.CancelledError:
                 pass
 
-        if not self._is_sess_active.is_set():
+        if not was_active and not recycle_in_progress and not self._is_sess_active.is_set():
             logger.info("agent session already inactive")
             return
 
