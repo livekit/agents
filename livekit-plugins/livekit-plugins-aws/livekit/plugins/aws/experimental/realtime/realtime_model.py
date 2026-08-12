@@ -540,6 +540,8 @@ class RealtimeSession(  # noqa: F811
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
+        self._tool_recycle_task: asyncio.Task[None] | None = None
+        self._active_tool_names: set[str] = set()
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -995,6 +997,7 @@ class RealtimeSession(  # noqa: F811
             # Step 1: Send session init events (session start, prompt start, system prompt)
             for event in init_events:
                 await self._send_raw_event(event)
+            self._active_tool_names = set(self._tools.function_tools)
 
             # Start session recycling timer
             self._session_start_time = time.time()
@@ -1878,12 +1881,15 @@ class RealtimeSession(  # noqa: F811
         # If tools actually changed and session is active, schedule a deferred recycle.
         # We defer because update_tools is often called from within a tool execution
         # callback, and the tool result is still being delivered to the current session.
-        if old_tools != new_tools and self._is_sess_active.is_set():
+        if new_tools != self._active_tool_names and self._is_sess_active.is_set():
             logger.info(
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            asyncio.create_task(self._deferred_tool_recycle())
+            if self._tool_recycle_task is None or self._tool_recycle_task.done():
+                self._tool_recycle_task = asyncio.create_task(
+                    self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+                )
         else:
             logger.debug("Tool list updated locally")
 
@@ -1893,8 +1899,16 @@ class RealtimeSession(  # noqa: F811
         # before we tear down the session.
         await asyncio.sleep(0.15)
 
+        if self._current_generation and self._current_generation._done_fut:
+            logger.debug("[SESSION] Waiting for active generation before tool recycle")
+            await asyncio.shield(self._current_generation._done_fut)
+
         if not self._is_sess_active.is_set():
             logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+            return
+
+        if set(self._tools.function_tools) == self._active_tool_names:
+            logger.debug("[SESSION] Tool changes were restored before recycle")
             return
 
         logger.info("[SESSION] Recycling session for updated tools")
@@ -1908,6 +1922,14 @@ class RealtimeSession(  # noqa: F811
             except utils.aio.channel.ChanEmpty:
                 break
         await self._graceful_session_recycle()
+
+    async def _wait_for_tool_recycle(self) -> None:
+        """Wait for a queued tool-set recycle before starting a reply."""
+        recycle_task = self._tool_recycle_task
+        if recycle_task is None or recycle_task.done():
+            return
+
+        await asyncio.shield(recycle_task)
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Live update of inference options is not supported by Sonic yet."""
@@ -2134,6 +2156,7 @@ class RealtimeSession(  # noqa: F811
             # Send text message asynchronously
             async def _send_text() -> None:
                 try:
+                    await self._wait_for_tool_recycle()
                     # Wait for the bidirectional stream to be fully established
                     # (HTTP 200 received) and audio input flowing.
                     await self._stream_ready.wait()
@@ -2282,6 +2305,14 @@ class RealtimeSession(  # noqa: F811
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")
+
+        if self._tool_recycle_task and not self._tool_recycle_task.done():
+            self._tool_recycle_task.cancel()
+            try:
+                await self._tool_recycle_task
+            except asyncio.CancelledError:
+                pass
+
         if not self._is_sess_active.is_set():
             logger.info("agent session already inactive")
             return
