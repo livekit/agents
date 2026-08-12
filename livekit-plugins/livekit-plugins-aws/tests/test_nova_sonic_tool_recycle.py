@@ -383,6 +383,53 @@ async def test_aclose_cleans_up_after_cancelling_recycle() -> None:
     session._stream_response.input_stream.close.assert_awaited_once()
 
 
+async def test_aclose_does_not_restart_after_cancelling_recycle_during_child_wait() -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    class _ChildCancellationWait:
+        def __init__(self) -> None:
+            self.cancel_called = asyncio.Event()
+            self._waiter = asyncio.get_running_loop().create_future()
+            self._cancelled = False
+
+        def done(self) -> bool:
+            return self._cancelled
+
+        def cancel(self) -> bool:
+            self._cancelled = True
+            self.cancel_called.set()
+            return True
+
+        def __await__(self):
+            return self._waiter.__await__()
+
+    session = object.__new__(realtime_model.RealtimeSession)
+    session._is_sess_active = asyncio.Event()
+    session._is_sess_active.set()
+    session._tool_results_ch = utils.aio.Chan()
+    session._response_task = None
+    session._audio_input_task = _ChildCancellationWait()
+    session._stream_response = None
+    session._realtime_model = SimpleNamespace(_model="test-model")
+    session._event_builder = SimpleNamespace(create_prompt_end_block=lambda: [])
+    session._send_raw_event = AsyncMock()
+    session._stream_ready = asyncio.Event()
+    session._audio_input_chan = utils.aio.Chan()
+    session._session_recycle_task = None
+    session._pending_generation_fut = None
+    session._main_atask = None
+    session._chat_ctx = SimpleNamespace(items=[])
+    session.initialize_streams = AsyncMock()
+
+    recycle_task = asyncio.create_task(session._graceful_session_recycle())
+    session._tool_recycle_task = recycle_task
+    await session._audio_input_task.cancel_called.wait()
+
+    await session.aclose()
+
+    session.initialize_streams.assert_not_awaited()
+
+
 async def test_tool_changes_during_recycle_are_applied() -> None:
     session = _session()
     first_recycle_started = asyncio.Event()

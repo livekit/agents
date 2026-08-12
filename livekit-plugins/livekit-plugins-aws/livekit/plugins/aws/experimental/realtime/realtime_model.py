@@ -742,6 +742,8 @@ class RealtimeSession(  # noqa: F811
                 try:
                     await self._response_task
                 except asyncio.CancelledError:
+                    if (current_task := asyncio.current_task()) and current_task.cancelling():
+                        raise
                     pass
 
         # Step 4: Cancel audio input task (blocked on channel, won't exit naturally)
@@ -750,6 +752,8 @@ class RealtimeSession(  # noqa: F811
             try:
                 await self._audio_input_task
             except asyncio.CancelledError:
+                if (current_task := asyncio.current_task()) and current_task.cancelling():
+                    raise
                 pass
 
         # Step 5: Close the stream (close events already sent in _session_recycle_timer)
