@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -67,6 +68,9 @@ def _session():
     session._tool_recycle_task = None
     session._active_tool_names = {"first_tool"}
     session._current_generation = None
+    session._is_shutting_down = False
+    session._last_audio_output_time = 0.0
+    session._audio_end_turn_received = False
     return session
 
 
@@ -309,6 +313,49 @@ async def test_tool_recycle_times_out_on_stuck_generation(monkeypatch: pytest.Mo
     await session.update_tools([second_tool])
     recycle_task = session._tool_recycle_task
     assert recycle_task is not None
+    await recycle_task
+
+    session._close_current_generation.assert_called_once()
+    assert recycle_calls == 1
+
+
+async def test_tool_recycle_does_not_cut_off_active_audio_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = _session()
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_GENERATION_TIMEOUT", 0.01)
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT", 0.5)
+
+    generation_done = asyncio.get_running_loop().create_future()
+    session._current_generation = SimpleNamespace(_done_fut=generation_done)
+    session._last_audio_output_time = time.time()
+    session._audio_end_turn_received = False
+    session._close_current_generation = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: setattr(session, "_current_generation", None)
+    )
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await asyncio.sleep(0.2)
+
+    session._last_audio_output_time = time.time()
+    await asyncio.sleep(0.2)
+
+    session._close_current_generation.assert_not_called()
+    assert not recycle_task.done()
+
+    session._audio_end_turn_received = True
     await recycle_task
 
     session._close_current_generation.assert_called_once()

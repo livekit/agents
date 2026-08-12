@@ -70,6 +70,7 @@ MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
 TOOL_RECYCLE_GENERATION_TIMEOUT = 2.0
+TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT = 1.0
 RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
     "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
     "System instability detected. Please retry your request.",
@@ -543,6 +544,7 @@ class RealtimeSession(  # noqa: F811
         self._session_recycle_task: asyncio.Task[None] | None = None
         self._tool_recycle_task: asyncio.Task[None] | None = None
         self._active_tool_names: set[str] = set()
+        self._is_shutting_down = False
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -742,7 +744,7 @@ class RealtimeSession(  # noqa: F811
                 try:
                     await self._response_task
                 except asyncio.CancelledError:
-                    if (current_task := asyncio.current_task()) and current_task.cancelling():
+                    if getattr(self, "_is_shutting_down", False):
                         raise
                     pass
 
@@ -752,7 +754,7 @@ class RealtimeSession(  # noqa: F811
             try:
                 await self._audio_input_task
             except asyncio.CancelledError:
-                if (current_task := asyncio.current_task()) and current_task.cancelling():
+                if getattr(self, "_is_shutting_down", False):
                     raise
                 pass
 
@@ -1121,6 +1123,8 @@ class RealtimeSession(  # noqa: F811
                 response_id=response_id,
                 _done_fut=asyncio.get_running_loop().create_future(),
             )
+            self._last_audio_output_time = 0.0
+            self._audio_end_turn_received = False
             generation_created = True
         else:
             logger.debug(
@@ -1935,7 +1939,44 @@ class RealtimeSession(  # noqa: F811
                         return
 
                     if self._current_generation is generation:
-                        self._close_current_generation()
+                        while (
+                            self._current_generation is generation
+                            and not self._audio_end_turn_received
+                        ):
+                            if not self._is_sess_active.is_set():
+                                logger.debug(
+                                    "[SESSION] Session no longer active, skipping tool recycle"
+                                )
+                                return
+
+                            if set(self._tools.function_tools) == self._active_tool_names:
+                                logger.debug(
+                                    "[SESSION] Tool changes were restored before tool recycle"
+                                )
+                                return
+
+                            last_audio_time = self._last_audio_output_time
+                            if last_audio_time == 0.0 or (
+                                time.time() - last_audio_time >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT
+                            ):
+                                break
+
+                            await asyncio.sleep(min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT))
+
+                        if self._current_generation is generation:
+                            if not self._is_sess_active.is_set():
+                                logger.debug(
+                                    "[SESSION] Session no longer active, skipping tool recycle"
+                                )
+                                return
+
+                            if set(self._tools.function_tools) == self._active_tool_names:
+                                logger.debug(
+                                    "[SESSION] Tool changes were restored before tool recycle"
+                                )
+                                return
+
+                            self._close_current_generation()
 
                 # A new generation can start after the one we waited for closes. Keep
                 # waiting so a tool recycle never tears down that newer response.
@@ -2350,6 +2391,7 @@ class RealtimeSession(  # noqa: F811
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")
 
+        self._is_shutting_down = True
         was_active = self._is_sess_active.is_set()
         recycle_task = self._tool_recycle_task
         recycle_in_progress = False
