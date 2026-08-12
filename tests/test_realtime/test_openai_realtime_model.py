@@ -170,6 +170,7 @@ def _handle_error_session(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _opts=SimpleNamespace(turn_detection=turn_detection),
             _chat_ctx_event_futures={},
+            _response_created_futures={},
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -334,6 +335,7 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     session._item_delete_future = {}
     session._item_create_future = {}
     session._chat_ctx_event_futures = {}
+    session._response_created_futures = {}
     sent: list[ConversationItemCreateEvent] = []
     session.send_event = sent.append  # type: ignore[method-assign,assignment]
     errors: list[llm.RealtimeModelError] = []
@@ -375,3 +377,58 @@ async def test_a_fatal_error_on_a_chat_ctx_event_still_ends_the_session() -> Non
 
     assert exc_info.value.retryable is False
     assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+# --------------------------------------------------------------------------- #
+# a response.create rejected before any response.created (the conversation already
+# has an active response) must fail its generate_reply future immediately with the
+# provider code, instead of orphaning it until the 10s timeout — while still emitting
+# the error event.
+# --------------------------------------------------------------------------- #
+
+
+def _active_response_rejection(event_id: str) -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.construct(
+        type="error",
+        event_id=event_id,
+        error={
+            "message": "Conversation already has an active response",
+            "type": "invalid_request_error",
+            "code": "conversation_already_has_active_response",
+            "event_id": event_id,
+        },
+    )
+
+
+def test_active_response_rejection_fails_generate_reply_future_fast() -> None:
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_1"))
+
+    # settled immediately (no 10s timeout), with the typed error and provider code
+    assert fut.done()
+    err = fut.exception()
+    assert isinstance(err, llm.RealtimeError)
+    assert err.code == "conversation_already_has_active_response"
+    # the future was consumed so nothing else touches it
+    assert "response_create_1" not in session._response_created_futures
+    # both surfaces: the error is still emitted as a recoverable "error" event
+    assert captured["recoverable"] is True
+
+
+def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -> None:
+    # an error naming an event_id we aren't tracking must not disturb a pending future
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_other"))
+
+    assert not fut.done()
+    assert session._response_created_futures == {"response_create_1": fut}
+    # still reported down the ordinary path
+    assert captured["recoverable"] is True

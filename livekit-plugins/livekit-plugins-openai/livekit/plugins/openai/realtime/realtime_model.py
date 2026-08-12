@@ -2282,6 +2282,17 @@ class RealtimeSession(
             if not _is_fatal_error(event.error):
                 return
 
+        # a rejected response.create (e.g. the conversation already has an active response) draws
+        # an error, not a response.created, so nothing else settles the future generate_reply
+        # handed out. Fail it now with the provider code attached, instead of orphaning it until
+        # the 10s timeout turns it into a generic "generate_reply timed out". Fall through so the
+        # error still surfaces as an "error" event.
+        if (event_id := event.error.event_id) and (
+            fut := self._response_created_futures.pop(event_id, None)
+        ):
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(event.error.message, code=event.error.code))
+
         if event.error.message.startswith("Cancellation failed"):
             return
 
