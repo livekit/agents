@@ -354,6 +354,56 @@ def test_boson_realtime_rejects_invalid_output_modalities(output_modalities):
         )
 
 
+def test_boson_realtime_defaults_to_the_hosted_endpoint(monkeypatch):
+    monkeypatch.setenv("BOSON_API_KEY", "env-key")
+
+    model = realtime.RealtimeModel()
+
+    assert model._boson_opts.url == "wss://api.boson.ai/v1/realtime"
+
+
+def test_boson_realtime_reads_the_api_key_from_the_environment(monkeypatch):
+    monkeypatch.setenv("BOSON_API_KEY", "env-key")
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
+
+    assert model._boson_opts.api_key == "env-key"
+
+
+def test_boson_realtime_explicit_api_key_beats_the_environment(monkeypatch):
+    monkeypatch.setenv("BOSON_API_KEY", "env-key")
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="passed-key")
+
+    assert model._boson_opts.api_key == "passed-key"
+
+
+def test_boson_realtime_explicit_none_api_key_stays_unauthenticated(monkeypatch):
+    # A local dev server with no auth. The environment must not be consulted:
+    # a key left over from another run would otherwise be sent to it silently.
+    monkeypatch.setenv("BOSON_API_KEY", "env-key")
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key=None)
+
+    assert model._boson_opts.api_key is None
+
+
+def test_boson_realtime_requires_an_api_key(monkeypatch):
+    monkeypatch.delenv("BOSON_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="BOSON_API_KEY"):
+        realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
+
+
+def test_boson_realtime_treats_an_empty_env_key_as_unset(monkeypatch):
+    # Otherwise the session connects with no credential and fails at the server,
+    # far from the blank line in the .env file that caused it.
+    monkeypatch.setenv("BOSON_API_KEY", "")
+
+    with pytest.raises(ValueError, match="BOSON_API_KEY"):
+        realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
+
+
 @pytest.mark.asyncio
 async def test_boson_realtime_text_only_generation_streams_text(monkeypatch):
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
