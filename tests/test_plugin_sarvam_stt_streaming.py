@@ -59,6 +59,7 @@ def _make_stream(
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
+    stream._flush_observed = False
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
     stream._audio_duration_collector = stt_streaming.PeriodicCollector(
@@ -198,13 +199,11 @@ def test_realtime_ws_url_includes_prompt_and_timestamp_controls() -> None:
     assert params["return_timestamps"] == "true"
 
 
-def test_realtime_ws_url_includes_connection_only_vad_and_lid_controls() -> None:
+def test_realtime_ws_url_includes_connection_only_vad_controls() -> None:
     opts = stt_streaming.RealtimeSTTOptions(
         language="auto",
         api_key="sk_test",
         vad_prefix_padding_ms=320,
-        lid_gate_seconds=2.5,
-        lid_confidence_threshold=0.85,
     )
 
     params = _parse_ws_url(
@@ -212,8 +211,6 @@ def test_realtime_ws_url_includes_connection_only_vad_and_lid_controls() -> None
     )
 
     assert params["prefix_padding_ms"] == "320"
-    assert params["lid_gate_seconds"] == "2.5"
-    assert params["lid_confidence_threshold"] == "0.85"
 
 
 def test_realtime_ws_url_omits_prefix_padding_for_manual_endpointing() -> None:
@@ -243,20 +240,6 @@ def test_streaming_options_validate_realtime_contract() -> None:
             language="hi-IN",
             api_key="sk_test",
             vad_prefix_padding_ms=-1,
-        )
-
-    with pytest.raises(ValueError, match="lid_gate_seconds"):
-        stt_streaming.RealtimeSTTOptions(
-            language="auto",
-            api_key="sk_test",
-            lid_gate_seconds=-1,
-        )
-
-    with pytest.raises(ValueError, match="lid_confidence_threshold"):
-        stt_streaming.RealtimeSTTOptions(
-            language="auto",
-            api_key="sk_test",
-            lid_confidence_threshold=1.1,
         )
 
     with pytest.raises(ValueError, match="mode must be one of"):

@@ -158,8 +158,6 @@ class RealtimeSTTOptions:
     vad_min_speech_ms: int | None = None
     vad_min_silence_ms: int | None = None
     vad_prefix_padding_ms: int | None = None
-    lid_gate_seconds: float | None = None
-    lid_confidence_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if self.model != REALTIME_MODEL:
@@ -190,13 +188,6 @@ class RealtimeSTTOptions:
             raise ValueError("vad_min_silence_ms must be greater than or equal to 0")
         if self.vad_prefix_padding_ms is not None and self.vad_prefix_padding_ms < 0:
             raise ValueError("vad_prefix_padding_ms must be greater than or equal to 0")
-        if self.lid_gate_seconds is not None and self.lid_gate_seconds < 0:
-            raise ValueError("lid_gate_seconds must be greater than or equal to 0")
-        if (
-            self.lid_confidence_threshold is not None
-            and not 0.0 <= self.lid_confidence_threshold <= 1.0
-        ):
-            raise ValueError("lid_confidence_threshold must be between 0.0 and 1.0")
 
 
 def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
@@ -213,10 +204,6 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
     params["return_timestamps"] = str(opts.return_timestamps).lower()
     if opts.prompt is not None:
         params["prompt"] = opts.prompt
-    if opts.lid_gate_seconds is not None:
-        params["lid_gate_seconds"] = str(opts.lid_gate_seconds)
-    if opts.lid_confidence_threshold is not None:
-        params["lid_confidence_threshold"] = str(opts.lid_confidence_threshold)
 
     if opts.endpointing == "vad":
         if opts.vad_sot_threshold is not None:
@@ -257,8 +244,6 @@ class STTRealtime(stt.STT):
         vad_min_speech_ms: int | None = None,
         vad_min_silence_ms: int | None = None,
         vad_prefix_padding_ms: int | None = None,
-        lid_gate_seconds: float | None = None,
-        lid_confidence_threshold: float | None = None,
     ) -> None:
         """Create a Sarvam realtime STT instance.
 
@@ -281,8 +266,6 @@ class STTRealtime(stt.STT):
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
             vad_prefix_padding_ms: Audio retained before speech onset in ms
                 (``vad`` endpointing only).
-            lid_gate_seconds: Utterance audio required before a detected language is promoted.
-            lid_confidence_threshold: Confidence required before a detected language is promoted.
 
         Raises:
             ValueError: If no API key is provided or found in the environment, or if an
@@ -319,8 +302,6 @@ class STTRealtime(stt.STT):
             vad_min_speech_ms=vad_min_speech_ms,
             vad_min_silence_ms=vad_min_silence_ms,
             vad_prefix_padding_ms=vad_prefix_padding_ms,
-            lid_gate_seconds=lid_gate_seconds,
-            lid_confidence_threshold=lid_confidence_threshold,
         )
         self._session = http_session
         self._owns_session = http_session is None
@@ -370,14 +351,12 @@ class STTRealtime(stt.STT):
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_prefix_padding_ms: NotGivenOr[int | None] = NOT_GIVEN,
-        lid_gate_seconds: NotGivenOr[float | None] = NOT_GIVEN,
-        lid_confidence_threshold: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """Update options for this instance and every stream it created.
 
         Options that Sarvam only accepts at connection time (``sample_rate``,
-        ``return_timestamps``, ``vad_prefix_padding_ms``, ``lid_gate_seconds``, and
-        ``lid_confidence_threshold``) take effect on newly created streams only.
+        ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect on
+        newly created streams only.
         The remaining options are sent to active streams as an in-band
         ``config.update``, and the boundary-gated ones apply from the next
         utterance boundary.
@@ -394,8 +373,6 @@ class STTRealtime(stt.STT):
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
             vad_prefix_padding_ms: Audio retained before speech onset; new streams only.
-            lid_gate_seconds: Language-promotion audio gate; applies to new streams only.
-            lid_confidence_threshold: Language-promotion confidence; new streams only.
 
         Raises:
             ValueError: If an option falls outside the values the endpoint accepts.
@@ -425,12 +402,6 @@ class STTRealtime(stt.STT):
             vad_prefix_padding_ms=vad_prefix_padding_ms
             if is_given(vad_prefix_padding_ms)
             else self._opts.vad_prefix_padding_ms,
-            lid_gate_seconds=lid_gate_seconds
-            if is_given(lid_gate_seconds)
-            else self._opts.lid_gate_seconds,
-            lid_confidence_threshold=lid_confidence_threshold
-            if is_given(lid_confidence_threshold)
-            else self._opts.lid_confidence_threshold,
         )
         self._opts = opts
         # Forward the given fields only, so a stream created with a per-stream
@@ -448,8 +419,6 @@ class STTRealtime(stt.STT):
                 vad_min_speech_ms=vad_min_speech_ms,
                 vad_min_silence_ms=vad_min_silence_ms,
                 vad_prefix_padding_ms=vad_prefix_padding_ms,
-                lid_gate_seconds=lid_gate_seconds,
-                lid_confidence_threshold=lid_confidence_threshold,
             )
 
     def stream(
@@ -484,8 +453,6 @@ class STTRealtime(stt.STT):
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
             vad_min_silence_ms=self._opts.vad_min_silence_ms,
             vad_prefix_padding_ms=self._opts.vad_prefix_padding_ms,
-            lid_gate_seconds=self._opts.lid_gate_seconds,
-            lid_confidence_threshold=self._opts.lid_confidence_threshold,
         )
         stream = RealtimeSpeechStream(
             stt=self,
@@ -546,6 +513,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._endpointing_update_sent = False
         self._pending_config_update: dict[str, Any] | None = None
         self._manual_speech_started = False
+        self._flush_observed = False
         self._pending_final_data: dict[str, Any] | None = None
         self._utterance_start_audio_pos = 0.0
         self._utterance_speech_end_audio_pos: float | None = None
@@ -582,8 +550,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
         vad_prefix_padding_ms: NotGivenOr[int | None] = NOT_GIVEN,
-        lid_gate_seconds: NotGivenOr[float | None] = NOT_GIVEN,
-        lid_confidence_threshold: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """Apply an option change to this live connection.
 
@@ -606,8 +572,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
             vad_prefix_padding_ms: Speech-onset padding; retained on a live stream.
-            lid_gate_seconds: Language-promotion audio gate; retained on a live stream.
-            lid_confidence_threshold: Language-promotion confidence; retained.
 
         Raises:
             ValueError: If an option falls outside the values the endpoint accepts.
@@ -636,10 +600,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
             requested["vad_min_silence_ms"] = vad_min_silence_ms
         if is_given(vad_prefix_padding_ms):
             requested["vad_prefix_padding_ms"] = vad_prefix_padding_ms
-        if is_given(lid_gate_seconds):
-            requested["lid_gate_seconds"] = lid_gate_seconds
-        if is_given(lid_confidence_threshold):
-            requested["lid_confidence_threshold"] = lid_confidence_threshold
 
         if not requested:
             return
@@ -655,15 +615,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if opts.vad_prefix_padding_ms != previous_opts.vad_prefix_padding_ms:
             connection_only_options.append("vad_prefix_padding_ms")
             opts = replace(opts, vad_prefix_padding_ms=previous_opts.vad_prefix_padding_ms)
-        if opts.lid_gate_seconds != previous_opts.lid_gate_seconds:
-            connection_only_options.append("lid_gate_seconds")
-            opts = replace(opts, lid_gate_seconds=previous_opts.lid_gate_seconds)
-        if opts.lid_confidence_threshold != previous_opts.lid_confidence_threshold:
-            connection_only_options.append("lid_confidence_threshold")
-            opts = replace(
-                opts,
-                lid_confidence_threshold=previous_opts.lid_confidence_threshold,
-            )
         if connection_only_options:
             self._logger.warning(
                 "Sarvam realtime STT connection-only option updates only apply to new streams",
@@ -675,6 +626,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         self._opts = opts
         if opts.endpointing != previous_opts.endpointing:
+            if opts.endpointing == "manual" and not self._flush_observed:
+                self._logger.warning(
+                    "Sarvam realtime STT switched to manual endpointing without an external VAD; "
+                    "turns will not be delimited unless the agent framework flushes the stream. "
+                    "Configure a VAD on the AgentSession to receive end-of-turn boundaries.",
+                    extra=self._build_log_context(),
+                )
             self._pending_endpointing = opts.endpointing
             self._endpointing_update_acknowledged = False
             self._endpointing_update_sent = False
@@ -992,7 +950,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
                 frames.extend(audio_bstream.write(data.data.tobytes()))
-            elif isinstance(data, self._FlushSentinel):
+            if isinstance(data, self._FlushSentinel):
+                self._flush_observed = True
                 frames.extend(audio_bstream.flush())
 
             for frame in frames:
