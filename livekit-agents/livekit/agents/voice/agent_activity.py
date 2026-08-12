@@ -312,6 +312,9 @@ class AgentActivity(RecognitionHooks):
         self._default_interruption_by_audio_activity_enabled = (
             self._interruption_by_audio_activity_enabled
         )
+        # re-entrancy guard: releasing held transcripts runs their hooks synchronously,
+        # and those hooks call _interrupt_by_audio_activity again
+        self._releasing_held_transcripts: bool = False
 
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
@@ -1985,6 +1988,9 @@ class AgentActivity(RecognitionHooks):
     def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
         self._interruption_detected = ev.is_interruption
         if ev.is_interruption:
+            # suspend VAD-triggered interrupts until on_interruption restores the flag and
+            # interrupts; this emitter callback fires before the verdict reaches the
+            # interruption task, so the suspend always precedes the restore
             self._interruption_by_audio_activity_enabled = False
         self._session.emit("overlapping_speech", ev)
 
@@ -2083,6 +2089,10 @@ class AgentActivity(RecognitionHooks):
 
     def _interrupt_by_audio_activity(self) -> None:
         """Interrupt the current speech or generation from detected audio activity."""
+        if self._releasing_held_transcripts:
+            # re-entry from a released event's transcript hook; the outer call interrupts
+            return
+
         if not self._interruption_by_audio_activity_enabled:
             return
 
@@ -2096,12 +2106,11 @@ class AgentActivity(RecognitionHooks):
 
         interruption_options = self._session.options.interruption
         if self._audio_recognition is not None:
-            # suppress re-entry while released events run their transcript hooks
-            self._interruption_by_audio_activity_enabled = False
+            self._releasing_held_transcripts = True
             try:
                 self._audio_recognition._release_transcripts_for_audio_activity()
             finally:
-                self._interruption_by_audio_activity_enabled = True
+                self._releasing_held_transcripts = False
 
         if (
             self.stt is not None
@@ -2262,6 +2271,7 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.clear_audio()
 
     def on_interruption(self, _ev: inference.OverlappingSpeechEvent) -> None:
+        # restore the flag that _on_overlap_speech_ended suspended, then interrupt
         self._restore_interruption_by_audio_activity()
         self._interrupt_by_audio_activity()
 

@@ -78,6 +78,7 @@ def test_positive_verdict_suspends_vad_before_transcript_release() -> None:
 def test_audio_activity_releases_held_transcripts_before_min_words() -> None:
     activity = AgentActivity.__new__(AgentActivity)
     activity._interruption_by_audio_activity_enabled = True
+    activity._releasing_held_transcripts = False
     activity._rt_turn_detection_enabled = False
     activity._rt_session = None
     activity._agent = MagicMock()
