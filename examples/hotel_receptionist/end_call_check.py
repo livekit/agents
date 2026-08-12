@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -37,39 +36,6 @@ _NUDGE_TEMPLATE = (
 )
 
 
-async def _may_end() -> None:
-    """The policy requires nothing further; the call may end now."""
-
-
-async def _missing(action: str) -> None:
-    """The policy still requires one concrete action or offer on this call.
-
-    Args:
-        action: One short imperative instruction for the receptionist.
-    """
-
-
-_VERDICT_TOOLS: list[llm.Tool] = [
-    function_tool(_may_end, name="may_end"),
-    function_tool(_missing, name="missing"),
-]
-
-
-def _verdict_from_tool_calls(tool_calls: list[llm.FunctionToolCall]) -> str | None:
-    """First may_end/missing call wins; anything unusable fails open (may end)."""
-    for call in tool_calls:
-        if call.name == "may_end":
-            return None
-        if call.name == "missing":
-            try:
-                arguments = json.loads(call.arguments or "{}")
-            except json.JSONDecodeError:
-                return None
-            action = str(arguments.get("action") or "").strip()
-            return action or None
-    return None
-
-
 def _render_transcript(chat_ctx: llm.ChatContext) -> str:
     """Caller/Agent turns plus tool names - no system prompt, no tool outputs."""
     lines: list[str] = []
@@ -102,23 +68,37 @@ async def find_missing_action(
         ),
     )
 
-    async def _collect() -> list[llm.FunctionToolCall]:
-        tool_calls: list[llm.FunctionToolCall] = []
-        async with llm_v.chat(
-            chat_ctx=audit_ctx, tools=_VERDICT_TOOLS, tool_choice="required"
-        ) as stream:
-            async for chunk in stream:
-                if chunk.delta and chunk.delta.tool_calls:
-                    tool_calls.extend(chunk.delta.tool_calls)
-        return tool_calls
+    verdict: str | None = None
 
+    async def may_end() -> None:
+        """The policy requires nothing further; the call may end now."""
+
+    async def missing(action: str) -> None:
+        """The policy still requires one concrete action or offer on this call.
+
+        Args:
+            action: One short imperative instruction for the receptionist.
+        """
+        nonlocal verdict
+        verdict = action.strip() or None
+
+    stream = llm_v.chat(
+        chat_ctx=audit_ctx,
+        tools=[function_tool(may_end), function_tool(missing)],
+        tool_choice="required",
+    )
     try:
-        tool_calls = await asyncio.wait_for(_collect(), timeout=timeout)
+        response = await asyncio.wait_for(stream.collect(), timeout=timeout)
+        # the prompt asks for exactly one call, so extras are ignored;
+        # execute_function_call never raises, so an unusable verdict leaves
+        # `verdict` unset and the call ends
+        if response.tool_calls:
+            await llm.execute_function_call(response.tool_calls[0], llm.ToolContext(stream.tools))
     except Exception:
         logger.exception("end-call policy audit failed; allowing the call to end")
         return None
 
-    return _verdict_from_tool_calls(tool_calls)
+    return verdict
 
 
 async def run_goodbye_gate(
