@@ -143,6 +143,7 @@ def _make_track_available_args(
     identity: str = "test-user", sid: str = "TR_123"
 ) -> tuple[MagicMock, MagicMock, MagicMock]:
     track = MagicMock()
+    track.sid = sid
     publication = MagicMock()
     publication.source = rtc.TrackSource.SOURCE_MICROPHONE
     publication.sid = sid
@@ -398,10 +399,9 @@ async def test_pre_connect_audio_runs_once_across_concrete_track_replacement() -
     )
     audio_input.set_participant("test-user")
     old_track, publication, participant = _make_track_available_args()
-    old_track.sid = "TRK_old"
     publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
     new_track = MagicMock()
-    new_track.sid = "TRK_new"
+    new_track.sid = publication.sid
     initial_stream = _MockAudioStream()
     replacement_stream = _MockAudioStream()
 
@@ -416,7 +416,7 @@ async def test_pre_connect_audio_runs_once_across_concrete_track_replacement() -
         assert audio_input._on_track_available(new_track, publication, participant)
         await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
 
-    pre_connect_audio_handler.wait_for_data.assert_awaited_once_with("TRK_old")
+    pre_connect_audio_handler.wait_for_data.assert_awaited_once_with(publication.sid)
 
     await audio_input.aclose()
 
