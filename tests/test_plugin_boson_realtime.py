@@ -1826,6 +1826,68 @@ async def test_boson_realtime_ordinary_error_stays_recoverable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_empty_commit_under_server_vad_is_not_an_error(monkeypatch):
+    # commit_user_turn() commits the buffer whether or not server VAD is on, so
+    # with it on the commit routinely lands on a buffer the server already
+    # emptied. Reporting that to the app makes ordinary manual turn-taking look
+    # like a failure.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "input_audio_buffer_commit_empty",
+                    "message": "buffer is empty",
+                },
+            },
+        )
+        assert errors == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_empty_commit_without_server_vad_still_reports(monkeypatch):
+    # The counterpart: with turn detection off the client owns every commit, so
+    # an empty one is a genuine client bug and must not be swallowed.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/", api_key="test-key", turn_detection=None
+    )
+    session = model.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "input_audio_buffer_commit_empty",
+                    "message": "buffer is empty",
+                },
+            },
+        )
+        assert [e.recoverable for e in errors] == [True]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_unrelated_error_does_not_fail_pending_generate_reply(monkeypatch):
     # An error whose event_id can't be correlated to a pending generate_reply()
     # (e.g. it belongs to an unrelated conversation.item.create) must not
