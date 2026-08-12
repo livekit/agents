@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 import aiohttp
-import httpx
+import httpx2
 import openai
 import pytest
 
@@ -713,27 +713,27 @@ async def test_session_keyterms_reach_the_next_connection() -> None:
     assert config["keywords"] == ["Acme Corp"]
 
 
-async def _transcription_form(instance: stt.STT, captured: list[httpx.Request]) -> str:
+async def _transcription_form(instance: stt.STT, captured: list[httpx2.Request]) -> str:
     event = await instance._recognize_impl(_silence(), conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert event.alternatives[0].text == "hello"
     return captured[0].read().decode("utf-8", errors="replace")
 
 
 def _mock_client(
-    captured: list[httpx.Request], body: dict[str, Any] | None = None
+    captured: list[httpx2.Request], body: dict[str, Any] | None = None
 ) -> openai.AsyncClient:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured.append(request)
-        return httpx.Response(200, json=body or {"text": "hello"})
+        return httpx2.Response(200, json=body or {"text": "hello"})
 
     return openai.AsyncClient(
         api_key="test-key",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
     )
 
 
 async def test_file_transcription_sends_bracketed_form_fields() -> None:
-    captured: list[httpx.Request] = []
+    captured: list[httpx2.Request] = []
     instance = stt.STT(
         model="gpt-transcribe",
         client=_mock_client(captured),
@@ -761,7 +761,7 @@ async def test_file_transcription_sends_bracketed_form_fields() -> None:
 async def test_file_transcription_reports_the_detected_language(
     detected: list[dict[str, str]], dominant: str
 ) -> None:
-    captured: list[httpx.Request] = []
+    captured: list[httpx2.Request] = []
     instance = stt.STT(
         model="gpt-transcribe",
         client=_mock_client(captured, {"text": "hello", "languages": detected}),
@@ -804,7 +804,7 @@ async def test_realtime_reports_the_detected_language() -> None:
 
 
 async def test_file_transcription_earlier_model_keeps_singular_language() -> None:
-    captured: list[httpx.Request] = []
+    captured: list[httpx2.Request] = []
     instance = stt.STT(model="whisper-1", client=_mock_client(captured), language="en-US")
 
     body = await _transcription_form(instance, captured)

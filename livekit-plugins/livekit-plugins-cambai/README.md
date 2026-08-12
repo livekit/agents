@@ -130,7 +130,7 @@ async def entrypoint(ctx: agents.JobContext):
 - **enhance_named_entities** (bool): Enhanced pronunciation (default: False)
 - **sample_rate** (int | None): Audio sample rate (auto-detected from model if None)
 - **base_url** (str): API base URL
-- **http_session** (httpx.AsyncClient | None): Reusable HTTP session
+- **http_session** (aiohttp.ClientSession | None): Reusable HTTP session
 
 ### Available Models
 

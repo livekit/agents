@@ -30,7 +30,7 @@ from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import httpx
+import httpx2
 import openai
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
@@ -46,13 +46,13 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 
 ApiVersion = Literal["v1", "v1beta1"]
 
 
-class _GoogleBearerAuth(httpx.Auth):
-    """httpx auth handler that injects a Google OAuth bearer token.
+class _GoogleBearerAuth(httpx2.Auth):
+    """HTTPX2 auth handler that injects a Google OAuth bearer token.
 
     Accepts either a static token (useful for short-lived testing) or
     ``google.auth.credentials.Credentials``, which are refreshed lazily
@@ -91,14 +91,14 @@ class _GoogleBearerAuth(httpx.Auth):
         return self._static_token or ""
 
     def sync_auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
         request.headers["Authorization"] = f"Bearer {self._current_token()}"
         yield request
 
     async def async_auth_flow(
-        self, request: httpx.Request
-    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         request.headers["Authorization"] = f"Bearer {self._current_token()}"
         yield request
 
@@ -153,7 +153,7 @@ class AIPlatformLLM(llm.LLM):
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         strict_tool_schema: bool = True,
         client: openai.AsyncClient | None = None,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ) -> None:
         """Create a new AIPlatformLLM.
 
@@ -183,6 +183,8 @@ class AIPlatformLLM(llm.LLM):
                 responsible for those concerns.
         """
         super().__init__()
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
 
         self._opts = _AIPlatformOptions(
             model=model,
@@ -226,13 +228,13 @@ class AIPlatformLLM(llm.LLM):
                 api_key="ignored-auth-comes-from-httpx-auth",
                 base_url=base_url,
                 max_retries=0,
-                http_client=httpx.AsyncClient(
+                http_client=openai.DefaultAsyncHttpx2Client(
                     auth=auth,
                     timeout=timeout
                     if timeout is not None
-                    else httpx.Timeout(connect=10.0, read=10.0, write=10.0, pool=5.0),
+                    else httpx2.Timeout(connect=10.0, read=10.0, write=10.0, pool=5.0),
                     follow_redirects=True,
-                    limits=httpx.Limits(
+                    limits=httpx2.Limits(
                         max_connections=50,
                         max_keepalive_connections=50,
                         keepalive_expiry=120,

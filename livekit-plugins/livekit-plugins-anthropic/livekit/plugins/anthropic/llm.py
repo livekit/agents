@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import httpx
+import httpx2
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
@@ -32,7 +32,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
@@ -75,7 +75,7 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
-        timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN,
+        timeout: NotGivenOr[httpx_compat.HTTPXTimeout] = NOT_GIVEN,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
     ) -> None:
@@ -92,11 +92,11 @@ class LLM(llm.LLM):
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
         max_retries (int, optional): Vendor client retries. Defaults to 0 because the framework
             owns retries via ``conn_options``.
-        timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
-            Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
+        timeout (httpx2.Timeout | None): HTTP timeout configuration for the underlying client.
+            Defaults to ``httpx2.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
             while allowing up to 30 s between streamed chunks — long enough for Claude's
             adaptive-thinking phases without masking genuine network stalls.
-            Pass a custom ``httpx.Timeout`` to override (e.g. ``httpx.Timeout(5.0, read=60.0)``
+            Pass a custom ``httpx2.Timeout`` to override (e.g. ``httpx2.Timeout(5.0, read=60.0)``
             for very large contexts or extended thinking budgets).
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
@@ -124,14 +124,22 @@ class LLM(llm.LLM):
                 " ANTHROPIC_API_KEY environment variable"
             )
 
+        if is_given(timeout):
+            httpx_compat.warn_on_legacy_timeout(cast(httpx_compat.HTTPXTimeout | None, timeout))
+        resolved_timeout = (
+            httpx_compat.to_httpx2_timeout(cast(httpx_compat.HTTPXTimeout, timeout))
+            if is_given(timeout) and timeout is not None
+            else httpx2.Timeout(5.0, read=30.0)
+        )
+        assert resolved_timeout is not None
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
             max_retries=max_retries if is_given(max_retries) else 0,
-            http_client=httpx.AsyncClient(
-                timeout=timeout or httpx.Timeout(5.0, read=30.0),
+            http_client=httpx_compat.legacy_async_client(
+                timeout=resolved_timeout,
                 follow_redirects=True,
-                limits=httpx.Limits(
+                limits=httpx2.Limits(
                     max_connections=1000,
                     max_keepalive_connections=100,
                     keepalive_expiry=120,

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import httpx
+import httpx2
 import openai
 from openai.types.chat import (
     ChatCompletionChunk,
@@ -270,10 +270,10 @@ class LLM(llm.LLM):
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
             max_retries=0,
-            http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            http_client=openai.DefaultAsyncHttpx2Client(
+                timeout=httpx2.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
-                limits=httpx.Limits(
+                limits=httpx2.Limits(
                     max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
                 ),
             ),
@@ -451,7 +451,7 @@ class LLMStream(llm.LLMStream):
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
+                timeout=self._conn_options.timeout,
                 **self._extra_kwargs,
             )
 
@@ -486,9 +486,9 @@ class LLMStream(llm.LLMStream):
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except httpx.TimeoutException as e:
+        except httpx2.TimeoutException as e:
             # Only the request call runs inside the openai client's error mapping, so a
-            # timeout waiting on the stream body arrives as the raw httpx exception.
+            # timeout waiting on the stream body arrives as the raw httpx2 exception.
             raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
             if e.status_code == 429:

@@ -1,4 +1,3 @@
-import httpx
 from openai import AsyncAzureOpenAI
 from openai.types import Reasoning
 from openai.types.shared_params import ResponsesModel
@@ -8,8 +7,9 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from livekit.agents.utils import httpx_compat
 from livekit.plugins import openai
-from livekit.plugins.openai.utils import AsyncAzureADTokenProvider
+from livekit.plugins.openai.utils import AsyncAzureADTokenProvider, create_http_client
 
 
 class LLM(openai.responses.LLM):
@@ -30,7 +30,7 @@ class LLM(openai.responses.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -44,6 +44,8 @@ class LLM(openai.responses.LLM):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         azure_client = AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -55,9 +57,7 @@ class LLM(openai.responses.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            http_client=create_http_client(timeout),
         )  # type: ignore
 
         super().__init__(

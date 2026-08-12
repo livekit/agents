@@ -19,7 +19,7 @@ import json
 import os
 from typing import Any
 
-import httpx
+import httpx2
 import msgpack
 import openai
 from openai._models import FinalRequestOptions
@@ -31,8 +31,9 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from livekit.plugins.openai import LLM as OpenAILLM
+from livekit.plugins.openai.utils import create_http_client
 
 from .models import CerebrasChatModels
 
@@ -62,7 +63,7 @@ class _CerebrasClient(openai.AsyncClient):
         options: FinalRequestOptions,
         *,
         retries_taken: int = 0,
-    ) -> httpx.Request:
+    ) -> httpx2.Request:
         if not (self._use_msgpack or self._use_gzip):
             return super()._build_request(options, retries_taken=retries_taken)
 
@@ -116,7 +117,7 @@ class LLM(OpenAILLM):
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         gzip_compression: bool = True,
         msgpack_encoding: bool = True,
@@ -135,6 +136,8 @@ class LLM(OpenAILLM):
         """
 
         cerebras_api_key = _get_api_key(api_key)
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
 
         created_client = False
         if client is None and (gzip_compression or msgpack_encoding):
@@ -144,17 +147,7 @@ class LLM(OpenAILLM):
                 api_key=cerebras_api_key,
                 base_url=base_url if is_given(base_url) else None,
                 max_retries=max_retries if is_given(max_retries) else 0,
-                http_client=httpx.AsyncClient(
-                    timeout=timeout
-                    if timeout
-                    else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                    follow_redirects=True,
-                    limits=httpx.Limits(
-                        max_connections=50,
-                        max_keepalive_connections=50,
-                        keepalive_expiry=120,
-                    ),
-                ),
+                http_client=create_http_client(timeout),
             )
             created_client = True
 

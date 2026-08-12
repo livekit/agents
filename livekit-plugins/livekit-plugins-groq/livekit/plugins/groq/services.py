@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 
-import httpx
 import openai
 from openai.types import ReasoningEffort
 
@@ -11,7 +10,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from livekit.plugins.openai import LLM as OpenAILLM, STT as OpenAISTT
 
 from .models import LLMModels, STTModels
@@ -35,7 +34,7 @@ class LLM(OpenAILLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
     ):
@@ -52,6 +51,8 @@ class LLM(OpenAILLM):
             elif model in ["qwen/qwen3-32b"]:
                 reasoning_effort = "none"
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         super().__init__(
             model=model,
             api_key=_get_api_key(api_key),

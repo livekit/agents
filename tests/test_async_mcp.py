@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, get_type_hints
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from typing import Any, Literal, get_type_hints
 
+import httpx2
 import pytest
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.llm.mcp import (
     MCPServer,
+    MCPServerHTTP,
     MCPToolOptions,
     MCPToolset,
     _resolve_tool_options,
@@ -18,11 +25,129 @@ from livekit.agents.voice.tool_executor import has_cancellable_tool
 pytestmark = pytest.mark.unit
 
 
+async def test_http_server_uses_httpx2_client() -> None:
+    server = MCPServerHTTP("https://example.com/mcp")
+    client = server._create_http_client()
+
+    try:
+        assert isinstance(client, httpx2.AsyncClient)
+    finally:
+        await client.aclose()
+
+
+class _SSEStream(httpx2.AsyncByteStream):
+    def __init__(self) -> None:
+        self._closed = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"event: endpoint\ndata: /messages/?session_id=test-session\n\n"
+        await self._closed.wait()
+
+    async def aclose(self) -> None:
+        self._closed.set()
+
+
+class _MockTransportMCPServer(MCPServerHTTP):
+    def __init__(
+        self,
+        url: str,
+        *,
+        transport_type: Literal["sse", "streamable_http"],
+        transport: httpx2.AsyncBaseTransport,
+    ) -> None:
+        super().__init__(url, transport_type=transport_type)
+        self._transport = transport
+
+    def _create_http_client(
+        self,
+        headers: dict[str, str] | None = None,
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
+    ) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(
+            transport=self._transport,
+            headers=headers,
+            timeout=timeout,
+            auth=auth,
+        )
+
+
+async def test_streamable_http_sends_request_with_httpx2() -> None:
+    requests: list[httpx2.Request] = []
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        await request.aread()
+        requests.append(request)
+        body = json.loads(request.content)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"jsonrpc": "2.0", "id": body["id"], "result": {}},
+            request=request,
+        )
+
+    server = _MockTransportMCPServer(
+        "https://example.com/mcp",
+        transport_type="streamable_http",
+        transport=httpx2.MockTransport(handler),
+    )
+    async with server.client_streams() as (read_stream, write_stream):
+        await write_stream.send(
+            SessionMessage(JSONRPCRequest(jsonrpc="2.0", id=1, method="tools/list"))
+        )
+        reply = await asyncio.wait_for(read_stream.receive(), timeout=2)
+
+    assert isinstance(reply.message, JSONRPCResponse)
+    assert [(request.method, str(request.url)) for request in requests] == [
+        ("POST", "https://example.com/mcp")
+    ]
+
+
+async def test_sse_sends_request_with_httpx2() -> None:
+    requests: list[httpx2.Request] = []
+    posted = asyncio.Event()
+    sse_stream = _SSEStream()
+
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        await request.aread()
+        requests.append(request)
+        if request.method == "GET":
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=sse_stream,
+                request=request,
+            )
+
+        posted.set()
+        return httpx2.Response(202, request=request)
+
+    server = _MockTransportMCPServer(
+        "https://example.com/sse",
+        transport_type="sse",
+        transport=httpx2.MockTransport(handler),
+    )
+    async with server.client_streams() as (_, write_stream):
+        await write_stream.send(
+            SessionMessage(JSONRPCNotification(jsonrpc="2.0", method="notifications/test"))
+        )
+        await asyncio.wait_for(posted.wait(), timeout=2)
+
+    assert [(request.method, str(request.url)) for request in requests] == [
+        ("GET", "https://example.com/sse"),
+        ("POST", "https://example.com/messages/?session_id=test-session"),
+    ]
+    assert json.loads(requests[1].content) == {
+        "jsonrpc": "2.0",
+        "method": "notifications/test",
+    }
+
+
 class _FakeToolDesc:
     def __init__(self, name: str) -> None:
         self.name = name
         self.description = "echo back"
-        self.inputSchema: dict[str, Any] = {"type": "object", "properties": {}}
+        self.input_schema: dict[str, Any] = {"type": "object", "properties": {}}
         self.meta = None
 
 

@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import httpx
+import httpx2
 
 import openai
 from livekit.agents import (
@@ -31,10 +31,10 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import aio, is_given
+from livekit.agents.utils import aio, httpx_compat, is_given
 
 from .models import TTSModels, TTSVoices
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, create_http_client
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -100,13 +100,7 @@ class TTS(tts.TTS):
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
-            http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
-                ),
-            ),
+            http_client=create_http_client(),
         )
 
         self._prewarm_task: asyncio.Task | None = None
@@ -153,7 +147,7 @@ class TTS(tts.TTS):
         project: str | None = None,
         base_url: str | None = None,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ) -> TTS:
         """
         Create a new instance of Azure OpenAI TTS.
@@ -168,6 +162,8 @@ class TTS(tts.TTS):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -179,9 +175,7 @@ class TTS(tts.TTS):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            http_client=create_http_client(timeout),
         )  # type: ignore
 
         tts = TTS(
@@ -238,7 +232,7 @@ class AudioChunkedStream(tts.ChunkedStream):
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.omit,
             stream_format="audio",
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=httpx2.Timeout(30, connect=self._conn_options.timeout),
         )
 
         try:
@@ -282,7 +276,7 @@ class SSEChunkedStream(tts.ChunkedStream):
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.omit,
             stream_format="sse",
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=httpx2.Timeout(30, connect=self._conn_options.timeout),
         )
 
         try:

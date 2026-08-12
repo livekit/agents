@@ -1,30 +1,28 @@
-# mypy: disable-error-code=unused-ignore
-
 from __future__ import annotations
 
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+import httpx2
 from typing_extensions import Self, TypedDict
 
 from ..log import logger
+from ..utils import httpx_compat
 
 try:
-    import httpx
     import mcp.types
     from mcp import ClientSession, stdio_client
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
-    from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared._stream_protocols import ReadStream, WriteStream
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -155,9 +153,7 @@ class MCPServer(ABC):
                 async with ClientSession(
                     receive_stream,
                     send_stream,
-                    read_timeout_seconds=timedelta(seconds=self._read_timeout)
-                    if self._read_timeout
-                    else None,
+                    read_timeout_seconds=self._read_timeout or None,
                 ) as client:
                     await client.initialize()
                     self._client = client
@@ -196,7 +192,7 @@ class MCPServer(ABC):
             self._make_function_tool(
                 tool.name,
                 tool.description,
-                tool.inputSchema,
+                tool.input_schema,
                 tool.meta,
                 options=_resolve_tool_options(options.get(tool.name)),
             )
@@ -215,7 +211,7 @@ class MCPServer(ABC):
         async def _resolve(
             tool_result: mcp.types.CallToolResult, raw_arguments: dict[str, Any]
         ) -> Any:
-            if tool_result.isError:
+            if tool_result.is_error:
                 error_str = "\n".join(
                     part.text if hasattr(part, "text") else str(part)
                     for part in tool_result.content
@@ -306,13 +302,8 @@ class MCPServer(ABC):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-        ]
-        | tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-            GetSessionIdCallback,
+            ReadStream[SessionMessage | Exception],
+            WriteStream[SessionMessage],
         ]
     ]: ...
 
@@ -345,7 +336,7 @@ class MCPServerHTTP(MCPServer):
         url: str,
         transport_type: Literal["sse", "streamable_http"] | None = None,
         allowed_tools: list[str] | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float = 5,
         sse_read_timeout: float = 60 * 5,
         client_session_timeout_seconds: float = 5,
@@ -373,35 +364,35 @@ class MCPServerHTTP(MCPServer):
             # Fall back to URL-based detection for backward compatibility
             self._use_streamable_http = self._should_use_streamable_http(url)
 
-        self._http_client: httpx.AsyncClient | None = None
+        self._http_client: httpx2.AsyncClient | None = None
 
     @property
-    def headers(self) -> dict[str, Any]:
+    def headers(self) -> dict[str, str]:
         return self._headers
 
     @headers.setter
-    def headers(self, headers: dict[str, Any]) -> None:
+    def headers(self, headers: dict[str, str]) -> None:
         self._headers = headers
         if self._http_client is not None:
             self._http_client.headers = headers
 
     def _create_http_client(
         self,
-        headers: dict[str, Any] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
+        headers: dict[str, str] | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
+        auth: httpx2.Auth | None = None,
+    ) -> httpx2.AsyncClient:
         # ported from mcp.shared._httpx_utils.create_mcp_http_client
         kwargs: dict[str, Any] = {
             "follow_redirects": True,
-            "timeout": timeout
+            "timeout": httpx_compat.to_httpx2_timeout(timeout)
             if timeout is not None
-            else httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+            else httpx2.Timeout(self._timeout, read=self._sse_read_timeout),
             "headers": headers if headers is not None else self._headers,
         }
         if auth is not None:
             kwargs["auth"] = auth
-        self._http_client = httpx.AsyncClient(**kwargs)
+        self._http_client = httpx2.AsyncClient(**kwargs)
         return self._http_client
 
     def _should_use_streamable_http(self, url: str) -> bool:
@@ -419,28 +410,29 @@ class MCPServerHTTP(MCPServer):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-        ]
-        | tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
-            GetSessionIdCallback,
+            ReadStream[SessionMessage | Exception],
+            WriteStream[SessionMessage],
         ]
     ]:
         if self._use_streamable_http:
 
             @asynccontextmanager
-            async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
+            async def _streamable_http_with_client() -> AsyncIterator[
+                tuple[
+                    ReadStream[SessionMessage | Exception],
+                    WriteStream[SessionMessage],
+                ]
+            ]:
                 async with self._create_http_client() as http_client:
                     async with streamable_http_client(
-                        url=self.url, http_client=http_client
+                        url=self.url,
+                        http_client=http_client,
                     ) as streams:
                         yield streams
 
-            return _streamable_http_with_client()  # type: ignore[return-value]
+            return _streamable_http_with_client()
         else:
-            return sse_client(  # type: ignore[no-any-return]
+            return sse_client(
                 url=self.url,
                 headers=self._headers,
                 timeout=self._timeout,
@@ -516,11 +508,11 @@ class MCPServerStdio(MCPServer):
         self,
     ) -> AbstractAsyncContextManager[
         tuple[
-            MemoryObjectReceiveStream[SessionMessage | Exception],
-            MemoryObjectSendStream[SessionMessage],
+            ReadStream[SessionMessage | Exception],
+            WriteStream[SessionMessage],
         ]
     ]:
-        return stdio_client(  # type: ignore[no-any-return]
+        return stdio_client(
             StdioServerParameters(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
         )
 

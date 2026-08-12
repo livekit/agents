@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 
 import spitch
 from livekit import rtc
@@ -17,7 +17,7 @@ from livekit.agents import (
     NotGivenOr,
 )
 from livekit.agents.stt import stt
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, httpx_compat
 from livekit.agents.voice.io import TimedString
 from spitch import AsyncSpitch
 
@@ -72,7 +72,9 @@ class STT(stt.STT):
             resp = await self._client.speech.transcribe(
                 language=config.language.language,
                 content=data,
-                timeout=httpx.Timeout(30, connect=conn_options.timeout),
+                timeout=httpx_compat.to_legacy_timeout(
+                    httpx2.Timeout(30, connect=conn_options.timeout)
+                ),
                 timestamp="word" if "mansa" in model else None,
             )
 

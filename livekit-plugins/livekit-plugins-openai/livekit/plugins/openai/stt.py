@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
-import httpx
+import httpx2
 from pydantic import TypeAdapter
 
 import openai
@@ -48,7 +48,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import AudioBuffer, httpx_compat, is_given
 from openai.types.audio import Transcription, TranscriptionVerbose
 from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
@@ -72,7 +72,7 @@ from openai.types.realtime.session_update_event import SessionUpdateEvent
 
 from .log import logger
 from .models import STTModels
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, create_http_client
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -306,15 +306,7 @@ class STT(stt.STT):
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
-            http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=50,
-                    max_keepalive_connections=50,
-                    keepalive_expiry=120,
-                ),
-            ),
+            http_client=create_http_client(),
         )
 
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -354,7 +346,7 @@ class STT(stt.STT):
         project: str | None = None,
         base_url: str | None = None,
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> STT:
         """
@@ -369,6 +361,8 @@ class STT(stt.STT):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -380,9 +374,7 @@ class STT(stt.STT):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            http_client=create_http_client(timeout),
         )  # type: ignore
 
         return STT(
@@ -637,7 +629,7 @@ class STT(stt.STT):
                 temperature=self._opts.temperature
                 if is_given(self._opts.temperature)
                 else openai.omit,
-                timeout=httpx.Timeout(30, connect=conn_options.timeout),
+                timeout=httpx2.Timeout(30, connect=conn_options.timeout),
             )
 
             # the detected language beats the hint, dominant code first; an empty list keeps it

@@ -7,8 +7,6 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import httpx
-
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -17,7 +15,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from mistralai.client import Mistral
 from mistralai.client.errors import SDKError
 
@@ -184,7 +182,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except httpx.TimeoutException as e:
+        except httpx_compat.LegacyTimeoutException as e:
             raise APITimeoutError() from e
         except SDKError as e:
             raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
