@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from behaviors.frontend_attributes import publish_frontend_attributes
 from behaviors.user_away import check_in_when_user_away
 from dotenv import load_dotenv
+from filters.pronunciation import pronounce_livekit
 from knowledge_base import KnowledgeBase
 from prompts import prompt
 
@@ -78,6 +79,7 @@ async def homepage_agent(ctx: JobContext):
         ),
         preemptive_generation=True,
         expressive=True,
+        tts_text_transforms=["filter_markdown", "filter_emoji", pronounce_livekit],
     )
 
     check_in_when_user_away(session)
