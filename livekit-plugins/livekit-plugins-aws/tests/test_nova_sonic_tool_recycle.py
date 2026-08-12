@@ -142,6 +142,22 @@ async def test_tool_recycle_waits_for_active_generation() -> None:
     assert recycle_calls == 1
 
 
+async def test_session_recycle_timer_does_not_wait_forever_without_end_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = _session()
+    session._stream_response = None
+    session._current_generation = None
+    session._graceful_session_recycle = AsyncMock()
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT", 0.01)
+
+    await asyncio.wait_for(session._session_recycle_timer(0.0), timeout=0.5)
+
+    session._graceful_session_recycle.assert_awaited_once()
+
+
 async def test_tool_recycle_waits_for_generation_that_replaces_completed_one() -> None:
     session = _session()
     first_done = asyncio.get_running_loop().create_future()

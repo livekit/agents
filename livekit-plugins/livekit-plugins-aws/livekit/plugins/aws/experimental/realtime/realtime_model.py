@@ -664,24 +664,54 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle"
             )
 
-            # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
+            # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN).
+            # An interrupted turn may never send END_TURN, so bound this wait by the
+            # same audio-idle grace period used by deferred tool recycling.
             if not self._audio_end_turn_received:
                 logger.info(
                     "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
                 )
+                generation_created_time = getattr(
+                    self._current_generation, "_created_timestamp", time.time()
+                )
+                idle_since = (
+                    self._last_audio_output_time
+                    if self._last_audio_output_time > 0.0
+                    else generation_created_time
+                )
                 while not self._audio_end_turn_received:
-                    await asyncio.sleep(0.1)
-                logger.debug("[SESSION] Assistant finished speaking")
+                    if not self._is_sess_active.is_set():
+                        logger.debug("[SESSION] Session no longer active, skipping recycle")
+                        return
 
-            # Step 2: Wait for audio to fully stop (no new audio for 1 second)
+                    last_audio_time = self._last_audio_output_time
+                    if last_audio_time > idle_since:
+                        idle_since = last_audio_time
+
+                    if time.time() - idle_since >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT:
+                        logger.warning(
+                            "[SESSION] Timed out waiting for AUDIO END_TURN after an idle "
+                            "period, proceeding with recycle"
+                        )
+                        break
+
+                    await asyncio.sleep(min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT))
+                else:
+                    logger.debug("[SESSION] Assistant finished speaking")
+
+            # Step 2: Wait for audio to fully stop (no new audio for the idle grace period)
             logger.debug("[SESSION] Waiting for audio to fully stop...")
             last_audio_time = self._last_audio_output_time
             while True:
-                await asyncio.sleep(0.1)
+                poll_interval = min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT)
+                await asyncio.sleep(poll_interval)
                 if self._last_audio_output_time == last_audio_time:
-                    await asyncio.sleep(0.9)
+                    await asyncio.sleep(max(0.0, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT - poll_interval))
                     if self._last_audio_output_time == last_audio_time:
-                        logger.debug("[SESSION] No new audio for 1s, proceeding with recycle")
+                        logger.debug(
+                            "[SESSION] No new audio for the idle grace period, proceeding "
+                            "with recycle"
+                        )
                         break
                 else:
                     logger.debug("[SESSION] New audio detected, continuing to wait...")
