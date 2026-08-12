@@ -59,6 +59,19 @@ DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
 # Rotate to a fresh stream at a sentence boundary
 # well before Soniox's fixed 2-minute per-stream cap.
 MAX_STREAM_AGE = 90.0  # seconds
+# Models that report supports_silence_reduction: false in the List models API
+# (https://soniox.com/docs/api-reference/tts/get_tts_models). Newer models are
+# assumed to support reduce_silence; the server still rejects unknown models.
+MODELS_WITHOUT_SILENCE_REDUCTION = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
+
+
+def _validate_reduce_silence(model: str, reduce_silence: bool) -> None:
+    if reduce_silence and model in MODELS_WITHOUT_SILENCE_REDUCTION:
+        raise ValueError(
+            f"reduce_silence is not supported on model {model!r}; use a model with "
+            "supports_silence_reduction (e.g. tts-rt-v2). "
+            "See https://soniox.com/docs/tts/concepts/reduce-silence"
+        )
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -135,6 +148,8 @@ class TTS(tts.TTS):
 
         if stream_idle_timeout <= 0:
             raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
+
+        _validate_reduce_silence(model, reduce_silence)
 
         self._opts = _TTSOptions(
             model=model,
@@ -216,6 +231,10 @@ class TTS(tts.TTS):
                 supports_silence_reduction only).
             stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
+        _validate_reduce_silence(
+            model if is_given(model) else self._opts.model,
+            reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,
+        )
         if is_given(model):
             self._opts.model = model
         if is_given(language):
