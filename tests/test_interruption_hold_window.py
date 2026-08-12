@@ -140,6 +140,25 @@ def test_drain_preserves_provider_order() -> None:
     assert not recognition._transcript_buffer
 
 
+def test_new_overlap_rearms_a_released_gate() -> None:
+    # a failed interrupt attempt (e.g. below min_words) releases the gate mid-speech;
+    # the next overlap in the same agent speech must hold its transcripts again
+    recognition = _make_recognition(vad_sos=None, agent_sos=0.0)
+    recognition._endpointing = MagicMock()
+    recognition._turn_backchannel_over_agent = False
+    recognition._overlap_in_current_turn = False
+    recognition._overlap_open = False
+    recognition._agent_speaking = True
+    recognition._interruption_enabled = True
+    recognition._interruption_ch = MagicMock(closed=False)
+    recognition._transcript_gate_active = False
+
+    recognition._on_start_of_speech(started_at=6.0)
+
+    assert recognition._transcript_gate_active
+    recognition._interruption_ch.send_nowait.assert_called_once()
+
+
 def test_disabling_vad_drains_the_transcript_gate() -> None:
     recognition = _make_recognition(vad_sos=5.0)
     event = _event("held", created_at=5.0)
