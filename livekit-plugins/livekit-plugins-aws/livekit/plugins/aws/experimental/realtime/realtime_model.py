@@ -1939,6 +1939,9 @@ class RealtimeSession(  # noqa: F811
                         return
 
                     if self._current_generation is generation:
+                        generation_created_time = getattr(
+                            generation, "_created_timestamp", time.time()
+                        )
                         while (
                             self._current_generation is generation
                             and not self._audio_end_turn_received
@@ -1956,9 +1959,12 @@ class RealtimeSession(  # noqa: F811
                                 return
 
                             last_audio_time = self._last_audio_output_time
-                            if last_audio_time == 0.0 or (
-                                time.time() - last_audio_time >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT
-                            ):
+                            idle_since = (
+                                last_audio_time
+                                if last_audio_time > 0.0
+                                else generation_created_time
+                            )
+                            if time.time() - idle_since >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT:
                                 break
 
                             await asyncio.sleep(min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT))
@@ -2439,11 +2445,15 @@ class RealtimeSession(  # noqa: F811
                 pass
 
         if self._response_task:
-            try:
-                await asyncio.wait_for(self._response_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                logger.warning("shutdown of output event loop timed out-- cancelling")
-                self._response_task.cancel()
+            if not self._response_task.done():
+                try:
+                    await asyncio.wait_for(self._response_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    logger.warning("shutdown of output event loop timed out-- cancelling")
+                    self._response_task.cancel()
+                except asyncio.CancelledError:
+                    if not self._response_task.cancelled():
+                        raise
             tasks.append(self._response_task)
 
         # must cancel the audio input task before closing the input stream

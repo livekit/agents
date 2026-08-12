@@ -362,6 +362,47 @@ async def test_tool_recycle_does_not_cut_off_active_audio_reply(
     assert recycle_calls == 1
 
 
+async def test_tool_recycle_allows_generation_before_first_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = _session()
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_GENERATION_TIMEOUT", 0.01)
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT", 0.5)
+
+    generation_done = asyncio.get_running_loop().create_future()
+    session._current_generation = SimpleNamespace(
+        _done_fut=generation_done,
+        _created_timestamp=time.time(),
+    )
+    session._close_current_generation = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: setattr(session, "_current_generation", None)
+    )
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await asyncio.sleep(0.2)
+
+    session._close_current_generation.assert_not_called()
+    assert not recycle_task.done()
+
+    session._audio_end_turn_received = True
+    await recycle_task
+
+    session._close_current_generation.assert_called_once()
+    assert recycle_calls == 1
+
+
 async def test_tool_recycle_timeout_does_not_close_restored_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -475,6 +516,57 @@ async def test_aclose_does_not_restart_after_cancelling_recycle_during_child_wai
     await session.aclose()
 
     session.initialize_streams.assert_not_awaited()
+
+
+async def test_aclose_continues_after_recycle_leaves_cancelled_response_task() -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    async def _wait_forever() -> None:
+        await asyncio.Future()
+
+    session = object.__new__(realtime_model.RealtimeSession)
+    session._is_sess_active = asyncio.Event()
+    recycle_started = asyncio.Event()
+
+    async def _recycle() -> None:
+        recycle_started.set()
+        session._is_sess_active.clear()
+        await asyncio.Future()
+
+    recycle_task = asyncio.create_task(_recycle())
+    await recycle_started.wait()
+
+    response_task = asyncio.create_task(_wait_forever())
+    response_task.cancel()
+    try:
+        await response_task
+    except asyncio.CancelledError:
+        pass
+
+    audio_input_task = asyncio.create_task(_wait_forever())
+    session._tool_recycle_task = recycle_task
+    session._response_task = response_task
+    session._audio_input_task = audio_input_task
+    session._pending_generation_fut = None
+    session._event_builder = SimpleNamespace(create_prompt_end_block=lambda: [])
+    session._send_raw_event = AsyncMock()
+    session._stream_response = SimpleNamespace(
+        output_stream=SimpleNamespace(closed=False, close=AsyncMock()),
+        input_stream=SimpleNamespace(closed=False, close=AsyncMock()),
+    )
+    session._session_recycle_task = None
+    session._main_atask = None
+    session._chat_ctx = SimpleNamespace(items=[])
+
+    try:
+        await session.aclose()
+    finally:
+        if not audio_input_task.done():
+            audio_input_task.cancel()
+        await asyncio.gather(audio_input_task, return_exceptions=True)
+
+    session._stream_response.input_stream.close.assert_awaited_once()
+    assert audio_input_task.cancelled()
 
 
 async def test_tool_changes_during_recycle_are_applied() -> None:
