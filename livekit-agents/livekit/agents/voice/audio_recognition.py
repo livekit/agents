@@ -1445,12 +1445,16 @@ class AudioRecognition:
                 self._session.amd._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
-            self._hooks.on_vad_inference_done(ev)
+            # Store duration before the hook: on_vad_inference_done →
+            # _interrupt_by_audio_activity reads current_speech_duration, which
+            # must match ev.speech_duration on the same frame or barge-in is
+            # delayed by one VAD window (~32ms).
             # Silero resets pub_speech_duration to 0 after END_OF_SPEECH; do not
             # clobber the segment's final voiced duration with that zero or a late
             # STT final will look "too short" for interruption.min_duration.
             if self._speaking or ev.speech_duration > 0.0:
                 self._vad_speech_duration = ev.speech_duration
+            self._hooks.on_vad_inference_done(ev)
 
             # for metrics, get the "earliest" signal of speech as possible
             if ev.raw_accumulated_speech > 0.0:

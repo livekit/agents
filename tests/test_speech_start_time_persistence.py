@@ -259,3 +259,30 @@ class TestUserTurnStartPersistence:
 
         assert audio_recognition.current_speech_duration is None
         assert audio_recognition._vad_speech_duration is None
+
+    @pytest.mark.asyncio
+    async def test_inference_done_hook_sees_current_vad_duration(self):
+        """``on_vad_inference_done`` must observe this frame's duration, not the last.
+
+        ``_interrupt_by_audio_activity`` gates on ``current_speech_duration``. If
+        that is updated after the hook, barge-in waits one extra VAD window.
+        """
+        audio_recognition = self._create_audio_recognition()
+        seen: list[float | None] = []
+
+        def _capture(_ev: object) -> None:
+            seen.append(audio_recognition.current_speech_duration)
+
+        audio_recognition._hooks.on_vad_inference_done.side_effect = _capture
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.1)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.48)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.51)
+        )
+
+        assert seen == [pytest.approx(0.48), pytest.approx(0.51)]
