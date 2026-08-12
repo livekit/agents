@@ -16,7 +16,8 @@ knowledge is loaded on demand through a generated `lookup_product` tool.
 - `tests/unit/` is deterministic; `tests/evals/` runs live behavioral evaluations.
 
 The voice pipeline uses LiveKit Inference with Gemma 4 31B, Deepgram Nova-3,
-Inworld TTS, the LiveKit turn detector, and ai-coustics voice isolation.
+Fish Audio S2.1 Pro in expressive mode, the LiveKit turn detector, and
+ai-coustics voice isolation.
 
 ## Run locally
 
