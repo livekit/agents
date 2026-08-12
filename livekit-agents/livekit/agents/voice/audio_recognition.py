@@ -472,7 +472,7 @@ class AudioRecognition:
         """
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
-        self._transcript_gate_active = self._adaptive_interruption_active
+        self._sync_transcript_gate()
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
 
         # reset user turn tracker when agent starts speaking
@@ -565,7 +565,7 @@ class AudioRecognition:
         self._overlap_open = True
         # a prior release (e.g. a failed interrupt attempt) must not leave later overlaps
         # un-gated; each overlap holds its transcripts until its own verdict
-        self._transcript_gate_active = True
+        self._sync_transcript_gate()
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
@@ -638,6 +638,10 @@ class AudioRecognition:
             return
         await self._user_silence_ev.wait()
 
+    def _sync_transcript_gate(self) -> None:
+        """Arm the transcript gate iff the agent is speaking and adaptive interruption is active."""
+        self._transcript_gate_active = self._agent_speaking and self._adaptive_interruption_active
+
     def _transcript_flush_start(self, *, now: float, vad_speech_started_at: float | None) -> float:
         """Return the earliest event creation time retained during a flush."""
         end_boundary = self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
@@ -688,7 +692,7 @@ class AudioRecognition:
         if not enabled:
             self._drain_transcript_gate()
         elif not was_enabled:
-            self._transcript_gate_active = self._agent_speaking
+            self._sync_transcript_gate()
 
     def _push_audio(
         self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
@@ -892,7 +896,6 @@ class AudioRecognition:
         self._interruption_detection = interruption_detection
         self._overlap_open = False  # the stream it belonged to is gone either way
         if interruption_detection is not None:
-            self._transcript_gate_active = self._agent_speaking
             self._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
             self._interruption_atask = asyncio.create_task(
                 self._interruption_task(
@@ -900,6 +903,7 @@ class AudioRecognition:
                 )
             )
             self._transcript_buffer.clear()
+            self._sync_transcript_gate()
         else:
             if self._interruption_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
