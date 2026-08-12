@@ -386,6 +386,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._client = AsyncPhonic(
             api_key=self._opts.api_key,
+            reconnect_conversation_on_abnormal_disconnect=True,
         )
 
         self._socket: AsyncConversationsSocketClient | None = None
