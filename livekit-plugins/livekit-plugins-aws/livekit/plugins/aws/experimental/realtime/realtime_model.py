@@ -2347,13 +2347,13 @@ class RealtimeSession(  # noqa: F811
         logger.info("attempting to shutdown agent session")
 
         was_active = self._is_sess_active.is_set()
-        recycle_in_progress = (
-            self._tool_recycle_task is not None and not self._tool_recycle_task.done()
-        )
-        if recycle_in_progress:
-            self._tool_recycle_task.cancel()
+        recycle_task = self._tool_recycle_task
+        recycle_in_progress = False
+        if recycle_task is not None and not recycle_task.done():
+            recycle_in_progress = True
+            recycle_task.cancel()
             try:
-                await self._tool_recycle_task
+                await recycle_task
             except asyncio.CancelledError:
                 pass
 
