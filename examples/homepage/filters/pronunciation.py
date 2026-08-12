@@ -1,7 +1,7 @@
-"""Rewrite "LiveKit" so the TTS pronounces it correctly.
+"""Rewrite "LiveKit" and "LiveKit's" so the TTS pronounces them correctly.
 
-Inworld TTS reads a single word's IPA transcription wrapped in slashes as a
-custom pronunciation: https://docs.inworld.ai/tts/capabilities/custom-pronunciation
+Fish Audio reads CMU Arpabet wrapped in phoneme tags as a custom pronunciation:
+https://docs.fish.audio/developer-guide/core-features/fine-grained-control#phoneme-control
 
 The rewrite only trusts complete words: LLM chunk boundaries land anywhere,
 so a per-chunk regex would both miss a "Live"/"Kit" split across chunks and
@@ -13,8 +13,13 @@ back time-to-first-audio.
 import re
 from collections.abc import AsyncIterable
 
-LIVEKIT_IPA = "/ˈlaɪvkɪt/"  # noqa: RUF001 - intentional IPA characters
-_LIVEKIT_RE = re.compile(r"\blivekit\b", re.IGNORECASE)
+LIVEKIT_PHONEMES = "<|phoneme_start|>L AY1 V K IH2 T<|phoneme_end|>"
+LIVEKITS_PHONEMES = "<|phoneme_start|>L AY1 V K IH2 T S<|phoneme_end|>"
+_LIVEKIT_RE = re.compile(r"\blivekit(?P<possessive>['’]s)?\b", re.IGNORECASE)
+
+
+def _replace_livekit(match: re.Match[str]) -> str:
+    return LIVEKITS_PHONEMES if match.group("possessive") else LIVEKIT_PHONEMES
 
 
 async def _whole_words(chunks: AsyncIterable[str]) -> AsyncIterable[str]:
@@ -31,4 +36,4 @@ async def _whole_words(chunks: AsyncIterable[str]) -> AsyncIterable[str]:
 
 async def pronounce_livekit(text: AsyncIterable[str]) -> AsyncIterable[str]:
     async for word in _whole_words(text):
-        yield _LIVEKIT_RE.sub(LIVEKIT_IPA, word)
+        yield _LIVEKIT_RE.sub(_replace_livekit, word)
