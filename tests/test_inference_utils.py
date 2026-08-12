@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 import openai
 import pytest
 
@@ -57,9 +57,9 @@ def test_extract_quota_usage_empty_when_no_quota_headers() -> None:
     assert extract_quota_usage({"Content-Type": "application/json"}) == {}
 
 
-def test_extract_quota_usage_case_insensitive_with_httpx_headers() -> None:
-    """HTTP/2 lowercases field names on the wire; httpx.Headers lookup still matches."""
-    headers = httpx.Headers(
+def test_extract_quota_usage_case_insensitive_with_httpx2_headers() -> None:
+    """HTTP/2 lowercases field names on the wire; httpx2.Headers lookup still matches."""
+    headers = httpx2.Headers(
         {
             "x-livekit-inference-rpm-limit": "100",
             "x-livekit-inference-rpm-used": "42",
@@ -73,14 +73,14 @@ def test_extract_quota_usage_case_insensitive_with_httpx_headers() -> None:
 
 def test_llm_stream_logs_quota_on_429(caplog: pytest.LogCaptureFixture) -> None:
     """A 429 from the gateway logs a warning carrying the quota snapshot."""
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers={
             "x-request-id": "req_123",
             "X-LiveKit-Inference-RPM-Limit": "100",
             "X-LiveKit-Inference-RPM-Used": "101",
         },
-        request=httpx.Request("POST", "https://agent-gateway.livekit.cloud/v1/chat/completions"),
+        request=httpx2.Request("POST", "https://agent-gateway.livekit.cloud/v1/chat/completions"),
     )
     err = openai.APIStatusError("rate limited", response=response, body=None)
 
@@ -103,9 +103,9 @@ def test_llm_stream_logs_quota_on_429(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_llm_stream_logs_429_without_quota_headers(caplog: pytest.LogCaptureFixture) -> None:
     """A 429 with no quota telemetry still logs, just without quota fields."""
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
-        request=httpx.Request("POST", "https://agent-gateway.livekit.cloud/v1/chat/completions"),
+        request=httpx2.Request("POST", "https://agent-gateway.livekit.cloud/v1/chat/completions"),
     )
     err = openai.APIStatusError("rate limited", response=response, body=None)
 

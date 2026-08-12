@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable
 
-import httpx
+import httpx2
 import openai
 import pytest
 
@@ -81,7 +81,7 @@ _USAGE = _sse(
 )
 
 
-class _StallingStream(httpx.AsyncByteStream):
+class _StallingStream(httpx2.AsyncByteStream):
     """Yields the given SSE bytes, then stalls out like a provider going quiet."""
 
     def __init__(self, chunks: list[bytes]) -> None:
@@ -90,10 +90,10 @@ class _StallingStream(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
-        raise httpx.ReadTimeout("stalled mid-stream")
+        raise httpx2.ReadTimeout("stalled mid-stream")
 
 
-class _CompletedStream(httpx.AsyncByteStream):
+class _CompletedStream(httpx2.AsyncByteStream):
     """Yields the given SSE bytes, then ends the stream cleanly."""
 
     def __init__(self, chunks: list[bytes]) -> None:
@@ -106,14 +106,14 @@ class _CompletedStream(httpx.AsyncByteStream):
 
 
 def _llm_for(
-    responder: Callable[[int], httpx.AsyncByteStream],
-) -> tuple[LLM, list[httpx.Request], list[LLMMetrics]]:
-    attempts: list[httpx.Request] = []
+    responder: Callable[[int], httpx2.AsyncByteStream],
+) -> tuple[LLM, list[httpx2.Request], list[LLMMetrics]]:
+    attempts: list[httpx2.Request] = []
     metrics: list[LLMMetrics] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         attempts.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
             stream=responder(len(attempts)),
@@ -126,7 +126,7 @@ def _llm_for(
         api_key=fake_secret,
         base_url="http://inference.test/v1",
         max_retries=0,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
     )
     llm_model.on("metrics_collected", metrics.append)
     return llm_model, attempts, metrics
@@ -141,7 +141,16 @@ def _drain(llm_model: LLM, *, max_retry: int):
     )
 
 
-async def _run(chunks: list[bytes], *, max_retry: int) -> tuple[Exception, list[httpx.Request]]:
+@pytest.mark.asyncio
+async def test_llm_uses_httpx2_transport() -> None:
+    fake_secret = "f" * 32
+    llm_model = LLM(model="openai/gpt-4o", api_key=fake_secret, api_secret=fake_secret)
+
+    assert isinstance(llm_model._client._client, httpx2.AsyncClient)
+    await llm_model.aclose()
+
+
+async def _run(chunks: list[bytes], *, max_retry: int) -> tuple[Exception, list[httpx2.Request]]:
     llm_model, attempts, _ = _llm_for(lambda _: _StallingStream(chunks))
 
     with pytest.raises(Exception) as exc_info:  # noqa: PT011
@@ -153,8 +162,8 @@ async def _run(chunks: list[bytes], *, max_retry: int) -> tuple[Exception, list[
 
 
 async def _run_to_completion(
-    responder: Callable[[int], httpx.AsyncByteStream], *, max_retry: int
-) -> tuple[list[LLMMetrics], list[httpx.Request]]:
+    responder: Callable[[int], httpx2.AsyncByteStream], *, max_retry: int
+) -> tuple[list[LLMMetrics], list[httpx2.Request]]:
     llm_model, attempts, metrics = _llm_for(responder)
 
     # aclose() awaits the metrics monitor, so metrics are settled once the block exits
@@ -208,7 +217,7 @@ async def test_stream_read_timeout_is_a_timeout_error() -> None:
 async def test_ttft_spans_the_retry() -> None:
     """The clock runs until generation, not until the failed attempt's metadata."""
 
-    def responder(attempt: int) -> httpx.AsyncByteStream:
+    def responder(attempt: int) -> httpx2.AsyncByteStream:
         if attempt == 1:
             return _StallingStream([_METADATA_ONLY])
         return _CompletedStream([_METADATA_ONLY, _TEXT, _USAGE])
