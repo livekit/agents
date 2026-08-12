@@ -1467,23 +1467,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             SpeechHandle: A handle to the generated reply.
 
         Note:
-            ``await handle`` waits for the reply to finish and never raises; inspect
+            ``await handle`` waits for the reply to finish and never raises; check
             ``handle.exception()`` for the failure instead. With a realtime model, a reply
-            that races an already-active response (server-VAD created) fails fast with an
-            ``llm.RealtimeError`` whose ``code`` is ``conversation_already_has_active_response``
-            rather than stalling until a timeout. The retry policy is yours to choose::
-
-                handle = session.generate_reply(user_input="...")
-                await handle
-                err = handle.exception()
-                if isinstance(err, llm.RealtimeError) and (
-                    err.code == "conversation_already_has_active_response"
-                ):
-                    # let the in-flight response play out, then retry
-                    if session.current_speech is not None:
-                        await session.current_speech.wait_for_playout()
-                    handle = session.generate_reply(user_input="...")
-                    await handle
+            that races an already-active response fails fast with an ``llm.RealtimeError``
+            whose ``code`` is ``conversation_already_has_active_response``, so callers can
+            catch it and retry rather than waiting out a timeout.
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
