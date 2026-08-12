@@ -69,6 +69,7 @@ MAX_MESSAGE_SIZE = 1024
 MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
+TOOL_RECYCLE_GENERATION_TIMEOUT = 2.0
 RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
     "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
     "System instability detected. Please retry your request.",
@@ -982,12 +983,14 @@ class RealtimeSession(  # noqa: F811
                         f"{interactive_user_text[:60]}..."
                     )
 
+            tool_configuration = self._serialize_tool_config()
+            active_tool_names = set(self._tools.function_tools)
             init_events, history_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
                 chat_ctx=restart_ctx,
-                tool_configuration=self._serialize_tool_config(),
+                tool_configuration=tool_configuration,
                 max_tokens=self._realtime_model._opts.max_tokens,
                 top_p=self._realtime_model._opts.top_p,
                 temperature=self._realtime_model._opts.temperature,
@@ -997,7 +1000,7 @@ class RealtimeSession(  # noqa: F811
             # Step 1: Send session init events (session start, prompt start, system prompt)
             for event in init_events:
                 await self._send_raw_event(event)
-            self._active_tool_names = set(self._tools.function_tools)
+            self._active_tool_names = active_tool_names
 
             # Start session recycling timer
             self._session_start_time = time.time()
@@ -1023,6 +1026,7 @@ class RealtimeSession(  # noqa: F811
             # interactive contentStart events simultaneously.
             await asyncio.sleep(0.05)
             self._is_sess_active.set()
+            self._schedule_tool_recycle()
 
             # Step 6: If we popped a user message from history, send it as
             # interactive text now to trigger Nova Sonic to respond.
@@ -1866,9 +1870,7 @@ class RealtimeSession(  # noqa: F811
         The recycle is deferred to avoid conflicts with in-flight tool
         results that are still being delivered to the current session.
         """
-        old_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
         self._tools = llm.ToolContext(tools)
-        new_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
 
         if self._tools.function_tools:
             if self._tools_ready is None:
@@ -1876,22 +1878,30 @@ class RealtimeSession(  # noqa: F811
             if not self._tools_ready.done():
                 self._tools_ready.set_result(True)
                 logger.debug("Tool list has been injected (initial)")
-                return
+                if not self._is_sess_active.is_set():
+                    return
 
-        # If tools actually changed and session is active, schedule a deferred recycle.
-        # We defer because update_tools is often called from within a tool execution
-        # callback, and the tool result is still being delivered to the current session.
-        if new_tools != self._active_tool_names and self._is_sess_active.is_set():
-            logger.info(
-                f"[SESSION] Tools changed (added={new_tools - old_tools}, "
-                f"removed={old_tools - new_tools}), scheduling deferred session recycle"
-            )
-            if self._tool_recycle_task is None or self._tool_recycle_task.done():
-                self._tool_recycle_task = asyncio.create_task(
-                    self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
-                )
-        else:
+        self._schedule_tool_recycle()
+
+    def _schedule_tool_recycle(self) -> None:
+        """Schedule a recycle when the local tools differ from the active session."""
+        if not self._is_sess_active.is_set():
             logger.debug("Tool list updated locally")
+            return
+
+        new_tools = set(self._tools.function_tools)
+        if new_tools == self._active_tool_names:
+            logger.debug("Tool list matches the active session")
+            return
+
+        logger.info(
+            f"[SESSION] Tools changed (added={new_tools - self._active_tool_names}, "
+            f"removed={self._active_tool_names - new_tools}), scheduling deferred session recycle"
+        )
+        if self._tool_recycle_task is None or self._tool_recycle_task.done():
+            self._tool_recycle_task = asyncio.create_task(
+                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+            )
 
     async def _deferred_tool_recycle(self) -> None:
         """Wait for in-flight tool results to be delivered, then recycle."""
@@ -1899,29 +1909,51 @@ class RealtimeSession(  # noqa: F811
         # before we tear down the session.
         await asyncio.sleep(0.15)
 
-        if self._current_generation and self._current_generation._done_fut:
-            logger.debug("[SESSION] Waiting for active generation before tool recycle")
-            await asyncio.shield(self._current_generation._done_fut)
-
-        if not self._is_sess_active.is_set():
-            logger.debug("[SESSION] Session no longer active, skipping tool recycle")
-            return
-
-        if set(self._tools.function_tools) == self._active_tool_names:
-            logger.debug("[SESSION] Tool changes were restored before recycle")
-            return
-
-        logger.info("[SESSION] Recycling session for updated tools")
-        # Clear pending tools so stale results from update_chat_ctx are ignored
-        self._pending_tools.clear()
-        # Drain and discard any queued tool results
         while True:
-            try:
-                discarded = self._tool_results_ch.recv_nowait()
-                logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
-            except utils.aio.channel.ChanEmpty:
-                break
-        await self._graceful_session_recycle()
+            generation = self._current_generation
+            if generation and generation._done_fut:
+                logger.debug("[SESSION] Waiting for active generation before tool recycle")
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(generation._done_fut),
+                        timeout=TOOL_RECYCLE_GENERATION_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[SESSION] Timeout waiting for active generation, proceeding with tool recycle"
+                    )
+                    if self._current_generation is generation:
+                        self._close_current_generation()
+
+                # A new generation can start after the one we waited for closes. Keep
+                # waiting so a tool recycle never tears down that newer response.
+                if (
+                    self._current_generation is not None
+                    and self._current_generation is not generation
+                ):
+                    continue
+
+            if not self._is_sess_active.is_set():
+                logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+                return
+
+            if set(self._tools.function_tools) == self._active_tool_names:
+                logger.debug("[SESSION] Tool changes were restored before recycle")
+                return
+
+            logger.info("[SESSION] Recycling session for updated tools")
+            # Clear pending tools so stale results from update_chat_ctx are ignored
+            self._pending_tools.clear()
+            # Drain and discard any queued tool results
+            while True:
+                try:
+                    discarded = self._tool_results_ch.recv_nowait()
+                    logger.debug(
+                        f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}"
+                    )
+                except utils.aio.channel.ChanEmpty:
+                    break
+            await self._graceful_session_recycle()
 
     async def _wait_for_tool_recycle(self) -> None:
         """Wait for a queued tool-set recycle before starting a reply."""

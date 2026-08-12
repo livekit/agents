@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import function_tool, utils
+from livekit import rtc
+from livekit.agents import function_tool, llm, utils
 from livekit.agents.llm import ToolContext
 
 pytestmark = pytest.mark.unit
@@ -75,6 +77,7 @@ async def test_update_tools_coalesces_pending_session_recycles() -> None:
     async def _fake_recycle() -> None:
         nonlocal recycle_calls
         recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
 
     session._graceful_session_recycle = _fake_recycle
 
@@ -119,6 +122,7 @@ async def test_tool_recycle_waits_for_active_generation() -> None:
     async def _fake_recycle() -> None:
         nonlocal recycle_calls
         recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
 
     session._graceful_session_recycle = _fake_recycle
 
@@ -132,6 +136,213 @@ async def test_tool_recycle_waits_for_active_generation() -> None:
     generation_done.set_result(None)
     await recycle_task
     assert recycle_calls == 1
+
+
+async def test_tool_recycle_waits_for_generation_that_replaces_completed_one() -> None:
+    session = _session()
+    first_done = asyncio.get_running_loop().create_future()
+    second_done = asyncio.get_running_loop().create_future()
+    first_generation = SimpleNamespace(_done_fut=first_done)
+    second_generation = SimpleNamespace(_done_fut=second_done)
+    session._current_generation = first_generation
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await asyncio.sleep(0.2)
+
+    session._current_generation = second_generation
+    first_done.set_result(None)
+    await asyncio.sleep(0)
+
+    assert recycle_calls == 0
+    assert not recycle_task.done()
+
+    second_done.set_result(None)
+    await recycle_task
+    assert recycle_calls == 1
+
+
+async def test_tool_recycle_keeps_audio_available_until_generation_finishes() -> None:
+    session = _session()
+    generation_done = asyncio.get_running_loop().create_future()
+    audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+    session._current_generation = SimpleNamespace(
+        _done_fut=generation_done,
+        content_id_map={"audio-content": "ASSISTANT_AUDIO"},
+        message_gen=SimpleNamespace(audio_ch=audio_ch),
+    )
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await asyncio.sleep(0.2)
+
+    audio = b"\x01\x02" * 320
+    await session._handle_audio_output_content_event(
+        {
+            "event": {
+                "audioOutput": {
+                    "contentId": "audio-content",
+                    "content": base64.b64encode(audio).decode(),
+                }
+            }
+        }
+    )
+
+    frame = audio_ch.recv_nowait()
+    assert bytes(frame.data) == audio
+    assert not audio_ch.closed
+    assert recycle_calls == 0
+
+    generation_done.set_result(None)
+    await recycle_task
+    assert recycle_calls == 1
+
+
+async def test_initialize_stream_captures_prompt_tool_snapshot() -> None:
+    from livekit.plugins.aws.experimental.realtime.realtime_model import RealtimeSession
+
+    session = object.__new__(RealtimeSession)
+    session._realtime_model = SimpleNamespace(
+        model="amazon.nova-2-sonic-v1:0",
+        _model="amazon.nova-2-sonic-v1:0",
+        _opts=SimpleNamespace(
+            voice="tiffany",
+            max_tokens=100,
+            top_p=0.9,
+            temperature=0.5,
+            tool_choice=None,
+            turn_detection="MEDIUM",
+        ),
+    )
+    session._bedrock_client = SimpleNamespace(
+        invoke_model_with_bidirectional_stream=AsyncMock(return_value=object())
+    )
+    session._stream_response = object()
+    session._tools = ToolContext([first_tool])
+    session._chat_ctx = llm.ChatContext.empty()
+    session._instructions = "test instructions"
+    session._event_builder = MagicMock()
+    session._event_builder.create_prompt_start_block.return_value = (["session-start"], [])
+    tool_configuration = object()
+    session._serialize_tool_config = MagicMock(return_value=tool_configuration)
+    session._report_connection_acquired = MagicMock()
+    session._start_session_recycle_timer = MagicMock()
+    session._response_task = None
+    session._audio_input_task = None
+    session._tools_ready = asyncio.get_running_loop().create_future()
+    session._tools_ready.set_result(True)
+    session._is_sess_active = asyncio.Event()
+    session._stream_ready = asyncio.Event()
+    session._tool_recycle_task = None
+    session._session_recycle_task = None
+    session._active_tool_names = set()
+    session._pending_tools = set()
+    session._current_generation = None
+    session._tool_results_ch = utils.aio.Chan()
+    session._audio_input_chan = utils.aio.Chan()
+
+    async def _send_raw_event(_: str) -> None:
+        await session.update_tools([second_tool])
+
+    async def _noop() -> None:
+        return
+
+    session._send_raw_event = _send_raw_event
+    session._process_responses = _noop
+    session._process_audio_input = _noop
+
+    await session.initialize_streams(is_restart=True)
+
+    assert session._active_tool_names == {"first_tool"}
+    assert set(session._tools.function_tools) == {"second_tool"}
+    assert session._tool_recycle_task is not None
+    assert (
+        session._event_builder.create_prompt_start_block.call_args.kwargs["tool_configuration"]
+        is tool_configuration
+    )
+
+    await asyncio.gather(session._response_task, session._audio_input_task)
+
+    session._tool_recycle_task.cancel()
+    try:
+        await session._tool_recycle_task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_tool_recycle_times_out_on_stuck_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.plugins.aws.experimental.realtime import realtime_model
+
+    session = _session()
+    monkeypatch.setattr(realtime_model, "TOOL_RECYCLE_GENERATION_TIMEOUT", 0.01)
+    session._current_generation = SimpleNamespace(_done_fut=asyncio.Future())
+    session._close_current_generation = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: setattr(session, "_current_generation", None)
+    )
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        session._active_tool_names = set(session._tools.function_tools)
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await recycle_task
+
+    session._close_current_generation.assert_called_once()
+    assert recycle_calls == 1
+
+
+async def test_tool_changes_during_recycle_are_applied() -> None:
+    session = _session()
+    first_recycle_started = asyncio.Event()
+    allow_first_recycle = asyncio.Event()
+    recycle_calls = 0
+
+    async def _fake_recycle() -> None:
+        nonlocal recycle_calls
+        recycle_calls += 1
+        target_tool_names = set(session._tools.function_tools)
+        if recycle_calls == 1:
+            first_recycle_started.set()
+            await allow_first_recycle.wait()
+        session._active_tool_names = target_tool_names
+
+    session._graceful_session_recycle = _fake_recycle
+
+    await session.update_tools([second_tool])
+    recycle_task = session._tool_recycle_task
+    assert recycle_task is not None
+    await first_recycle_started.wait()
+
+    await session.update_tools([third_tool])
+    allow_first_recycle.set()
+    await recycle_task
+
+    assert recycle_calls == 2
+    assert session._active_tool_names == {"third_tool"}
 
 
 async def test_generate_reply_waits_for_pending_tool_recycle() -> None:
