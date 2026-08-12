@@ -14,6 +14,8 @@ async def _speak(*chunks: str) -> str:
 
 @pytest.mark.asyncio
 async def test_pronounce_livekit() -> None:
+    assert LIVEKIT_PHONEMES.count("<|phoneme_start|>") == 2
+    assert LIVEKITS_PHONEMES.count("<|phoneme_start|>") == 2
     assert await _speak("I love LiveKit.") == f"I love {LIVEKIT_PHONEMES}."
     assert await _speak("livekit is great") == f"{LIVEKIT_PHONEMES} is great"
     assert await _speak("Live", "Kit rocks") == f"{LIVEKIT_PHONEMES} rocks"

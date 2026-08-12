@@ -1,6 +1,6 @@
 """Rewrite "LiveKit" and "LiveKit's" so the TTS pronounces them correctly.
 
-Fish Audio reads CMU Arpabet wrapped in phoneme tags as a custom pronunciation:
+Fish Audio reads one word of CMU Arpabet per phoneme tag as a custom pronunciation:
 https://docs.fish.audio/developer-guide/core-features/fine-grained-control#phoneme-control
 
 The rewrite only trusts complete words: LLM chunk boundaries land anywhere,
@@ -13,8 +13,10 @@ back time-to-first-audio.
 import re
 from collections.abc import AsyncIterable
 
-LIVEKIT_PHONEMES = "<|phoneme_start|>L AY1 V K IH2 T<|phoneme_end|>"
-LIVEKITS_PHONEMES = "<|phoneme_start|>L AY1 V K IH2 T S<|phoneme_end|>"
+LIVEKIT_PHONEMES = "<|phoneme_start|>L AY1 V<|phoneme_end|> <|phoneme_start|>K IH1 T<|phoneme_end|>"
+LIVEKITS_PHONEMES = (
+    "<|phoneme_start|>L AY1 V<|phoneme_end|> <|phoneme_start|>K IH1 T S<|phoneme_end|>"
+)
 _LIVEKIT_RE = re.compile(r"\blivekit(?P<possessive>['’]s)?\b", re.IGNORECASE)
 
 
