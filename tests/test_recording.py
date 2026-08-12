@@ -505,6 +505,41 @@ def test_job_context_init_recording_enables_session_redaction() -> None:
     assert ctx._redaction_enabled is True
 
 
+@pytest.mark.parametrize(
+    ("project_redaction", "session_redaction"),
+    [
+        pytest.param(True, False, id="project-redaction"),
+        pytest.param(False, True, id="session-redaction"),
+    ],
+)
+def test_job_context_init_recording_rejects_audio_without_transcript_when_redacted(
+    project_redaction: bool, session_redaction: bool
+) -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(
+        job=SimpleNamespace(enable_redaction=project_redaction),
+        url="",
+    )
+    ctx._recording_initialized = False
+    ctx._redaction_enabled = project_redaction
+    ctx._early_log_handler = None
+
+    with pytest.raises(
+        ValueError, match="audio upload requires transcript upload when redaction is enabled"
+    ):
+        ctx.init_recording(
+            {
+                "audio": True,
+                "traces": False,
+                "logs": False,
+                "transcript": False,
+                "redaction": session_redaction,
+            }
+        )
+
+
 async def test_upload_session_report_omits_simulation_metadata_for_normal_session() -> None:
     report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
 
