@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
@@ -67,6 +68,10 @@ from livekit.plugins.openai.realtime.utils import (
 from ..log import logger
 
 SAMPLE_RATE = openai_rt.SAMPLE_RATE
+
+# The hosted endpoint, as documented at
+# https://docs.boson.ai/models/higgs-realtime/overview
+DEFAULT_URL = "wss://api.boson.ai/v1/realtime"
 
 _DEFAULT_TURN_DETECTION = {
     "type": "server_vad",
@@ -142,10 +147,9 @@ class RealtimeModel(openai_rt.RealtimeModel):
         from livekit.agents import Agent, AgentSession
         from livekit.plugins import boson
 
+        # Reads BOSON_API_KEY from the environment and connects to the hosted API.
         session = AgentSession(
             llm=boson.realtime.RealtimeModel(
-                url="wss://your-boson-host/v1/realtime/",
-                api_key="...",
                 instructions="You are a helpful voice assistant.",
                 input_audio_transcription_model="higgs-stt-3.1",
             )
@@ -157,8 +161,8 @@ class RealtimeModel(openai_rt.RealtimeModel):
     def __init__(
         self,
         *,
-        url: str,
-        api_key: str | None = None,
+        url: str = DEFAULT_URL,
+        api_key: NotGivenOr[str | None] = NOT_GIVEN,
         model: str = "higgs-realtime",
         voice: str = "default",
         instructions: str = "You are a helpful AI assistant",
@@ -180,10 +184,14 @@ class RealtimeModel(openai_rt.RealtimeModel):
         """Configure a Boson realtime model.
 
         Args:
-            url: WebSocket endpoint, e.g. ``wss://host/v1/realtime/``. ``http``
-                and ``https`` are accepted and rewritten to ``ws``/``wss``.
-            api_key: Bearer token for the endpoint. ``None`` sends a placeholder,
-                for deployments that do not authenticate.
+            url: WebSocket endpoint. Defaults to the hosted API. ``http`` and
+                ``https`` are accepted and rewritten to ``ws``/``wss``; the path
+                is passed through unchanged.
+            api_key: Bearer token for the endpoint. Omit it to read
+                ``BOSON_API_KEY`` from the environment, which raises
+                ``ValueError`` if that is unset too. Pass ``None`` explicitly to
+                send no ``Authorization`` header at all, for a local dev server
+                that does not authenticate.
             model: Server-side model name.
             voice: Output voice name.
             instructions: System prompt for the session. Unlike OpenAI, the server
@@ -224,8 +232,26 @@ class RealtimeModel(openai_rt.RealtimeModel):
 
         Raises:
             ValueError: If ``output_modalities`` is not exactly one of ``["text"]``
-                or ``["audio"]``.
+                or ``["audio"]``, or if no API key was given and ``BOSON_API_KEY``
+                is unset.
         """
+        resolved_api_key: str | None
+        if is_given(api_key):
+            # An explicit None means "this endpoint takes no auth", so it is
+            # honored as given rather than falling back to the environment.
+            resolved_api_key = api_key
+        else:
+            # An empty BOSON_API_KEY counts as unset. Carrying it through would
+            # connect with no credential and surface as a close code far from
+            # the cause.
+            resolved_api_key = os.environ.get("BOSON_API_KEY") or None
+            if resolved_api_key is None:
+                raise ValueError(
+                    "The api_key client option must be set either by passing api_key "
+                    "to the client or by setting the BOSON_API_KEY environment variable. "
+                    "Pass api_key=None explicitly for a local server without auth."
+                )
+
         resolved_output_modalities = _resolve_output_modalities(output_modalities)
         turn_detection_config = (
             dict(_DEFAULT_TURN_DETECTION)
@@ -250,7 +276,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
             tool_choice=tool_choice,
             input_audio_transcription=None,
             turn_detection=None,
-            api_key=api_key or "boson",
+            api_key=resolved_api_key or "boson",
             http_session=http_session,
             max_session_duration=None,
             conn_options=conn_options,
@@ -260,7 +286,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
         self._provider_label = "Boson Realtime API"
         self._boson_opts = _BosonOptions(
             url=_normalize_ws_url(url, query_params or {}),
-            api_key=api_key,
+            api_key=resolved_api_key,
             model=model,
             voice=voice,
             instructions=instructions,

@@ -15,20 +15,20 @@ pip install livekit-plugins-boson
 
 ## Usage
 
+Set `BOSON_API_KEY` in your environment. Get a key at
+[boson.ai/workspace/api-key](https://www.boson.ai/workspace/api-key).
+
 ```python
 from livekit.agents import AgentSession
 from livekit.plugins import boson
 
 
-session = AgentSession(
-    llm=boson.realtime.RealtimeModel(
-        url="wss://api.boson.ai/v1/realtime/",
-        api_key="...",  # required for the hosted API; only a local dev server without auth can omit it
-        model="higgs-realtime",
-        voice="default",
-    )
-)
+session = AgentSession(llm=boson.realtime.RealtimeModel())
 ```
+
+The defaults connect to the hosted API (`wss://api.boson.ai/v1/realtime`) with
+the `higgs-realtime` model and the `default` voice. To point at another
+deployment, pass `url=` — and `api_key=None` if it does not authenticate.
 
 ## Model options
 
@@ -36,8 +36,8 @@ session = AgentSession(
 
 | Option | Description |
 | --- | --- |
-| `url` | Realtime WebSocket endpoint, e.g. `wss://api.boson.ai/v1/realtime/`. `http`/`https` URLs are normalized to `ws`/`wss`. |
-| `api_key` | Sent as an `Authorization: Bearer ...` header. Required for the hosted API; `None` is only for an unauthenticated local dev server. |
+| `url` | Realtime WebSocket endpoint. Defaults to `wss://api.boson.ai/v1/realtime`. `http`/`https` URLs are normalized to `ws`/`wss`; the path is passed through unchanged. |
+| `api_key` | Sent as an `Authorization: Bearer ...` header. Omit it to read `BOSON_API_KEY` from the environment; omitting both raises `ValueError`. Pass `None` explicitly to send no header, for a local dev server without auth. |
 | `model` | Sent as `session.model`. Defaults to `"higgs-realtime"`. |
 | `voice` | Sent as `session.audio.output.voice`. |
 | `instructions` | Sent as `session.instructions`. |
@@ -71,6 +71,9 @@ response is always created after user speech and the active response is always
 cancelled when new speech is detected. The plugin's own duplicate
 `response.cancel` suppression follows that behavior (keyed on whether server
 VAD is enabled at all), not on what these fields are set to.
+
+The dict is sent to the server as given, so `{"type": "semantic_vad", ...}` works
+too; the plugin does not filter or rewrite its keys.
 
 Passing `turn_detection=None`/`False` disables server-side turn detection and
 switches to client-driven `input_audio_buffer.commit`. This is exposed for
