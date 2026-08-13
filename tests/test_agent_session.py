@@ -49,6 +49,7 @@ from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 
 from .fake_session import FakeActions, create_session, run_session
+from .fake_stt import FakeSTT
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -240,6 +241,50 @@ async def test_events_and_metrics() -> None:
     assert metrics_events[2].metrics.type == "tts_metrics"
     check_timestamp(metrics_events[2].metrics.ttfb, 0.2, speed_factor=speed)
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
+
+
+async def test_aclose_flushes_pending_interim_transcript() -> None:
+    """A normal session close commits an STT interim transcript that is still flushing."""
+    session = create_session(
+        FakeActions(),
+        turn_handling={"endpointing": {"min_delay": 0.0, "max_delay": 0.0}},
+        extra_kwargs={"session_close_transcript_timeout": 0.01},
+    )
+    final_transcripts: list[UserInputTranscribedEvent] = []
+    interim_received = asyncio.Event()
+    agent = MyAgent()
+
+    def on_transcript(event: UserInputTranscribedEvent) -> None:
+        if event.transcript == "last words":
+            if event.is_final:
+                final_transcripts.append(event)
+            else:
+                interim_received.set()
+
+    session.on("user_input_transcribed", on_transcript)
+
+    synchronizer = session.output.audio._synchronizer
+    try:
+        await session.start(agent)
+        stt = session.stt
+        assert isinstance(stt, FakeSTT)
+        stream = await asyncio.wait_for(stt.stream_ch.recv(), timeout=1)
+        stream.send_fake_transcript("last words", is_final=False)
+        await asyncio.wait_for(interim_received.wait(), timeout=1)
+
+        await session.aclose()
+
+        assert [event.transcript for event in final_transcripts] == ["last words"]
+        for chat_ctx in (agent.chat_ctx, session.history):
+            assert [
+                item.text_content
+                for item in chat_ctx.items
+                if item.type == "message" and item.role == "user"
+            ] == ["last words"]
+    finally:
+        if session._started:
+            await session.aclose()
+        await synchronizer.aclose()
 
 
 async def test_tts_node_ttfb_excludes_upstream_latency() -> None:

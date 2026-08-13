@@ -37,6 +37,8 @@ class TestAudioRecognitionAclose:
         audio_recognition._interruption_atask = None
         audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
+        audio_recognition._session_close_commit_user_turn_atask = None
+        audio_recognition._session_close_end_of_turn_atask = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._vad_ch = None
         audio_recognition._interruption_ch = None
@@ -153,6 +155,96 @@ class TestAudioRecognitionAclose:
         # Both tasks are now done (not orphaned)
         assert commit_task.done()
         assert end_of_turn_task.done()
+
+    @pytest.mark.asyncio
+    async def test_aclose_propagates_outer_cancellation_after_finishing_cleanup(self) -> None:
+        """Outer cancellation waits for the close flush and all remaining cleanup."""
+        audio_recognition = self._create_audio_recognition()
+        flush_started = asyncio.Event()
+        release_flush = asyncio.Event()
+
+        async def flush() -> None:
+            flush_started.set()
+            await release_flush.wait()
+
+        flush_task = asyncio.create_task(flush())
+        audio_recognition._commit_user_turn_atask = flush_task
+        audio_recognition._session_close_commit_user_turn_atask = flush_task
+        stt_pipeline = MagicMock()
+        stt_pipeline.aclose = AsyncMock()
+        audio_recognition._stt_pipeline = stt_pipeline
+        turn_detector_stream = MagicMock()
+        turn_detector_stream.aclose = AsyncMock()
+        audio_recognition._turn_detector_stream = turn_detector_stream
+        background_tasks = [asyncio.create_task(asyncio.Event().wait()) for _ in range(4)]
+        audio_recognition._tasks = {background_tasks[0]}
+        audio_recognition._stt_consumer_atask = background_tasks[1]
+        audio_recognition._vad_atask = background_tasks[2]
+        audio_recognition._interruption_atask = background_tasks[3]
+        close_task = asyncio.create_task(audio_recognition._aclose())
+
+        try:
+            await flush_started.wait()
+            close_task.cancel()
+            await asyncio.sleep(0)
+
+            assert not close_task.done()
+            assert not flush_task.cancelled()
+
+            release_flush.set()
+            with pytest.raises(asyncio.CancelledError):
+                await close_task
+
+            assert flush_task.done()
+            assert not flush_task.cancelled()
+            stt_pipeline.aclose.assert_awaited_once()
+            turn_detector_stream.aclose.assert_awaited_once()
+            assert all(task.cancelled() for task in background_tasks)
+        finally:
+            release_flush.set()
+            await asyncio.gather(close_task, flush_task, *background_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flush_task_attr", ["_commit_user_turn_atask", "_end_of_turn_task"])
+    async def test_aclose_cancels_non_session_close_flushes(self, flush_task_attr: str) -> None:
+        """Generic commit and EOU work retain the normal activity-teardown cancellation policy."""
+        audio_recognition = self._create_audio_recognition()
+        flush_task = asyncio.create_task(asyncio.Event().wait())
+        setattr(audio_recognition, flush_task_attr, flush_task)
+
+        await audio_recognition._aclose()
+
+        assert flush_task.cancelled()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "flush_task_attr",
+        ["_session_close_commit_user_turn_atask", "_session_close_end_of_turn_atask"],
+    )
+    async def test_aclose_propagates_session_close_flush_errors_after_cleanup(
+        self, flush_task_attr: str
+    ) -> None:
+        """A failed close-owned flush is observed only after the remaining teardown finishes."""
+        audio_recognition = self._create_audio_recognition()
+
+        async def fail_flush() -> None:
+            raise RuntimeError("transcript flush failed")
+
+        flush_task = asyncio.create_task(fail_flush())
+        setattr(audio_recognition, flush_task_attr, flush_task)
+        if flush_task_attr == "_session_close_commit_user_turn_atask":
+            audio_recognition._commit_user_turn_atask = flush_task
+        else:
+            audio_recognition._end_of_turn_task = flush_task
+
+        turn_detector_stream = MagicMock()
+        turn_detector_stream.aclose = AsyncMock()
+        audio_recognition._turn_detector_stream = turn_detector_stream
+
+        with pytest.raises(RuntimeError, match="transcript flush failed"):
+            await audio_recognition._aclose()
+
+        turn_detector_stream.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("is_recording", "expected_end_count"), [(True, 1), (False, 0)])
