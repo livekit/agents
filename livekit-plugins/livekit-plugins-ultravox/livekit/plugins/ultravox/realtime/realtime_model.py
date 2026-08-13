@@ -62,6 +62,7 @@ class _UltravoxOptions:
 
     model_id: str
     voice: str
+    external_voice: NotGivenOr[dict[str, Any]]
     api_key: str
     base_url: str
     system_prompt: str
@@ -117,6 +118,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: UltravoxModel | str = DEFAULT_MODEL,
         voice: UltravoxVoice | str = DEFAULT_VOICE,
+        external_voice: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         system_prompt: str = "You are a helpful assistant.",
@@ -139,6 +141,12 @@ class RealtimeModel(llm.RealtimeModel):
             The Ultravox model to use.
         voice : str | UltravoxVoice
             The voice to use for TTS.
+        external_voice : dict[str, Any], optional
+            An Ultravox ``externalVoice`` config so Ultravox synthesizes speech with an
+            external TTS provider (e.g. ElevenLabs, Cartesia, or a generic endpoint) and
+            streams it back as normal voice output. Mutually exclusive with ``voice``:
+            when given, it is sent as ``externalVoice`` and ``voice`` is omitted. Because
+            output stays in voice mode, the model's native barge-in is preserved.
         api_key : str, optional
             The Ultravox API key. If None, will try to use environment variables.
         base_url : str, optional
@@ -190,6 +198,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._opts = _UltravoxOptions(
             model_id=model,
             voice=voice,
+            external_voice=external_voice,
             api_key=ultravox_api_key,
             base_url=base_url or ULTRAVOX_BASE_URL,
             system_prompt=system_prompt,
@@ -602,7 +611,6 @@ class RealtimeSession(
         payload: dict[str, Any] = {
             "systemPrompt": self._opts.system_prompt,
             "model": self._opts.model_id,
-            "voice": self._opts.voice,
             "medium": {
                 "serverWebSocket": {
                     "inputSampleRate": self._opts.input_sample_rate,
@@ -612,6 +620,13 @@ class RealtimeSession(
             },
             "selectedTools": parse_tools(list(self._tools.function_tools.values())),
         }
+
+        # Ultravox accepts either a built-in voice or a server-side external TTS
+        # voice, never both.
+        if is_given(self._opts.external_voice):
+            payload["externalVoice"] = self._opts.external_voice
+        else:
+            payload["voice"] = self._opts.voice
 
         # Add optional parameters only if specified
         if is_given(self._opts.temperature):
