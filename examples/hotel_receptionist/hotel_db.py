@@ -65,6 +65,19 @@ def speak_usd(cents: int) -> str:
     return f"{dollars} dollars and {change} cents"
 
 
+def describe_extras(nights: int) -> str:
+    """Each extra and what it adds to a stay of this length.
+
+    Priced through extras_total so there is no second pricing table to drift, and
+    priced for the actual nights, since breakfast and valet are per-night while
+    late checkout and the pet fee are one-off.
+    """
+    return "\n".join(
+        f"- {extra.replace('_', ' ')}: adds {speak_usd(extras_total([extra], nights))}"
+        for extra in sorted(ALLOWED_EXTRAS)
+    )
+
+
 def speak_time(t: time) -> str:
     """A clock time as natural speech, e.g. '7 PM', '6:30 PM'."""
     hour = t.hour % 12 or 12
