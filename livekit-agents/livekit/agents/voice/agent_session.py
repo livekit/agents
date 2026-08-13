@@ -1501,6 +1501,35 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return handle
 
+    async def _generate_reply_for_user_turn(self, user_input: str) -> None:
+        """Reply to a user turn that arrived off the audio path.
+
+        Runs ``on_user_turn_completed`` before generating, the way a spoken turn
+        does: the hook is the documented seam for editing or dropping a user
+        message before it reaches the LLM, so it can't depend on the modality
+        the turn arrived on.
+        """
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+        user_message = llm.ChatMessage(role="user", content=[user_input])
+        hook_result = await activity._run_user_turn_hook(user_message)
+        if hook_result is None:
+            return  # the hook raised StopResponse: drop the turn
+
+        chat_ctx, _ = hook_result
+        handle = activity._generate_reply(
+            user_message=user_message,
+            chat_ctx=chat_ctx,
+            input_details=InputDetails(modality="text"),
+        )
+        if run_state := self._global_run_state:
+            run_state._watch_handle(handle)
+
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
