@@ -5,8 +5,12 @@ from typing import Any
 
 import pytest
 from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents.telemetry import trace_types, utils as telemetry_utils
+from livekit.agents.telemetry.traces import _DynamicTracer
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
@@ -92,3 +96,33 @@ def test_record_exception_uses_resolved_redaction_state(monkeypatch: pytest.Monk
         telemetry_utils.REDACTED_EXCEPTION_MESSAGE
     )
     assert trace_types.ATTR_EXCEPTION_TRACE not in span.attributes
+
+
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_dynamic_tracer_omits_automatic_exception_details_when_redacted(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    dynamic_tracer = _DynamicTracer("test-exception-redaction")
+    dynamic_tracer.set_provider(provider)
+    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+
+    with pytest.raises(RuntimeError, match="secret transcript"):
+        with dynamic_tracer.start_as_current_span("test-span"):
+            raise RuntimeError("secret transcript")
+
+    (span,) = exporter.get_finished_spans()
+    exception_events = [event for event in span.events if event.name == "exception"]
+    if redaction_enabled:
+        assert exception_events == []
+        assert span.status.status_code == trace.StatusCode.UNSET
+        assert span.status.description is None
+    else:
+        assert len(exception_events) == 1
+        assert exception_events[0].attributes is not None
+        assert exception_events[0].attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
+            "secret transcript"
+        )
+        assert span.status.status_code == trace.StatusCode.ERROR

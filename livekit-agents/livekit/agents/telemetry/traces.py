@@ -55,7 +55,7 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from . import trace_types
+from . import trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
@@ -99,6 +99,12 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
         with self._tracer.start_as_current_span(*args, **kwargs) as span:
             yield span
 
