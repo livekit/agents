@@ -77,6 +77,39 @@ class _FailingPrewarmLLM(FakeLLM):
         raise RuntimeError("successor prewarm failed")
 
 
+class _CallbackHandoffSuccessor(_TurnRecorder):
+    def __init__(self) -> None:
+        super().__init__("callback handoff successor")
+        self.llm_context: llm.ChatContext | None = None
+
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        _tools: list[llm.Tool],
+        _model_settings: object,
+    ):
+        self.llm_context = chat_ctx.copy()
+        yield "reply"
+
+
+class _CallbackHandoffSource(_TurnRecorder):
+    def __init__(self, successor: Agent) -> None:
+        super().__init__("callback handoff source")
+        self.successor = successor
+        self.callback_started = asyncio.Event()
+        self.release_callback = asyncio.Event()
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        await super().on_user_turn_completed(turn_ctx, new_message)
+        new_message.content = ["rewritten by the source callback"]
+        turn_ctx.add_message(role="system", content="source callback context")
+        self.session.update_agent(self.successor)
+        self.callback_started.set()
+        await self.release_callback.wait()
+
+
 async def _wait_for(predicate, *, message: str) -> None:
     for _ in range(300):
         if predicate():
@@ -464,3 +497,69 @@ async def test_source_close_persists_a_turn_queued_before_update_starts() -> Non
     finally:
         if close_task is None:
             await asyncio.wait_for(session.aclose(), timeout=5.0)
+
+
+async def test_callback_handoff_continues_without_invoking_the_callback_twice() -> None:
+    """A callback-triggered handoff keeps its callback edits and does not rerun it."""
+    original_transcript = "the original user turn"
+    rewritten_transcript = "rewritten by the source callback"
+    speech = FakeUserSpeech(
+        start_time=0.05,
+        end_time=0.10,
+        transcript=original_transcript,
+        stt_delay=0.0,
+    )
+    session = AgentSession(
+        stt=FakeSTT(fake_user_speeches=[speech]),
+        vad=FakeVAD(
+            fake_user_speeches=[speech], min_speech_duration=0.05, min_silence_duration=0.05
+        ),
+        llm=FakeLLM(),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            endpointing=EndpointingOptions(min_delay=0.01, max_delay=0.01),
+        ),
+        aec_warmup_duration=None,
+    )
+    audio_input = FakeAudioInput()
+    session.input.audio = audio_input
+    successor = _CallbackHandoffSuccessor()
+    source = _CallbackHandoffSource(successor)
+
+    try:
+        await session.start(source)
+        audio_input.push(0.1)
+        await asyncio.wait_for(source.callback_started.wait(), timeout=2.0)
+        source.release_callback.set()
+        await _wait_for(
+            lambda: session.current_agent is successor,
+            message="the callback-triggered handoff never started its successor",
+        )
+        await _wait_for(
+            lambda: successor.llm_context is not None or successor.received_turn.is_set(),
+            message="the callback-triggered handoff never continued the user turn",
+        )
+        await asyncio.wait_for(session.wait_for_idle(), timeout=3.0)
+
+        assert source.user_turns == [original_transcript]
+        assert successor.user_turns == []
+        assert len(source.user_turns) + len(successor.user_turns) == 1
+        assert successor.llm_context is not None
+        assert any(
+            item.type == "message"
+            and item.role == "system"
+            and item.raw_text_content == "source callback context"
+            for item in successor.llm_context.items
+        )
+        assert [
+            item.raw_text_content
+            for item in successor.chat_ctx.items
+            if item.type == "message" and item.role == "user"
+        ] == [rewritten_transcript]
+        assert [
+            item.raw_text_content
+            for item in session.history.items
+            if item.type == "message" and item.role == "user"
+        ] == [rewritten_transcript]
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=5.0)

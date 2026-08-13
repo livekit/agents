@@ -47,7 +47,7 @@ from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
-from .agent_activity import AgentActivity, _ReusableResources
+from .agent_activity import AgentActivity, _PreparedUserTurn, _ReusableResources
 from .amd import AMD
 from .events import (
     AgentEvent,
@@ -1788,7 +1788,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await asyncio.shield(self._activity._on_enter_task)
 
     def _forward_handoff_user_turn(
-        self, source_activity: AgentActivity, info: _EndOfTurnInfo
+        self,
+        source_activity: AgentActivity,
+        user_turn: _EndOfTurnInfo | _PreparedUserTurn,
     ) -> bool:
         """Route an accepted pipeline turn across an activity handoff.
 
@@ -1804,11 +1806,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return False
 
         if self._next_activity is not None:
-            self._next_activity._queue_handoff_user_turn(info)
+            self._next_activity._queue_handoff_user_turn(user_turn)
             return True
 
         if self._update_activity_atask is not None and not self._update_activity_atask.done():
-            source_activity._queue_handoff_user_turn(info)
+            source_activity._queue_handoff_user_turn(user_turn)
             return True
 
         return False
