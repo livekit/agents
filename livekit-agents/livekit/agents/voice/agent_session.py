@@ -91,6 +91,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
+    from .audio_recognition import _EndOfTurnInfo
     from .transcription.text_transforms import TextTransforms
 
 
@@ -1708,6 +1709,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self._next_activity = agent._activity
 
+            next_activity = self._next_activity
+            assert next_activity is not None
+
+            # A turn can finish after update_agent() blocks its source activity
+            # but before this coroutine creates the replacement. The queue lives
+            # on that source (rather than on the session), so it has one clear
+            # owner and follows chained handoffs without retaining stale activities.
+            if (activity := self._activity) is not None:
+                next_activity._take_handoff_user_turns(activity)
+
             if self._root_span_context is not None:
                 # restore the root span context so on_exit, on_enter, and future turns
                 # are direct children of the root span, not nested under a tool call.
@@ -1718,27 +1729,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
-                        reuse_resources = await activity.drain(new_activity=self._next_activity)
+                        reuse_resources = await activity.drain(new_activity=next_activity)
                         await activity.aclose()
                     elif previous_activity == "pause":
                         reuse_resources = await activity.pause(
                             blocked_tasks=blocked_tasks or [],
-                            new_activity=self._next_activity,
+                            new_activity=next_activity,
                         )
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
                     logger.warning(
-                        f"session is closing, skipping {new_activity} activity of {self._next_activity.agent.id}",
+                        f"session is closing, skipping {new_activity} activity of {next_activity.agent.id}",
                     )
                     if reuse_resources is not None:
                         await reuse_resources.cleanup()
                         reuse_resources = None
+                    next_activity._persist_handoff_user_turns()
                     self._next_activity = None
                     self._activity = None
                     return
 
-                self._activity = self._next_activity
+                self._activity = next_activity
                 self._next_activity = None
 
                 run_state = self._global_run_state
@@ -1763,6 +1775,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 elif new_activity == "resume":
                     await self._activity.resume(reuse_resources=reuse_resources)
             except BaseException:
+                # The successor cannot consume these accepted turns, so preserve
+                # them with the same history semantics as session close.
+                next_activity._persist_handoff_user_turns()
                 if reuse_resources is not None:
                     await reuse_resources.cleanup()
                 raise
@@ -1771,6 +1786,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if wait_on_enter:
             assert self._activity._on_enter_task is not None
             await asyncio.shield(self._activity._on_enter_task)
+
+    def _forward_handoff_user_turn(
+        self, source_activity: AgentActivity, info: _EndOfTurnInfo
+    ) -> bool:
+        """Route an accepted pipeline turn across an activity handoff.
+
+        Callers intentionally restrict this to ``llm.LLM``: pipeline turns use
+        this local ChatMessage/speech-scheduler lifecycle, while Realtime models
+        commit their input through the remote session instead.
+
+        This is intentionally limited to an activity transition. A manually
+        drained activity still has no successor, so it keeps its existing
+        behaviour instead of retaining a turn indefinitely.
+        """
+        if self._closing or self._activity is not source_activity:
+            return False
+
+        if self._next_activity is not None:
+            self._next_activity._queue_handoff_user_turn(info)
+            return True
+
+        if self._update_activity_atask is not None and not self._update_activity_atask.done():
+            source_activity._queue_handoff_user_turn(info)
+            return True
+
+        return False
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

@@ -216,6 +216,7 @@ class AgentActivity(RecognitionHooks):
 
         self._scheduling_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
+        self._handoff_user_turns: list[_EndOfTurnInfo] = []
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
@@ -1130,6 +1131,43 @@ class AgentActivity(RecognitionHooks):
             if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
+        self._schedule_handoff_user_turns()
+
+    def _queue_handoff_user_turn(self, info: _EndOfTurnInfo) -> None:
+        """Keep an accepted pipeline turn until this activity's scheduler is running."""
+        self._handoff_user_turns.append(info)
+
+    def _take_handoff_user_turns(self, source_activity: AgentActivity) -> None:
+        """Move queued turns from the activity being replaced to this activity."""
+        if source_activity._handoff_user_turns:
+            self._handoff_user_turns.extend(source_activity._handoff_user_turns)
+            source_activity._handoff_user_turns.clear()
+
+    def _persist_handoff_user_turns(self) -> None:
+        """Append unconsumed handoff turns using the session-close history semantics."""
+        handoff_user_turns = self._handoff_user_turns
+        self._handoff_user_turns = []
+        for info in handoff_user_turns:
+            user_message = llm.ChatMessage(
+                role="user",
+                content=[info.new_transcript],
+                transcript_confidence=info.transcript_confidence,
+            )
+            user_message.metrics = self._init_metrics_from_end_of_turn(info)
+            self._agent._chat_ctx.items.append(user_message)
+            self._session._conversation_item_added(user_message)
+
+    def _schedule_handoff_user_turns(self) -> None:
+        """Continue turns accepted by the activity that handed off to this one."""
+        handoff_user_turns = self._handoff_user_turns
+        self._handoff_user_turns = []
+        for info in handoff_user_turns:
+            old_task = self._user_turn_completed_atask
+            self._user_turn_completed_atask = self._create_speech_task(
+                self._user_turn_completed_task(old_task, info),
+                name="AgentActivity._user_turn_completed_task",
+            )
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
         self, *, new_activity: AgentActivity | None = None
@@ -1335,6 +1373,7 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+            self._persist_handoff_user_turns()
             await self._session._keyterm_detector.aclose()
 
             # on_exit_task should be awaited in `drain`
@@ -2341,6 +2380,11 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
 
+            if isinstance(self.llm, llm.LLM) and self._session._forward_handoff_user_turn(
+                self, info
+            ):
+                return True
+
             if self._session._closing:
                 # add user input to chat context
                 user_message = llm.ChatMessage(
@@ -2471,6 +2515,10 @@ class AgentActivity(RecognitionHooks):
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            if isinstance(self.llm, llm.LLM) and self._session._forward_handoff_user_turn(
+                self, info
+            ):
+                return
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
@@ -2505,6 +2553,10 @@ class AgentActivity(RecognitionHooks):
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
+            if isinstance(self.llm, llm.LLM) and self._session._forward_handoff_user_turn(
+                self, info
+            ):
+                return
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
