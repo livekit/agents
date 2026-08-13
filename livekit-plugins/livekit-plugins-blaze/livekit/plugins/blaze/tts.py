@@ -936,6 +936,10 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                             # Always cancel and await reader_task to prevent
                             # "Task destroyed but pending" / exception-not-retrieved.
                             await utils.aio.gracefully_cancel(reader_task)
+                            if reader_task.done() and not reader_task.cancelled():
+                                # Consume any pending reader exception so asyncio
+                                # does not log "exception was never retrieved".
+                                reader_task.exception()
 
                         if not stream_initialized:
                             # No audio arrived, but keep emitter lifecycle consistent.
