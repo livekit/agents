@@ -7,7 +7,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
@@ -811,9 +811,11 @@ class AudioRecognition:
             try:
                 commit_user_turn_atask = self._commit_user_turn_atask
                 if commit_user_turn_atask is not None:
-                    if commit_user_turn_atask is getattr(
-                        self, "_session_close_commit_user_turn_atask", None
-                    ):
+                    session_close_commit_user_turn_atask = cast(
+                        asyncio.Task[None] | None,
+                        getattr(self, "_session_close_commit_user_turn_atask", None),
+                    )
+                    if commit_user_turn_atask is session_close_commit_user_turn_atask:
                         await _finish_close_flush(commit_user_turn_atask)
                     else:
                         await aio.cancel_and_wait(commit_user_turn_atask)
@@ -835,7 +837,11 @@ class AudioRecognition:
 
                 end_of_turn_task = self._end_of_turn_task
                 if end_of_turn_task is not None:
-                    if end_of_turn_task is getattr(self, "_session_close_end_of_turn_atask", None):
+                    session_close_end_of_turn_atask = cast(
+                        asyncio.Task[None] | None,
+                        getattr(self, "_session_close_end_of_turn_atask", None),
+                    )
+                    if end_of_turn_task is session_close_end_of_turn_atask:
                         await _finish_close_flush(end_of_turn_task)
                     else:
                         await aio.cancel_and_wait(end_of_turn_task)
