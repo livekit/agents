@@ -47,6 +47,12 @@ lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
 
+# A NON_BLOCKING tool call can be followed by output in the same Gemini turn. Keep
+# that output open until it goes quiet, but do not wait forever for a completion
+# event that some models omit while waiting for the tool response.
+NON_BLOCKING_TOOL_DRAIN_QUIESCENCE_SECONDS = 0.25
+NON_BLOCKING_TOOL_DRAIN_TIMEOUT_SECONDS = 5.0
+
 # Known VertexAI models for the Live API
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
@@ -180,6 +186,10 @@ class _ResponseGeneration:
     """Whether the generation is done (set when the turn is complete)"""
     _extra_content_warned: bool = False
     """Whether we've warned about audio/text arriving after generation completed"""
+    _last_output_activity_at: float | None = None
+    """Last server output observed after a NON_BLOCKING tool call"""
+    _tool_output_drain_atask: asyncio.Task[None] | None = None
+    """Task that bounds how long a NON_BLOCKING generation remains open"""
 
     def push_text(self, text: str) -> None:
         if self.text_ch.closed:
@@ -1272,6 +1282,11 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("received server content but no active generation.")
             return
 
+        if server_content.model_turn or (
+            server_content.output_transcription and server_content.output_transcription.text
+        ):
+            current_gen._last_output_activity_at = time.monotonic()
+
         if model_turn := server_content.model_turn:
             for part in model_turn.parts or []:
                 if part.thought:
@@ -1346,10 +1361,14 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._current_generation or self._current_generation._done:
             return
 
+        self._mark_generation_done(self._current_generation)
+
+    def _mark_generation_done(self, gen: _ResponseGeneration) -> None:
+        if gen._done:
+            return
+
         # emit input_speech_stopped event after the generation is done
         self._handle_input_speech_stopped()
-
-        gen = self._current_generation
 
         # The only way we'd know that the transcription is complete is by when they are
         # done with generation
@@ -1379,6 +1398,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
         self._close_output_streams(gen)
+
+        drain_task = gen._tool_output_drain_atask
+        if drain_task and not drain_task.done() and drain_task is not asyncio.current_task():
+            drain_task.cancel()
 
         gen.function_ch.close()
         gen.message_ch.close()
@@ -1444,7 +1467,8 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
-        for fnc_call in tool_call.function_calls or []:
+        function_calls = tool_call.function_calls or []
+        for fnc_call in function_calls:
             arguments = json.dumps(fnc_call.args)
 
             gen.function_ch.send_nowait(
@@ -1454,7 +1478,52 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+
+        # NON_BLOCKING calls may be followed by more output in the same turn.
+        # Keep the generation open briefly for that output, with a bounded fallback
+        # for models that wait for the tool response instead of completing the turn.
+        if self._opts.tool_behavior == types.Behavior.NON_BLOCKING and function_calls:
+            gen._last_output_activity_at = time.monotonic()
+            self._schedule_non_blocking_tool_output_drain(gen)
+            return
+
         self._mark_current_generation_done()
+
+    def _schedule_non_blocking_tool_output_drain(self, gen: _ResponseGeneration) -> None:
+        drain_task = gen._tool_output_drain_atask
+        if drain_task and not drain_task.done():
+            return
+
+        gen._tool_output_drain_atask = asyncio.create_task(
+            self._finalize_non_blocking_generation_after_output_drain(gen),
+            name="gemini-realtime-tool-output-drain",
+        )
+
+    async def _finalize_non_blocking_generation_after_output_drain(
+        self,
+        gen: _ResponseGeneration,
+    ) -> None:
+        started_at = time.monotonic()
+        last_activity_at = gen._last_output_activity_at
+
+        while not gen._done:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= NON_BLOCKING_TOOL_DRAIN_TIMEOUT_SECONDS:
+                break
+
+            await asyncio.sleep(
+                min(
+                    NON_BLOCKING_TOOL_DRAIN_QUIESCENCE_SECONDS,
+                    NON_BLOCKING_TOOL_DRAIN_TIMEOUT_SECONDS - elapsed,
+                )
+            )
+
+            current_activity_at = gen._last_output_activity_at
+            if current_activity_at == last_activity_at:
+                break
+            last_activity_at = current_activity_at
+
+        self._mark_generation_done(gen)
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
