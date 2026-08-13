@@ -176,12 +176,34 @@ RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
 
 
 @dataclass
-class RoomTypeAvailability:
+class RoomOption:
+    """One bookable type+view pairing and what the cheapest room in it costs.
+
+    The pairing is the unit a caller actually picks, not the type: rate varies with
+    the view (a city king is 240/night, an ocean king 260), so a price quoted per
+    type is a price that moves once the view is known. Splitting the row also means
+    a view a type doesn't have has no row to be offered from.
+    """
+
     type: RoomType
+    view: str
+    # cheapest free room in this pairing; rate varies room to room within it, and
+    # _SQL_FREE_ROOM hands out the cheapest, so this is the rate that gets charged
     nightly_rate: int
-    # every distinct view available for this type on the dates,
-    # e.g. ["city", "garden"]
-    views: list[str]
+
+
+def describe_room_options(options: Sequence[RoomOption]) -> str:
+    """The bookable pairings as one line each, cheapest first.
+
+    One line is one type with one view and that pairing's price. Rolling a type's
+    views onto a single line lets a neighbouring line's view bind to the wrong type
+    - a garden-view double queen, which has never existed - and hides that the view
+    moves the price, so a figure spoken before the view is settled has to change.
+    """
+    return "\n".join(
+        f"- {o.type.replace('_', ' ')}, {o.view} view: {speak_usd(o.nightly_rate)}/night"
+        for o in options
+    )
 
 
 @dataclass
@@ -534,7 +556,7 @@ class HotelDB:
     async def aclose(self) -> None:
         self.close()
 
-    async def list_room_types_available(
+    async def list_room_options(
         self,
         *,
         check_in: date,
@@ -542,7 +564,7 @@ class HotelDB:
         guests: int,
         smoking: bool | None = None,
         exclude_booking_code: str | None = None,
-    ) -> list[RoomTypeAvailability]:
+    ) -> list[RoomOption]:
         rows = self.connection.execute(
             _SQL_AVAILABILITY,
             {
@@ -553,10 +575,7 @@ class HotelDB:
                 "exclude": exclude_booking_code,
             },
         )
-        return [
-            RoomTypeAvailability(t, rate, views=sorted((concat or "").split(",")))
-            for t, rate, concat in rows
-        ]
+        return [RoomOption(t, view, rate) for t, view, rate in rows]
 
     async def list_restaurant_availability(
         self, *, on_date: date, party_size: int
@@ -1962,7 +1981,7 @@ ORDER BY CASE WHEN id = :prefer THEN 0 ELSE 1 END, nightly_rate, id LIMIT 1
 """
 
 _SQL_AVAILABILITY = """
-SELECT r.type, r.nightly_rate, GROUP_CONCAT(DISTINCT r.room_view)
+SELECT r.type, r.room_view, MIN(r.nightly_rate)
 FROM hotel_rooms r
 WHERE r.max_occupancy >= :guests
   AND (:smoking IS NULL OR r.smoking = :smoking)
@@ -1971,7 +1990,7 @@ WHERE r.max_occupancy >= :guests
     WHERE b.room_id = r.id AND b.status = 'confirmed'
       AND (:exclude IS NULL OR b.code != :exclude)
       AND NOT (b.check_out <= :check_in OR b.check_in >= :check_out))
-GROUP BY r.type ORDER BY r.nightly_rate
+GROUP BY r.type, r.room_view ORDER BY MIN(r.nightly_rate), r.type, r.room_view
 """
 
 _SQL_FREE_TABLE = """
