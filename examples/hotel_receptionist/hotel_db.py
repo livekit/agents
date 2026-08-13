@@ -185,7 +185,7 @@ TODAY: date = (
 )
 MAX_PARTY_SIZE = 6
 
-RoomType = Literal["king", "queen_2beds", "double_queen", "suite", "penthouse"]
+RoomType = Literal["king", "queen_2beds", "suite", "penthouse"]
 
 
 @dataclass
@@ -1675,7 +1675,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS hotel_rooms (
     id            TEXT    PRIMARY KEY,  -- human room number, e.g. 'RM_201' (floor 2, room 01)
-    type          TEXT    NOT NULL CHECK (type IN ('king','queen_2beds','double_queen','suite','penthouse')),
+    type          TEXT    NOT NULL CHECK (type IN ('king','queen_2beds','suite','penthouse')),
     nightly_rate  INTEGER NOT NULL,
     max_occupancy INTEGER NOT NULL,
     smoking       BOOLEAN NOT NULL DEFAULT 0,

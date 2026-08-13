@@ -142,7 +142,7 @@ class RoomToolsMixin:
         check_out: date,
         guests: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)],
         smoking: Literal["smoking", "non_smoking", "no_preference"],
-        room_type: Literal["king", "queen_2beds", "double_queen", "suite", "penthouse", "any"],
+        room_type: Literal["king", "queen_2beds", "suite", "penthouse", "any"],
     ) -> str:
         """Check what's available for a date range, with prices and views. One tool for every "what do you have?" / "how much?" / "any king available?" / "any smoking rooms?" question. Read-only browsing: it never books anything - when the caller wants to actually book, call start_room_booking instead. Surface the results progressively (types first, details after they narrow), don't recite the whole list.
 

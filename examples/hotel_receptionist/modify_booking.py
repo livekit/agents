@@ -182,7 +182,7 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         A stated view moves the guest to a room with that view (this is how you resolve "I booked a garden view but my room has none"). The view is a property of specific rooms, NOT a separate type - if the requested view isn't available for the chosen type, this errors with where that view IS available, so you can offer the right type. Omit view entirely unless the caller asks for one.
 
         Args:
-            room_type: Room type for the booking (king / queen_2beds / double_queen / suite / penthouse).
+            room_type: Room type for the booking (king / queen_2beds / suite / penthouse).
             extras: Full new list of extras after the caller's change.
             smoking_room: True if the caller wants a smoking-permitted room.
             view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
