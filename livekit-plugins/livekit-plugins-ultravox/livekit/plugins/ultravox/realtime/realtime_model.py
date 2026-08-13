@@ -19,7 +19,7 @@ from typing import Any, Literal
 import aiohttp
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, APIStatusError, llm, utils
+from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
@@ -142,11 +142,7 @@ class RealtimeModel(llm.RealtimeModel):
         voice : str | UltravoxVoice
             The voice to use for TTS.
         external_voice : dict[str, Any], optional
-            An Ultravox ``externalVoice`` config so Ultravox synthesizes speech with an
-            external TTS provider (e.g. ElevenLabs, Cartesia, or a generic endpoint) and
-            streams it back as normal voice output. Mutually exclusive with ``voice``:
-            when given, it is sent as ``externalVoice`` and ``voice`` is omitted. Because
-            output stays in voice mode, the model's native barge-in is preserved.
+            The Ultravox configuration for an external TTS provider. Mutually exclusive with ``voice``.
         api_key : str, optional
             The Ultravox API key. If None, will try to use environment variables.
         base_url : str, optional
@@ -600,48 +596,6 @@ class RealtimeSession(
         self._closed = True
 
     @utils.log_exceptions(logger=logger)
-    def _build_call_payload(self) -> dict[str, Any]:
-        """Build the JSON body for the Ultravox ``/calls`` request.
-
-        Extracted from ``_main_task`` so the payload can be exercised directly in
-        unit tests without standing up an HTTP session and WebSocket. Never log
-        the return value: it may carry provider credentials (e.g. an external TTS
-        ``Authorization`` header).
-        """
-        payload: dict[str, Any] = {
-            "systemPrompt": self._opts.system_prompt,
-            "model": self._opts.model_id,
-            "medium": {
-                "serverWebSocket": {
-                    "inputSampleRate": self._opts.input_sample_rate,
-                    "outputSampleRate": self._opts.output_sample_rate,
-                    "clientBufferSizeMs": 30000,  # 30 seconds
-                }
-            },
-            "selectedTools": parse_tools(list(self._tools.function_tools.values())),
-        }
-
-        # Ultravox accepts either a built-in voice or a server-side external TTS
-        # voice, never both.
-        if is_given(self._opts.external_voice):
-            payload["externalVoice"] = self._opts.external_voice
-        else:
-            payload["voice"] = self._opts.voice
-
-        # Add optional parameters only if specified
-        if is_given(self._opts.temperature):
-            payload["temperature"] = self._opts.temperature
-        if is_given(self._opts.language_hint):
-            payload["languageHint"] = self._opts.language_hint
-        if is_given(self._opts.max_duration):
-            payload["maxDuration"] = self._opts.max_duration
-        if is_given(self._opts.time_exceeded_message):
-            payload["timeExceededMessage"] = self._opts.time_exceeded_message
-        if is_given(self._opts.first_speaker):
-            payload["firstSpeaker"] = self._opts.first_speaker
-
-        return payload
-
     async def _main_task(self) -> None:
         """Main task with restart loop for managing WebSocket sessions."""
         while not self._msg_ch.closed:
@@ -671,24 +625,44 @@ class RealtimeSession(
                     create_call_url += f"?{query_string}"
 
                 # Build payload with core parameters
-                payload = self._build_call_payload()
+                payload: dict[str, Any] = {
+                    "systemPrompt": self._realtime_model._opts.system_prompt,
+                    "model": self._realtime_model._opts.model_id,
+                    "medium": {
+                        "serverWebSocket": {
+                            "inputSampleRate": self._realtime_model._opts.input_sample_rate,
+                            "outputSampleRate": self._realtime_model._opts.output_sample_rate,
+                            "clientBufferSizeMs": 30000,  # 30 seconds
+                        }
+                    },
+                    "selectedTools": parse_tools(list(self._tools.function_tools.values())),
+                }
+
+                if is_given(self._realtime_model._opts.external_voice):
+                    payload["externalVoice"] = self._realtime_model._opts.external_voice
+                else:
+                    payload["voice"] = self._realtime_model._opts.voice
+
+                # Add optional parameters only if specified
+                if is_given(self._realtime_model._opts.temperature):
+                    payload["temperature"] = self._realtime_model._opts.temperature
+                if is_given(self._realtime_model._opts.language_hint):
+                    payload["languageHint"] = self._realtime_model._opts.language_hint
+                if is_given(self._realtime_model._opts.max_duration):
+                    payload["maxDuration"] = self._realtime_model._opts.max_duration
+                if is_given(self._realtime_model._opts.time_exceeded_message):
+                    payload["timeExceededMessage"] = (
+                        self._realtime_model._opts.time_exceeded_message
+                    )
+                if is_given(self._realtime_model._opts.first_speaker):
+                    payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
 
                 # Create call and connect to WebSocket
                 http_session = self._realtime_model._ensure_http_session()
                 async with http_session.post(
                     create_call_url, json=payload, headers=headers
                 ) as resp:
-                    if resp.status >= 400:
-                        # Ultravox returns a body describing why /calls was rejected
-                        # (e.g. a malformed externalVoice blob). Surface it via
-                        # APIStatusError — which derives retryability from the status
-                        # code — so the failure is actionable instead of a bare
-                        # "HTTP 400". Truncate to keep logs bounded.
-                        error_body = (await resp.text())[:2048]
-                        raise APIStatusError(
-                            f"Ultravox /calls request failed: {error_body}",
-                            status_code=resp.status,
-                        )
+                    resp.raise_for_status()
                     response_json = await resp.json()
                     join_url = response_json.get("joinUrl")
                     if not join_url:
