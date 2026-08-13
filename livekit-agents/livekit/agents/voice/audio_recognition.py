@@ -485,6 +485,12 @@ class AudioRecognition:
         if self._adaptive_interruption_active:
             self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
 
+        if self._speaking:
+            self._on_start_of_overlap_speech(
+                started_at=started_at,
+                user_speaking_span=self._session._user_speaking_span,
+            )
+
     def _on_end_of_agent_speech(
         self, *, ignore_user_transcript_until: float, paused: bool = False
     ) -> None:
@@ -549,6 +555,18 @@ class AudioRecognition:
         if not self._agent_speaking:
             self._overlap_in_current_turn = False
 
+        self._on_start_of_overlap_speech(
+            started_at=started_at,
+            speech_duration=speech_duration,
+            user_speaking_span=user_speaking_span,
+        )
+
+    def _on_start_of_overlap_speech(
+        self,
+        started_at: float,
+        speech_duration: float = 0.0,
+        user_speaking_span: trace.Span | None = None,
+    ) -> None:
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
         # overlap over agent speech started this turn; gates verdict acceptance below

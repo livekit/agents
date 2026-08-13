@@ -317,6 +317,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._user_silence_ev = asyncio.Event()
     ar._user_silence_ev.set()
     ar._hooks = MagicMock()
+    ar._session = MagicMock()
     return ar, ch
 
 
@@ -351,13 +352,24 @@ async def test_user_speech_ending_after_pause_does_not_close_overlap_again() -> 
 async def test_resume_restarts_the_detector() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
-    ar._on_start_of_speech(started_at=time.time())
+    user_started_at = time.time()
+    ar._speaking = True
+    ar._on_start_of_speech(started_at=user_started_at)
     ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
     ch.sent.clear()
 
-    ar._on_start_of_agent_speech(started_at=time.time())
+    resumed_at = time.time()
+    ar._on_start_of_agent_speech(started_at=resumed_at)
 
-    assert _sentinel_names(ch) == ["_AgentSpeechStartedSentinel"]
+    assert _sentinel_names(ch) == [
+        "_AgentSpeechStartedSentinel",
+        "_OverlapSpeechStartedSentinel",
+    ]
+    assert ch.sent[1]._speech_duration == 0.0  # type: ignore[attr-defined]
+    assert ch.sent[1]._started_at == resumed_at  # type: ignore[attr-defined]
+    ar._endpointing.on_start_of_speech.assert_called_once_with(
+        started_at=user_started_at, overlapping=True
+    )
 
 
 async def test_a_resolved_overlap_is_not_closed_again() -> None:
