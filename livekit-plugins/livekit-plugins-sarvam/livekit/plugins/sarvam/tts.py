@@ -810,8 +810,7 @@ class TTS(tts.TTS):
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            if pace is None:
-                _validate_pace(model, self._opts.pace)
+            _validate_pace(model, self._opts.pace if pace is None else pace)
             self._opts.model = model
             if speaker is None and self._opts.speaker is not None:
                 if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
