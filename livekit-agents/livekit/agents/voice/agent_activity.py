@@ -3494,6 +3494,13 @@ class AgentActivity(RecognitionHooks):
                     interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
+                self._session.emit(
+                    "function_tools_executed",
+                    FunctionToolsExecutedEvent(
+                        function_calls=interrupted_calls,
+                        function_call_outputs=interrupted_fnc_outputs,
+                    ),
+                )
                 self._agent._chat_ctx.insert(interrupted_tool_messages)
                 self._session._tool_items_added(interrupted_tool_messages)
             return
