@@ -50,7 +50,7 @@ from livekit.agents import (
 )
 
 from ._config import BlazeConfig
-from ._utils import effective_connect_timeout
+from ._utils import effective_connect_timeout, validate_api_base_url
 from .log import logger
 
 
@@ -99,8 +99,11 @@ class LLM(llm.LLM):
         super().__init__()
 
         self._config = config or BlazeConfig()
-        # Normalize base URL (constructor override may bypass BlazeConfig strip).
-        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
+        # Normalize/validate base URL (constructor override may bypass BlazeConfig).
+        self._api_url = validate_api_base_url(
+            (api_url or self._config.api_url).strip() or self._config.api_url,
+            http_only=True,
+        )
         self._bot_id = bot_id
         self._auth_token = auth_token or self._config.api_token
         self._deep_search = deep_search

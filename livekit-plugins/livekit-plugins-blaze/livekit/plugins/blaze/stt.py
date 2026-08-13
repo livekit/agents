@@ -54,6 +54,8 @@ from ._utils import (
     apply_normalization_rules,
     convert_pcm_to_wav,
     effective_connect_timeout,
+    safe_ws_error_detail,
+    validate_api_base_url,
     ws_base_url,
 )
 from .log import logger
@@ -135,8 +137,11 @@ class STT(stt.STT):
         )
 
         self._config = config or BlazeConfig()
-        # Normalize base URL (constructor override may bypass BlazeConfig strip).
-        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
+        # Normalize/validate base URL (constructor override may bypass BlazeConfig).
+        self._api_url = validate_api_base_url(
+            (api_url or self._config.api_url).strip() or self._config.api_url,
+            http_only=True,
+        )
         self._language = language
         self._auth_token = auth_token or self._config.api_token
         self._sample_rate = sample_rate
@@ -608,8 +613,11 @@ class SpeechStream(stt.SpeechStream):
                         ready = True
                         break
                     if mtype == "error":
+                        # Do not interpolate the full frame — gateways may echo
+                        # the auth token sent on the first message.
                         raise APIConnectionError(
-                            f"STT realtime auth error: {msg.get('text') or msg}"
+                            "STT realtime auth error: "
+                            + safe_ws_error_detail(msg, token=stt_cfg._auth_token)
                         )
 
                 if not ready:
@@ -660,7 +668,10 @@ class SpeechStream(stt.SpeechStream):
                         mtype = msg.get("type")
                         text = msg.get("text") or ""
                         if mtype == "error":
-                            raise APIConnectionError(f"STT realtime error: {text or msg}")
+                            raise APIConnectionError(
+                                "STT realtime error: "
+                                + safe_ws_error_detail(msg, token=stt_cfg._auth_token)
+                            )
 
                         if mtype not in ("partial", "final", "interim"):
                             continue

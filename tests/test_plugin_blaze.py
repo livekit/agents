@@ -25,6 +25,9 @@ from livekit.plugins.blaze._utils import (
     apply_normalization_rules,
     convert_pcm_to_wav,
     effective_connect_timeout,
+    safe_ws_error_detail,
+    validate_api_base_url,
+    ws_base_url,
 )
 from livekit.plugins.blaze.llm import LLM, LLMStream
 from livekit.plugins.blaze.stt import STT
@@ -528,15 +531,12 @@ def test_stt_default_models() -> None:
 
 def test_ws_base_url_upgrades_remote_http_to_wss() -> None:
     """Auth tokens ride on the first WS frame — non-loopback http:// → wss://."""
-    from livekit.plugins.blaze._utils import ws_base_url
-
     assert ws_base_url("https://api.blaze.vn") == "wss://api.blaze.vn"
     assert ws_base_url("http://api.blaze.vn") == "wss://api.blaze.vn"
     assert ws_base_url("http://localhost:8080") == "ws://localhost:8080"
     assert ws_base_url("http://127.0.0.1") == "ws://127.0.0.1"
     assert ws_base_url("http://[::1]") == "ws://[::1]"
     assert ws_base_url("http://[::1]:8080/v1") == "ws://[::1]:8080/v1"
-    assert ws_base_url("api.example.com") == "wss://api.example.com"
     # mDNS / LAN .local hosts are NOT loopback — must not send bearer over ws://
     assert ws_base_url("http://blaze-gw.local") == "wss://blaze-gw.local"
     assert ws_base_url("ws://blaze-gw.local/v1") == "wss://blaze-gw.local/v1"
@@ -544,9 +544,56 @@ def test_ws_base_url_upgrades_remote_http_to_wss() -> None:
     remote = STT(config=BlazeConfig(api_url="http://api.example.com", api_token="tok"))
     assert remote._ws_url == "wss://api.example.com/v1/stt/realtime"
     # userinfo must be stripped so tokens are not sent via unexpected authority
-    assert ws_base_url("user@evil.host/path") == "wss://evil.host/path"
     assert ws_base_url("https://user:pass@api.blaze.vn/v1") == "wss://api.blaze.vn/v1"
     assert ws_base_url("http://user@localhost:8080") == "ws://localhost:8080"
+
+
+def test_ws_base_url_rejects_scheme_less_or_hostless() -> None:
+    """Malformed BLAZE_API_URL must fail fast — not become a bad wss:// target."""
+    for bad in (
+        "api.example.com",
+        "user@evil.host/path",
+        "/v1/only-path",
+        "ftp://api.example.com",
+        "https://",
+        "",
+        "   ",
+    ):
+        with pytest.raises(ValueError, match="Blaze API URL"):
+            ws_base_url(bad)
+        with pytest.raises(ValueError, match="Blaze API URL"):
+            validate_api_base_url(bad)
+
+    with pytest.raises(ValueError, match="Blaze API URL"):
+        BlazeConfig(api_url="not-a-url")
+    with pytest.raises(ValueError, match="Blaze API URL"):
+        BlazeConfig(api_url="/relative/path")
+
+
+def test_safe_ws_error_detail_redacts_token() -> None:
+    secret = "super-secret-token-value"
+    detail = safe_ws_error_detail(
+        {"type": "error", "text": f"auth failed for token {secret}"},
+        token=secret,
+    )
+    assert secret not in detail
+    assert "***" in detail
+    assert "error" in detail
+
+    # Full raw dict must not be stringified into the message.
+    echoed = safe_ws_error_detail(
+        {"type": "error", "token": secret, "text": "denied"},
+        token=secret,
+    )
+    assert secret not in echoed
+    assert "denied" in echoed
+
+    bearer = safe_ws_error_detail(
+        {"type": "error", "text": "Bearer abc.def.ghi rejected"},
+        token=None,
+    )
+    assert "abc.def.ghi" not in bearer
+    assert "Bearer ***" in bearer
 
 
 def test_stt_update_models() -> None:

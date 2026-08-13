@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+from ._utils import validate_api_base_url
 from .log import logger
 
 _DEFAULT_API_URL = "https://api.blaze.vn"
@@ -80,9 +81,12 @@ class BlazeConfig:
     ) -> None:
         # Strip trailing slashes so HTTP paths like f"{api_url}/v1/..." never double-slash.
         # Blank/whitespace env (or constructor) values fall back to the default, same as _env_float.
-        self.api_url: str = (
-            (api_url or os.environ.get("BLAZE_API_URL", "")).strip() or _DEFAULT_API_URL
-        ).rstrip("/")
+        # Require absolute http(s) + hostname so a bad BLAZE_API_URL fails fast
+        # (WS rewrite must not invent a target that still carries the bearer token).
+        self.api_url: str = validate_api_base_url(
+            (api_url or os.environ.get("BLAZE_API_URL", "")).strip() or _DEFAULT_API_URL,
+            http_only=True,
+        )
         self.api_token: str = api_token or os.environ.get("BLAZE_API_TOKEN", "")
         self.stt_timeout: float = (
             stt_timeout

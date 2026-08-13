@@ -55,7 +55,13 @@ from livekit.agents.utils import is_given, shortuuid
 from livekit.agents.utils.aio.channel import ChanClosed
 
 from ._config import BlazeConfig
-from ._utils import apply_normalization_rules, effective_connect_timeout, ws_base_url
+from ._utils import (
+    apply_normalization_rules,
+    effective_connect_timeout,
+    safe_ws_error_detail,
+    validate_api_base_url,
+    ws_base_url,
+)
 from .log import logger
 
 _WS_PING_INTERVAL = 20
@@ -202,8 +208,11 @@ class TTS(tts.TTS):
 
         self._config = config or BlazeConfig()
 
-        # Normalize base URL (constructor override may bypass BlazeConfig strip).
-        self._api_url = (api_url or self._config.api_url).strip().rstrip("/")
+        # Normalize/validate base URL (constructor override may bypass BlazeConfig).
+        self._api_url = validate_api_base_url(
+            (api_url or self._config.api_url).strip() or self._config.api_url,
+            http_only=True,
+        )
         self._language = language
         self._speaker_id = speaker_id
         self._auth_token = auth_token or self._config.api_token
@@ -413,7 +422,10 @@ class ChunkedStream(tts.ChunkedStream):
                 # Handshake
                 msg = json.loads(await ws_guard.recv(ws))
                 if msg.get("type") != "successful-connection":
-                    raise APIConnectionError(f"Unexpected WS message on connect: {msg}")
+                    raise APIConnectionError(
+                        "Unexpected WS message on connect: "
+                        + safe_ws_error_detail(msg, token=tts_cfg._auth_token)
+                    )
 
                 await ws.send(
                     json.dumps(
@@ -425,11 +437,12 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 msg = json.loads(await ws_guard.recv(ws))
                 if msg.get("type") != "successful-authentication":
+                    detail = safe_ws_error_detail(msg, token=tts_cfg._auth_token)
                     raise APIStatusError(
-                        f"WS authentication failed: {msg}",
+                        f"WS authentication failed: {detail}",
                         status_code=403,
                         request_id=request_id,
-                        body=json.dumps(msg),
+                        body=detail,
                     )
 
                 # Single speech session. No speech-start ack is defined by the
@@ -523,8 +536,15 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
 
         msg = json.loads(await ws_guard.recv(ws))
         if msg.get("type") != "successful-connection":
-            raise APIConnectionError(f"Unexpected WS message on connect: {msg}")
-        logger.debug("[%s] TTS WS connected: %s", request_id, msg)
+            raise APIConnectionError(
+                "Unexpected WS message on connect: "
+                + safe_ws_error_detail(msg, token=self._blaze_tts._auth_token)
+            )
+        logger.debug(
+            "[%s] TTS WS connected: %s",
+            request_id,
+            safe_ws_error_detail(msg, token=self._blaze_tts._auth_token),
+        )
 
         await ws.send(
             json.dumps(
@@ -536,11 +556,12 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
         )
         msg = json.loads(await ws_guard.recv(ws))
         if msg.get("type") != "successful-authentication":
+            detail = safe_ws_error_detail(msg, token=self._blaze_tts._auth_token)
             raise APIStatusError(
-                f"WS authentication failed: {msg}",
+                f"WS authentication failed: {detail}",
                 status_code=403,
                 request_id=request_id,
-                body=json.dumps(msg),
+                body=detail,
             )
 
         logger.info(
