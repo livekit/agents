@@ -109,7 +109,8 @@ class JudgeGroup:
             llm: The LLM to use for evaluation. Can be an LLM instance or a model
                 string like "openai/gpt-4o-mini" (uses LiveKit inference gateway).
                 Model strings default to the lowest reasoning effort the model
-                supports; pass a configured LLM instance to override.
+                supports and to low inference priority; pass a configured LLM
+                instance to override.
             judges: The judges to run during evaluation.
         """
         if isinstance(llm, str):
@@ -120,7 +121,9 @@ class JudgeGroup:
             if (effort := min_reasoning_effort(llm)) is not None:
                 extra_kwargs["reasoning_effort"] = effort
 
-            self._llm: LLM = InferenceLLM(llm, extra_kwargs=extra_kwargs)
+            # Judges run after the conversation, so no caller is waiting on them:
+            # they must not compete with live voice traffic for gateway quota.
+            self._llm: LLM = InferenceLLM(llm, inference_class="low", extra_kwargs=extra_kwargs)
         else:
             self._llm = llm
 

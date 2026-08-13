@@ -347,11 +347,13 @@ class TestEotPredictionDedup:
         ar._audio_preflight_transcript = ""
         ar._stt_request_ids = []
         ar._turn_detector_stream.flush = MagicMock()
-        ar.update_stt = MagicMock()  # type: ignore[method-assign]
+        ar._update_stt = MagicMock()  # type: ignore[method-assign]
+        ar._user_turn_start = 123.0
 
-        ar.clear_user_turn()
+        ar._clear_user_turn()
 
         assert ar._last_emitted_prediction is None
+        assert ar._user_turn_start is None
 
 
 class TestBackchannelOpportunityEmit:

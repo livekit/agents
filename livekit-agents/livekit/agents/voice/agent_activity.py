@@ -2059,6 +2059,8 @@ class AgentActivity(RecognitionHooks):
                 assert (timeout := interruption_options["false_interruption_timeout"]) is not None
                 assert (audio_output := self._session.output.audio) is not None
 
+                # EOS arms false-interruption resume. A final transcript or a
+                # replying turn commit interrupts the paused handle.
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
@@ -2104,8 +2106,8 @@ class AgentActivity(RecognitionHooks):
             and current_speech.allow_interruptions
             and (self._paused_speech is None or self._paused_speech.handle is not current_speech)
         ):
-            # pause the audio output if agent is not speaking (in thinking state);
-            # resume immediately when user stops speaking, the timeout will be updated by _interrupt_by_audio_activity
+            # EOS arms false-interruption resume. A final transcript or a
+            # replying turn commit interrupts the paused handle.
             assert (audio_output := self._session.output.audio) is not None
 
             self._update_paused_speech(current_speech, timeout=0)
@@ -2165,7 +2167,7 @@ class AgentActivity(RecognitionHooks):
         if (
             ev.speaking
             # allow some silence between utterances during active speech
-            and ev.raw_accumulated_silence <= self._session.options.endpointing["min_delay"] / 2
+            and ev.raw_accumulated_silence <= self.min_endpointing_delay / 2
         ):
             self._user_silence_event.clear()
         else:
@@ -2872,12 +2874,16 @@ class AgentActivity(RecognitionHooks):
                     text_source = timed_texts
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=tts_gen_data.audio_ch
+                    audio_output=audio_output,
+                    tts_output=tts_gen_data.audio_ch,
+                    reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
                 )
             else:
                 # use the provided audio
                 forward_audio_task, audio_out = perform_audio_forwarding(
-                    audio_output=audio_output, tts_output=audio
+                    audio_output=audio_output,
+                    tts_output=audio,
+                    reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
                 )
 
             audio_out.first_frame_fut.add_done_callback(_on_first_frame)
@@ -3385,6 +3391,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -3931,6 +3938,7 @@ class AgentActivity(RecognitionHooks):
                 audio_source=audio_source,
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
+                reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
             )
             return _MsgOutput(msg=msg, out=out)
 
@@ -4284,9 +4292,47 @@ class AgentActivity(RecognitionHooks):
         return bool(
             interruption_options["resume_false_interruption"]
             and interruption_options["false_interruption_timeout"] is not None
+            and self._session.output.audio_enabled
             and self._session.output.audio
             and self._session.output.audio.can_pause
         )
+
+    def _reconcile_playout_pause(self, speech_handle: SpeechHandle) -> None:
+        """Preserve, apply, or release a speech pause before forwarding audio."""
+        audio_output = self._session.output.audio
+        pause_is_allowed = (
+            self._pause_enabled()
+            and not speech_handle.interrupted
+            and speech_handle.allow_interruptions
+        )
+        pause_is_valid = (
+            self._paused_speech is not None
+            and self._paused_speech.handle is speech_handle
+            and pause_is_allowed
+        )
+        if pause_is_valid:
+            # a paused playout stay paused regardless of forwarding status
+            return
+
+        # clear stale _paused_speech ref
+        if self._paused_speech is not None:
+            self._cancel_false_interruption_timer()
+            self._paused_speech = None
+
+        if (
+            pause_is_allowed
+            and self._session.agent_state != "speaking"
+            and not self._user_silence_event.is_set()
+        ):
+            assert audio_output is not None
+            # SOS arrived before this handle became current so we pause here
+            # EOS/transcripts/turn commit will resolve the pause eventually
+            self._update_paused_speech(speech_handle, timeout=0)
+            audio_output.pause()
+            return
+
+        if audio_output is not None:
+            audio_output.resume()
 
     def _cancel_false_interruption_timer(self) -> None:
         if self._false_interruption_timer is not None:
@@ -4370,6 +4416,12 @@ class AgentActivity(RecognitionHooks):
     async def _cancel_speech_pause(
         self, old_task: asyncio.Task[None] | None = None, *, interrupt: bool = True
     ) -> None:
+        """Clear a speech pause and optionally interrupt its handle.
+
+        Final STT transcripts and committed turns that generate replies use
+        ``interrupt=True``. Activity shutdown uses ``interrupt=False`` because the
+        scheduling task owns the speech.
+        """
         if old_task is not None:
             try:
                 await old_task
