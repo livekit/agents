@@ -14,6 +14,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    describe_extras,
     describe_room_options,
     speak_usd,
 )
@@ -48,6 +49,7 @@ class _Step(Enum):
     NEED_STAY = auto()
     OFFERING = auto()
     NEED_ROOM = auto()
+    NEED_EXTRAS = auto()
     CAPTURE = auto()
     READ_BACK = auto()
     AWAIT_AGREEMENT = auto()
@@ -59,13 +61,15 @@ class _Step(Enum):
 # read-back has been answered. CAPTURE adds the dialogs for the details still
 # missing, leaving a captured detail with no dialog to re-ask it with. set_stay
 # and choose_room stay open past their own step so a caller can correct them.
+_RECORDERS = frozenset({"set_stay", "choose_room", "set_extras"})
 _ALLOWED: dict[_Step, frozenset[str]] = {
     _Step.NEED_STAY: frozenset({"set_stay"}),
     _Step.OFFERING: frozenset({"set_stay"}),
     _Step.NEED_ROOM: frozenset({"choose_room", "set_stay"}),
-    _Step.CAPTURE: frozenset({"set_stay", "choose_room"}),
-    _Step.READ_BACK: frozenset({"set_stay", "choose_room"}),
-    _Step.AWAIT_AGREEMENT: frozenset({"confirm_booking", "set_stay", "choose_room"}),
+    _Step.NEED_EXTRAS: _RECORDERS,
+    _Step.CAPTURE: _RECORDERS,
+    _Step.READ_BACK: _RECORDERS,
+    _Step.AWAIT_AGREEMENT: _RECORDERS | {"confirm_booking"},
 }
 
 
@@ -88,6 +92,10 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._room_type: RoomType | None = None
         self._view: str | None = None
         self._extras: list[RoomExtra] = []
+        # An empty extras list is a real answer, indistinguishable from never having
+        # asked - so the answer is tracked separately from the value. No total is
+        # quoted until it's True, since every extra moves the total.
+        self._extras_set: bool = False
         # Smoking defaults to non-smoking: it's industry-standard opt-in, not
         # a value the caller has to volunteer. choose_room flips it when the
         # caller actually asks for a smoking-permitted room.
@@ -152,6 +160,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return _Step.OFFERING
         if self._room_type is None:
             return _Step.NEED_ROOM
+        if not self._extras_set:
+            return _Step.NEED_EXTRAS
         if self._missing():
             return _Step.CAPTURE
         if self._must_read_back:
@@ -163,6 +173,25 @@ class BookRoomTask(AgentTask[RoomBooking]):
         if step is _Step.CAPTURE:
             tools |= {tool for tool, _ in self._missing()}
         return tools | {"give_up"}
+
+    async def _requote(self) -> None:
+        """Recompute the exact total (with tax) for the room that will be booked, so
+        the read-back uses the real number rather than per-night arithmetic. Stays
+        None until the extras are answered - a total quoted before then is one that
+        changes the moment the caller says "and breakfast"."""
+        if not (self._extras_set and self._room_type and self._check_in and self._check_out):
+            self._quoted_total = None
+            return
+        assert self._guests is not None
+        self._quoted_total = await self._db.peek_stay_total(
+            room_type=self._room_type,
+            smoking=self._smoking,
+            guests=self._guests,
+            check_in=self._check_in,
+            check_out=self._check_out,
+            view=self._view,
+            extras=self._extras,
+        )
 
     def _closed(self, tool: str) -> str | None:
         """The refusal for a tool called outside its step, or None when it's open.
@@ -206,6 +235,12 @@ class BookRoomTask(AgentTask[RoomBooking]):
             )
         if step is _Step.NEED_ROOM:
             return "stay captured - ask which room type, then call choose_room"
+        if step is _Step.NEED_EXTRAS:
+            return (
+                "room captured, no total yet - offer the extras and ask which the caller "
+                "wants, then call set_extras (empty list if they want none). Each extra "
+                "moves the total, so the total only exists once this is answered"
+            )
         if step is _Step.CAPTURE:
             return self._missing()[0][1]
         if step is _Step.AWAIT_AGREEMENT:
@@ -259,6 +294,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
+        # Per-night extras and the room both reprice with the night count.
+        await self._requote()
         return (
             f"stay recorded ({check_in} to {check_out}, {guests} guests)\n"
             f"options (one line per room type + view - the price is that pairing's, so "
@@ -270,17 +307,17 @@ class BookRoomTask(AgentTask[RoomBooking]):
     async def choose_room(
         self,
         room_type: RoomType,
-        extras: list[RoomExtra],
         smoking_room: bool = False,
         view: str | None = None,
     ) -> str:
-        """Record the room type the caller chose from the options set_stay returned, plus any view they asked for.
+        """Record the room type and view the caller picked from the options set_stay returned.
 
         Call ONLY after the caller has named a room type (a stated view narrows WHICH room of that type they get - it doesn't pick the type). If the caller asks for a view, pass it here; if that view isn't available for the type, this errors with where the view IS available - relay that and let them choose. Never guess a type from a preference.
 
+        This does NOT produce a total - extras are still open, and each one moves it. The return lists the extras to offer; call set_extras once the caller has answered.
+
         Args:
             room_type: The room type exactly as the caller chose it.
-            extras: Any of breakfast / valet / late_checkout / pets; empty list if none.
             smoking_room: True if the caller wants a smoking-permitted room.
             view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
         """
@@ -315,28 +352,43 @@ class BookRoomTask(AgentTask[RoomBooking]):
             )
         self._room_type = room_type
         self._view = view
-        self._extras = list(extras)
         self._smoking = smoking_room
         self._must_read_back = True  # a different room means a different read-back
-        # The exact total (with tax) for the room that will be booked - quoted
-        # here so the read-back uses the real number, never per-night arithmetic.
-        self._quoted_total = await self._db.peek_stay_total(
-            room_type=room_type,
-            smoking=smoking_room,
-            guests=self._guests,
-            check_in=self._check_in,
-            check_out=self._check_out,
-            view=view,
-            extras=extras,
-        )
+        await self._requote()
+        rate = min(a.nightly_rate for a in for_type if view is None or a.view == view)
         view_part = f" with a {view} view" if view else ""
-        extras_part = f", extras: {', '.join(extras)}" if extras else ""
+        nights = (self._check_out - self._check_in).days
+        return (
+            f"room recorded: {room_type.replace('_', ' ')}{view_part} at "
+            f"{speak_usd(rate)}/night\nextras for this {nights}-night stay - offer these "
+            f"and get an answer before any total, since each one moves it:\n"
+            f"{describe_extras(nights)}\n{self._status()}"
+        )
+
+    @function_tool()
+    async def set_extras(self, extras: list[RoomExtra]) -> str:
+        """Record which extras the caller wants, after you've offered them.
+
+        An empty list is a real answer - it means they were offered and declined, and it settles the question. Don't call this to skip the offer.
+
+        The stay's total is computed here, because every extra moves it. This return is where the number for the read-back comes from.
+
+        Args:
+            extras: Any of breakfast / valet / late_checkout / pets; empty list if the caller wants none.
+        """
+        if closed := self._closed("set_extras"):
+            return closed
+        self._extras = list(extras)
+        self._extras_set = True
+        self._must_read_back = True  # different extras mean a different read-back
+        await self._requote()
+        chosen = ", ".join(e.replace("_", " ") for e in extras) if extras else "none"
         total_part = (
             f"; total for the stay {speak_usd(self._quoted_total)} including tax"
             if self._quoted_total
             else ""
         )
-        return f"room recorded: {room_type.replace('_', ' ')}{view_part}{extras_part}{total_part} | {self._status()}"
+        return f"extras recorded: {chosen}{total_part} | {self._status()}"
 
     @function_tool()
     async def open_name_dialog(self) -> str:
