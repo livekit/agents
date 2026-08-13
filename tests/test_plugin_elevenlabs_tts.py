@@ -501,7 +501,22 @@ async def test_wait_for_turn_drained_returns_once_event_is_set() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_turn_drained_falls_through_without_event(
+async def test_wait_for_turn_drained_resolves_immediately_with_no_flush_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_CLOSE_CONTEXT_DRAIN_TIMEOUT", 10.0)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        # a context that was opened but never flushed (e.g. cancelled before any
+        # flush) has nothing to wait for and must not block for the fallback timeout
+        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-missing"), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_drained_falls_through_when_flush_unacknowledged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(elevenlabs_tts, "_CLOSE_CONTEXT_DRAIN_TIMEOUT", 0.05)
@@ -510,7 +525,8 @@ async def test_wait_for_turn_drained_falls_through_without_event(
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )
-        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-missing"), timeout=1.0)
+        connection._mark_flush_sent("ctx-1")
+        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-1"), timeout=1.0)
 
 
 @pytest.mark.asyncio

@@ -1128,7 +1128,8 @@ class _DialogueConnection:
         close_context: sending it right after the final flush (like the regular
         protocol does) races the server's stream teardown and drops the last
         turn's audio."""
-        event = self._turn_drained.setdefault(context_id, asyncio.Event())
+        self._sync_turn_drained_event(context_id)
+        event = self._turn_drained[context_id]
         ctx = self._context_data.get(context_id)
         timeout = ctx.stream._conn_options.timeout if ctx else _CLOSE_CONTEXT_DRAIN_TIMEOUT
         with contextlib.suppress(asyncio.TimeoutError):
