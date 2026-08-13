@@ -24,6 +24,7 @@ dependencies = [
     "livekit-agents[codecs, openai]>=1.6.9",
     "aiohttp",
     "livekit",
+    "httpx",
 ]
 
 [project.urls]

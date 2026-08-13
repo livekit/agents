@@ -24,7 +24,9 @@ classifiers = [
 dependencies = [
     "livekit-agents[codecs, images]>=1.6.9",
     # keywords/languages on the transcription APIs landed in 2.50
-    "openai[realtime]>=2.50",
+    # openai 3 defaults to httpx2; these clients still hand it legacy httpx objects
+    "openai[realtime]>=2.50,<3",
+    "httpx",
 ]
 
 

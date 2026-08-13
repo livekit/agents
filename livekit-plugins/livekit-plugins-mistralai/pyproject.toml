@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "livekit-agents>=1.6.9",
     "mistralai[realtime]>=2.0.0,<3.0.0",
+    "httpx",
 ]
 
 [project.urls]

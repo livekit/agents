@@ -25,9 +25,10 @@ dependencies = [
     "livekit-agents[codecs, openai]>=1.6.9",
     # _CerebrasClient._build_request sets options.content on FinalRequestOptions,
     # a field added in openai 2.16.0 (binary request streaming support).
-    "openai>=2.16.0",
+    "openai>=2.16.0,<3",
     "msgpack>=1.0",
     "msgpack-types>=0.7.0",
+    "httpx",
 ]
 
 [project.urls]

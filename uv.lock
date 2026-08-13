@@ -2715,13 +2715,15 @@ name = "livekit-plugins-azure"
 source = { editable = "livekit-plugins/livekit-plugins-azure" }
 dependencies = [
     { name = "azure-cognitiveservices-speech" },
-    { name = "livekit-agents" },
+    { name = "httpx" },
+    { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "azure-cognitiveservices-speech", specifier = ">=1.48.2" },
-    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "httpx" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
@@ -2729,15 +2731,17 @@ name = "livekit-plugins-baseten"
 source = { editable = "livekit-plugins/livekit-plugins-baseten" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "httpx" },
     { name = "livekit" },
-    { name = "livekit-agents" },
+    { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
+    { name = "httpx" },
     { name = "livekit" },
-    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
@@ -2821,6 +2825,7 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-cerebras"
 source = { editable = "livekit-plugins/livekit-plugins-cerebras" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "msgpack" },
     { name = "msgpack-types" },
@@ -2829,10 +2834,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx" },
     { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "msgpack-types", specifier = ">=0.7.0" },
-    { name = "openai", specifier = ">=2.16.0" },
+    { name = "openai", specifier = ">=2.16.0,<3" },
 ]
 
 [[package]]
@@ -2959,7 +2965,9 @@ dependencies = [
     { name = "google-cloud-speech" },
     { name = "google-cloud-texttospeech" },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "livekit-agents" },
+    { name = "openai" },
 ]
 
 [package.metadata]
@@ -2968,7 +2976,9 @@ requires-dist = [
     { name = "google-cloud-speech", specifier = ">=2,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2.32,<3" },
     { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=1.68" },
+    { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "openai", specifier = "<3" },
 ]
 
 [[package]]
@@ -2992,6 +3002,7 @@ name = "livekit-plugins-groq"
 source = { editable = "livekit-plugins/livekit-plugins-groq" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "httpx" },
     { name = "livekit" },
     { name = "livekit-agents", extra = ["codecs", "openai"] },
 ]
@@ -2999,6 +3010,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
+    { name = "httpx" },
     { name = "livekit" },
     { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
 ]
@@ -3170,12 +3182,14 @@ requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "liv
 name = "livekit-plugins-mistralai"
 source = { editable = "livekit-plugins/livekit-plugins-mistralai" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents" },
     { name = "mistralai", extra = ["realtime"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "mistralai", extras = ["realtime"], specifier = ">=2.0.0,<3.0.0" },
 ]
@@ -3241,6 +3255,7 @@ provides-extras = ["personaplex"]
 name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["codecs", "images"] },
     { name = "openai", extra = ["realtime"] },
 ]
@@ -3253,8 +3268,9 @@ vertex = [
 [package.metadata]
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
+    { name = "httpx" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=2.50" },
+    { name = "openai", extras = ["realtime"], specifier = ">=2.50,<3" },
 ]
 provides-extras = ["vertex"]
 
@@ -3262,11 +3278,15 @@ provides-extras = ["vertex"]
 name = "livekit-plugins-perplexity"
 source = { editable = "livekit-plugins/livekit-plugins-perplexity" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
+requires-dist = [
+    { name = "httpx" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-plugins-phonic"
@@ -3360,12 +3380,14 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-sarvam"
 source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["codecs", "openai"] },
     { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx" },
     { name = "livekit-agents", extras = ["codecs", "openai"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
 ]
@@ -3466,12 +3488,14 @@ requires-dist = [
 name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["codecs"] },
     { name = "speechify-api" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "speechify-api", specifier = ">=3.0.1" },
 ]
@@ -3494,12 +3518,14 @@ requires-dist = [
 name = "livekit-plugins-spitch"
 source = { editable = "livekit-plugins/livekit-plugins-spitch" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["codecs"] },
     { name = "spitch" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "spitch", specifier = ">=1.47.0" },
 ]
@@ -3589,11 +3615,15 @@ requires-dist = [
 name = "livekit-plugins-xai"
 source = { editable = "livekit-plugins/livekit-plugins-xai" }
 dependencies = [
+    { name = "httpx" },
     { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" }]
+requires-dist = [
+    { name = "httpx" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
+]
 
 [[package]]
 name = "livekit-protocol"
