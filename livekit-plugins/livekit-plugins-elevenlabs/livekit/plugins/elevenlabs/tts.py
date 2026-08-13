@@ -46,7 +46,7 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import trace_id_from_headers
 from .log import logger
-from .models import TTSEncoding, TTSModels
+from .models import TTSEncoding, TTSModels, is_dialogue_model
 
 # by default, use 22.05kHz sample rate at 32kbps
 # in our testing,  reduce TTFB by about ~110ms
@@ -131,6 +131,9 @@ class TTS(tts.TTS):
             voice_id (str): Voice ID. Defaults to `DEFAULT_VOICE_ID`.
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
+                "eleven_v3" and "eleven_v3_conversational" go through ElevenLabs'
+                text-to-dialogue API instead (single voice per instance, same as
+                other models).
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
@@ -209,8 +212,9 @@ class TTS(tts.TTS):
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
-        self.__current_connection: _Connection | None = None
+        self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._warn_if_dialogue_model_ignores_options()
 
     @property
     def model(self) -> str:
@@ -224,6 +228,32 @@ class TTS(tts.TTS):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
+
+    def _warn_if_dialogue_model_ignores_options(self) -> None:
+        """Warn if options unsupported by text-to-dialogue are set for a dialogue model."""
+        if not is_dialogue_model(self._opts.model):
+            return
+
+        ignored = [
+            name
+            for name, is_set in (
+                ("chunk_length_schedule", is_given(self._opts.chunk_length_schedule)),
+                ("streaming_latency", is_given(self._opts.streaming_latency)),
+                ("enable_ssml_parsing", self._opts.enable_ssml_parsing),
+                (
+                    "apply_language_text_normalization",
+                    is_given(self._opts.apply_language_text_normalization),
+                ),
+            )
+            if is_set
+        ]
+        if ignored:
+            logger.warning(
+                "model '%s' is synthesized via ElevenLabs' text-to-dialogue API, which "
+                "does not support these options; they will be ignored: %s",
+                self._opts.model,
+                ", ".join(ignored),
+            )
 
     async def list_voices(self) -> list[Voice]:
         async with self._ensure_session().get(
@@ -256,6 +286,7 @@ class TTS(tts.TTS):
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             changed = True
+            self._warn_if_dialogue_model_ignores_options()
 
         if is_given(voice_id) and voice_id != self._opts.voice_id:
             self._opts.voice_id = voice_id
@@ -279,7 +310,7 @@ class TTS(tts.TTS):
             self.__current_connection.mark_non_current()
             self.__current_connection = None
 
-    async def _current_connection(self) -> tuple[_Connection, float, bool]:
+    async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
         """Get the current connection, creating one if needed.
 
         Returns:
@@ -294,7 +325,11 @@ class TTS(tts.TTS):
                 return self.__current_connection, 0.0, True
 
             session = self._ensure_session()
-            conn = _Connection(self._opts, session)
+            conn: _Connection | _DialogueConnection = (
+                _DialogueConnection(self._opts, session)
+                if is_dialogue_model(self._opts.model)
+                else _Connection(self._opts, session)
+            )
             t0 = time.perf_counter()
             await conn.connect()
             acquire_time = time.perf_counter() - t0
@@ -337,24 +372,34 @@ class ChunkedStream(tts.ChunkedStream):
             if is_given(self._opts.voice_settings)
             else None
         )
-        extra_params: dict[str, str | bool] = {}
-        if is_given(self._opts.language):
-            extra_params["language_code"] = self._opts.language.language
-        if is_given(self._opts.apply_language_text_normalization):
-            extra_params["apply_language_text_normalization"] = (
-                self._opts.apply_language_text_normalization
+
+        if is_dialogue_model(self._opts.model):
+            url = _dialogue_synthesize_url(self._opts)
+            json_body: dict[str, Any] = _build_dialogue_synthesize_body(
+                self._opts, self._input_text, voice_settings
             )
+        else:
+            extra_params: dict[str, str | bool] = {}
+            if is_given(self._opts.language):
+                extra_params["language_code"] = self._opts.language.language
+            if is_given(self._opts.apply_language_text_normalization):
+                extra_params["apply_language_text_normalization"] = (
+                    self._opts.apply_language_text_normalization
+                )
+            url = _synthesize_url(self._opts)
+            json_body = {
+                "text": self._input_text,
+                "model_id": self._opts.model,
+                "voice_settings": voice_settings,
+                "apply_text_normalization": self._opts.apply_text_normalization,
+                **extra_params,
+            }
+
         try:
             async with self._tts._ensure_session().post(
-                _synthesize_url(self._opts),
+                url,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                json={
-                    "text": self._input_text,
-                    "model_id": self._opts.model,
-                    "voice_settings": voice_settings,
-                    "apply_text_normalization": self._opts.apply_text_normalization,
-                    **extra_params,
-                },
+                json=json_body,
                 timeout=aiohttp.ClientTimeout(
                     total=30,
                     sock_connect=self._conn_options.timeout,
@@ -406,7 +451,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._text_buffer = ""
         self._start_times_ms: list[int] = []
         self._durations_ms: list[int] = []
-        self._connection: _Connection | None = None
+        self._connection: _Connection | _DialogueConnection | None = None
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -428,7 +473,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=self._context_id)
 
-        connection: _Connection
+        connection: _Connection | _DialogueConnection
         try:
             connection, self._acquire_time, self._connection_reused = await asyncio.wait_for(
                 self._tts._current_connection(), self._conn_options.timeout
@@ -561,6 +606,26 @@ def _build_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[st
         init_pkt["generation_config"] = {
             "chunk_length_schedule": opts.chunk_length_schedule,
         }
+    if is_given(opts.pronunciation_dictionary_locators):
+        init_pkt["pronunciation_dictionary_locators"] = [
+            {
+                "pronunciation_dictionary_id": locator.pronunciation_dictionary_id,
+                "version_id": locator.version_id,
+            }
+            for locator in opts.pronunciation_dictionary_locators
+        ]
+    return init_pkt
+
+
+def _build_dialogue_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
+    # voices/voice_settings/pronunciation_dictionary_locators are only valid on a
+    # context's first message; text is sent separately, after this.
+    init_pkt: dict[str, Any] = {
+        "context_id": context_id,
+        "voices": [opts.voice_id],
+    }
+    if is_given(opts.voice_settings):
+        init_pkt["voice_settings"] = _strip_nones(dataclasses.asdict(opts.voice_settings))
     if is_given(opts.pronunciation_dictionary_locators):
         init_pkt["pronunciation_dictionary_locators"] = [
             {
@@ -888,6 +953,323 @@ class _Connection:
         self._ws = None
 
 
+# Fallback wait bound when a context has no registered stream to size a timeout from.
+_CLOSE_CONTEXT_DRAIN_TIMEOUT = 10.0
+
+
+class _DialogueConnection:
+    """Like `_Connection`, but speaks the text-to-dialogue multi-stream-input
+    protocol (different message framing and response field casing) for models
+    ElevenLabs doesn't support on the regular text-to-speech websocket."""
+
+    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
+        self._opts = opts
+        self._session = session
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._is_current = True
+        self._active_contexts: set[str] = set()
+        self._input_queue = utils.aio.Chan[_SynthesizeContent | _CloseContext]()
+
+        self._context_data: dict[str, _StreamData] = {}
+        # per-context "audio fully drained" signal; see _wait_for_turn_drained
+        self._turn_drained: dict[str, asyncio.Event] = {}
+
+        self._send_task: asyncio.Task | None = None
+        self._recv_task: asyncio.Task | None = None
+        self._closed = False
+
+    @property
+    def voice_id(self) -> str:
+        return self._opts.voice_id
+
+    @property
+    def is_current(self) -> bool:
+        return self._is_current
+
+    @cached_property
+    def preferred_alignment(self) -> Literal["normalized", "original"]:
+        if is_given(self._opts.preferred_alignment):
+            preferred_alignment = self._opts.preferred_alignment
+        else:
+            if is_given(self._opts.language) and self._opts.language.language in {
+                "ja",
+                "ko",
+                "zh",
+            }:
+                preferred_alignment = "original"
+            else:
+                preferred_alignment = "normalized"
+        return preferred_alignment
+
+    def mark_non_current(self) -> None:
+        """Mark this connection as no longer current - it will shut down when drained"""
+        self._is_current = False
+
+    async def connect(self) -> None:
+        """Establish WebSocket connection and start send/recv loops"""
+        if self._ws or self._closed:
+            return
+
+        url = _dialogue_multi_stream_url(self._opts)
+        headers = {AUTHORIZATION_HEADER: self._opts.api_key}
+        self._ws = await self._session.ws_connect(url, headers=headers)
+
+        self._send_task = asyncio.create_task(self._send_loop())
+        self._recv_task = asyncio.create_task(self._recv_loop())
+
+    def register_stream(
+        self, stream: SynthesizeStream, emitter: tts.AudioEmitter, done_fut: asyncio.Future[None]
+    ) -> None:
+        """Register a new synthesis stream with this connection"""
+        context_id = stream._context_id
+        self._context_data[context_id] = _StreamData(
+            emitter=emitter, stream=stream, waiter=done_fut
+        )
+
+    def send_content(self, content: _SynthesizeContent) -> None:
+        """Send synthesis content to the connection"""
+        if self._closed or not self._ws or self._ws.closed:
+            raise APIConnectionError("WebSocket connection is closed")
+        self._input_queue.send_nowait(content)
+
+    def close_context(self, context_id: str) -> None:
+        """Close a specific context"""
+        if self._closed or not self._ws or self._ws.closed:
+            raise APIConnectionError("WebSocket connection is closed")
+        self._input_queue.send_nowait(_CloseContext(context_id))
+
+    async def _send_loop(self) -> None:
+        """Send loop - processes messages from input queue"""
+        try:
+            while not self._closed:
+                try:
+                    msg = await self._input_queue.recv()
+                except utils.aio.ChanClosed:
+                    break
+
+                if not self._ws or self._ws.closed:
+                    break
+
+                if isinstance(msg, _SynthesizeContent):
+                    is_new_context = msg.context_id not in self._active_contexts
+
+                    if is_new_context:
+                        init_pkt = _build_dialogue_context_init_packet(
+                            self._opts,
+                            context_id=msg.context_id,
+                        )
+                        await self._ws.send_json(init_pkt)
+                        self._active_contexts.add(msg.context_id)
+
+                    pkt: dict[str, Any] = {
+                        "context_id": msg.context_id,
+                        "inputs": [{"text": msg.text, "voice_id": self._opts.voice_id}],
+                    }
+                    if msg.flush:
+                        pkt["flush"] = True
+
+                    # start timeout timer for this context
+                    self._start_timeout_timer(msg.context_id)
+
+                    await self._ws.send_json(pkt)
+
+                elif isinstance(msg, _CloseContext):
+                    if msg.context_id in self._active_contexts:
+                        await self._wait_for_turn_drained(msg.context_id)
+                        close_pkt = {
+                            "context_id": msg.context_id,
+                            "close_context": True,
+                        }
+                        await self._ws.send_json(close_pkt)
+
+        except Exception as e:
+            logger.warning("dialogue send loop error", exc_info=e)
+        finally:
+            if not self._closed:
+                await self.aclose()
+
+    async def _wait_for_turn_drained(self, context_id: str) -> None:
+        """Wait for `is_final_audio_for_turn` before sending close_context: sending it
+        right after the final flush (like the regular protocol does) races the
+        server's stream teardown and drops the last turn's audio."""
+        event = self._turn_drained.setdefault(context_id, asyncio.Event())
+        ctx = self._context_data.get(context_id)
+        timeout = ctx.stream._conn_options.timeout if ctx else _CLOSE_CONTEXT_DRAIN_TIMEOUT
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+
+    async def _recv_loop(self) -> None:
+        """Receive loop - processes messages from WebSocket"""
+        try:
+            while not self._closed and self._ws and not self._ws.closed:
+                msg = await self._ws.receive()
+
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    if not self._closed and len(self._context_data) > 0:
+                        # websocket will be closed after all contexts are closed
+                        raise APIStatusError(
+                            "ElevenLabs dialogue websocket connection closed unexpectedly",
+                            status_code=self._ws.close_code or -1,
+                        )
+                    break
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning("unexpected message type %s", msg.type)
+                    continue
+
+                data = json.loads(msg.data)
+                context_id = data.get("context_id")
+                ctx = self._context_data.get(context_id) if context_id is not None else None
+
+                if error := data.get("error"):
+                    logger.error(
+                        "elevenlabs text-to-dialogue returned error",
+                        extra={"context_id": context_id, "error": error, "data": data},
+                    )
+                    if context_id is not None:
+                        if ctx and not ctx.waiter.done():
+                            ctx.waiter.set_exception(APIError(message=error))
+                        self._cleanup_context(context_id)
+                    continue
+
+                if ctx is None:
+                    logger.warning(
+                        "unexpected message received from elevenlabs text-to-dialogue",
+                        extra={"data": data},
+                    )
+                    continue
+
+                emitter = ctx.emitter
+                stream = ctx.stream
+
+                # text-to-dialogue is plain snake_case, no camelCase fallback needed
+                alignment = (
+                    data.get("normalized_alignment")
+                    if self.preferred_alignment == "normalized"
+                    else data.get("alignment")
+                )
+                if alignment and stream is not None:
+                    chars = alignment["chars"]
+                    starts = alignment.get("char_start_times_ms")
+                    durs = alignment.get("char_durations_ms")
+                    if starts and durs and len(chars) == len(durs) and len(starts) == len(durs):
+                        stream._text_buffer += "".join(chars)
+                        # in case item in chars has multiple characters
+                        for char, start, dur in zip(chars, starts, durs, strict=False):
+                            if len(char) > 1:
+                                stream._start_times_ms += [start] * (len(char) - 1)
+                                stream._durations_ms += [0] * (len(char) - 1)
+                            stream._start_times_ms.append(start)
+                            stream._durations_ms.append(dur)
+
+                        timed_words, stream._text_buffer = _to_timed_words(
+                            stream._text_buffer, stream._start_times_ms, stream._durations_ms
+                        )
+                        emitter.push_timed_transcript(timed_words)
+                        stream._start_times_ms = stream._start_times_ms[-len(stream._text_buffer) :]
+                        stream._durations_ms = stream._durations_ms[-len(stream._text_buffer) :]
+
+                if data.get("audio"):
+                    b64data = base64.b64decode(data["audio"])
+                    emitter.push(b64data)
+                    if ctx.timeout_timer:
+                        ctx.timeout_timer.cancel()
+
+                # turn boundary; unblocks a pending close_context (see above), not
+                # otherwise exposed by this plugin's API
+                if data.get("is_final_audio_for_turn"):
+                    logger.debug(
+                        "elevenlabs text-to-dialogue turn boundary",
+                        extra={"context_id": context_id},
+                    )
+                    self._turn_drained.setdefault(context_id, asyncio.Event()).set()
+
+                if data.get("is_final"):
+                    if stream is not None:
+                        timed_words, _ = _to_timed_words(
+                            stream._text_buffer,
+                            stream._start_times_ms,
+                            stream._durations_ms,
+                            flush=True,
+                        )
+                        emitter.push_timed_transcript(timed_words)
+
+                    if not ctx.waiter.done():
+                        ctx.waiter.set_result(None)
+                    self._cleanup_context(context_id)
+
+                    if not self._is_current and not self._active_contexts:
+                        logger.debug("no active contexts, shutting down connection")
+                        break
+        except Exception as e:
+            logger.warning("dialogue recv loop error", exc_info=e)
+            for ctx in self._context_data.values():
+                if not ctx.waiter.done():
+                    ctx.waiter.set_exception(e)
+                if ctx.timeout_timer:
+                    ctx.timeout_timer.cancel()
+            self._context_data.clear()
+        finally:
+            if not self._closed:
+                await self.aclose()
+
+    def _cleanup_context(self, context_id: str) -> None:
+        """Clean up context state"""
+        ctx = self._context_data.pop(context_id, None)
+        if ctx and ctx.timeout_timer:
+            ctx.timeout_timer.cancel()
+
+        self._active_contexts.discard(context_id)
+        self._turn_drained.pop(context_id, None)
+
+    def _start_timeout_timer(self, context_id: str) -> None:
+        """Start a timeout timer for a context"""
+        if not (ctx := self._context_data.get(context_id)) or ctx.timeout_timer:
+            return
+
+        timeout = ctx.stream._conn_options.timeout
+
+        def _on_timeout() -> None:
+            if not ctx.waiter.done():
+                ctx.waiter.set_exception(
+                    APITimeoutError(f"11labs text-to-dialogue timed out after {timeout} seconds")
+                )
+            self._cleanup_context(context_id)
+
+        ctx.timeout_timer = asyncio.get_event_loop().call_later(timeout, _on_timeout)
+
+    async def aclose(self) -> None:
+        """Close the connection and clean up"""
+        if self._closed:
+            return
+
+        self._closed = True
+        self._input_queue.close()
+
+        for ctx in self._context_data.values():
+            if not ctx.waiter.done():
+                # do not cancel the future as it becomes difficult to catch
+                # all pending tasks will be aborted with an exception
+                ctx.waiter.set_exception(APIStatusError("connection closed"))
+            if ctx.timeout_timer:
+                ctx.timeout_timer.cancel()
+        self._context_data.clear()
+
+        if self._ws:
+            await self._ws.close()
+
+        if self._send_task:
+            await utils.aio.gracefully_cancel(self._send_task)
+        if self._recv_task:
+            await utils.aio.gracefully_cancel(self._recv_task)
+
+        self._ws = None
+
+
 def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:
     voices: list[Voice] = []
     for voice in data["voices"]:
@@ -934,6 +1316,47 @@ def _multi_stream_url(opts: _TTSOptions) -> str:
         params.append("sync_alignment=true")
     if is_given(opts.auto_mode):
         params.append(f"auto_mode={str(opts.auto_mode).lower()}")
+    url += "&".join(params)
+    return url
+
+
+def _dialogue_synthesize_url(opts: _TTSOptions) -> str:
+    base_url = opts.base_url
+    return (
+        f"{base_url}/text-to-dialogue/stream?"
+        f"output_format={opts.encoding}&enable_logging={str(opts.enable_logging).lower()}"
+    )
+
+
+def _build_dialogue_synthesize_body(
+    opts: _TTSOptions, input_text: str, voice_settings: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Single-turn body for /text-to-dialogue/stream: `settings`, not `voice_settings`,
+    and voice_id is per-input rather than part of the URL."""
+    body: dict[str, Any] = {
+        "inputs": [{"text": input_text, "voice_id": opts.voice_id}],
+        "model_id": opts.model,
+        "apply_text_normalization": opts.apply_text_normalization,
+    }
+    if voice_settings is not None:
+        body["settings"] = voice_settings
+    if is_given(opts.language):
+        body["language_code"] = opts.language.language
+    return body
+
+
+def _dialogue_multi_stream_url(opts: _TTSOptions) -> str:
+    # no voice_id in the URL (sent in the registration message); narrower param set
+    # than the regular websocket (no ssml/inactivity_timeout/chunk_schedule/auto_mode)
+    base_url = opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
+    url = f"{base_url}/text-to-dialogue/multi-stream-input?"
+    params = [f"model_id={opts.model}", f"output_format={opts.encoding}"]
+    if is_given(opts.language):
+        params.append(f"language_code={opts.language.language}")
+    params.append(f"enable_logging={str(opts.enable_logging).lower()}")
+    params.append(f"apply_text_normalization={opts.apply_text_normalization}")
+    if opts.sync_alignment:
+        params.append("sync_alignment=true")
     url += "&".join(params)
     return url
 
