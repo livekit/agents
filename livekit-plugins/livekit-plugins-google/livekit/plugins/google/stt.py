@@ -150,6 +150,7 @@ class STT(stt.STT):
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        project: NotGivenOr[str] = NOT_GIVEN,
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
@@ -185,6 +186,7 @@ class STT(stt.STT):
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            project(str): the Google Cloud project to use for recognition
             profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
@@ -247,7 +249,7 @@ class STT(stt.STT):
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
         self._credentials = credentials
-        self._project_id: str | None = None
+        self._project_id: str | None = project if is_given(project) else None
 
         if (
             not is_given(credentials)
@@ -333,7 +335,8 @@ class STT(stt.STT):
                 self._credentials_file,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
-            self._project_id = project_id
+            if self._project_id is None:
+                self._project_id = project_id
             client = client_cls(credentials=credentials, client_options=client_options)
         else:
             client = client_cls(client_options=client_options)

@@ -2167,7 +2167,7 @@ class AgentActivity(RecognitionHooks):
         if (
             ev.speaking
             # allow some silence between utterances during active speech
-            and ev.raw_accumulated_silence <= self._session.options.endpointing["min_delay"] / 2
+            and ev.raw_accumulated_silence <= self.min_endpointing_delay / 2
         ):
             self._user_silence_event.clear()
         else:
@@ -3494,6 +3494,13 @@ class AgentActivity(RecognitionHooks):
                     interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
+                self._session.emit(
+                    "function_tools_executed",
+                    FunctionToolsExecutedEvent(
+                        function_calls=interrupted_calls,
+                        function_call_outputs=interrupted_fnc_outputs,
+                    ),
+                )
                 self._agent._chat_ctx.insert(interrupted_tool_messages)
                 self._session._tool_items_added(interrupted_tool_messages)
             return
