@@ -1958,7 +1958,7 @@ WHERE type = :room_type AND smoking = :smoking AND max_occupancy >= :guests
     WHERE b.room_id = hotel_rooms.id AND b.status = 'confirmed'
       AND (:exclude IS NULL OR b.code != :exclude)
       AND NOT (b.check_out <= :check_in OR b.check_in >= :check_out))
-ORDER BY CASE WHEN id = :prefer THEN 0 ELSE 1 END, id LIMIT 1
+ORDER BY CASE WHEN id = :prefer THEN 0 ELSE 1 END, nightly_rate, id LIMIT 1
 """
 
 _SQL_AVAILABILITY = """
