@@ -99,9 +99,7 @@ def validate_api_base_url(api_url: str, *, http_only: bool = False) -> str:
         )
     host = parsed.hostname
     if not host:
-        raise ValueError(
-            f"Blaze API URL must include a non-empty hostname, got {api_url!r}"
-        )
+        raise ValueError(f"Blaze API URL must include a non-empty hostname, got {api_url!r}")
 
     authority = _authority_without_userinfo(host, parsed.port)
     path = parsed.path.rstrip("/") if parsed.path else ""
