@@ -20,24 +20,22 @@ from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
-from livekit.agents.llm import ChatContext
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _BOOK_ROOM_INSTRUCTIONS = """\
-You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script, and never re-ask something already given.
+You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script.
 
-Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values - don't re-ask the caller for details they already gave.
+Every tool stays listed, but one called out of turn does nothing: it comes back saying so, with the list of what IS available right now. Take something from that list - never retry the refused call, and never tell the caller that a refused call worked.
 
-Run set_stay before choose_room - available rooms depend on the dates. set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick (ask about any preference they've hinted at, like a view) before calling choose_room. Before calling confirm_booking, make sure you've collected the stay, the room choice, plus the caller's name, email, phone, and card - then read the whole booking back in one short sentence (dates, room type and extras, total, card last four) and let the caller say "go ahead" or correct something. confirm_booking only fires once they've agreed to the read-back.
+Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values.
 
-Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did. When the directive says "call confirm_booking() now", call it - the call IS the next action, no filler turn.
+set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick, asking about any preference they've hinted at, like a view.
+
+Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did.
 
 If the room sells out at the last second, just pick another - everything else stays captured.
-
-A booking is not complete unless "confirm_booking" is called. Bookings are only valid once you call "confirm_booking."
-
-Never speak the same question twice in a row. If a field was just captured ("name recorded", "email recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
 
 
@@ -47,9 +45,27 @@ class _Step(Enum):
     bookkeeping to keep in sync."""
 
     NEED_STAY = auto()
+    OFFERING = auto()
     NEED_ROOM = auto()
     CAPTURE = auto()
-    READY = auto()
+    READ_BACK = auto()
+    AWAIT_AGREEMENT = auto()
+
+
+# What each step accepts. Every tool stays listed to the model - a call outside
+# its step returns _closed() instead of running, so choose_room can't land
+# before the options have been offered and confirm_booking can't land before the
+# read-back has been answered. CAPTURE adds the dialogs for the details still
+# missing, leaving a captured detail with no dialog to re-ask it with. set_stay
+# and choose_room stay open past their own step so a caller can correct them.
+_ALLOWED: dict[_Step, frozenset[str]] = {
+    _Step.NEED_STAY: frozenset({"set_stay"}),
+    _Step.OFFERING: frozenset({"set_stay"}),
+    _Step.NEED_ROOM: frozenset({"choose_room", "set_stay"}),
+    _Step.CAPTURE: frozenset({"set_stay", "choose_room"}),
+    _Step.READ_BACK: frozenset({"set_stay", "choose_room"}),
+    _Step.AWAIT_AGREEMENT: frozenset({"confirm_booking", "set_stay", "choose_room"}),
+}
 
 
 class BookRoomTask(AgentTask[RoomBooking]):
@@ -57,7 +73,11 @@ class BookRoomTask(AgentTask[RoomBooking]):
     handle the part with real coupling - dates <-> availability <-> room - and the
     `open_*_dialog` tools capture each independent detail the moment it's
     offered, storing it on the draft so a later hiccup never re-asks it.
-    `confirm_booking()` takes the card, writes the booking, and completes with it."""
+    `confirm_booking()` takes the card, writes the booking, and completes with it.
+
+    Which of those will actually run is `_ALLOWED[self._step()]`, checked by
+    each tool through `_closed()`: the sequencing is enforced where the call
+    lands rather than requested in instructions the model has to remember."""
 
     def __init__(self, db: HotelDB, *, chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN) -> None:
         self._db = db
@@ -77,6 +97,11 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._phone: str | None = None
         self._card_last4: str | None = None
         self._quoted_total: int | None = None
+        # Speech the flow owes the caller before it may move on. Discharged as
+        # the tool-less step is served, so the model speaks and the turn ends
+        # there - the caller's reply is what reopens the tools.
+        self._must_offer: bool = False
+        self._must_read_back: bool = True
         super().__init__(
             instructions=f"{COMMON_INSTRUCTIONS}\n\n{_BOOK_ROOM_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
@@ -122,11 +147,48 @@ class BookRoomTask(AgentTask[RoomBooking]):
     def _step(self) -> _Step:
         if self._check_in is None:
             return _Step.NEED_STAY
+        if self._must_offer:
+            return _Step.OFFERING
         if self._room_type is None:
             return _Step.NEED_ROOM
         if self._missing():
             return _Step.CAPTURE
-        return _Step.READY
+        if self._must_read_back:
+            return _Step.READ_BACK
+        return _Step.AWAIT_AGREEMENT
+
+    def _allowed(self, step: _Step) -> frozenset[str]:
+        tools = _ALLOWED[step]
+        if step is _Step.CAPTURE:
+            tools |= {tool for tool, _ in self._missing()}
+        return tools | {"give_up"}
+
+    def _closed(self, tool: str) -> str | None:
+        """The refusal for a tool called outside its step, or None when it's open.
+
+        The refusal has to name the outcome. A bare "do X next" reads as a report
+        of progress, and the model relays it to the caller as though the call had
+        gone through - which for confirm_booking means speaking a confirmation
+        code for a reservation that was never written.
+        """
+        allowed = self._allowed(self._step())
+        if tool in allowed:
+            return None
+        return (
+            f"{tool} did NOT run - nothing was recorded, no booking was made, and no "
+            f"confirmation code exists. Available right now: {', '.join(sorted(allowed))}. "
+            f"{self._status()}"
+        )
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        # The caller answering is what discharges speech the flow owes them: the
+        # options are offered and picked from, the read-back is spoken and agreed
+        # to. Until then choose_room / confirm_booking stay closed.
+        step = self._step()
+        if step is _Step.OFFERING:
+            self._must_offer = False
+        elif step is _Step.READ_BACK:
+            self._must_read_back = False
 
     def _status(self) -> str:
         # Action-oriented status, NOT a missing-field list. A "still need: card"
@@ -136,10 +198,17 @@ class BookRoomTask(AgentTask[RoomBooking]):
         step = self._step()
         if step is _Step.NEED_STAY:
             return "no stay yet - ask the caller for dates and party size, then call set_stay"
+        if step is _Step.OFFERING:
+            return (
+                "offer these room types to the caller and ask which one they want - "
+                "choose_room stays closed until they've answered"
+            )
         if step is _Step.NEED_ROOM:
             return "stay captured - ask which room type, then call choose_room"
         if step is _Step.CAPTURE:
             return self._missing()[0][1]
+        if step is _Step.AWAIT_AGREEMENT:
+            return "the read-back is done - call confirm_booking() the moment the caller agrees"
         total = (
             f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
         )
@@ -164,6 +233,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
             check_out: Check-out date in ISO YYYY-MM-DD format.
             guests: Number of guests (must be >= 1; ask the caller if not specified).
         """
+        if closed := self._closed("set_stay"):
+            return closed
         if check_out <= check_in:
             raise ToolError("check-out must be after check-in")
         if (check_out - check_in).days > 30:
@@ -181,6 +252,9 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return f"sold out for {check_in} to {check_out}, {guests} guests - dates not recorded; ask for adjacent dates"
 
         self._check_in, self._check_out, self._guests = check_in, check_out, guests
+        # The options have to be spoken before a room can be picked, and new
+        # dates invalidate any read-back already given.
+        self._must_offer = self._must_read_back = True
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
@@ -209,6 +283,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
             smoking_room: True if the caller wants a smoking-permitted room.
             view: The view the caller asked for (city / garden / ocean), ONLY if they stated one - omit entirely otherwise.
         """
+        if closed := self._closed("choose_room"):
+            return closed
         if self._check_in is None or self._check_out is None or self._guests is None:
             raise ToolError("stay dates and guest count not yet recorded")
         # Re-check against availability filtered by the smoking preference: a
@@ -240,6 +316,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._view = view
         self._extras = list(extras)
         self._smoking = smoking_room
+        self._must_read_back = True  # a different room means a different read-back
         # The exact total (with tax) for the room that will be booked - quoted
         # here so the read-back uses the real number, never per-night arithmetic.
         self._quoted_total = await self._db.peek_stay_total(
@@ -263,6 +340,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_name_dialog(self) -> str:
         """Open the name dialog. It collects the guest's first and last name (read back and confirmed) from the caller."""
+        if closed := self._closed("open_name_dialog"):
+            return closed
         r = await beta.workflows.GetNameTask(
             first_name=True,
             last_name=True,
@@ -275,6 +354,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_email_dialog(self) -> str:
         """Open the email dialog. It collects the guest's email address (read back and confirmed) from the caller."""
+        if closed := self._closed("open_email_dialog"):
+            return closed
         r = await beta.workflows.GetEmailTask(
             chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
         )
@@ -284,6 +365,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
+        if closed := self._closed("open_phone_dialog"):
+            return closed
         r = await beta.workflows.GetPhoneNumberTask(
             chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
         )
@@ -293,6 +376,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_credit_card_dialog(self) -> str:
         """Open the credit-card dialog. It collects the card number, expiry, security code, and cardholder name from the caller in one focused step."""
+        if closed := self._closed("open_credit_card_dialog"):
+            return closed
         card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
         self._card_last4 = card.card_number[-4:]
         return f"card recorded (ending {self._card_last4}) | {self._status()}"
@@ -300,6 +385,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def confirm_booking(self) -> str | None:
         """Finalize the booking and charge the card. Call ONLY after every detail is captured AND the caller has agreed to your read-back (dates, room and extras, total, card last four). Returns the final confirmation - relay it to the caller; the booking flow ends with this call."""
+        if closed := self._closed("confirm_booking"):
+            return closed
         check_in, check_out, guests, room_type = (
             self._check_in,
             self._check_out,
