@@ -29,8 +29,6 @@ from livekit.agents.voice.agent import AgentTask
 _BOOK_ROOM_INSTRUCTIONS = """\
 You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script.
 
-Every tool stays listed, but one called out of turn does nothing: it comes back saying so, with the list of what IS available right now. Take something from that list - never retry the refused call, and never tell the caller that a refused call worked.
-
 Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values.
 
 set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick, asking about any preference they've hinted at, like a view.
