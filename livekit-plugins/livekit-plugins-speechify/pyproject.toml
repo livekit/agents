@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.6.10", "speechify-api>=3.0.1"]
+dependencies = ["livekit-agents[codecs]>=1.6.11.rc1", "speechify-api>=3.0.1"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
