@@ -30,6 +30,14 @@ The defaults connect to the hosted API (`wss://api.boson.ai/v1/realtime`) with
 the `higgs-realtime` model and the `default` voice. To point at another
 deployment, pass `url=` — and `api_key=None` if it does not authenticate.
 
+`examples/agent.py` is a complete agent with function tools that you can talk to
+over your own microphone, with no LiveKit server involved:
+
+```bash
+export BOSON_API_KEY=...
+python examples/agent.py console
+```
+
 ## Model options
 
 `boson.realtime.RealtimeModel` accepts these options:
