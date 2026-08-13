@@ -265,8 +265,9 @@ class ChunkedStream(tts.ChunkedStream):
             await self._attempt(output_emitter)
         except _Retryable:
             # The API asked for a retry. Take one more run at it rather than
-            # handing the caller silence.
-            await self._tts._prewarm_async()
+            # handing the caller silence. The prewarm is fired in the
+            # background so it can never add its own timeout to the turn.
+            self._tts._prewarm_soon()
             await asyncio.sleep(1.0)
             try:
                 await self._attempt(output_emitter)
