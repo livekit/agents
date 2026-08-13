@@ -2240,6 +2240,91 @@ async def test_boson_realtime_rejected_item_settles_its_own_create(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_rejected_item_is_not_also_a_session_error(monkeypatch):
+    # The rejection already reaches the caller through the future settled above,
+    # where it is downgraded to a warning. Emitting a session error for the same
+    # event would have the plugin call one server message both harmless and a
+    # failure, and would put a false alarm in front of applications during
+    # ordinary chat-context syncing.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    errors = []
+    session.on("error", errors.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
+            )
+        )
+        create_event = await session._msg_ch.recv()
+
+        _server_event(
+            session,
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "item_rejected",
+                    "message": "conversation item rejected",
+                    "event_id": create_event["event_id"],
+                },
+            },
+        )
+
+        await asyncio.wait_for(update_task, timeout=0.5)
+        assert errors == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_fatal_error_ends_the_session_even_naming_an_item(monkeypatch):
+    # The counterpart: settling a chat-ctx future must not swallow a refusal that
+    # has to end the session. Which client event the server happened to be
+    # answering says nothing about whether the account can continue.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(
+                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
+            )
+        )
+        create_event = await session._msg_ch.recv()
+
+        with pytest.raises(APIError) as exc_info:
+            _server_event(
+                session,
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "insufficient_quota",
+                        "code": "monthly_cap_reached",
+                        "message": "monthly cap reached",
+                        "event_id": create_event["event_id"],
+                    },
+                },
+            )
+        assert exc_info.value.retryable is False
+
+        # The waiter is settled either way; what matters is that raising still
+        # happened. _main_task is what turns this into a stopped session.
+        await asyncio.wait_for(update_task, timeout=0.5)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_rejected_item_survives_a_later_echo(monkeypatch):
     # A rejected create stays registered in _item_create_future -- the error
     # paths settle the future without removing the entry, and only

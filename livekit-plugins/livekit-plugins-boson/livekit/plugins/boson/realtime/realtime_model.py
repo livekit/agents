@@ -1295,6 +1295,19 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # settling is shared rather than duplicated; see _settle_chat_ctx_wait.
         if event_id and (chat_ctx_fut := self._chat_ctx_event_futures.pop(event_id, None)):
             self._settle_chat_ctx_wait(chat_ctx_fut, error, event_id)
+            # The rejection is the answer to one chat-ctx event, and the future
+            # now carries it to update_chat_ctx(), which downgrades a single
+            # rejected item to a warning. Emitting a session error as well would
+            # report the same event twice and disagree with that downgrade, so
+            # stop here -- as the base does after settling a non-fatal one.
+            #
+            # A fatal error still falls through: it has to end the session
+            # whatever client event it happened to name. Escalation is unaffected
+            # either way, being decided inside _settle_chat_ctx_wait; and a
+            # generate_reply cannot be waiting on this id, since a chat-ctx event
+            # id and a response.create event id are never the same id.
+            if not _is_boson_fatal_error(error):
+                return
 
         if (
             error.get("code") == "input_audio_buffer_commit_empty"
@@ -1355,9 +1368,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             return
 
         message = _format_error_message(error, event_id)
-        if error.get("code") in _BOSON_FATAL_ERROR_CODES or (
-            error.get("type") in _BOSON_FATAL_ERROR_TYPES
-        ):
+        if _is_boson_fatal_error(error):
             # Permanent for the account, not for this connection: another attempt
             # buys nothing. Raised rather than emitted, which is how the base
             # signals the same thing -- its recv loop lets a non-retryable
@@ -1447,6 +1458,13 @@ def _set_message_text(message: llm.ChatMessage, text: str) -> None:
         message.content.append(text)
     else:
         message.content[text_index] = text
+
+
+def _is_boson_fatal_error(error: dict[str, Any]) -> bool:
+    """Whether this error is an account-level refusal a reconnect cannot clear."""
+    return error.get("code") in _BOSON_FATAL_ERROR_CODES or (
+        error.get("type") in _BOSON_FATAL_ERROR_TYPES
+    )
 
 
 def _copy_dict_or_none(value: Any | None) -> dict[str, Any] | None:
