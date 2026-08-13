@@ -157,6 +157,20 @@ def test_blaze_config_empty_or_invalid_timeout_env_falls_back(
     assert config.llm_timeout == 60.0
 
 
+def test_blaze_config_blank_api_url_env_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty/whitespace BLAZE_API_URL must fall back to the default base URL."""
+    monkeypatch.setenv("BLAZE_API_URL", "")
+    assert BlazeConfig().api_url == "https://api.blaze.vn"
+
+    monkeypatch.setenv("BLAZE_API_URL", "   ")
+    assert BlazeConfig().api_url == "https://api.blaze.vn"
+
+    # Explicit blank constructor value also falls through to default (env cleared).
+    monkeypatch.delenv("BLAZE_API_URL", raising=False)
+    assert BlazeConfig(api_url="").api_url == "https://api.blaze.vn"
+    assert BlazeConfig(api_url="  ").api_url == "https://api.blaze.vn"
+
+
 # ---------------------------------------------------------------------------
 # Utils
 # ---------------------------------------------------------------------------

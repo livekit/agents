@@ -383,7 +383,10 @@ class ChunkedStream(tts.ChunkedStream):
             return
 
         if not tts_cfg._auth_token:
-            raise APIConnectionError("Blaze TTS requires an auth token (BLAZE_API_TOKEN)")
+            raise APIConnectionError(
+                "Blaze TTS requires an auth token (BLAZE_API_TOKEN)",
+                retryable=False,
+            )
 
         logger.info(
             "[%s] TTS one-shot WS: %d chars, speaker=%s, model=%s",

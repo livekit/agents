@@ -79,9 +79,10 @@ class BlazeConfig:
         llm_timeout: float | None = None,
     ) -> None:
         # Strip trailing slashes so HTTP paths like f"{api_url}/v1/..." never double-slash.
+        # Blank/whitespace env (or constructor) values fall back to the default, same as _env_float.
         self.api_url: str = (
-            (api_url or os.environ.get("BLAZE_API_URL", _DEFAULT_API_URL)).strip().rstrip("/")
-        )
+            (api_url or os.environ.get("BLAZE_API_URL", "")).strip() or _DEFAULT_API_URL
+        ).rstrip("/")
         self.api_token: str = api_token or os.environ.get("BLAZE_API_TOKEN", "")
         self.stt_timeout: float = (
             stt_timeout

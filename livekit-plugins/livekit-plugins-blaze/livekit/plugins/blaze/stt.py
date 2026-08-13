@@ -550,7 +550,10 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         stt_cfg = self._blaze_stt
         if not stt_cfg._auth_token:
-            raise APIConnectionError("Blaze STT streaming requires an auth token (BLAZE_API_TOKEN)")
+            raise APIConnectionError(
+                "Blaze STT streaming requires an auth token (BLAZE_API_TOKEN)",
+                retryable=False,
+            )
 
         timeout = effective_connect_timeout(self._conn_options, stt_cfg._timeout)
         logger.info(
