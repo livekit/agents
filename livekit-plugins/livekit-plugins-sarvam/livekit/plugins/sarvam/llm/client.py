@@ -22,8 +22,7 @@ import httpx
 import openai
 from openai.types import ReasoningEffort
 
-from livekit.agents import __version__ as livekit_version
-from livekit.agents import llm
+from livekit.agents import __version__ as livekit_version, llm
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ImageContent
 from livekit.agents.types import (
@@ -38,6 +37,8 @@ from livekit.plugins.openai.llm import LLM as OpenAILLM
 from .models import SarvamLLMModels
 
 SARVAM_API_BASE = "https://api.sarvam.ai"
+SARVAM_LLM_BASE_URL_V1 = f"{SARVAM_API_BASE}/v1"
+SARVAM_LLM_BASE_URL_V2 = f"{SARVAM_API_BASE}/v2"
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 # ---------------------------------------------------------------------------
@@ -100,8 +101,8 @@ def _resolve_base_url(model: str) -> str:
     ``sarvam-105b-conversations`` uses ``/v1``; all other models use ``/v2``.
     """
     if model in _V1_MODELS:
-        return f"{SARVAM_API_BASE}/v1"
-    return f"{SARVAM_API_BASE}/v2"
+        return SARVAM_LLM_BASE_URL_V1
+    return SARVAM_LLM_BASE_URL_V2
 
 
 def _api_version(model: str) -> str:
@@ -111,8 +112,7 @@ def _api_version(model: str) -> str:
 def _validate_model(model: str) -> str:
     if model not in _SUPPORTED_MODELS:
         raise ValueError(
-            f"Unsupported Sarvam model '{model}'. "
-            f"Supported models: {sorted(_SUPPORTED_MODELS)}"
+            f"Unsupported Sarvam model '{model}'. Supported models: {sorted(_SUPPORTED_MODELS)}"
         )
     return model
 
@@ -189,9 +189,7 @@ class LLM(OpenAILLM):
         sarvam_api_key = _get_api_key(api_key)
 
         # Resolve base URL: explicit > model-derived
-        resolved_base_url = (
-            base_url if is_given(base_url) else _resolve_base_url(validated_model)
-        )
+        resolved_base_url = base_url if is_given(base_url) else _resolve_base_url(validated_model)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -315,20 +313,22 @@ class LLM(OpenAILLM):
         # --- Image rejection on non-vision models ---
         if model not in _VISION_MODELS and _has_image_content(chat_ctx):
             raise ValueError(
-                f"Model '{model}' does not support image input. "
+                f"Image input is not supported for model '{model}'. "
                 f"Use 'gemma4' for vision capabilities."
             )
 
         # --- tool_choice without tools ---
-        effective_tool_choice = (
-            tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        )
+        # 'none' and 'auto' are always valid (they don't require tools).
+        # 'required' and named-function tool_choice require a non-empty tools array.
+        effective_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         effective_tools = tools or []
         if is_given(effective_tool_choice) and not effective_tools:
-            raise ValueError(
-                "tool_choice requires a non-empty tools array. "
-                "Provide tools or set tool_choice to 'none' or 'auto'."
-            )
+            tc_str = effective_tool_choice if isinstance(effective_tool_choice, str) else "function"
+            if tc_str not in ("none", "auto"):
+                raise ValueError(
+                    "tool_choice requires a non-empty tools array. "
+                    "Provide tools or set tool_choice to 'none' or 'auto'."
+                )
 
         # --- Strip unsupported fields from caller-provided extra_kwargs ---
         merged_extra: dict[str, Any] = {}
