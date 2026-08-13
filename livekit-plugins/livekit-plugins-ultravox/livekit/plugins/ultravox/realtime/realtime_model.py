@@ -591,6 +591,42 @@ class RealtimeSession(
         self._closed = True
 
     @utils.log_exceptions(logger=logger)
+    def _build_call_payload(self) -> dict[str, Any]:
+        """Build the JSON body for the Ultravox ``/calls`` request.
+
+        Extracted from ``_main_task`` so the payload can be exercised directly in
+        unit tests without standing up an HTTP session and WebSocket. Never log
+        the return value: it may carry provider credentials (e.g. an external TTS
+        ``Authorization`` header).
+        """
+        payload: dict[str, Any] = {
+            "systemPrompt": self._opts.system_prompt,
+            "model": self._opts.model_id,
+            "voice": self._opts.voice,
+            "medium": {
+                "serverWebSocket": {
+                    "inputSampleRate": self._opts.input_sample_rate,
+                    "outputSampleRate": self._opts.output_sample_rate,
+                    "clientBufferSizeMs": 30000,  # 30 seconds
+                }
+            },
+            "selectedTools": parse_tools(list(self._tools.function_tools.values())),
+        }
+
+        # Add optional parameters only if specified
+        if is_given(self._opts.temperature):
+            payload["temperature"] = self._opts.temperature
+        if is_given(self._opts.language_hint):
+            payload["languageHint"] = self._opts.language_hint
+        if is_given(self._opts.max_duration):
+            payload["maxDuration"] = self._opts.max_duration
+        if is_given(self._opts.time_exceeded_message):
+            payload["timeExceededMessage"] = self._opts.time_exceeded_message
+        if is_given(self._opts.first_speaker):
+            payload["firstSpeaker"] = self._opts.first_speaker
+
+        return payload
+
     async def _main_task(self) -> None:
         """Main task with restart loop for managing WebSocket sessions."""
         while not self._msg_ch.closed:
@@ -620,33 +656,7 @@ class RealtimeSession(
                     create_call_url += f"?{query_string}"
 
                 # Build payload with core parameters
-                payload: dict[str, Any] = {
-                    "systemPrompt": self._realtime_model._opts.system_prompt,
-                    "model": self._realtime_model._opts.model_id,
-                    "voice": self._realtime_model._opts.voice,
-                    "medium": {
-                        "serverWebSocket": {
-                            "inputSampleRate": self._realtime_model._opts.input_sample_rate,
-                            "outputSampleRate": self._realtime_model._opts.output_sample_rate,
-                            "clientBufferSizeMs": 30000,  # 30 seconds
-                        }
-                    },
-                    "selectedTools": parse_tools(list(self._tools.function_tools.values())),
-                }
-
-                # Add optional parameters only if specified
-                if is_given(self._realtime_model._opts.temperature):
-                    payload["temperature"] = self._realtime_model._opts.temperature
-                if is_given(self._realtime_model._opts.language_hint):
-                    payload["languageHint"] = self._realtime_model._opts.language_hint
-                if is_given(self._realtime_model._opts.max_duration):
-                    payload["maxDuration"] = self._realtime_model._opts.max_duration
-                if is_given(self._realtime_model._opts.time_exceeded_message):
-                    payload["timeExceededMessage"] = (
-                        self._realtime_model._opts.time_exceeded_message
-                    )
-                if is_given(self._realtime_model._opts.first_speaker):
-                    payload["firstSpeaker"] = self._realtime_model._opts.first_speaker
+                payload = self._build_call_payload()
 
                 # Create call and connect to WebSocket
                 http_session = self._realtime_model._ensure_http_session()
