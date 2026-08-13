@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import Enum, auto
 from typing import Annotated
 
 from context import speech_only
@@ -38,6 +39,17 @@ A booking is not complete unless "confirm_booking" is called. Bookings are only 
 
 Never speak the same question twice in a row. If a field was just captured ("name recorded", "email recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
+
+
+class _Step(Enum):
+    """Where the booking stands. Derived from the captured values on every read,
+    so a correction lands the flow back on the right step with no rollback
+    bookkeeping to keep in sync."""
+
+    NEED_STAY = auto()
+    NEED_ROOM = auto()
+    CAPTURE = auto()
+    READY = auto()
 
 
 class BookRoomTask(AgentTask[RoomBooking]):
@@ -78,23 +90,56 @@ class BookRoomTask(AgentTask[RoomBooking]):
             )
         )
 
+    def _missing(self) -> list[tuple[str, str]]:
+        """The dialog tool and its directive for each detail still uncaptured, in ladder order."""
+        return [
+            (tool, directive)
+            for captured, tool, directive in (
+                (
+                    bool(self._first_name and self._last_name),
+                    "open_name_dialog",
+                    "stay and room captured - next: call open_name_dialog",
+                ),
+                (
+                    bool(self._email),
+                    "open_email_dialog",
+                    "name captured - next: call open_email_dialog",
+                ),
+                (
+                    bool(self._phone),
+                    "open_phone_dialog",
+                    "email captured - next: call open_phone_dialog",
+                ),
+                (
+                    bool(self._card_last4),
+                    "open_credit_card_dialog",
+                    "phone captured - next: call open_credit_card_dialog",
+                ),
+            )
+            if not captured
+        ]
+
+    def _step(self) -> _Step:
+        if self._check_in is None:
+            return _Step.NEED_STAY
+        if self._room_type is None:
+            return _Step.NEED_ROOM
+        if self._missing():
+            return _Step.CAPTURE
+        return _Step.READY
+
     def _status(self) -> str:
         # Action-oriented status, NOT a missing-field list. A "still need: card"
         # string gets parroted by the model as "What card should I use?" - the
         # field name leaks straight into the spoken question. Phrasing each
         # step as the next action avoids that.
-        if self._check_in is None:
+        step = self._step()
+        if step is _Step.NEED_STAY:
             return "no stay yet - ask the caller for dates and party size, then call set_stay"
-        if self._room_type is None:
+        if step is _Step.NEED_ROOM:
             return "stay captured - ask which room type, then call choose_room"
-        if not (self._first_name and self._last_name):
-            return "stay and room captured - next: call open_name_dialog"
-        if not self._email:
-            return "name captured - next: call open_email_dialog"
-        if not self._phone:
-            return "email captured - next: call open_phone_dialog"
-        if not self._card_last4:
-            return "phone captured - next: call open_credit_card_dialog"
+        if step is _Step.CAPTURE:
+            return self._missing()[0][1]
         total = (
             f"total {speak_usd(self._quoted_total)} including tax, " if self._quoted_total else ""
         )
