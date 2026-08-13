@@ -546,10 +546,16 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
             safe_ws_error_detail(msg, token=self._blaze_tts._auth_token),
         )
 
+        if not self._blaze_tts._auth_token:
+            raise APIConnectionError(
+                "Blaze TTS requires an auth token (BLAZE_API_TOKEN)",
+                retryable=False,
+            )
+
         await ws.send(
             json.dumps(
                 {
-                    "token": self._blaze_tts._auth_token or "",
+                    "token": self._blaze_tts._auth_token,
                     "strategy": "livekit",
                 }
             )
