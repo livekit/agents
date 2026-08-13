@@ -305,6 +305,7 @@ class AudioRecognition:
         self._turn_backchannel_over_agent: bool = False
         # an overlap is open right now, awaiting a verdict; several can occur within one turn
         self._overlap_open: bool = False
+        self._pending_interruption: inference.OverlappingSpeechEvent | None = None
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -506,6 +507,7 @@ class AudioRecognition:
             self._drain_transcript_gate()
             self._agent_speaking = False
             self._agent_speech_started_at = None
+            self._clear_pending_interruption()
             return
 
         if self._agent_speaking:
@@ -531,6 +533,7 @@ class AudioRecognition:
         self._drain_transcript_gate()
         self._agent_speaking = False
         self._agent_speech_started_at = None
+        self._clear_pending_interruption()
 
     def _on_start_of_speech(
         self,
@@ -558,7 +561,11 @@ class AudioRecognition:
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
     ) -> None:
-        if not self._adaptive_interruption_active or not self._agent_speaking:
+        if (
+            self._interruption_pending
+            or not self._adaptive_interruption_active
+            or not self._agent_speaking
+        ):
             return
         # overlap over agent speech started this turn; gates verdict acceptance below
         self._overlap_in_current_turn = True
@@ -638,9 +645,20 @@ class AudioRecognition:
             return
         await self._user_silence_ev.wait()
 
+    @property
+    def _interruption_pending(self) -> bool:
+        return self._pending_interruption is not None
+
+    def _clear_pending_interruption(self) -> None:
+        self._pending_interruption = None
+
     def _sync_transcript_gate(self) -> None:
         """Arm the transcript gate iff the agent is speaking and adaptive interruption is active."""
-        self._transcript_gate_active = self._agent_speaking and self._adaptive_interruption_active
+        self._transcript_gate_active = (
+            self._agent_speaking
+            and self._adaptive_interruption_active
+            and not self._interruption_pending
+        )
 
     def _transcript_flush_start(self, *, now: float, vad_speech_started_at: float | None) -> float:
         """Return the earliest event creation time retained during a flush."""
@@ -1387,6 +1405,7 @@ class AudioRecognition:
             return
 
         if ev.is_interruption:
+            self._pending_interruption = ev
             self._release_transcript_gate(
                 at=ev.detected_at,
                 vad_speech_started_at=ev.overlap_started_at,
