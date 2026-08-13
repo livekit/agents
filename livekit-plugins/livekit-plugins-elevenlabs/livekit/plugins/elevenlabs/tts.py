@@ -973,6 +973,8 @@ class _DialogueConnection:
         self._context_data: dict[str, _StreamData] = {}
         # per-context "audio fully drained" signal; see _wait_for_turn_drained
         self._turn_drained: dict[str, asyncio.Event] = {}
+        self._send_lock = asyncio.Lock()
+        self._pending_close_tasks: set[asyncio.Task] = set()
 
         self._send_task: asyncio.Task | None = None
         self._recv_task: asyncio.Task | None = None
@@ -1058,7 +1060,8 @@ class _DialogueConnection:
                             self._opts,
                             context_id=msg.context_id,
                         )
-                        await self._ws.send_json(init_pkt)
+                        async with self._send_lock:
+                            await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
                     pkt: dict[str, Any] = {
@@ -1068,23 +1071,33 @@ class _DialogueConnection:
                     if msg.flush:
                         pkt["flush"] = True
 
-                    # start timeout timer for this context
                     self._start_timeout_timer(msg.context_id)
 
-                    await self._ws.send_json(pkt)
+                    async with self._send_lock:
+                        await self._ws.send_json(pkt)
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
-                        await self._wait_for_turn_drained(msg.context_id)
-                        close_pkt = {
-                            "context_id": msg.context_id,
-                            "close_context": True,
-                        }
-                        await self._ws.send_json(close_pkt)
+                        task = asyncio.create_task(self._close_context_when_drained(msg.context_id))
+                        self._pending_close_tasks.add(task)
+                        task.add_done_callback(self._pending_close_tasks.discard)
 
         except Exception as e:
             logger.warning("dialogue send loop error", exc_info=e)
         finally:
+            if not self._closed:
+                await self.aclose()
+
+    async def _close_context_when_drained(self, context_id: str) -> None:
+        try:
+            await self._wait_for_turn_drained(context_id)
+            if self._closed or not self._ws or self._ws.closed:
+                return
+            close_pkt = {"context_id": context_id, "close_context": True}
+            async with self._send_lock:
+                await self._ws.send_json(close_pkt)
+        except Exception as e:
+            logger.warning("dialogue close context error", exc_info=e)
             if not self._closed:
                 await self.aclose()
 
@@ -1095,7 +1108,7 @@ class _DialogueConnection:
         event = self._turn_drained.setdefault(context_id, asyncio.Event())
         ctx = self._context_data.get(context_id)
         timeout = ctx.stream._conn_options.timeout if ctx else _CLOSE_CONTEXT_DRAIN_TIMEOUT
-        with contextlib.suppress(TimeoutError):
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(event.wait(), timeout=timeout)
 
     async def _recv_loop(self) -> None:
@@ -1258,6 +1271,9 @@ class _DialogueConnection:
             if ctx.timeout_timer:
                 ctx.timeout_timer.cancel()
         self._context_data.clear()
+
+        if self._pending_close_tasks:
+            await utils.aio.gracefully_cancel(*self._pending_close_tasks)
 
         if self._ws:
             await self._ws.close()
