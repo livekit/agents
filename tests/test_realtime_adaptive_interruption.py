@@ -116,6 +116,41 @@ def test_audio_activity_releases_held_transcripts_before_min_words() -> None:
     activity._current_speech.interrupt.assert_called_once_with()
 
 
+def test_rejected_audio_interruption_clears_pending_verdict() -> None:
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._interruption_by_audio_activity_enabled = True
+    activity._releasing_held_transcripts = False
+    activity._rt_turn_detection_enabled = False
+    activity._rt_session = None
+    activity._agent = MagicMock()
+    activity._session = MagicMock()
+    activity._session._aec_warmup_remaining = 0
+    activity._session._aec_warmup_timer = None
+    activity._session.options = SimpleNamespace(interruption={"min_words": 0})
+    activity._audio_recognition = MagicMock()
+    activity._current_speech = None
+
+    activity._interrupt_by_audio_activity()
+
+    activity._audio_recognition._clear_pending_interruption.assert_called_once_with()
+
+
+def test_replayed_start_preserves_pending_positive_verdict() -> None:
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._session = MagicMock()
+    activity._session.agent_state = "speaking"
+    activity._audio_recognition = MagicMock()
+    activity._audio_recognition._interruption_pending = True
+    activity._user_silence_event = asyncio.Event()
+    activity._stt_eos_received = True
+    activity._interruption_detected = True
+    activity._cancel_false_interruption_timer = MagicMock()  # type: ignore[method-assign]
+
+    activity.on_start_of_speech(None, speech_start_time=time.time())
+
+    assert activity._interruption_detected is True
+
+
 def _realtime_barge_in_session() -> AgentSession:
     return AgentSession(
         llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False)),
@@ -429,6 +464,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._backchannel_boundary_callback = None
     ar._overlap_in_current_turn = False
     ar._overlap_open = False
+    ar._pending_interruption = None
     ar._turn_backchannel_over_agent = False
     ar._transcript_buffer = deque()
     ar._tasks = set()
@@ -441,6 +477,35 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
 
 def _sentinel_names(ch: _RecordingChan) -> list[str]:
     return [type(item).__name__ for item in ch.sent]
+
+
+async def test_positive_verdict_blocks_replayed_start_from_reopening_overlap() -> None:
+    ar, ch = _recognition_with_interruption_ch()
+    ar._agent_speaking = True
+    ar._agent_speech_started_at = 9.0
+    ar._overlap_in_current_turn = True
+    ar._overlap_open = True
+    ar._transcript_gate_active = True
+    ar._transcript_buffer.append(MagicMock(created_at=9.5))
+    ar._process_stt_event = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda _: ar._on_start_of_speech(started_at=9.5)
+    )
+
+    event = OverlappingSpeechEvent(
+        is_interruption=True,
+        detected_at=10.0,
+        overlap_started_at=9.0,
+    )
+    await ar._on_overlap_speech_event(event)
+
+    assert ar._pending_interruption is event
+    assert ar._overlap_open is False
+    assert ar._transcript_gate_active is False
+    assert _sentinel_names(ch) == []
+
+    ar._on_end_of_agent_speech(ended_at=10.1)
+
+    assert ar._pending_interruption is None
 
 
 async def test_agent_speech_end_closes_overlap_before_reset() -> None:
