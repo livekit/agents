@@ -27,15 +27,9 @@ from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
 _BOOK_ROOM_INSTRUCTIONS = """\
-You're handling a room booking from start to finish. Collect details in whatever order the caller offers them - don't follow a fixed script.
+You're handling a room booking from start to finish.
 
 Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values.
-
-set_stay's options are for YOU to offer, not to act on: name the room types to the caller and let them pick, asking about any preference they've hinted at, like a view.
-
-Each tool's return ends with a directive for the next action (e.g. "next: call open_email_dialog"). Follow that directive immediately - don't narrate what the tool just did.
-
-If the room sells out at the last second, just pick another - everything else stays captured.
 """
 
 
