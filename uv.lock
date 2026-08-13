@@ -2674,13 +2674,13 @@ name = "livekit-plugins-azure"
 source = { editable = "livekit-plugins/livekit-plugins-azure" }
 dependencies = [
     { name = "azure-cognitiveservices-speech" },
-    { name = "livekit-agents" },
+    { name = "livekit-agents", extra = ["openai"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "azure-cognitiveservices-speech", specifier = ">=1.48.2" },
-    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
