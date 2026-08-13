@@ -296,6 +296,10 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_connect=self._conn_options.timeout,
                     sock_read=o.timeout,
                 ),
+                # large read_bufsize to avoid `ValueError: Chunk too big`
+                # when a single SSE data line carries a full base64 PCM
+                # chunk (~96 KiB at 2s of 24 kHz mono s16).
+                read_bufsize=10 * 1024 * 1024,
             ) as resp:
                 if resp.status >= 400:
                     detail = (await resp.text())[:300]
