@@ -366,19 +366,34 @@ class BookRoomTask(AgentTask[RoomBooking]):
         )
 
     @function_tool()
-    async def set_extras(self, extras: list[RoomExtra]) -> str:
-        """Record which extras the caller wants, after you've offered them.
+    async def set_extras(
+        self, breakfast: bool, valet: bool, late_checkout: bool, pets: bool
+    ) -> str:
+        """Record the caller's answer on each extra, after you've offered them.
 
-        An empty list is a real answer - it means they were offered and declined, and it settles the question. Don't call this to skip the offer.
+        Every extra takes an explicit true or false, so pass false for the ones the caller turned down - all four false is a real answer and settles the question. Don't call this to skip the offer.
 
         The stay's total is computed here, because every extra moves it. This return is where the number for the read-back comes from.
 
         Args:
-            extras: Any of breakfast / valet / late_checkout / pets; empty list if the caller wants none.
+            breakfast: True if the caller wants breakfast added.
+            valet: True if the caller wants valet parking.
+            late_checkout: True if the caller wants a late checkout.
+            pets: True if the caller is bringing a pet.
         """
         if closed := self._closed("set_extras"):
             return closed
-        self._extras = list(extras)
+        # One boolean per extra rather than a list: the model has to answer for every
+        # one, so an extra it never raised with the caller can't be quietly left out
+        # of an array the way an omitted list member is.
+        answers: tuple[tuple[RoomExtra, bool], ...] = (
+            ("breakfast", breakfast),
+            ("valet", valet),
+            ("late_checkout", late_checkout),
+            ("pets", pets),
+        )
+        extras = [name for name, wanted in answers if wanted]
+        self._extras = extras
         self._extras_set = True
         self._must_read_back = True  # different extras mean a different read-back
         await self._requote()
