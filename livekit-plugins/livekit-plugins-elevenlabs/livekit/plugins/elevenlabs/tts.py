@@ -973,6 +973,8 @@ class _DialogueConnection:
         self._context_data: dict[str, _StreamData] = {}
         # per-context "audio fully drained" signal; see _wait_for_turn_drained
         self._turn_drained: dict[str, asyncio.Event] = {}
+        self._flushes_sent: dict[str, int] = {}
+        self._turn_boundaries_received: dict[str, int] = {}
         self._send_lock = asyncio.Lock()
         self._pending_close_tasks: set[asyncio.Task] = set()
 
@@ -1070,6 +1072,7 @@ class _DialogueConnection:
                     }
                     if msg.flush:
                         pkt["flush"] = True
+                        self._mark_flush_sent(msg.context_id)
 
                     self._start_timeout_timer(msg.context_id)
 
@@ -1101,10 +1104,30 @@ class _DialogueConnection:
             if not self._closed:
                 await self.aclose()
 
+    def _mark_flush_sent(self, context_id: str) -> None:
+        self._flushes_sent[context_id] = self._flushes_sent.get(context_id, 0) + 1
+        self._sync_turn_drained_event(context_id)
+
+    def _mark_turn_boundary_received(self, context_id: str) -> None:
+        self._turn_boundaries_received[context_id] = (
+            self._turn_boundaries_received.get(context_id, 0) + 1
+        )
+        self._sync_turn_drained_event(context_id)
+
+    def _sync_turn_drained_event(self, context_id: str) -> None:
+        event = self._turn_drained.setdefault(context_id, asyncio.Event())
+        sent = self._flushes_sent.get(context_id, 0)
+        received = self._turn_boundaries_received.get(context_id, 0)
+        if received >= sent:
+            event.set()
+        else:
+            event.clear()
+
     async def _wait_for_turn_drained(self, context_id: str) -> None:
-        """Wait for `is_final_audio_for_turn` before sending close_context: sending it
-        right after the final flush (like the regular protocol does) races the
-        server's stream teardown and drops the last turn's audio."""
+        """Wait for every sent flush's `is_final_audio_for_turn` before sending
+        close_context: sending it right after the final flush (like the regular
+        protocol does) races the server's stream teardown and drops the last
+        turn's audio."""
         event = self._turn_drained.setdefault(context_id, asyncio.Event())
         ctx = self._context_data.get(context_id)
         timeout = ctx.stream._conn_options.timeout if ctx else _CLOSE_CONTEXT_DRAIN_TIMEOUT
@@ -1199,7 +1222,7 @@ class _DialogueConnection:
                         "elevenlabs text-to-dialogue turn boundary",
                         extra={"context_id": context_id},
                     )
-                    self._turn_drained.setdefault(context_id, asyncio.Event()).set()
+                    self._mark_turn_boundary_received(context_id)
 
                 if data.get("is_final"):
                     if stream is not None:
@@ -1238,6 +1261,8 @@ class _DialogueConnection:
 
         self._active_contexts.discard(context_id)
         self._turn_drained.pop(context_id, None)
+        self._flushes_sent.pop(context_id, None)
+        self._turn_boundaries_received.pop(context_id, None)
 
     def _start_timeout_timer(self, context_id: str) -> None:
         """Start a timeout timer for a context"""
@@ -1272,8 +1297,10 @@ class _DialogueConnection:
                 ctx.timeout_timer.cancel()
         self._context_data.clear()
 
-        if self._pending_close_tasks:
-            await utils.aio.gracefully_cancel(*self._pending_close_tasks)
+        current_task = asyncio.current_task()
+        pending_close_tasks = self._pending_close_tasks - {current_task}
+        if pending_close_tasks:
+            await utils.aio.gracefully_cancel(*pending_close_tasks)
 
         if self._ws:
             await self._ws.close()

@@ -63,6 +63,27 @@ class _FakeConnection:
         }
         self.preferred_alignment = "normalized"
         self._turn_drained: dict[str, asyncio.Event] = {}
+        self._flushes_sent: dict[str, int] = {}
+        self._turn_boundaries_received: dict[str, int] = {}
+
+    def _mark_flush_sent(self, context_id: str) -> None:
+        self._flushes_sent[context_id] = self._flushes_sent.get(context_id, 0) + 1
+        self._sync_turn_drained_event(context_id)
+
+    def _mark_turn_boundary_received(self, context_id: str) -> None:
+        self._turn_boundaries_received[context_id] = (
+            self._turn_boundaries_received.get(context_id, 0) + 1
+        )
+        self._sync_turn_drained_event(context_id)
+
+    def _sync_turn_drained_event(self, context_id: str) -> None:
+        event = self._turn_drained.setdefault(context_id, asyncio.Event())
+        sent = self._flushes_sent.get(context_id, 0)
+        received = self._turn_boundaries_received.get(context_id, 0)
+        if received >= sent:
+            event.set()
+        else:
+            event.clear()
 
     def _cleanup_context(self, context_id: str) -> None:
         ctx = self._context_data.pop(context_id, None)
@@ -70,6 +91,8 @@ class _FakeConnection:
             ctx.timeout_timer.cancel()
         self._active_contexts.discard(context_id)
         self._turn_drained.pop(context_id, None)
+        self._flushes_sent.pop(context_id, None)
+        self._turn_boundaries_received.pop(context_id, None)
 
     async def aclose(self) -> None:
         self._closed = True
@@ -488,3 +511,21 @@ async def test_wait_for_turn_drained_falls_through_without_event(
             tts._opts, session
         )
         await asyncio.wait_for(connection._wait_for_turn_drained("ctx-missing"), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_turn_drained_waits_for_every_sent_flush() -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        connection._mark_flush_sent("ctx-1")
+        connection._mark_flush_sent("ctx-1")
+        connection._mark_turn_boundary_received("ctx-1")
+
+        assert not connection._turn_drained["ctx-1"].is_set()
+
+        connection._mark_turn_boundary_received("ctx-1")
+
+        assert connection._turn_drained["ctx-1"].is_set()
