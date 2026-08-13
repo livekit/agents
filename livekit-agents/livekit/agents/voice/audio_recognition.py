@@ -809,11 +809,14 @@ class AudioRecognition:
                         flush_error = exc
 
             try:
-                if self._commit_user_turn_atask is not None:
-                    if self._commit_user_turn_atask is self._session_close_commit_user_turn_atask:
-                        await _finish_close_flush(self._commit_user_turn_atask)
+                commit_user_turn_atask = self._commit_user_turn_atask
+                if commit_user_turn_atask is not None:
+                    if commit_user_turn_atask is getattr(
+                        self, "_session_close_commit_user_turn_atask", None
+                    ):
+                        await _finish_close_flush(commit_user_turn_atask)
                     else:
-                        await aio.cancel_and_wait(self._commit_user_turn_atask)
+                        await aio.cancel_and_wait(commit_user_turn_atask)
 
                 if self._stt_pipeline is not None:
                     await self._stt_pipeline.aclose()
@@ -830,11 +833,12 @@ class AudioRecognition:
                 if self._interruption_atask is not None:
                     await aio.cancel_and_wait(self._interruption_atask)
 
-                if self._end_of_turn_task is not None:
-                    if self._end_of_turn_task is self._session_close_end_of_turn_atask:
-                        await _finish_close_flush(self._end_of_turn_task)
+                end_of_turn_task = self._end_of_turn_task
+                if end_of_turn_task is not None:
+                    if end_of_turn_task is getattr(self, "_session_close_end_of_turn_atask", None):
+                        await _finish_close_flush(end_of_turn_task)
                     else:
-                        await aio.cancel_and_wait(self._end_of_turn_task)
+                        await aio.cancel_and_wait(end_of_turn_task)
 
                 if self._turn_detector_stream is not None:
                     await self._turn_detector_stream.aclose()

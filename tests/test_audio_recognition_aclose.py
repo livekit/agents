@@ -37,8 +37,6 @@ class TestAudioRecognitionAclose:
         audio_recognition._interruption_atask = None
         audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
-        audio_recognition._session_close_commit_user_turn_atask = None
-        audio_recognition._session_close_end_of_turn_atask = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._vad_ch = None
         audio_recognition._interruption_ch = None
@@ -207,7 +205,7 @@ class TestAudioRecognitionAclose:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("flush_task_attr", ["_commit_user_turn_atask", "_end_of_turn_task"])
     async def test_aclose_cancels_non_session_close_flushes(self, flush_task_attr: str) -> None:
-        """Generic commit and EOU work retain the normal activity-teardown cancellation policy."""
+        """Missing close markers leave ordinary commit and EOU work cancellable."""
         audio_recognition = self._create_audio_recognition()
         flush_task = asyncio.create_task(asyncio.Event().wait())
         setattr(audio_recognition, flush_task_attr, flush_task)
