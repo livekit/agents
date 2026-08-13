@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for base STT `RecognizeStream` fields (start_time, etc.)."""
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -67,6 +70,16 @@ class _NonRetryableStream(RecognizeStream):
     async def _run(self) -> None:
         self.run_count += 1
         raise APIStatusError("Unauthorized", status_code=401)
+
+
+class _NonRetryableBatchSTT(_DummySTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recognize_count = 0
+
+    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+        self.recognize_count += 1
+        raise APIConnectionError("invalid request", retryable=False)
 
 
 async def test_start_time_seeded_on_init() -> None:
@@ -138,3 +151,12 @@ async def test_non_retryable_error_is_not_retried() -> None:
     assert stream.run_count == 1
 
     await stream.aclose()
+
+
+async def test_batch_recognize_does_not_retry_non_retryable_api_error() -> None:
+    stt = _NonRetryableBatchSTT()
+
+    with pytest.raises(APIConnectionError, match="invalid request"):
+        await stt.recognize([], conn_options=APIConnectOptions(max_retry=3))
+
+    assert stt.recognize_count == 1
