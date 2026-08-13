@@ -563,7 +563,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(input_t, stream_t)
             if not context_closed:
                 with contextlib.suppress(Exception):
-                    connection.close_context(self._context_id)
+                    connection.close_context(self._context_id, drain=False)
             await sent_tokenizer_stream.aclose()
 
 
@@ -647,6 +647,7 @@ class _SynthesizeContent:
 @dataclass
 class _CloseContext:
     context_id: str
+    drain: bool = True
 
 
 @dataclass
@@ -728,7 +729,7 @@ class _Connection:
             raise APIConnectionError("WebSocket connection is closed")
         self._input_queue.send_nowait(content)
 
-    def close_context(self, context_id: str) -> None:
+    def close_context(self, context_id: str, *, drain: bool = True) -> None:
         """Close a specific context"""
         if self._closed or not self._ws or self._ws.closed:
             raise APIConnectionError("WebSocket connection is closed")
@@ -1036,11 +1037,11 @@ class _DialogueConnection:
             raise APIConnectionError("WebSocket connection is closed")
         self._input_queue.send_nowait(content)
 
-    def close_context(self, context_id: str) -> None:
+    def close_context(self, context_id: str, *, drain: bool = True) -> None:
         """Close a specific context"""
         if self._closed or not self._ws or self._ws.closed:
             raise APIConnectionError("WebSocket connection is closed")
-        self._input_queue.send_nowait(_CloseContext(context_id))
+        self._input_queue.send_nowait(_CloseContext(context_id, drain=drain))
 
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
@@ -1081,7 +1082,9 @@ class _DialogueConnection:
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
-                        task = asyncio.create_task(self._close_context_when_drained(msg.context_id))
+                        task = asyncio.create_task(
+                            self._close_context_when_drained(msg.context_id, drain=msg.drain)
+                        )
                         self._pending_close_tasks.add(task)
                         task.add_done_callback(self._pending_close_tasks.discard)
 
@@ -1091,9 +1094,10 @@ class _DialogueConnection:
             if not self._closed:
                 await self.aclose()
 
-    async def _close_context_when_drained(self, context_id: str) -> None:
+    async def _close_context_when_drained(self, context_id: str, *, drain: bool = True) -> None:
         try:
-            await self._wait_for_turn_drained(context_id)
+            if drain:
+                await self._wait_for_turn_drained(context_id)
             if self._closed or not self._ws or self._ws.closed:
                 return
             close_pkt = {"context_id": context_id, "close_context": True}

@@ -545,3 +545,29 @@ async def test_turn_drained_waits_for_every_sent_flush() -> None:
         connection._mark_turn_boundary_received("ctx-1")
 
         assert connection._turn_drained["ctx-1"].is_set()
+
+
+class _RecordingWs:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+        self.closed = False
+
+    async def send_json(self, data: dict[str, object]) -> None:
+        self.sent.append(data)
+
+
+@pytest.mark.asyncio
+async def test_close_context_skips_drain_wait_when_interrupted() -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        connection._ws = _RecordingWs()  # type: ignore[assignment]
+        connection._mark_flush_sent("ctx-1")  # unacknowledged; would normally block
+
+        await asyncio.wait_for(
+            connection._close_context_when_drained("ctx-1", drain=False), timeout=1.0
+        )
+
+        assert connection._ws.sent == [{"context_id": "ctx-1", "close_context": True}]
