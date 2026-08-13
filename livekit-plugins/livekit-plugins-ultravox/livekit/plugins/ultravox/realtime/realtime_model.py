@@ -19,7 +19,7 @@ from typing import Any, Literal
 import aiohttp
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, APIStatusError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
@@ -678,7 +678,17 @@ class RealtimeSession(
                 async with http_session.post(
                     create_call_url, json=payload, headers=headers
                 ) as resp:
-                    resp.raise_for_status()
+                    if resp.status >= 400:
+                        # Ultravox returns a body describing why /calls was rejected
+                        # (e.g. a malformed externalVoice blob). Surface it via
+                        # APIStatusError — which derives retryability from the status
+                        # code — so the failure is actionable instead of a bare
+                        # "HTTP 400". Truncate to keep logs bounded.
+                        error_body = (await resp.text())[:2048]
+                        raise APIStatusError(
+                            f"Ultravox /calls request failed: {error_body}",
+                            status_code=resp.status,
+                        )
                     response_json = await resp.json()
                     join_url = response_json.get("joinUrl")
                     if not join_url:
