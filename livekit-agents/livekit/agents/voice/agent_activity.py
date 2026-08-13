@@ -1334,35 +1334,41 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
-            self._cancel_preemptive_generation()
-            await self._session._keyterm_detector.aclose()
+            try:
+                self._cancel_preemptive_generation()
+                await self._session._keyterm_detector.aclose()
 
-            # on_exit_task should be awaited in `drain`
-            self._on_exit_task = None
+                # on_exit_task should be awaited in `drain`
+                self._on_exit_task = None
 
-            # cancel cancellable tools and await the rest before teardown
-            await self._tool_executor.drain()
+                # cancel cancellable tools and await the rest before teardown
+                await self._tool_executor.drain()
 
-            await self._close_session()
-            await asyncio.gather(*self._interrupt_background_speeches(force=False))
+                await self._close_session()
+                await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
-            if self._scheduling_atask is not None:
-                await utils.aio.cancel_and_wait(self._scheduling_atask)
+                if self._scheduling_atask is not None:
+                    await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            # session-scoped toolsets are closed by the session; this only closes
-            # the agent's own toolsets + MCP — all of which outlive pause
-            toolsets = self._mcp_tools + [
-                tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
-            ]
-            if toolsets:
-                await asyncio.gather(
-                    *(toolset.aclose() for toolset in toolsets), return_exceptions=True
-                )
+                # session-scoped toolsets are closed by the session; this only closes
+                # the agent's own toolsets + MCP — all of which outlive pause
+                toolsets = self._mcp_tools + [
+                    tool for tool in self._agent.tools if isinstance(tool, llm.Toolset)
+                ]
+                if toolsets:
+                    await asyncio.gather(
+                        *(toolset.aclose() for toolset in toolsets), return_exceptions=True
+                    )
 
-            # final sweep: anything non-cancellable that survived drain dies here
-            await self._tool_executor.aclose()
+                # final sweep: anything non-cancellable that survived drain dies here
+                await self._tool_executor.aclose()
 
-            self._agent._activity = None
+                self._agent._activity = None
+            except BaseException:
+                # aclose is serialized by _lock; let the next caller retry any
+                # idempotent teardown steps that did not finish successfully
+                self._closed = False
+                raise
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:

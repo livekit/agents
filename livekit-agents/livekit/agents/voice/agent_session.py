@@ -1214,6 +1214,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # notify AgentTask to complete and wait it to resume the parent agent
                 agent_task.cancel()
                 await agent_task._wait_for_inactive()
+                # The handoff normally closes this activity. Retry idempotently in case
+                # its close failed before the parent activity could resume.
+                await activity.aclose()
 
                 if old_agent := agent_task._old_agent:
                     activity = old_agent._activity
