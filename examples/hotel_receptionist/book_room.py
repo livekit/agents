@@ -14,6 +14,7 @@ from hotel_db import (
     RoomExtra,
     RoomType,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from persona import COMMON_INSTRUCTIONS
@@ -242,7 +243,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         if check_in < TODAY:
             raise ToolError("check-in can't be in the past")
 
-        avail = await self._db.list_room_types_available(
+        avail = await self._db.list_room_options(
             check_in=check_in, check_out=check_out, guests=guests
         )
         if not avail:
@@ -258,12 +259,12 @@ class BookRoomTask(AgentTask[RoomBooking]):
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
-        options = " | ".join(
-            f"{a.type.replace('_', ' ')} ({speak_usd(a.nightly_rate)}/night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''})"
-            for a in avail
+        return (
+            f"stay recorded ({check_in} to {check_out}, {guests} guests)\n"
+            f"options (one line per room type + view - the price is that pairing's, so "
+            f"the view is part of what the caller is picking):\n"
+            f"{describe_room_options(avail)}\n{self._status()}"
         )
-        return f"stay recorded ({check_in} to {check_out}, {guests} guests); options: {options} | {self._status()}"
 
     @function_tool()
     async def choose_room(
@@ -289,16 +290,16 @@ class BookRoomTask(AgentTask[RoomBooking]):
             raise ToolError("stay dates and guest count not yet recorded")
         # Re-check against availability filtered by the smoking preference: a
         # type may have rooms free, but not a smoking (or non-smoking) one.
-        avail = await self._db.list_room_types_available(
+        avail = await self._db.list_room_options(
             check_in=self._check_in,
             check_out=self._check_out,
             guests=self._guests,
             smoking=smoking_room,
         )
-        chosen = next((a for a in avail if a.type == room_type), None)
-        if chosen is None:
+        for_type = [a for a in avail if a.type == room_type]
+        if not for_type:
             kind = "smoking " if smoking_room else ""
-            offer = ", ".join(sorted(a.type for a in avail)) or "nothing for those dates"
+            offer = ", ".join(sorted({a.type for a in avail})) or "nothing for those dates"
             raise ToolError(f"no {kind}{room_type} available; offer one of: {offer}")
         # Models sometimes send placeholder strings for optional args they
         # should omit - normalize those to "no view preference".
@@ -306,11 +307,11 @@ class BookRoomTask(AgentTask[RoomBooking]):
             view = view.strip().casefold()
             if view in ("", "null", "none", "any", "no preference", "unspecified"):
                 view = None
-        if view is not None and view not in chosen.views:
-            where = ", ".join(f"{a.type.replace('_', ' ')} ({' or '.join(a.views)})" for a in avail)
+        if view is not None and view not in {a.view for a in for_type}:
             raise ToolError(
                 f"no {view}-view {room_type.replace('_', ' ')} for those dates - "
-                f"the views by room type are: {where}. Tell the caller and let them choose."
+                f"the pairings open are:\n{describe_room_options(avail)}\n"
+                "Tell the caller and let them choose."
             )
         self._room_type = room_type
         self._view = view
