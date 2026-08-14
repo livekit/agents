@@ -430,7 +430,6 @@ class FunctionToolsExecutedEvent(BaseModel):
     function_calls: list[FunctionCall]
     function_call_outputs: list[FunctionCallOutput]
     created_at: float = Field(default_factory=time.time)
-    _reply_required: bool = PrivateAttr(default=False)
     _handoff_required: bool = PrivateAttr(default=False)
 
     def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
@@ -438,14 +437,15 @@ class FunctionToolsExecutedEvent(BaseModel):
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
-        self._reply_required = False
+        for fnc_call_out in self.function_call_outputs:
+            fnc_call_out.reply_required = False
 
     def cancel_agent_handoff(self) -> None:
         self._handoff_required = False
 
     @property
     def has_tool_reply(self) -> bool:
-        return self._reply_required
+        return any(fnc_call_out.reply_required for fnc_call_out in self.function_call_outputs)
 
     @property
     def has_agent_handoff(self) -> bool:

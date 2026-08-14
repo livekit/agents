@@ -3535,10 +3535,7 @@ class AgentActivity(RecognitionHooks):
             for sanitized_out in tool_output.output:
                 new_calls.append(sanitized_out.fnc_call)
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                if sanitized_out.fnc_call_out.reply_required:
-                    fnc_executed_ev._reply_required = True
 
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
@@ -3565,7 +3562,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
-            if fnc_executed_ev._reply_required and not speech_handle.interrupted:
+            if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
@@ -4174,13 +4171,10 @@ class AgentActivity(RecognitionHooks):
             ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                if sanitized_out.fnc_call_out.reply_required:
-                    fnc_executed_ev._reply_required = True
 
                 # add tool output to the chat context
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
@@ -4198,11 +4192,6 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
-
-            if not fnc_executed_ev._reply_required:
-                # a handler can withdraw the reply the tools asked for
-                for fnc_call_out in new_fnc_outputs:
-                    fnc_call_out.reply_required = False
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -4227,7 +4216,7 @@ class AgentActivity(RecognitionHooks):
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev._reply_required
+                    and fnc_executed_ev.has_tool_reply
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -4266,7 +4255,7 @@ class AgentActivity(RecognitionHooks):
                         auto_reply_fut.set_result(None)
 
             if (
-                fnc_executed_ev._reply_required
+                fnc_executed_ev.has_tool_reply
                 and not self._rt_session.capabilities.auto_tool_reply_generation
             ):
                 self._rt_session.interrupt()
