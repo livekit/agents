@@ -133,6 +133,9 @@ async def test_markup_only_turn_keeps_nonzero_speed() -> None:
         await impl._capture_atask
 
         assert impl._speed > 0
+        # no visible syllables to estimate from, so the speaking-unit speed stays unset
+        # rather than being overwritten with a meaningless 0
+        assert impl._speed_on_speaking_unit is None
         assert "".join(collector.words) == MARKUP_ONLY_TURN
     finally:
         await impl.aclose()
