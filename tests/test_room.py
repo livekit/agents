@@ -70,8 +70,8 @@ async def connect_room(
 ):
     room = rtc.Room()
     token = _make_token(identity, room_name, kind=kind, agent=agent)
-    await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
     try:
+        await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
         yield room
     finally:
         await room.disconnect()
@@ -89,18 +89,14 @@ async def _publish_audio_track(room: rtc.Room) -> None:
 
 async def _test_wait_disconnect(wait_fn: Callable[[rtc.Room], Awaitable[object]]) -> None:
     """Connect a room, start waiting, disconnect, and assert RuntimeError."""
-    name = _room_name()
-    room = rtc.Room()
-    token = _make_token("observer", name)
-    await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
+    async with connect_room("observer", _room_name()) as room:
+        task = asyncio.ensure_future(wait_fn(room))
+        # ensure the task is running and has registered its event handlers
+        await asyncio.sleep(0.5)
+        await room.disconnect()
 
-    task = asyncio.ensure_future(wait_fn(room))
-    # ensure the task is running and has registered its event handlers
-    await asyncio.sleep(0.5)
-    await room.disconnect()
-
-    with pytest.raises(RuntimeError, match="disconnected"):
-        await asyncio.wait_for(task, timeout=TIMEOUT)
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await asyncio.wait_for(task, timeout=TIMEOUT)
 
 
 # -- wait_for_participant tests --
