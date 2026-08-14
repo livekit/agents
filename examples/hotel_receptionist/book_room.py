@@ -525,7 +525,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def give_up(self, reason: str) -> None:
-        """Caller wants to abandon the booking.
+        """End the booking without making it: the caller no longer wants the room, OR they need something this flow can't do. The right tools for their request become available once this returns.
 
         Args:
             reason: short explanation.
