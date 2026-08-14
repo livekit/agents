@@ -903,19 +903,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
             )
 
-        # Parallel tool calls put every awaited task in the same turn, each pausing the
-        # same activity. Only the last handoff survives, and the others are left waiting
-        # on a result that can no longer be produced - the function calls never return,
-        # so the speech never finishes and the session wedges until close times out.
-        # Refusing the second is what the returned-AgentTask path already does when a
-        # turn yields more than one ("expected to receive only one AgentTask from the
-        # tool executions").
+        # An activity holds at most one paused inline task - the awaited path's form of the
+        # one-per-turn rule the returned-AgentTask path enforces ("expected to receive only
+        # one AgentTask from the tool executions").
         #
-        # Raised rather than completed: complete() also hands the result to the enclosing
-        # speech handle, which would make this refusal the whole run's final output. The
-        # claim goes after the interrupted check and before the speech handle is mutated
-        # below, so a refused task leaves both untouched, and the check and the claim stay
-        # in one synchronous block or two tasks both pass the check.
+        # Raising rather than completing keeps the refusal off the enclosing speech handle,
+        # whose final output complete() also assigns. Placed after the interrupted check and
+        # before the speech handle is mutated below, a refusal leaves both untouched. Check
+        # and claim stay in one synchronous block, or both tasks pass the check.
         if (busy := old_activity._inline_task) is not None:
             raise ToolError(
                 f"cannot start {self.__class__.__name__}: {busy.__class__.__name__} is "

@@ -226,12 +226,8 @@ class AgentActivity(RecognitionHooks):
         self._authorization_allowed.set()
 
         self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
-        # At most one inline AgentTask may pause this activity at a time: a second
-        # concurrent handoff overwrites the first one's agent switch, and the loser is
-        # then never active again, so nothing ever completes it - it awaits its result
-        # forever and its function call never returns. Held from before the pause until
-        # after the resume. Nested inline tasks pause different activities, so they
-        # never contend for this.
+        # The inline AgentTask that paused this activity, held from before the pause until
+        # after the resume. At most one at a time.
         self._inline_task: AgentTask[Any] | None = None
         self._mcp_tools: list[mcp.MCPToolset] = []
 
