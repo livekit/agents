@@ -298,8 +298,9 @@ async def test_server_side_turn_detection_keeps_the_resume_armed(
     assert activity._paused_speech is None
 
 
-async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    # the pipeline paths that report it are gated on a speaking state the pause already left
+async def test_interrupting_paused_speech_does_not_end_agent_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
@@ -312,7 +313,7 @@ async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.Mo
     await session.aclose()
 
     handle.interrupt.assert_called_once()
-    activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
+    activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
 
 
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
