@@ -6,6 +6,11 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# scenarios.yaml dates are literals against this date. hotel_db.TODAY freezes at
+# import time, so the pin has to precede every import that reaches hotel_db.
+if "--simulation" in sys.argv:
+    os.environ.setdefault("HOTEL_TODAY", "2026-06-08")
+
 from benchmark import build_expected, diff_databases
 from common import Userdata
 from dotenv import load_dotenv
