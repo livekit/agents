@@ -265,9 +265,9 @@ class BookRoomTask(AgentTask[RoomBooking]):
         )
         return (
             "all required details captured - read the booking back in one sentence "
-            f"(dates, room and extras, {total}card ending {self._card_last4}) and call "
-            "confirm_booking() the moment the caller agrees. Quote ONLY this total - "
-            "never compute your own."
+            f"(dates, {self._guests} guests, room and extras, {total}card ending "
+            f"{self._card_last4}) and call confirm_booking() the moment the caller agrees. "
+            "Quote ONLY this total - never compute your own."
         )
 
     @function_tool()
