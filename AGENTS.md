@@ -9,6 +9,11 @@ This project uses **uv** as the package manager. All commands run from the repos
 make install          # Install all dependencies with dev extras (uv sync --all-extras --dev)
 ```
 
+### Versioning
+
+- Use a `patch` version bump by default.
+- Do not use a `minor` or `major` version bump unless a human explicitly confirms the bump level.
+
 ### Code Quality
 ```bash
 make format           # Format code with ruff

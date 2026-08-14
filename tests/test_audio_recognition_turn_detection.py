@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import vad
+from livekit.agents import LanguageCode, vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -57,6 +57,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._hooks = MagicMock()
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None
+    ar._stt_pipeline = None
+    ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
     ar._turn_detection_mode = "vad"
 
@@ -124,6 +126,32 @@ def _make_chat_ctx_stub() -> MagicMock:
     ctx.add_message = MagicMock()
     ctx.items = []
     return ctx
+
+
+class TestLanguageTracking:
+    def test_non_specific_language_does_not_replace_concrete_language(self) -> None:
+        ar = AudioRecognition.__new__(AudioRecognition)
+        ar._last_language = LanguageCode("en")
+
+        ar._update_last_language(LanguageCode("multi"), "ambiguous phrase")
+
+        assert ar._last_language == LanguageCode("en")
+
+    def test_non_specific_language_does_not_initialize_language(self) -> None:
+        ar = AudioRecognition.__new__(AudioRecognition)
+        ar._last_language = None
+
+        ar._update_last_language(LanguageCode("multi"), "we")
+
+        assert ar._last_language is None
+
+    def test_concrete_language_still_updates_after_long_transcript(self) -> None:
+        ar = AudioRecognition.__new__(AudioRecognition)
+        ar._last_language = LanguageCode("en")
+
+        ar._update_last_language(LanguageCode("fr"), "bonjour")
+
+        assert ar._last_language == LanguageCode("fr")
 
 
 def _resolved_prediction(
@@ -319,11 +347,13 @@ class TestEotPredictionDedup:
         ar._audio_preflight_transcript = ""
         ar._stt_request_ids = []
         ar._turn_detector_stream.flush = MagicMock()
-        ar.update_stt = MagicMock()  # type: ignore[method-assign]
+        ar._update_stt = MagicMock()  # type: ignore[method-assign]
+        ar._user_turn_start = 123.0
 
-        ar.clear_user_turn()
+        ar._clear_user_turn()
 
         assert ar._last_emitted_prediction is None
+        assert ar._user_turn_start is None
 
 
 class TestBackchannelOpportunityEmit:

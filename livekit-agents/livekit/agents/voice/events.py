@@ -69,6 +69,10 @@ class RunContext(Generic[Userdata_T]):
         # (the deferred-reply pattern isn't replayable — see _execute_durable)
         self._durable = False
 
+        # the run this call belongs to; background work that outlives it must not hold a
+        # later run open
+        self._run_state = session._global_run_state
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -189,7 +193,7 @@ class RunContext(Generic[Userdata_T]):
         plays before the floor is held — keeps chat order matching code order.
         """
         await self._drain_pending_reply()
-        async with self._session._wait_for_idle_and_hold() as activity:
+        async with self._session._wait_for_idle_and_hold(run_state=self._run_state) as activity:
             yield activity
 
     async def update(
@@ -313,23 +317,14 @@ class RunContext(Generic[Userdata_T]):
             extra=dict(self.function_call.extra),
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
-        # fall back to a stub when the message isn't a valid tool output (e.g. raw object)
-        if tool_output.fnc_call_out is None:
-            fnc_call_out = FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=str(message or ""),
-                is_error=False,
-            )
-        else:
-            fnc_call_out = tool_output.fnc_call_out
-        return (fnc_call, fnc_call_out)
+        return (fnc_call, tool_output.fnc_call_out)
 
 
 EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
+    "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
     "overlapping_speech",
@@ -369,6 +364,15 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class UserTranscriptionTimeoutEvent(BaseModel):
+    type: Literal["user_transcription_timeout"] = "user_transcription_timeout"
+    speech_duration: float
+    """Total VAD-detected speech (s) in the turn that produced no transcript."""
+    vad_speech_started_at: float
+    """When VAD first detected speech for this (untranscribed) turn."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -452,33 +456,31 @@ class FunctionToolsExecutedEvent(BaseModel):
     """Emitted after a batch of function tools finishes executing.
 
     ``function_calls`` and ``function_call_outputs`` are parallel lists: the
-    output at a given index belongs to the call at the same index. When an
-    output is present, its ``call_id`` matches the paired function call's
-    ``call_id``. A ``None`` output means the function call did not produce a
-    value that should be sent back to the LLM, such as when a tool raises
-    ``StopResponse`` or returns an invalid output.
+    output at a given index belongs to the call at the same index and carries
+    the same ``call_id``. Every call has one output, even one whose tool raised
+    ``StopResponse``; such an output asks for no reply with ``reply_required``.
     """
 
     type: Literal["function_tools_executed"] = "function_tools_executed"
     function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput | None]
+    function_call_outputs: list[FunctionCallOutput]
     created_at: float = Field(default_factory=time.time)
-    _reply_required: bool = PrivateAttr(default=False)
     _handoff_required: bool = PrivateAttr(default=False)
 
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput | None]]:
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
         """Return calls paired with outputs by list position."""
         return list(zip(self.function_calls, self.function_call_outputs, strict=False))
 
     def cancel_tool_reply(self) -> None:
-        self._reply_required = False
+        for fnc_call_out in self.function_call_outputs:
+            fnc_call_out.reply_required = False
 
     def cancel_agent_handoff(self) -> None:
         self._handoff_required = False
 
     @property
     def has_tool_reply(self) -> bool:
-        return self._reply_required
+        return any(fnc_call_out.reply_required for fnc_call_out in self.function_call_outputs)
 
     @property
     def has_agent_handoff(self) -> bool:
@@ -615,6 +617,7 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
+    | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent

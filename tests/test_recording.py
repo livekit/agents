@@ -19,7 +19,8 @@ from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.recorder_io.recorder_io import _split_frame
+from livekit.agents.voice.recorder_io.recorder_io import RecorderAudioOutput, _split_frame
+from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 from .fake_llm import FakeLLM
@@ -96,7 +97,6 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
     """Create a minimal mock SessionReport for upload tests."""
     report = MagicMock()
-    report.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     report.job_id = "job-1"
     report.room_id = "room-1"
     report.room = "test-room"
@@ -109,6 +109,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
+    report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     return report
 
 
@@ -118,6 +119,9 @@ def _make_mock_tagger(
     mock = MagicMock()
     mock.evaluations = evaluations or []
     mock.outcome_reason = outcome_reason
+    mock.tags = set()
+    mock._tags = {}
+    mock.outcome = "pass" if outcome_reason else None
     return mock
 
 
@@ -148,7 +152,9 @@ def _patch_upload_deps() -> Iterator[MagicMock]:
         patch(f"{_TRACES_MOD}.get_logger_provider") as mock_glp,
         patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
     ):
-        mock_glp.return_value.get_logger.return_value = mock_logger
+        provider = mock_glp.return_value
+        provider.get_logger.return_value = mock_logger
+        mock_logger.provider = provider
         mock_token = MagicMock()
         mock_token.with_observability_grants.return_value = mock_token
         mock_token.with_ttl.return_value = mock_token
@@ -162,6 +168,7 @@ async def _call_upload(
     *,
     tagger: MagicMock | None = None,
     http_session: MagicMock | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Call _upload_session_report with sensible defaults."""
     await _upload_session_report(
@@ -170,6 +177,7 @@ async def _call_upload(
         report=report,
         tagger=tagger or _make_mock_tagger(),
         http_session=http_session or _make_mock_http(),
+        metadata=metadata,
     )
 
 
@@ -184,6 +192,16 @@ def _get_multipart_part_names(mp_writer: aiohttp.MultipartWriter) -> list[str]:
     return names
 
 
+def _get_multipart_parts(mp_writer: aiohttp.MultipartWriter) -> dict[str, Any]:
+    parts = {}
+    for payload, _enc, _te in mp_writer._parts:
+        cd = payload.headers.get("Content-Disposition", "")
+        for name in ("header", "chat_history", "audio"):
+            if f'name="{name}"' in cd:
+                parts[name] = payload
+    return parts
+
+
 # ---------------------------------------------------------------------------
 # Group 1: RecordingOptions normalization (no JobContext)
 # ---------------------------------------------------------------------------
@@ -196,8 +214,25 @@ def _get_multipart_part_names(mp_writer: aiohttp.MultipartWriter) -> list[str]:
         pytest.param(False, _RECORDING_ALL_OFF, id="record=False"),
         pytest.param(
             {"audio": False},
-            {"audio": False, "traces": True, "logs": True, "transcript": True},
+            {
+                "audio": False,
+                "traces": True,
+                "logs": True,
+                "transcript": True,
+                "redaction": False,
+            },
             id="partial",
+        ),
+        pytest.param(
+            {"redaction": True},
+            {
+                "audio": True,
+                "traces": True,
+                "logs": True,
+                "transcript": True,
+                "redaction": True,
+            },
+            id="redaction",
         ),
     ],
 )
@@ -206,7 +241,7 @@ async def test_record_normalization(
 ) -> None:
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=record)
-    assert session._recording_options == expected
+    assert session.options.recording_options == expected
     await _cleanup(session)
 
 
@@ -214,7 +249,7 @@ async def test_record_not_given_without_job_ctx() -> None:
     """When record is omitted and no JobContext is available, all options should be False."""
     session = _create_simple_session()
     await session.start(SimpleAgent())
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -227,7 +262,13 @@ async def test_init_recording_called_with_options() -> None:
     """init_recording should be called with the correct RecordingOptions."""
     session = _create_simple_session()
     mock_ctx = _make_mock_job_ctx()
-    custom: RecordingOptions = {"audio": True, "traces": True, "logs": False, "transcript": True}
+    custom: RecordingOptions = {
+        "audio": True,
+        "traces": True,
+        "logs": False,
+        "transcript": True,
+        "redaction": True,
+    }
 
     with _patch_job_ctx(mock_ctx, patch_recorder=True):
         await session.start(SimpleAgent(), record=custom)
@@ -239,6 +280,7 @@ async def test_init_recording_called_with_options() -> None:
         "traces": True,
         "logs": False,
         "transcript": True,
+        "redaction": True,
     }
     await _cleanup(session)
 
@@ -278,7 +320,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -290,7 +332,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
 async def test_upload_returns_early_when_none() -> None:
     """When all options are False, no HTTP request and no session report log should be made."""
     report = _make_mock_report(
-        {"audio": False, "traces": False, "logs": False, "transcript": False}
+        {"audio": False, "traces": False, "logs": False, "transcript": False, "redaction": True}
     )
     mock_http = MagicMock(spec=aiohttp.ClientSession)
     mock_http.post = MagicMock()
@@ -332,6 +374,35 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     assert "chat item" not in bodies
 
 
+def test_session_report_constructor_includes_recording_options_in_options() -> None:
+    from livekit.agents.voice.report import SessionReport
+
+    recording_options: RecordingOptions = {
+        "audio": False,
+        "traces": True,
+        "logs": False,
+        "transcript": False,
+        "redaction": True,
+    }
+    session = _create_simple_session()
+    session.options.recording_options = recording_options
+    report = SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=session.options,
+        events=[],
+        chat_history=session.history,
+    )
+
+    assert report.options.recording_options == recording_options
+    serialized_recording_options = report.to_dict()["options"]["recording_options"]
+    assert serialized_recording_options == recording_options
+
+    serialized_recording_options["audio"] = True
+    assert report.options.recording_options["audio"] is False
+
+
 async def test_upload_audio_only_no_file() -> None:
     """When transcript=False, audio=True but no audio file exists, no upload is made."""
     report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
@@ -360,6 +431,74 @@ async def test_upload_evaluations_emitted_without_logs() -> None:
     assert bodies.count("outcome") == 1
 
 
+async def test_upload_session_report_includes_simulation_metadata() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    metadata = {
+        "lk.simulation.enabled": True,
+    }
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report, metadata=metadata)
+
+    attrs = mock_logger.provider.get_logger.call_args_list[0].kwargs["attributes"]
+    assert attrs["lk.simulation.enabled"] is True
+    session_report_call = next(
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+    )
+    assert "session.simulation" not in session_report_call.kwargs["attributes"]
+
+
+async def test_upload_session_report_includes_redaction_metadata() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report, metadata={"lk.redaction.enabled": True})
+
+    attrs = mock_logger.provider.get_logger.call_args_list[0].kwargs["attributes"]
+    assert attrs["lk.redaction.enabled"] is True
+
+
+async def test_upload_multipart_header_carries_simulation_redaction() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    metadata = {
+        "lk.simulation.enabled": True,
+        "lk.redaction.enabled": True,
+    }
+    mock_http = _make_mock_http()
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http, metadata=metadata)
+
+    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
+    parts = _get_multipart_parts(mp_writer)
+    header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+    assert header.simulated is True
+    assert header.redaction_enabled is True
+
+
+def test_job_context_otel_metadata_includes_redaction_option() -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    ctx.simulation_context = MagicMock(return_value=None)
+
+    assert ctx._otel_metadata({"redaction": True}) == {"lk.redaction.enabled": True}
+
+
+async def test_upload_session_report_omits_simulation_metadata_for_normal_session() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+
+    attrs = mock_logger.provider.get_logger.call_args_list[0].kwargs["attributes"]
+    assert not any(k.startswith("lk.simulation.") for k in attrs)
+    session_report_call = next(
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+    )
+    assert "session.simulation" not in session_report_call.kwargs["attributes"]
+
+
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     """LoggerProvider should be set up even when enable_logs=False."""
     from livekit.agents.telemetry.traces import _setup_cloud_tracer
@@ -370,6 +509,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
         patch(f"{_TRACES_MOD}.set_logger_provider") as mock_slp,
         patch(f"{_TRACES_MOD}.OTLPLogExporter") as mock_exporter,
         patch(f"{_TRACES_MOD}.BatchLogRecordProcessor") as mock_blrp,
+        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
         patch(f"{_TRACES_MOD}.logging"),
     ):
         mock_token = MagicMock()
@@ -386,12 +526,78 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
             **_observability_endpoint_arg(_setup_cloud_tracer),
             enable_traces=False,
             enable_logs=False,
+            metadata={"lk.simulation.enabled": True},
         )
 
     mock_slp.assert_called_once()
+    assert not any(k.startswith("lk.simulation.") for k in mock_resource_create.call_args.args[0])
     # OTLP exporter should NOT be created when enable_logs=False
     mock_exporter.assert_not_called()
     mock_blrp.assert_not_called()
+
+
+def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
+    """Run _setup_cloud_tracer under the given os.environ and return the dict
+    passed to Resource.create."""
+    from livekit.agents.telemetry.traces import _setup_cloud_tracer
+
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
+        patch(f"{_TRACES_MOD}.get_logger_provider", return_value=MagicMock()),
+        patch(f"{_TRACES_MOD}.set_logger_provider"),
+        patch(f"{_TRACES_MOD}.OTLPLogExporter"),
+        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor"),
+        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}.logging"),
+    ):
+        mock_token = MagicMock()
+        mock_token.with_observability_grants.return_value = mock_token
+        mock_token.with_ttl.return_value = mock_token
+        mock_token.to_jwt.return_value = "test-jwt"
+        mock_at.return_value = mock_token
+
+        _setup_cloud_tracer(
+            room_id="room-1",
+            job_id="job-1",
+            **_observability_endpoint_arg(_setup_cloud_tracer),
+            enable_traces=False,
+            enable_logs=False,
+        )
+    # Resource.create is also called internally by LoggerProvider() with an
+    # empty dict, so select the call that built the tracing resource (the one
+    # carrying service.name) rather than relying on call ordering.
+    for call in mock_resource_create.call_args_list:
+        attrs = call.args[0]
+        if "service.name" in attrs:
+            return attrs
+    raise AssertionError("Resource.create was not called with the service resource")
+
+
+def test_setup_cloud_tracer_adds_identity_from_env() -> None:
+    """LIVEKIT_AGENT_ID / LIVEKIT_AGENT_DEPLOYMENT become
+    lk.cloud_agent_id / lk.deployment_id on the tracing resource."""
+    attrs = _resource_attrs_for_env(
+        {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": "canary"}
+    )
+    assert attrs["lk.cloud_agent_id"] == "CA_test123"
+    assert attrs["lk.deployment_id"] == "canary"
+
+
+def test_setup_cloud_tracer_omits_identity_when_env_unset() -> None:
+    """Neither identity attr is set when the env vars are absent."""
+    attrs = _resource_attrs_for_env({})
+    assert "lk.cloud_agent_id" not in attrs
+    assert "lk.deployment_id" not in attrs
+
+
+def test_setup_cloud_tracer_omits_empty_deployment() -> None:
+    """An empty LIVEKIT_AGENT_DEPLOYMENT is omitted rather than emitted."""
+    attrs = _resource_attrs_for_env(
+        {"LIVEKIT_AGENT_ID": "CA_test123", "LIVEKIT_AGENT_DEPLOYMENT": ""}
+    )
+    assert attrs["lk.cloud_agent_id"] == "CA_test123"
+    assert "lk.deployment_id" not in attrs
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +629,94 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Group 5: _split_frame (encode-path helper)
+# Group 5: RecorderAudioOutput pause alignment
+# ---------------------------------------------------------------------------
+
+
+async def test_recorder_output_drops_pauses_before_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+        now = 10.5
+        output.resume()
+
+        now = 11.0
+        await output.capture_frame(frame)
+        output.flush()
+
+        now = 11.02
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(
+        frame.samples_per_channel, abs=1
+    )
+
+
+async def test_recorder_output_clips_a_pause_that_overlaps_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+
+        now = 10.5
+        await output.capture_frame(frame)
+
+        now = 10.7
+        output.resume()
+        output.flush()
+
+        now = 10.72
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(10560, abs=1)
+
+
+async def test_recorder_output_keeps_trailing_silence_for_a_midsegment_pause() -> None:
+    frame = rtc.AudioFrame(bytes(4800 * 2), 48000, 1, 4800)  # 100ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        await output.capture_frame(frame)
+
+        now = 10.05
+        output.pause()
+        output.flush()
+
+        now = 10.2
+        output.on_playback_finished(playback_position=0.05, interrupted=True)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(9600, abs=1)
+
+
+# ---------------------------------------------------------------------------
+# Group 6: _split_frame (encode-path helper)
 # ---------------------------------------------------------------------------
 
 

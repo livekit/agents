@@ -1,9 +1,11 @@
-from . import io, presets, run_result
+from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
     ExpressiveOptions,
+    NonverbalOptions,
     RecordingOptions,
+    SpeechSteeringOptions,
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
@@ -27,9 +29,14 @@ from .events import (
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
-from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions
+from .keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .remote_session import RemoteSession
 from .room_io import (
     _ParticipantAudioOutput,
@@ -42,13 +49,14 @@ from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "ExpressiveOptions",
+    "NonverbalOptions",
     "RecordingOptions",
+    "SpeechSteeringOptions",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "ExpressiveOptions",
-    "presets",
     "AgentTask",
     "SpeechHandle",
     "RunContext",
@@ -62,6 +70,7 @@ __all__ = [
     "CloseEvent",
     "CloseReason",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",
@@ -74,6 +83,7 @@ __all__ = [
     "UserTurnExceededEvent",
     "KeytermsOptions",
     "KeytermDetectionOptions",
+    "STTContextOptions",
     "TranscriptSynchronizer",
     "io",
     "room_io",

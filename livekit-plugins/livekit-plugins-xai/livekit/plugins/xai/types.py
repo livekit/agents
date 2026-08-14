@@ -29,14 +29,37 @@ STTLanguages = Literal[
 ]
 
 GrokVoices = Literal[
-    "Ara",
-    "Eve",
-    "Leo",
-    "Rex",
-    "Sal",
+    "carina",
+    "zagan",
+    "helix",
+    "orion",
+    "luna",
+    "iris",
+    "altair",
+    "zenith",
+    "perseus",
+    "helios",
+    "lux",
+    "kepler",
+    "rigel",
+    "cosmo",
+    "celeste",
+    "ursa",
+    "sirius",
+    "lumen",
+    "castor",
+    "naksh",
+    "atlas",
+    "ara",
+    "eve",
+    "leo",
+    "rex",
+    "sal",
 ]
 
 GrokRealtimeModels = Literal[
+    "grok-voice-latest",
+    "grok-voice-think-fast-2.0",
     "grok-voice-think-fast-1.0",
     "grok-voice-fast-1.0",
 ]

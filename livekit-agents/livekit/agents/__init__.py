@@ -92,14 +92,17 @@ from .voice import (
     CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    ExpressiveOptions,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    NonverbalOptions,
     RecordingOptions,
     RunContext,
     RunOutputOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    SpeechSteeringOptions,
     ToolCallEnded,
     ToolCallStarted,
     ToolCallUpdated,
@@ -107,6 +110,7 @@ from .voice import (
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     avatar,
     io,
@@ -119,7 +123,11 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
-from .voice.keyterm_detection import KeytermDetectionOptions, KeytermsOptions
+from .voice.keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -194,6 +202,7 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "SpeechCreatedEvent",
     "ToolExecutionUpdatedEvent",
     "ToolCallStarted",
@@ -221,6 +230,9 @@ __all__ = [
     "SimulationVerdict",
     "AgentSession",
     "AudioRecognition",
+    "ExpressiveOptions",
+    "NonverbalOptions",
+    "SpeechSteeringOptions",
     "RecordingOptions",
     "RunOutputOptions",
     "text_transforms",
@@ -282,6 +294,7 @@ __all__ = [
     "UserTurnLimitOptions",
     "KeytermsOptions",
     "KeytermDetectionOptions",
+    "STTContextOptions",
     "UserTurnExceededEvent",
 ]
 

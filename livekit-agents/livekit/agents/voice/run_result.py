@@ -104,7 +104,7 @@ class RunResult(Generic[Run_T]):
         output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
         session: AgentSession | None = None,
     ) -> None:
-        self._handles: set[SpeechHandle | asyncio.Task] = set()
+        self._handles: set[SpeechHandle | asyncio.Future[Any]] = set()
 
         if not is_given(output_options):
             output_options = RunOutputOptions()
@@ -234,7 +234,7 @@ class RunResult(Generic[Run_T]):
             self._recorded_items.insert(index, event)
             self._recorded_items_ch.send_nowait(event)
 
-    def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+    def _watch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> None:
         if self._done_fut.done():
             return
 
@@ -245,7 +245,7 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
         if handle not in self._handles:
             return False
 
@@ -256,7 +256,7 @@ class RunResult(Generic[Run_T]):
             handle._remove_item_added_callback(self._item_added)
         return True
 
-    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
+    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
@@ -1044,12 +1044,15 @@ class ChatMessageAssert:
         if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
             extra_kwargs["temperature"] = 0.0
 
+        from ..evals.judge import _judge_chat_kwargs
+
         # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
         async for chunk in llm_v.chat(
             chat_ctx=chat_ctx,
             tools=[check_intent],
-            tool_choice={"type": "function", "function": {"name": "check_intent"}},
+            tool_choice="required",
             extra_kwargs=extra_kwargs,
+            **_judge_chat_kwargs(llm_v),
         ):
             if chunk.usage is not None:
                 usage = chunk.usage

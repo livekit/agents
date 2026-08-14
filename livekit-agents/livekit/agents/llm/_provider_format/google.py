@@ -30,7 +30,7 @@ def to_chat_ctx(
     parts: list[dict] = []
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
             system_messages.append(text)
             continue
 

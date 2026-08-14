@@ -28,7 +28,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio
-from .chat_context import ChatContext, ChatRole
+from .chat_context import ChatContext, ChatRole, MetricsMetadata
 from .tool_context import Tool, ToolChoice
 
 
@@ -81,6 +81,15 @@ class ChatChunk(BaseModel):
     delta: ChoiceDelta | None = None
     usage: CompletionUsage | None = None
 
+    def has_response(self) -> bool:
+        """Whether this chunk delivered generation the caller can see.
+
+        Token counts and provider metadata (a gateway deployment stamp, a thought
+        signature) reach the caller without being output: they neither start the
+        clock on time-to-first-token nor give a retry anything to duplicate.
+        """
+        return bool(self.delta and (self.delta.content or self.delta.tool_calls))
+
 
 class LLMError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -102,6 +111,7 @@ class LLM(
     def __init__(self) -> None:
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
     def label(self) -> str:
@@ -131,6 +141,11 @@ class LLM(
         """
         return "unknown"
 
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this LLM instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
     @abstractmethod
     def chat(
         self,
@@ -143,11 +158,50 @@ class LLM(
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream: ...
 
-    def prewarm(self) -> None:
-        """Pre-warm connection to the LLM service"""
-        pass
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm connection to the LLM service.
 
-    async def aclose(self) -> None: ...
+        Establishes DNS resolution and the TLS connection to the provider before the
+        first inference request, reducing time-to-first-token on the initial reply.
+        It is called automatically when an ``AgentSession`` is constructed and when an
+        agent activity starts, but can also be called directly.
+
+        Non-blocking (fire-and-forget) and idempotent. Providers enable it by
+        overriding ``_prewarm_impl``.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if type(self)._prewarm_impl is LLM._prewarm_impl:
+            return  # no provider-specific prewarm implemented
+
+        if self._prewarm_task is not None:
+            return
+
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        async def _prewarm() -> None:
+            try:
+                await self._prewarm_impl()
+            except Exception:
+                pass
+
+        self._prewarm_task = loop.create_task(_prewarm())
+
+    async def _prewarm_impl(self) -> None:
+        """Provider-specific prewarm request, overriding it enables ``prewarm()``.
+
+        Implementations should perform a cheap, token-free request (e.g. listing
+        models) using the same client that serves chat requests, so DNS + TLS are
+        established and a keep-alive connection is left in the pool. Exceptions
+        are swallowed by ``prewarm()``; subclasses overriding ``aclose`` must call
+        ``await super().aclose()`` to cancel an in-flight prewarm."""
+
+    async def aclose(self) -> None:
+        if self._prewarm_task is not None:
+            await aio.cancel_and_wait(self._prewarm_task)
 
     async def __aenter__(self) -> LLM:
         return self
@@ -288,12 +342,16 @@ class LLMStream(ABC):
         response_content = ""
         tool_calls: list[FunctionToolCall] = []
         completion_start_time: str | None = None
+        received_chunk = False
 
         async for ev in event_aiter:
+            received_chunk = True
             request_id = ev.id
             if request_id and request_id not in self._provider_request_ids:
                 self._provider_request_ids.append(request_id)
-            if ttft == -1.0:
+            # measured against generation, not the first chunk: a retry that follows a
+            # contentless chunk would otherwise latch the clock on the failed attempt
+            if ttft == -1.0 and ev.has_response():
                 ttft = time.perf_counter() - start_time
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 
@@ -308,8 +366,9 @@ class LLMStream(ABC):
 
         duration = time.perf_counter() - start_time
 
-        # if generation is aborted before any tokens are received, it doesn't make sense to report -1 ttft
-        if self._current_attempt_has_error or ttft < 0:
+        # a request that never yielded a chunk has nothing to report; one that yielded
+        # only metadata still carries token counts, and reports ttft as -1
+        if self._current_attempt_has_error or not received_chunk:
             return
 
         metrics = LLMMetrics(
@@ -322,6 +381,7 @@ class LLMStream(ABC):
             completion_tokens=usage.completion_tokens if usage else 0,
             prompt_tokens=usage.prompt_tokens if usage else 0,
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
+            cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
             metadata=Metadata(
@@ -436,8 +496,7 @@ class LLMStream(ABC):
             for tc in response.tool_calls:
                 result = await llm.execute_function_call(tc, tool_ctx)
                 ctx.insert(result.fnc_call)
-                if result.fnc_call_out:
-                    ctx.insert(result.fnc_call_out)
+                ctx.insert(result.fnc_call_out)
             ```
         """
         text_parts: list[str] = []

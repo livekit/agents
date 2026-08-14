@@ -33,7 +33,7 @@ from livekit.agents.beta.workflows import (
     WarmTransferTask,
 )
 from livekit.agents.llm import ToolError, function_tool
-from livekit.agents.voice import UserStateChangedEvent, presets
+from livekit.agents.voice import UserStateChangedEvent
 
 logger = logging.getLogger("HealthcareAgent")
 
@@ -763,7 +763,6 @@ async def entrypoint(ctx: JobContext):
             voice="Luna",
             extra_kwargs={"delivery_mode": "CREATIVE", "speaking_rate": 1.1},
         ),
-        expressive=presets.CUSTOMER_SERVICE,
         preemptive_generation=True,
         # Flip user_state to "away" after 10s of mutual silence so we can
         # check whether they're still there (default is 15s).

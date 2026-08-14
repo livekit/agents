@@ -18,8 +18,6 @@ from livekit.agents import (
 from livekit.agents.beta import Instructions
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.llm import ToolFlag, function_tool
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
@@ -138,8 +136,6 @@ async def entrypoint(ctx: JobContext):
         stt="deepgram/nova-3",
         llm="openai/gpt-4.1-mini",
         tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        turn_detection=MultilingualModel(),
-        vad=silero.VAD.load(),
         preemptive_generation=True,
     )
 

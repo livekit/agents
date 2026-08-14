@@ -44,6 +44,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
+from ._utils import trace_id_from_headers
 from .log import logger
 from .models import TTSEncoding, TTSModels
 
@@ -383,7 +384,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
-                request_id=None,
+                request_id=trace_id_from_headers(e.headers),
                 body=None,
             ) from e
         except Exception as e:
@@ -434,6 +435,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=e.message,
+                status_code=e.status,
+                request_id=trace_id_from_headers(e.headers),
+            ) from e
         except Exception as e:
             raise APIConnectionError("could not connect to ElevenLabs") from e
 
