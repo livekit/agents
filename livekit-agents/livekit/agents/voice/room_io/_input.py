@@ -250,6 +250,7 @@ class _MixedSource:
     stream: rtc.AudioStream | None = None
     task: asyncio.Task[None] | None = None
     publication_sid: str | None = None
+    processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None
 
 
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
@@ -435,7 +436,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         # the sink is bound here, once: a participant removed mid-forward must never fall
         # back to _data_ch and reach the session unmixed
         source.task = asyncio.create_task(
-            self._forward_task(None, source.stream, publication, participant, source.chan)
+            self._forward_task(
+                None, source.stream, publication, participant, source.chan, source.processor
+            )
         )
         self._ensure_mixer().add_stream(source.chan)
         return True
@@ -480,8 +483,15 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if callable(noise_cancellation):
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
             if self._mix_participants:
-                # each mixed participant gets its own processor, tied to its stream
+                # each mixed participant gets its own processor, tied to its stream. it is kept
+                # on the source so this participant's pre-connect buffer runs through it too
                 auto_close_noise_cancellation = isinstance(noise_cancellation, rtc.FrameProcessor)
+                if (source := self._mix_sources.get(participant.identity)) is not None:
+                    source.processor = (
+                        noise_cancellation
+                        if isinstance(noise_cancellation, rtc.FrameProcessor)
+                        else None
+                    )
             elif isinstance(noise_cancellation, rtc.FrameProcessor):
                 self._update_processor(noise_cancellation)
             else:
@@ -497,16 +507,22 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         )
 
     @override
-    async def _forward_task(
+    async def _forward_task(  # type: ignore[override]
         self,
         old_task: asyncio.Task[None] | None,
-        stream: rtc.AudioStream,  # type: ignore[override]
+        stream: rtc.AudioStream,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
         sink: aio.Chan[rtc.AudioFrame],
+        processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None,
     ) -> None:
+        """`processor` filters the pre-connect buffer; the live track is filtered by the stream
+        itself. Defaults to the stream-wide processor, mixed sources pass their own."""
         if old_task:
             await aio.cancel_and_wait(old_task)
+
+        if processor is None:
+            processor = self._processor
 
         # a mixed participant's sink is closed when they leave, mid-forwarding. the base loop
         # handles that itself; this covers the pre-connect and flush sends around it.
@@ -525,7 +541,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     frames = await self._pre_connect_audio_handler.wait_for_data(
                         publication.track.sid
                     )
-                    for frame in self._resample_frames(self._apply_audio_processor(frames)):
+                    for frame in self._resample_frames(
+                        self._apply_audio_processor(frames, processor)
+                    ):
                         if self._should_forward():
                             await sink.send(frame)
                             duration += frame.duration
@@ -602,11 +620,15 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if resampler:
             yield from resampler.flush()
 
-    def _apply_audio_processor(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
+    def _apply_audio_processor(
+        self,
+        frames: Iterable[rtc.AudioFrame],
+        processor: rtc.FrameProcessor[rtc.AudioFrame] | None,
+    ) -> Iterable[rtc.AudioFrame]:
         for frame in frames:
-            if self._processor is not None:
+            if processor is not None:
                 try:
-                    yield self._processor._process(frame)
+                    yield processor._process(frame)
                 except Exception as e:
                     logger.warning(
                         "error pre-processing audio frame: %s",

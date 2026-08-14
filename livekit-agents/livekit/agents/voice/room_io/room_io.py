@@ -444,7 +444,9 @@ class RoomIO:
             self.set_participant(remaining.identity)
             if not self._participant_available_fut.done():
                 self._participant_available_fut.set_result(remaining)
-            self._agent_session._on_room_io_participant_linked(remaining)
+            # deliberately not notifying the session: relinking mid-conversation is not a new
+            # call, and the hook re-arms the AEC warmup, which would swallow everyone's audio
+            # and block interruptions through the agent's next reply
             return
 
         if (

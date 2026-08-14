@@ -23,6 +23,7 @@ from livekit.agents.voice.room_io._output import (
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import NoiseCancellationParams
+from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -76,6 +77,7 @@ class _MockFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self._enabled = True
         self.stream_info_calls: list[dict[str, str]] = []
         self.credentials_calls: list[dict[str, str]] = []
+        self.processed_frames: list[rtc.AudioFrame] = []
         self.close_calls: int = 0
 
     @property
@@ -101,6 +103,7 @@ class _MockFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         self.credentials_calls.append({"token": token, "url": url})
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        self.processed_frames.append(frame)
         return frame
 
     def _close(self) -> None:
@@ -491,6 +494,48 @@ async def test_only_producing_sources_are_registered_with_the_mixer() -> None:
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_mixed_pre_connect_buffer_runs_through_the_participants_processor() -> None:
+    """The live track is filtered by its stream; the pre-connect buffer must be too."""
+    room = _FakeRoom()
+    processors: list[_MockFrameProcessor] = []
+
+    def selector(_params: NoiseCancellationParams) -> _MockFrameProcessor:
+        processors.append(_MockFrameProcessor())
+        return processors[-1]
+
+    handler = MagicMock()
+    handler.wait_for_data = AsyncMock(
+        return_value=[rtc.AudioFrame(b"\x01\x00" * 240, 24000, 1, 240)]
+    )
+
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=selector,
+        auto_gain_control=False,
+        pre_connect_audio_handler=handler,
+        frame_size_ms=10,
+        mix_participants=True,
+    )
+
+    participant = _make_mix_participant("speaker", "TR_1")
+    participant.track_publications["TR_1"].audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        stream.add_participant(participant)
+
+    source = stream._mix_sources["speaker"]
+    assert source.processor is processors[0]  # kept on the source, not on the shared stream
+    assert source.task is not None
+    await asyncio.wait_for(source.task, timeout=5)
+
+    assert len(processors[0].processed_frames) == 1
+
+    await stream.aclose()
+
+
 class _TickingAudioStream:
     """Yields a frame on every iteration, forever."""
 
@@ -609,6 +654,9 @@ async def test_mix_relinks_instead_of_closing_when_the_linked_participant_leaves
         assert room_io.linked_participant is interviewer
         assert room_io._participant_identity == "interviewer"
         agent_session._close_soon.assert_not_called()
+        # a relink is not a new call: re-notifying would re-arm the AEC warmup and swallow
+        # everyone's audio through the agent's next reply
+        agent_session._on_room_io_participant_linked.assert_called_once()
 
         # last one out does close it
         interviewer.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
