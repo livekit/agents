@@ -67,17 +67,24 @@ def get_default_inference_url() -> str:
     return DEFAULT_INFERENCE_URL
 
 
-def get_inference_headers() -> dict[str, str]:
+def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
     """Build identification headers for inference requests.
 
     Always includes User-Agent with SDK version and Python version.
     Includes X-LiveKit-Room-ID, X-LiveKit-Job-ID, and X-LiveKit-Agent-ID
     when running inside a job context (omitted in console mode or tests).
     Includes X-LiveKit-Worker-Token when LIVEKIT_WORKER_TOKEN is set (hosted agents).
+
+    ``inference_class`` is the class the caller configured, if any; it lands in
+    X-LiveKit-Inference-Priority. A job can override it through
+    :attr:`JobContext.inference_headers`, which is merged last.
     """
     headers: dict[str, str] = {
         HEADER_USER_AGENT: (f"LiveKit Agents/{__version__} (python {platform.python_version()})"),
     }
+    if inference_class:
+        headers[HEADER_INFERENCE_PRIORITY] = inference_class
+
     try:
         from ..job import get_job_context
 
@@ -96,8 +103,12 @@ def get_inference_headers() -> dict[str, str]:
         # cleared, so the access below won't raise once isconnected() is True.
         if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
             headers[HEADER_AGENT_ID] = agent_sid
+        # merged last: what the job asserts about itself outranks what an individual
+        # model was configured with.
+        headers.update(ctx.inference_headers)
     except RuntimeError:
         pass
+
     return headers
 
 

@@ -19,7 +19,7 @@ from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.recorder_io.recorder_io import _split_frame
+from livekit.agents.voice.recorder_io.recorder_io import RecorderAudioOutput, _split_frame
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -97,7 +97,6 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
     """Create a minimal mock SessionReport for upload tests."""
     report = MagicMock()
-    report.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     report.job_id = "job-1"
     report.room_id = "room-1"
     report.room = "test-room"
@@ -110,6 +109,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
+    report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     return report
 
 
@@ -241,7 +241,7 @@ async def test_record_normalization(
 ) -> None:
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=record)
-    assert session._recording_options == expected
+    assert session.options.recording_options == expected
     await _cleanup(session)
 
 
@@ -249,7 +249,7 @@ async def test_record_not_given_without_job_ctx() -> None:
     """When record is omitted and no JobContext is available, all options should be False."""
     session = _create_simple_session()
     await session.start(SimpleAgent())
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -320,7 +320,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -372,6 +372,35 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+def test_session_report_constructor_includes_recording_options_in_options() -> None:
+    from livekit.agents.voice.report import SessionReport
+
+    recording_options: RecordingOptions = {
+        "audio": False,
+        "traces": True,
+        "logs": False,
+        "transcript": False,
+        "redaction": True,
+    }
+    session = _create_simple_session()
+    session.options.recording_options = recording_options
+    report = SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=session.options,
+        events=[],
+        chat_history=session.history,
+    )
+
+    assert report.options.recording_options == recording_options
+    serialized_recording_options = report.to_dict()["options"]["recording_options"]
+    assert serialized_recording_options == recording_options
+
+    serialized_recording_options["audio"] = True
+    assert report.options.recording_options["audio"] is False
 
 
 async def test_upload_audio_only_no_file() -> None:
@@ -600,7 +629,94 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Group 5: _split_frame (encode-path helper)
+# Group 5: RecorderAudioOutput pause alignment
+# ---------------------------------------------------------------------------
+
+
+async def test_recorder_output_drops_pauses_before_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+        now = 10.5
+        output.resume()
+
+        now = 11.0
+        await output.capture_frame(frame)
+        output.flush()
+
+        now = 11.02
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(
+        frame.samples_per_channel, abs=1
+    )
+
+
+async def test_recorder_output_clips_a_pause_that_overlaps_the_segment() -> None:
+    frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        output.pause()
+
+        now = 10.5
+        await output.capture_frame(frame)
+
+        now = 10.7
+        output.resume()
+        output.flush()
+
+        now = 10.72
+        output.on_playback_finished(playback_position=frame.duration, interrupted=False)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(10560, abs=1)
+
+
+async def test_recorder_output_keeps_trailing_silence_for_a_midsegment_pause() -> None:
+    frame = rtc.AudioFrame(bytes(4800 * 2), 48000, 1, 4800)  # 100ms
+    recording_io = MagicMock(recording=True)
+    writes: list[list[rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=recording_io,
+        audio_output=None,
+        write_fnc=writes.append,
+    )
+    now = 10.0
+
+    with patch("livekit.agents.voice.recorder_io.recorder_io.time.time", side_effect=lambda: now):
+        await output.capture_frame(frame)
+
+        now = 10.05
+        output.pause()
+        output.flush()
+
+        now = 10.2
+        output.on_playback_finished(playback_position=0.05, interrupted=True)
+
+    assert len(writes) == 1
+    assert sum(f.samples_per_channel for f in writes[0]) == pytest.approx(9600, abs=1)
+
+
+# ---------------------------------------------------------------------------
+# Group 6: _split_frame (encode-path helper)
 # ---------------------------------------------------------------------------
 
 

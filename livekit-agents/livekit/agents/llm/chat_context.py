@@ -376,6 +376,11 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    Only realtime models read it, since they answer a result on their own.
+    """
 
 
 class AgentHandoff(BaseModel):
