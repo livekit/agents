@@ -50,7 +50,7 @@ from livekit.agents import (
 )
 
 from ._config import BlazeConfig
-from ._utils import effective_connect_timeout, validate_api_base_url
+from ._utils import effective_connect_timeout, redact_secrets, validate_api_base_url
 from .log import logger
 
 
@@ -367,7 +367,10 @@ class LLMStream(llm.LLMStream):
                 timeout=effective_connect_timeout(self._conn_options, blaze._timeout),
             ) as response:
                 if response.status_code != 200:
-                    error_text = (await response.aread()).decode(errors="replace")
+                    error_text = redact_secrets(
+                        (await response.aread()).decode(errors="replace"),
+                        blaze._auth_token,
+                    )
                     raise APIStatusError(
                         f"Chatbot service error {response.status_code}: {error_text}",
                         status_code=response.status_code,

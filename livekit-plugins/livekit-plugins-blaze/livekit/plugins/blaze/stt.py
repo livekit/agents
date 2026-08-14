@@ -54,6 +54,7 @@ from ._utils import (
     apply_normalization_rules,
     convert_pcm_to_wav,
     effective_connect_timeout,
+    redact_secrets,
     safe_ws_error_detail,
     validate_api_base_url,
     ws_base_url,
@@ -416,7 +417,7 @@ class STT(stt.STT):
             raise APIConnectionError(f"STT connection error: {e}") from e
 
         if response.status_code != 200:
-            error_text = response.text
+            error_text = redact_secrets(response.text, self._auth_token)
             raise APIStatusError(
                 f"STT service error {response.status_code}: {error_text}",
                 status_code=response.status_code,
