@@ -2013,8 +2013,8 @@ scenarios:
     FACTS (reveal each only when asked, one per turn):
     - arriving June 17th, two nights
     - it's you and one colleague - you are NOT a couple, you're co-workers
-    - what you actually want, ONLY if the agent asks you to clarify: one room is fine,
-      but two separate beds - "we're colleagues, not sharing a bed"
+    - what you actually want, ONLY once the agent asks or offers you room types: one
+      room is fine, but two separate beds - "we're colleagues, not sharing a bed"
     - name: Dana Whitfield
     - email: dana.whitfield@gmail.com
     - phone: 415-555-0181
@@ -2023,7 +2023,8 @@ scenarios:
     1. Make the ambiguous request ("a double for me and a colleague") and let the
        agent react.
     2. If the agent asks a clarifying question (one room or two rooms? one bed or
-       two?), answer it: "oh - one room's fine, but two separate beds, please."
+       two?), or lays out the room types for you to pick from, answer: "oh - one
+       room's fine, but two separate beds, please."
     3. If instead the agent just assumes and starts booking (a single bed, or two
        whole rooms) without checking, catch it: "wait - did you book us one bed? we'd
        want two separate beds, same room."
@@ -2032,13 +2033,12 @@ scenarios:
     - You're not trying to trip anyone up - "a double" genuinely could mean a few
       things and you expect to be asked. Cooperate cheerfully once they clarify.
   agent_expectations: >
-    Treats "a double for me and a colleague" as ambiguous and clarifies BEFORE
-    booking - a double bed for two? one room with two beds? two separate rooms? -
-    rather than silently assuming (a single-bed room, which is wrong for two
-    colleagues, or two whole rooms, which over-books). Once the caller clarifies (one
-    room, two beds), it books a two-bed room. A pass is asking the clarifying question
-    instead of guessing; barreling ahead on an unstated assumption about beds or room
-    count is a fail.
+    Never settles "a double" on the caller's behalf. The bed layout stays open until she
+    states it, and either route counts: asking her outright, or laying out the room types
+    and letting her pick from them. The fail is committing without her - quoting or
+    booking a one-bed king, or two separate rooms, on an assumption she never gave - or
+    reading the booking back without saying how many beds it has. What lands is one room
+    with two beds, June 17-19, which she agreed to before the card was taken.
   tags:
     feature: ambiguity_clarification
     channel: phone
