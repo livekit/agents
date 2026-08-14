@@ -1065,8 +1065,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 await session._update_activity(
                     old_agent, new_activity="resume", wait_on_enter=False
                 )
-            # released only now: the activity is free for another inline task once it has
-            # been resumed, not while the resume is still in flight.
             old_activity._inline_task = None
             self.__inactive_ev.set()
 
