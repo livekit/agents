@@ -715,7 +715,12 @@ async def test_pre_connect_audio_is_not_spliced_into_an_ongoing_conversation() -
     room = _FakeRoom()
     buffered = rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)
     handler = MagicMock()
-    handler.wait_for_data = AsyncMock(return_value=[buffered])
+
+    async def _wait_for_data(_sid: str) -> list[rtc.AudioFrame]:
+        await asyncio.sleep(3)  # a buffer that never finishes uploading
+        return [buffered]
+
+    handler.wait_for_data = AsyncMock(side_effect=_wait_for_data)
 
     stream = _ParticipantAudioInputStream(
         room,
@@ -743,7 +748,10 @@ async def test_pre_connect_audio_is_not_spliced_into_an_ongoing_conversation() -
 
         stream.add_participant(joiner)
         await asyncio.sleep(0.05)
+        # mixed in straight away: the buffer is going to be discarded, so waiting for it would
+        # leave the joiner's live track buffering unread and permanently behind the others
         assert _mixing_identities(stream) == {"incumbent", "joiner"}
+        handler.wait_for_data.assert_not_awaited()
 
         # the joiner is mixed in live, but their pre-join words were not spliced in
         mixed = b"".join(bytes(f.data) for f in _drain(stream._data_ch))

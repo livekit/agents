@@ -623,14 +623,26 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         sink = sink if sink is not None else self._data_ch
         logging_extra = {"track_id": track_sid, "participant": participant.identity}
+
+        # this buffer predates the conversation and does not go through the mixer, so writing
+        # it while others are speaking would interleave it frame by frame with them. losing one
+        # newcomer's opening words beats garbling everyone's
+        if self._mixing:
+            # decided before the wait rather than after it: the live track is already buffering
+            # unread behind this coroutine, and waiting for something we will discard would put
+            # this participant permanently behind the rest of the mix
+            logger.debug(
+                "pre-connect audio skipped, other participants are already mixed in",
+                extra=logging_extra,
+            )
+            return
+
         try:
             duration: float = 0
             frames = await self._pre_connect_audio_handler.wait_for_data(track_sid)
 
             if self._mixing:
-                # this buffer predates the conversation and does not go through the mixer, so
-                # writing it now would interleave it frame by frame with whoever is currently
-                # speaking. losing one newcomer's opening words beats garbling everyone's
+                # somebody started speaking while the buffer loaded
                 logger.debug(
                     "pre-connect audio dropped, other participants are already mixed in",
                     extra=logging_extra,
