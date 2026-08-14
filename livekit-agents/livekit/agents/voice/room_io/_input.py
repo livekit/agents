@@ -430,7 +430,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         """
         # pre-connect audio was recorded before this participant joined, so it is not concurrent
         # with anyone: it goes straight to the session rather than through the mixer, where it
-        # would stall the mix while it loads and then leave this source permanently behind
+        # would stall the mix while it loads and then leave this source permanently behind.
+        # it is only delivered while nobody else is mixed in — see _flush_pre_connect
         with contextlib.suppress(aio.ChanClosed):
             await self._flush_pre_connect(publication, participant, processor)
 
@@ -452,12 +453,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
     @log_exceptions(logger=logger)
     async def _forward_mixed(self, mixer: rtc.AudioMixer) -> None:
-        async for frame in mixer:
-            if not self._attached:
-                continue
-            if self._apm is not None:
-                self._apm.process_stream(frame)
-            await self._data_ch.send(frame)
+        # the session channel closing is a shutdown, not a failure worth a traceback
+        with contextlib.suppress(aio.ChanClosed):
+            async for frame in mixer:
+                if not self._attached:
+                    continue
+                if self._apm is not None:
+                    self._apm.process_stream(frame)
+                await self._data_ch.send(frame)
 
     @override
     def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
@@ -616,6 +619,17 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         try:
             duration: float = 0
             frames = await self._pre_connect_audio_handler.wait_for_data(track_sid)
+
+            if self._mixing:
+                # this buffer predates the conversation and does not go through the mixer, so
+                # writing it now would interleave it frame by frame with whoever is currently
+                # speaking. losing one newcomer's opening words beats garbling everyone's
+                logger.debug(
+                    "pre-connect audio dropped, other participants are already mixed in",
+                    extra=logging_extra,
+                )
+                return
+
             for frame in self._resample_frames(self._apply_audio_processor(frames, processor)):
                 # these go straight to the session, so they need the detached check that
                 # _forward_mixed applies to everything coming out of the mixer
@@ -627,6 +641,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "pre-connect audio buffer pushed",
                     extra={"duration": duration, **logging_extra},
                 )
+
+        except aio.ChanClosed:
+            raise  # the caller suppresses this: a departure mid-flush is not a failure
 
         except asyncio.TimeoutError:
             logger.warning("timeout waiting for pre-connect audio buffer", extra=logging_extra)

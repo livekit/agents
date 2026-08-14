@@ -405,6 +405,14 @@ class _ConstantAudioStream:
         pass
 
 
+def _drain(chan) -> list[rtc.AudioFrame]:
+    """Everything currently queued for the session."""
+    frames = []
+    while not chan.empty():
+        frames.append(chan.recv_nowait())
+    return frames
+
+
 def _mixing_identities(stream: _ParticipantAudioInputStream) -> set[str]:
     """Which participants are actually feeding the mixer (it is keyed on channels)."""
     return {i for i, src in stream._mix_sources.items() if src.chan in stream._mixing}
@@ -676,6 +684,88 @@ async def test_unmuting_does_not_wait_for_the_pre_connect_buffer_again() -> None
         # the buffer is not read a second time, so the speaker is mixed in straight away
         assert reads == ["TR_1"]
         assert _mixing_identities(stream) == {"speaker"}
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_is_not_spliced_into_an_ongoing_conversation() -> None:
+    """It bypasses the mixer, so writing it while others are live would interleave two
+    speakers frame by frame in the channel the session reads."""
+    room = _FakeRoom()
+    buffered = rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)
+    handler = MagicMock()
+    handler.wait_for_data = AsyncMock(return_value=[buffered])
+
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=handler,
+        frame_size_ms=10,
+        mix_participants=True,
+    )
+
+    incumbent = _make_mix_participant("incumbent", "TR_1")
+    joiner = _make_mix_participant("joiner", "TR_2")
+    joiner.track_publications["TR_2"].audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    joiner.track_publications["TR_2"].track.sid = "TR_2"
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        stream.add_participant(incumbent)
+        await asyncio.sleep(0.05)
+        assert _mixing_identities(stream) == {"incumbent"}  # conversation already under way
+
+        stream.add_participant(joiner)
+        await asyncio.sleep(0.05)
+        assert _mixing_identities(stream) == {"incumbent", "joiner"}
+
+        # the joiner is mixed in live, but their pre-join words were not spliced in
+        mixed = b"".join(bytes(f.data) for f in _drain(stream._data_ch))
+        assert bytes(buffered.data) not in mixed
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_departing_mid_flush_is_not_logged_as_an_error(caplog) -> None:
+    """ChanClosed derives from Exception; the broad handler must not report it as a failure."""
+    room = _FakeRoom()
+    handler = MagicMock()
+    handler.wait_for_data = AsyncMock(
+        return_value=[rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)]
+    )
+
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=handler,
+        frame_size_ms=10,
+        mix_participants=True,
+    )
+
+    participant = _make_mix_participant("speaker", "TR_1")
+    participant.track_publications["TR_1"].audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    participant.track_publications["TR_1"].track.sid = "TR_1"
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        with patch(
+            "livekit.rtc.AudioStream.from_track",
+            side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+        ):
+            stream.add_participant(participant)
+            stream._data_ch.close()  # the session shuts down while the buffer is in flight
+            await asyncio.sleep(0.05)
+
+    assert [record.message for record in caplog.records if record.levelno >= logging.ERROR] == []
 
     await stream.aclose()
 
