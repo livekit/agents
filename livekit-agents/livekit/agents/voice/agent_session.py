@@ -1465,6 +1465,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Returns:
             SpeechHandle: A handle to the generated reply.
+
+        Note:
+            ``await handle`` waits for the reply to finish and never raises; check
+            ``handle.exception()`` for the failure instead.
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
