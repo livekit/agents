@@ -889,6 +889,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
 
+        # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
