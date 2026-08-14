@@ -200,6 +200,55 @@ async def test_end_soon_teardown_does_not_deadlock_on_itself() -> None:
     assert call._closed
 
 
+# ── resource release and replay-window retention (upstream review) ─────────────
+
+
+async def test_teardown_closes_the_rtc_primitives() -> None:
+    # rtc.AudioStream and rtc.AudioSource each own an FFI subscription and an
+    # internal task that only aclose() releases. Cancelling the pump task frees
+    # neither, so without this every finished call leaks one of each for the
+    # life of the worker.
+    from livekit.plugins.standin.bridge import _Call
+
+    closed: list[str] = []
+
+    class _Closable:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    bridge = SimpleNamespace(_release=lambda _cid: None, audio_idle_timeout=0)
+    call = _Call(bridge, "c1", SimpleNamespace(closed=True))  # type: ignore[arg-type]
+    call._audio_stream = _Closable("stream")  # type: ignore[assignment]
+    call._source = _Closable("source")  # type: ignore[assignment]
+
+    await call.aclose()
+    assert sorted(closed) == ["source", "stream"]
+    assert call._audio_stream is None and call._source is None
+
+
+def test_replay_entries_outlive_a_future_dated_signature() -> None:
+    # verify_handshake accepts a timestamp up to REPLAY_WINDOW_MS in the FUTURE,
+    # so an entry aged from ARRIVAL would be pruned while its signature was
+    # still valid, reopening the replay. Aged from the signing time, retention
+    # matches validity exactly.
+    from livekit.plugins.standin._hmac import REPLAY_WINDOW_MS, verify_handshake
+
+    signed_at = NOW + REPLAY_WINDOW_MS  # the furthest-future timestamp accepted
+    sig = sign_handshake(SECRET, signed_at, "c1")
+    assert verify_handshake(SECRET, str(signed_at), "c1", sig, NOW)
+
+    # Latest moment the signature still verifies, i.e. the entry must survive.
+    last_valid = signed_at + REPLAY_WINDOW_MS
+    assert verify_handshake(SECRET, str(signed_at), "c1", sig, last_valid)
+    assert signed_at >= last_valid - REPLAY_WINDOW_MS, "prune cutoff would drop a live entry"
+
+    # One millisecond later the signature is dead, so dropping it is correct.
+    assert not verify_handshake(SECRET, str(signed_at), "c1", sig, last_valid + 1)
+
+
 # ── chat channel ───────────────────────────────────────────────────────────────
 
 

@@ -86,6 +86,9 @@ def _safe(value: str) -> str:
 
 _BRIDGE_IDENTITY = "standin-bridge"
 
+#: How often the single-use handshake cache is swept for expired entries.
+_PRUNE_INTERVAL_MS = 1_000
+
 
 def _http_url(url: str) -> str:
     """LiveKitAPI speaks HTTP; accept the ws(s):// form people configure."""
@@ -104,6 +107,7 @@ class _Call:
         self._room: rtc.Room | None = None
         self._room_name = ""
         self._source: rtc.AudioSource | None = None
+        self._audio_stream: rtc.AudioStream | None = None
         self._agent_identity: str | None = None
         self._pump_sid: str | None = None
         self._seq = 0
@@ -247,6 +251,20 @@ class _Call:
             if self._tasks:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
             self._tasks.clear()
+
+            # rtc primitives own FFI subscriptions and internal tasks that only
+            # aclose() releases: cancelling the tasks above frees neither, so
+            # every finished call would leave one of each behind for the life of
+            # the worker. Closed here, before the socket and room teardown, so a
+            # hang there cannot skip them.
+            stream, self._audio_stream = self._audio_stream, None
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
+            source, self._source = self._source, None
+            if source is not None:
+                with contextlib.suppress(Exception):
+                    await source.aclose()
 
             with contextlib.suppress(Exception):
                 if not self._ws.closed:
@@ -427,11 +445,13 @@ class _Call:
         self._pump_sid = sid
 
         async def pump() -> None:
+            stream: rtc.AudioStream | None = None
             try:
                 # Ask the SDK for 16 kHz mono so our side stays copy-only.
                 stream = rtc.AudioStream.from_track(
                     track=track, sample_rate=SAMPLE_RATE_HZ, num_channels=NUM_CHANNELS
                 )
+                self._audio_stream = stream
                 async for event in stream:
                     if self._closed:
                         break
@@ -453,6 +473,13 @@ class _Call:
                 # pump's claim and let a third pump start alongside it.
                 if self._pump_sid == sid:
                     self._pump_sid = None
+                if stream is not None:
+                    if self._audio_stream is stream:
+                        self._audio_stream = None
+                    # The stream owns an FFI subscription and an internal task
+                    # that only aclose() releases; ending the pump does not.
+                    with contextlib.suppress(Exception):
+                        await stream.aclose()
 
         self._spawn(pump())
 
@@ -609,6 +636,7 @@ class CallBridge:
         #: clearing the set would reopen the replay window for every handshake
         #: still inside it.
         self._used_signatures: dict[str, int] = {}
+        self._last_prune = now_ms()
         self.draining = False
         self._runner: web.AppRunner | None = None
 
@@ -691,8 +719,19 @@ class CallBridge:
         now = now_ms()
         if fingerprint in self._used_signatures:
             return web.Response(status=401, text="handshake already used")
-        self._used_signatures[fingerprint] = now
-        if len(self._used_signatures) > 4096:
+        # Key on the SIGNING timestamp, never the arrival time: verification
+        # accepts a timestamp up to REPLAY_WINDOW_MS in the FUTURE, so an entry
+        # aged from arrival can be pruned while its signature is still valid -
+        # reopening the exact replay this guard exists to close. Aged from the
+        # signing time, an entry lives precisely as long as the signature does.
+        self._used_signatures[fingerprint] = int(timestamp) if timestamp else now
+        # Prune on a time throttle, not on a size threshold: rebuilding once the
+        # map passes a watermark makes every later request O(n). Only correctly
+        # signed, not-yet-seen handshakes reach this line (a bad signature 401s
+        # earlier, a replay returns above), so the map tracks StandIn's real
+        # call rate rather than attacker traffic.
+        if now - self._last_prune >= _PRUNE_INTERVAL_MS:
+            self._last_prune = now
             cutoff = now - REPLAY_WINDOW_MS
             self._used_signatures = {
                 fp: ts for fp, ts in self._used_signatures.items() if ts >= cutoff
