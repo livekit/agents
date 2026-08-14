@@ -50,6 +50,7 @@ scenarios:
     deposit or charge.
   tags:
     feature: room_booking
+    workflow: book_room
     channel: phone
     difficulty: '1'
   userdata:
@@ -136,6 +137,7 @@ scenarios:
     the guest agrees once sold well.
   tags:
     feature: room_booking_upsell
+    workflow: book_room
     channel: phone
     difficulty: '3'
   userdata:
@@ -373,6 +375,7 @@ scenarios:
               '2026-06-15', '2026-06-17', 1, '', 'IGNORED', '7012')
   tags:
     feature: advance_booking
+    workflow: book_room
     channel: phone
     difficulty: "2"
 
@@ -657,6 +660,7 @@ scenarios:
               '2026-07-07', '2026-07-09', 1, '', 'IGNORED', '1111')
   tags:
     feature: spelled_name_capture
+    workflow: book_room
     channel: phone
     difficulty: '3'
 - label: Booking with relative dates (next Saturday, not this one)
@@ -694,6 +698,7 @@ scenarios:
               '2026-06-20', '2026-06-22', 2, '', 'IGNORED', '4242')
   tags:
     feature: relative_date_resolution
+    workflow: book_room
     channel: phone
     difficulty: "3"
 - label: Medical emergency call
@@ -1816,6 +1821,7 @@ scenarios:
     taking the first utterance over the correction - is a fail.
   tags:
     feature: transcription_self_correction
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
@@ -1872,6 +1878,7 @@ scenarios:
     non-ocean room, or an unnecessarily expensive suite/penthouse, is a fail.
   tags:
     feature: constraint_search
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
@@ -1999,6 +2006,7 @@ scenarios:
     satisfies both, or quietly booking one that violates a stated must-have, is a fail.
   tags:
     feature: constraint_tradeoff
+    workflow: book_room
     channel: phone
     difficulty: "3"
 
@@ -2041,6 +2049,7 @@ scenarios:
     with two beds, June 17-19, which she agreed to before the card was taken.
   tags:
     feature: ambiguity_clarification
+    workflow: book_room
     channel: phone
     difficulty: "2"
 
@@ -2156,6 +2165,7 @@ scenarios:
     altering, or needlessly re-asking a provided field is a fail.
   tags:
     feature: information_overload
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
@@ -2213,6 +2223,7 @@ scenarios:
     fail.
   tags:
     feature: midturn_correction
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
@@ -2583,6 +2594,7 @@ scenarios:
     a clearly-returning guest as brand-new, is a fail.
   tags:
     feature: guest_history
+    workflow: book_room
     channel: phone
     difficulty: "3"
 
@@ -3041,6 +3053,7 @@ scenarios:
     only booking one room is a fail.
   tags:
     feature: multi_room_booking
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
@@ -3278,6 +3291,7 @@ scenarios:
     quietly booking the full six weeks, or refusing to engage at all, is a fail.
   tags:
     feature: max_stay_cap
+    workflow: book_room
     channel: phone
     difficulty: "2"
 
@@ -3306,6 +3320,7 @@ scenarios:
     combination isn't available, here's what is"; fabricating a smoking two-queen room is a fail.
   tags:
     feature: impossible_room_combo
+    workflow: book_room
     channel: phone
     difficulty: "2"
 
@@ -3605,6 +3620,7 @@ scenarios:
     fail.
   tags:
     feature: withhold_checkout_date
+    workflow: book_room
     channel: phone
     difficulty: "3"
   userdata:
