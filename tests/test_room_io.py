@@ -403,19 +403,26 @@ class _ConstantAudioStream:
 
 
 def _make_mix_participant(
-    identity: str, sid: str, *, kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, attributes=None
+    identity: str,
+    sid: str,
+    *,
+    kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    attributes=None,
+    publishes: bool = True,
+    muted: bool = False,
 ) -> MagicMock:
     publication = MagicMock()
     publication.source = rtc.TrackSource.SOURCE_MICROPHONE
     publication.sid = sid
     publication.track = MagicMock()
     publication.audio_features = []
+    publication.muted = muted
 
     participant = MagicMock()
     participant.identity = identity
     participant.kind = kind
     participant.attributes = attributes or {}
-    participant.track_publications = {sid: publication}
+    participant.track_publications = {sid: publication} if publishes else {}
     return participant
 
 
@@ -437,6 +444,49 @@ async def test_mix_participants_sums_every_participant_audio() -> None:
 
     assert frame.samples_per_channel == samples
     assert bytes(frame.data) == (300).to_bytes(2, "little", signed=True) * samples
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_only_producing_sources_are_registered_with_the_mixer() -> None:
+    """A registered stream that delivers nothing paces the whole mixer below real time,
+    so the live speakers fall behind. Only sources with a live track may be registered."""
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, None, mix_participants=True, frame_size_ms=10)
+
+    speaker = _make_mix_participant("speaker", "TR_1")
+    muted = _make_mix_participant("muted", "TR_2", muted=True)
+    listener = _make_mix_participant("listener", "TR_3", publishes=False)
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        for participant in (speaker, muted, listener):
+            stream.add_participant(participant)
+
+    assert stream._mixer is not None
+    registered = stream._mixer._streams
+    # all three are mixed participants, only the one actually sending feeds the mixer
+    assert set(stream._mix_sources) == {"speaker", "muted", "listener"}
+    assert stream._mix_sources["speaker"].chan in registered
+    assert stream._mix_sources["muted"].chan not in registered
+    assert stream._mix_sources["listener"].chan not in registered
+    # a muted track isn't even read, so nothing accumulates behind the mixer
+    assert stream._mix_sources["muted"].task is None
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        # unmuting brings a source back, muting drops it again
+        # (rtc flips publication.muted before it emits the event)
+        muted.track_publications["TR_2"].muted = False
+        stream._on_track_unmuted(muted, muted.track_publications["TR_2"])
+        assert stream._mix_sources["muted"].chan in registered
+
+        speaker.track_publications["TR_1"].muted = True
+        stream._on_track_muted(speaker, speaker.track_publications["TR_1"])
+        assert stream._mix_sources["speaker"].chan not in registered
+
+    # and leaving takes the source with it
+    stream.remove_participant("muted")
+    assert len(registered) == 0
 
     await stream.aclose()
 
