@@ -24,7 +24,7 @@ from policies import build_lookup_policy_tool
 from run_artifacts import dump_run_artifacts
 from tools_restaurant import RestaurantToolsMixin
 from tools_rooms import RoomToolsMixin
-from tools_services import ServicesToolsMixin
+from tools_services import ServicesToolsMixin, record_followup
 from ui_view import UiView
 
 from livekit.agents import (
@@ -218,6 +218,11 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
     userdata = Userdata(db=db)
     session = AgentSession[Userdata](
         userdata=userdata,
+        # Session-scoped, so every agent and every AgentTask in the call can reach
+        # it - including the name / email / phone dialogs. A caller can abandon
+        # anywhere, and the alternative to recording the callback where they say so
+        # is promising one that was never written.
+        tools=[record_followup],
         # An explicit VAD is required (not the bundled default): without it the
         # speaking anchor falls back to the STT stream clock, which drifts into the
         # future across a long call / nested-task switch and makes the turn-commit
