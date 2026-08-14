@@ -303,13 +303,20 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return f"sold out for {check_in} to {check_out}, {guests} guests - dates not recorded; ask for adjacent dates"
 
         self._check_in, self._check_out, self._guests = check_in, check_out, guests
-        # The options have to be spoken before a room can be picked, and new
-        # dates invalidate any read-back already given.
-        self._must_offer.arm()
+        # New dates invalidate any read-back already given.
         self._must_read_back.arm()
-        available_types = {a.type for a in avail}
-        if self._room_type and self._room_type not in available_types:
-            self._room_type = None  # prior choice no longer fits the new dates
+        # The type+view pairing is what was picked and what carries the rate, so both
+        # have to still be open for the choice to survive the new dates.
+        survives = self._room_type is not None and any(
+            a.type == self._room_type and (self._view is None or a.view == self._view)
+            for a in avail
+        )
+        if not survives:
+            self._room_type = self._view = None
+            # The options have to be spoken before a room can be picked. A pairing that
+            # survives was already offered and picked, and re-arming over it rewinds a
+            # settled step - where a caller correcting one date at the read-back lands.
+            self._must_offer.arm()
         # Per-night extras and the room both reprice with the night count.
         await self._requote()
         return (
