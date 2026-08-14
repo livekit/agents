@@ -491,9 +491,7 @@ class AudioRecognition:
                 user_speaking_span=self._session._user_speaking_span,
             )
 
-    def _on_end_of_agent_speech(
-        self, *, ignore_user_transcript_until: float, paused: bool = False
-    ) -> None:
+    def _on_end_of_agent_speech(self, *, ignore_user_transcript_until: float) -> None:
         """Mark the end of active agent speech.
 
         This can occur while the generation remains active, such as when playout is paused.
@@ -507,9 +505,8 @@ class AudioRecognition:
             return
 
         if self._agent_speaking:
-            # no interruption is detected, end the inference (idempotent)
-            if not paused and not is_given(self._ignore_user_transcript_until):
-                self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
+            # close any unresolved overlap before resetting the detector
+            self._on_end_of_overlap_speech(ended_at=time.time(), agent_ended=True)
 
         self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
@@ -537,8 +534,6 @@ class AudioRecognition:
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
 
-        # the sentinel sent above resets the detector stream, dropping any open overlap
-        self._overlap_open = False
         self._agent_speaking = False
 
     def _on_start_of_speech(

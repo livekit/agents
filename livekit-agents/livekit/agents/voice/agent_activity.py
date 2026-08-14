@@ -2067,8 +2067,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition._on_end_of_agent_speech(
-                        ignore_user_transcript_until=ignore_user_transcript_until or time.time(),
-                        paused=True,
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
                     )
                 if self.interruption_enabled:
                     self._restore_interruption_by_audio_activity()
@@ -2192,8 +2191,7 @@ class AgentActivity(RecognitionHooks):
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at,
-                paused=self._paused_speech is not None,
+                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -3468,7 +3466,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state("thinking")
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time(), paused=True
+                    ignore_user_transcript_until=time.time()
                 )
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()

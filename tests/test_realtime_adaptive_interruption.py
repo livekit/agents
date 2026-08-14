@@ -325,23 +325,27 @@ def _sentinel_names(ch: _RecordingChan) -> list[str]:
     return [type(item).__name__ for item in ch.sent]
 
 
-async def test_pause_ends_overlap_inference() -> None:
+async def test_agent_speech_end_closes_overlap_before_reset() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
     ch.sent.clear()
 
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
 
-    assert _sentinel_names(ch) == ["_AgentSpeechEndedSentinel"]
+    assert _sentinel_names(ch) == [
+        "_OverlapSpeechEndedSentinel",
+        "_AgentSpeechEndedSentinel",
+    ]
+    assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
     assert ar._overlap_open is False
 
 
-async def test_user_speech_ending_after_pause_does_not_close_overlap_again() -> None:
+async def test_user_speech_ending_after_agent_end_does_not_close_overlap_again() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
     ch.sent.clear()
 
     ar._on_end_of_speech(ended_at=time.time())
@@ -355,7 +359,7 @@ async def test_resume_restarts_the_detector() -> None:
     user_started_at = time.time()
     ar._speaking = True
     ar._on_start_of_speech(started_at=user_started_at)
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
     ch.sent.clear()
 
     resumed_at = time.time()
