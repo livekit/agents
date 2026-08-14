@@ -751,8 +751,10 @@ async def test_pre_connect_audio_is_not_spliced_into_an_ongoing_conversation() -
         # mixed in straight away: the buffer is going to be discarded, so waiting for it would
         # leave the joiner's live track buffering unread and permanently behind the others
         assert _mixing_identities(stream) == {"incumbent", "joiner"}
-        handler.wait_for_data.assert_not_awaited()
+        # read off the forwarding path, so the handler stops holding the recording
+        handler.wait_for_data.assert_awaited_once_with("TR_2")
 
+        await asyncio.sleep(3.1)  # let the discard finish
         # the joiner is mixed in live, but their pre-join words were not spliced in
         mixed = b"".join(bytes(f.data) for f in _drain(stream._data_ch))
         assert bytes(buffered.data) not in mixed

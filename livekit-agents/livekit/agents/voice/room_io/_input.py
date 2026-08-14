@@ -299,6 +299,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._mixing: set[aio.Chan[rtc.AudioFrame]] = set()  # channels feeding the mixer
         self._mix_closed = False
         self._pre_connect_flushed: set[str] = set()  # track sids whose buffer was consumed
+        self._discard_tasks: set[asyncio.Task[None]] = set()
 
         if mix_participants:
             self._room.on("track_muted", self._on_track_muted)
@@ -635,6 +636,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 "pre-connect audio skipped, other participants are already mixed in",
                 extra=logging_extra,
             )
+            self._discard_pre_connect(track_sid, logging_extra)
             return
 
         try:
@@ -670,6 +672,26 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         except Exception as e:
             logger.error("error reading pre-connect audio buffer", extra=logging_extra, exc_info=e)
 
+    def _discard_pre_connect(self, track_sid: str, logging_extra: dict[str, Any]) -> None:
+        """Read the buffer in the background and drop it.
+
+        `wait_for_data` is what releases the handler's entry, so a buffer we skip would
+        otherwise be held for the lifetime of the session. Off the forwarding path, because
+        waiting for it there is what leaves the participant behind the mix.
+        """
+        if (handler := self._pre_connect_audio_handler) is None:
+            return
+
+        async def _discard() -> None:
+            try:
+                await handler.wait_for_data(track_sid)
+            except Exception:
+                logger.debug("discarding pre-connect audio failed", extra=logging_extra)
+
+        task = asyncio.create_task(_discard())
+        task.add_done_callback(self._discard_tasks.discard)
+        self._discard_tasks.add(task)
+
     def _silent_frame(self) -> rtc.AudioFrame:
         return audio.silence_frame(0.5, self._sample_rate, self._num_channels)
 
@@ -688,6 +710,11 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 await aio.cancel_and_wait(source.task)
             if source.stream:
                 await source.stream.aclose()
+
+        # cancelling a discard mid-wait still releases the handler's buffer, in its own finally
+        if self._discard_tasks:
+            await aio.cancel_and_wait(*self._discard_tasks)
+            self._discard_tasks.clear()
 
         # sources torn down earlier cancel their forward task in the background; let those finish
         if pending := list(self._tasks):
