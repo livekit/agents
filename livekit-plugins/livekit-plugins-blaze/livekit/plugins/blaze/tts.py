@@ -465,12 +465,14 @@ class ChunkedStream(tts.ChunkedStream):
                     if st == "speech-end":
                         break
                     if st in ("failed-request", "error"):
+                        # Do not put the raw frame in body — gateways may echo
+                        # the auth token sent on the first message.
+                        detail = safe_ws_error_detail(status_msg, token=tts_cfg._auth_token)
                         raise APIStatusError(
-                            f"TTS failed: {status_msg.get('message', '')} "
-                            f"{status_msg.get('details', '')}",
+                            f"TTS failed: {detail}",
                             status_code=500,
                             request_id=request_id,
-                            body=json.dumps(status_msg),
+                            body=detail,
                         )
                     # started-byte-stream / finished-byte-stream / processing → ignore
 
@@ -810,12 +812,16 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         )
 
                                     elif st in ("failed-request", "error"):
+                                        # Do not put the raw frame in body — gateways
+                                        # may echo the auth token sent on connect.
+                                        detail = safe_ws_error_detail(
+                                            msg, token=tts_cfg._auth_token
+                                        )
                                         raise APIStatusError(
-                                            f"TTS failed: {msg.get('message', '')} "
-                                            f"{msg.get('details', '')}",
+                                            f"TTS failed: {detail}",
                                             status_code=500,
                                             request_id=request_id,
-                                            body=json.dumps(msg),
+                                            body=detail,
                                         )
                                     # processing-request, speech-start → skip
 
@@ -940,10 +946,35 @@ class _TTSSynthesizeStream(tts.SynthesizeStream):
                                         return_when=asyncio.FIRST_COMPLETED,
                                     )
                                     if reader_task in done:
+                                        # Snapshot drain status before cancel — if
+                                        # both finished, FIRST_COMPLETED may still
+                                        # only report one task depending on timing.
+                                        drain_finished = drain_t.done() and not drain_t.cancelled()
                                         # Reader failed or finished early —
                                         # stop pumping text and surface the error.
                                         await utils.aio.gracefully_cancel(input_t, send_t, drain_t)
+                                        # Propagate reader failures (intentional path).
                                         seg_count, _ = await reader_task
+                                        if drain_finished:
+                                            # Both completed; surface drain errors.
+                                            await drain_t
+                                            input_done = True
+                                        else:
+                                            # Server ended speech (e.g. speech-end)
+                                            # while text was still pending — do not
+                                            # silently discard remaining input.
+                                            logger.warning(
+                                                "[%s] TTS audio reader finished before "
+                                                "input was fully drained (early "
+                                                "speech-end); incomplete turn will "
+                                                "be retried",
+                                                request_id,
+                                            )
+                                            raise APIConnectionError(
+                                                "TTS incomplete: server ended speech "
+                                                "before all input text was sent",
+                                                retryable=True,
+                                            )
                                     else:
                                         await drain_t
                                         # Only mark complete after a successful drain.
