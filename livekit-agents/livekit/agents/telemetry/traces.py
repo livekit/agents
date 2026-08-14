@@ -567,7 +567,7 @@ async def _upload_session_report(
         )
 
     chat_logger = _get_logger("chat_history")
-    recording_options = report.recording_options
+    recording_options = report.options.recording_options
 
     if recording_enabled(recording_options):
         _log(

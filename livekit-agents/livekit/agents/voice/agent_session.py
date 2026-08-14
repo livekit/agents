@@ -292,6 +292,7 @@ class AgentSessionOptions:
     ivr_detection: bool
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
+    recording_options: RecordingOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -580,6 +581,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
+            recording_options=_RECORDING_ALL_OFF.copy(),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -700,7 +702,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
-        self._recording_options: RecordingOptions = _RECORDING_ALL_OFF.copy()
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
 
@@ -893,9 +894,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # defer to server-side setting for recording
                 record = job_ctx.job.enable_recording if job_ctx else False
 
-            self._recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
             if self._text_only:
-                self._recording_options["audio"] = False
+                self._opts.recording_options["audio"] = False
 
             is_primary = True
             if job_ctx:
@@ -904,7 +905,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     job_ctx._primary_agent_session = self
                 else:
                     is_primary = False
-                    if recording_enabled(self._recording_options):
+                    if recording_enabled(self._opts.recording_options):
                         if record_is_given:
                             raise RuntimeError(
                                 "Only one `AgentSession` can be the primary at a time. "
@@ -913,9 +914,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             )
                         else:
                             # auto-disable recording for non-primary sessions when record is not given
-                            self._recording_options = _resolve_recording_options(False)
+                            self._opts.recording_options = _resolve_recording_options(False)
 
-                job_ctx.init_recording(self._recording_options)
+                job_ctx.init_recording(self._opts.recording_options)
 
             # hosting needs the primary designation as before, and the caller's consent
             hosting = is_primary and (session_host if is_given(session_host) else True)
@@ -1017,7 +1018,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
-                    if self._recording_options["audio"] or (c.enabled and c.record):
+                    if self._opts.recording_options["audio"] or (c.enabled and c.record):
                         self._recorder_io = RecorderIO(agent_session=self)
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
@@ -1464,6 +1465,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Returns:
             SpeechHandle: A handle to the generated reply.
+
+        Note:
+            ``await handle`` waits for the reply to finish and never raises; check
+            ``handle.exception()`` for the failure instead.
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
@@ -2047,15 +2052,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _text_only(self) -> bool:
         """True when running under a text simulation: the session uses no audio
         I/O and no audio models (STT/TTS/VAD)."""
-        from ..job import get_job_context
-
-        job_ctx = get_job_context(required=False)
-        if job_ctx is None or (sim_ctx := job_ctx.simulation_context()) is None:
-            return False
-
+        from ..job import current_simulation
         from ..simulation import SimulationMode
 
-        return sim_ctx.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
+        sim = current_simulation()
+        return sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT
 
     @property
     def stt(self) -> stt.STT | None:

@@ -2445,6 +2445,55 @@ async def test_agent_turn_detection_override_resolves_endpointing_per_activity()
         await session.aclose()
 
 
+@pytest.mark.parametrize(
+    ("session_min_delay", "agent_min_delay", "reply_held"),
+    [
+        pytest.param(0.2, 1.0, True, id="agent-holds-longer"),
+        pytest.param(1.0, 0.2, False, id="agent-releases-earlier"),
+    ],
+)
+async def test_reply_holdoff_uses_agent_endpointing_delay(
+    session_min_delay: float, agent_min_delay: float, reply_held: bool
+) -> None:
+    """VAD silence uses the active agent's delay for pending reply hold-off."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    session = AgentSession(
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling={
+            "turn_detection": "vad",
+            "endpointing": {"min_delay": session_min_delay},
+        },
+    )
+    try:
+        activity = AgentActivity(
+            Agent(
+                instructions="test",
+                turn_handling={"endpointing": {"min_delay": agent_min_delay}},
+            ),
+            session,
+        )
+        assert activity.endpointing_opts["min_delay"] == agent_min_delay
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=0.0,
+                speech_duration=0.0,
+                silence_duration=0.25,
+                speaking=True,
+                raw_accumulated_silence=0.25,
+            )
+        )
+
+        assert activity._user_silence_event.is_set() == (not reply_held)
+    finally:
+        await session.aclose()
+
+
 async def test_runtime_endpointing_opts_survive_handoff() -> None:
     """update_options changes are recorded as overrides, so a new activity keeps them."""
     from livekit.agents.voice.agent_session import AgentSession

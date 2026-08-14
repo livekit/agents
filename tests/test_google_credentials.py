@@ -51,6 +51,15 @@ class TestSTTCredentials:
         recognizer = stt_instance._get_recognizer(client)
         assert recognizer == "projects/test-project-123/locations/global/recognizers/_"
 
+    async def test_recognizer_uses_explicit_project(self) -> None:
+        creds = AnonymousCredentials()
+        stt_instance = STT(credentials=creds, project="explicit-project")
+        client = await stt_instance._create_client(timeout=1.0)
+
+        assert stt_instance._get_recognizer(client) == (
+            "projects/explicit-project/locations/global/recognizers/_"
+        )
+
     async def test_clear_error_when_project_unresolvable(self, monkeypatch) -> None:
         # no project on the credentials and no ADC available: the error must
         # say what is wrong instead of a confusing "default credentials not
