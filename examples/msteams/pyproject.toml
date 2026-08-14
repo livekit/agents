@@ -1,0 +1,23 @@
+[project]
+name = "livekit-example-msteams"
+version = "0"
+requires-python = ">=3.10"
+dependencies = [
+    "livekit-agents[openai]>=1.6",
+    "livekit-plugins-standin>=0.1",
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+# an example is a script collection, not an installable distribution
+package = false
+
+[tool.uv.sources]
+# livekit-plugins-standin is not on PyPI yet, so it resolves from the in-repo
+# copy - and pulling one in-repo package means resolving its livekit-* deps
+# from the repo too, exactly as the workspace root does for members. Drop this
+# table once the package is published and the example resolves on its own,
+# outside the repo, like the other examples.
+livekit-plugins-standin = { path = "../../livekit-plugins/livekit-plugins-standin", editable = true }
+livekit-agents = { path = "../../livekit-agents", editable = true }
+livekit-plugins-openai = { path = "../../livekit-plugins/livekit-plugins-openai", editable = true }
