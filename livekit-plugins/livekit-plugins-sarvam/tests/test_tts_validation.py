@@ -143,6 +143,20 @@ def test_update_options_model_switch_revalidates_pace() -> None:
         instance.update_options(model="bulbul:v3", speaker="shubh", pace=2.5)
 
 
+def test_update_options_model_switch_clamps_stale_pace() -> None:
+    # 2.5 is legal on v2 but not on v3; switching models without passing a new
+    # pace must clamp the stored value instead of sending it to the API.
+    instance = tts.TTS(model="bulbul:v2", pace=2.5, api_key=API_KEY)
+    instance.update_options(model="bulbul:v3", speaker="shubh")
+    assert instance._opts.pace == 2.0
+
+
+def test_update_options_model_switch_keeps_in_range_pace() -> None:
+    instance = tts.TTS(model="bulbul:v2", pace=1.5, api_key=API_KEY)
+    instance.update_options(model="bulbul:v3", speaker="shubh")
+    assert instance._opts.pace == 1.5
+
+
 # ---------------------------------------------------------------------------
 # Sample rate gating: streaming vs REST
 # ---------------------------------------------------------------------------

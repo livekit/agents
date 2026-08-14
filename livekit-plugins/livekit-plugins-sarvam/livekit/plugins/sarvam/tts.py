@@ -814,6 +814,21 @@ class TTS(tts.TTS):
                         f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers)}"
                     )
+            # A pace that was valid for the previous model may be out of range
+            # for the new one. Clamp it with a warning (same policy as pitch)
+            # so a model switch cannot carry an invalid pace to the API.
+            if self._opts.pace is not None:
+                min_pace, max_pace = _pace_range(self._opts.model)
+                if not min_pace <= self._opts.pace <= max_pace:
+                    logger.warning(
+                        "pace value %.2f is outside the range [%.2f, %.2f] for model '%s'; "
+                        "clamping to nearest bound.",
+                        self._opts.pace,
+                        min_pace,
+                        max_pace,
+                        self._opts.model,
+                    )
+                    self._opts.pace = max(min_pace, min(max_pace, self._opts.pace))
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
