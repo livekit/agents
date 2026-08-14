@@ -1468,10 +1468,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Note:
             ``await handle`` waits for the reply to finish and never raises; check
-            ``handle.exception()`` for the failure instead. With a realtime model, a reply
-            that races an already-active response fails fast with an ``llm.RealtimeError``
-            whose ``code`` is ``conversation_already_has_active_response``, so callers can
-            catch it and retry rather than waiting out a timeout.
+            ``handle.exception()`` for the failure instead.
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
