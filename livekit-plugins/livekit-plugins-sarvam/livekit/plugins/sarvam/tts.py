@@ -99,6 +99,14 @@ _CODEC_TO_MIME: dict[str, str] = {
 
 _TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
+# Sample rates accepted by the Sarvam streaming (WebSocket) API. The higher
+# rates (32/44.1/48 kHz) exist for the REST API only (bulbul:v3), so a stream
+# built with one of them would only fail once a connection is open.
+_STREAMING_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000})
+
+# REST-only sample rates; valid only for bulbul:v3 via synthesize().
+_REST_ONLY_SAMPLE_RATES: frozenset[int] = frozenset({32000, 44100, 48000})
+
 
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
@@ -216,6 +224,15 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
 # Model-Speaker compatibility mapping
@@ -294,8 +311,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -317,6 +332,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
         "all": [
             "shubh",
@@ -342,8 +366,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
             "suhani",
             "rupali",
             "tanya",
@@ -379,6 +410,17 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
+def _pace_range(model: str) -> tuple[float, float]:
+    """Return the (min, max) pace accepted by the Sarvam API for the model.
+
+    bulbul:v3 and bulbul:v3-beta cap pace at 2.0, while the legacy bulbul:v2
+    model still accepts up to 3.0 (per the official Bulbul API docs).
+    """
+    if model in ("bulbul:v3", "bulbul:v3-beta"):
+        return (0.5, 2.0)
+    return (0.3, 3.0)
+
+
 @dataclass
 class SarvamTTSOptions:
     """Options for the Sarvam.ai TTS service.
@@ -389,13 +431,13 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for v3/v3-beta, 0.3 to 3.0 for v2)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000; streaming is capped at 24 kHz)
         enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
@@ -441,7 +483,7 @@ class TTS(tts.TTS):
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for v3/v3-beta, 0.3 to 3.0 for v2)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -514,8 +556,9 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        min_pace, max_pace = _pace_range(model)
+        if not min_pace <= pace <= max_pace:
+            raise ValueError(f"Pace must be between {min_pace} and {max_pace} for model '{model}'")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -795,8 +838,11 @@ class TTS(tts.TTS):
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
+            min_pace, max_pace = _pace_range(self._opts.model)
+            if not min_pace <= pace <= max_pace:
+                raise ValueError(
+                    f"Pace must be between {min_pace} and {max_pace} for model '{self._opts.model}'"
+                )
             self._opts.pace = pace
 
         if loudness is not None:
@@ -852,6 +898,14 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions | None = None
     ) -> ChunkedStream:
         """Synthesize text to audio using Sarvam.ai TTS API."""
+        if (
+            self._opts.speech_sample_rate in _REST_ONLY_SAMPLE_RATES
+            and self._opts.model != "bulbul:v3"
+        ):
+            raise ValueError(
+                "Sample rates of 32, 44.1 and 48 kHz are only available for "
+                "bulbul:v3 through the REST API"
+            )
         if conn_options is None:
             conn_options = DEFAULT_API_CONNECT_OPTIONS
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
@@ -860,6 +914,13 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        if self._opts.speech_sample_rate not in _STREAMING_SAMPLE_RATES:
+            raise ValueError(
+                "Sarvam streaming supports sample rates of "
+                f"{', '.join(map(str, sorted(_STREAMING_SAMPLE_RATES)))} Hz; "
+                f"got {self._opts.speech_sample_rate}. Rates above 24 kHz are "
+                "only available through the REST API with bulbul:v3."
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
