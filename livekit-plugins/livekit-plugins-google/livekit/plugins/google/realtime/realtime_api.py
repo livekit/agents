@@ -95,6 +95,13 @@ def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
         )
 
 
+def _warn_vertex_scheduling_unsupported() -> None:
+    logger.warning(
+        "tool_response_scheduling is not supported by Vertex AI and will be ignored; "
+        "tool responses use the default scheduling there."
+    )
+
+
 def _get_1008_error_hint(error_message: str) -> str | None:
     """
     Generate a hint for WebSocket 1008 policy violation errors.
@@ -327,6 +334,8 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
+        if use_vertexai and is_given(tool_response_scheduling):
+            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
@@ -813,6 +822,8 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
+            if self._opts.vertexai:
+                _warn_vertex_scheduling_unsupported()
             # no need to restart
 
         if is_given(tool_choice):
@@ -958,10 +969,29 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         if append_ctx.items:
+            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
+            supports_silent_scheduling = (
+                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+            )
+            if not supports_silent_scheduling and (
+                silenced := [
+                    item.name
+                    for item in append_ctx.items
+                    if item.type == "function_call_output" and not item.reply_required
+                ]
+            ):
+                logger.warning(
+                    "a tool result wants no reply, but Gemini will answer it anyway; declare "
+                    "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
+                    "regardless, since an unanswered call blocks the session.",
+                    extra={"functions": silenced},
+                )
+
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
+                supports_silent_scheduling=supports_silent_scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
                 if turns:

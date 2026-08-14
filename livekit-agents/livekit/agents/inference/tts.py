@@ -783,7 +783,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aligned: list[TimedString] = []
                     if words := data.get("words"):
                         aligned = [
-                            TimedString(w["word"], start_time=w["start"], end_time=w["end"])
+                            TimedString(
+                                f"{w['word']} " if provider == "cartesia" else w["word"],
+                                start_time=w["start"],
+                                end_time=w["end"],
+                            )
                             for w in words
                         ]
                     elif chars := data.get("chars"):
