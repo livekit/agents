@@ -405,6 +405,11 @@ class _ConstantAudioStream:
         pass
 
 
+def _mixing_identities(stream: _ParticipantAudioInputStream) -> set[str]:
+    """Which participants are actually feeding the mixer (it is keyed on channels)."""
+    return {i for i, src in stream._mix_sources.items() if src.chan in stream._mixing}
+
+
 def _make_mix_participant(
     identity: str,
     sid: str,
@@ -462,34 +467,69 @@ async def test_only_producing_sources_are_registered_with_the_mixer() -> None:
     muted = _make_mix_participant("muted", "TR_2", muted=True)
     listener = _make_mix_participant("listener", "TR_3", publishes=False)
 
-    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
         for participant in (speaker, muted, listener):
             stream.add_participant(participant)
+        await asyncio.sleep(0.05)  # let the forward tasks reach their live loop
 
-    assert stream._mixer is not None
-    registered = stream._mixer._streams
-    # all three are mixed participants, only the one actually sending feeds the mixer
-    assert set(stream._mix_sources) == {"speaker", "muted", "listener"}
-    assert stream._mix_sources["speaker"].chan in registered
-    assert stream._mix_sources["muted"].chan not in registered
-    assert stream._mix_sources["listener"].chan not in registered
-    # a muted track isn't even read, so nothing accumulates behind the mixer
-    assert stream._mix_sources["muted"].task is None
+        # all three are mixed participants, only the one actually sending feeds the mixer
+        assert set(stream._mix_sources) == {"speaker", "muted", "listener"}
+        assert _mixing_identities(stream) == {"speaker"}
+        assert stream._mixer is not None
+        assert stream._mix_sources["speaker"].chan in stream._mixer._streams
+        # a muted track isn't even read, so nothing accumulates behind the mixer
+        assert stream._mix_sources["muted"].task is None
 
-    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         # unmuting brings a source back, muting drops it again
         # (rtc flips publication.muted before it emits the event)
         muted.track_publications["TR_2"].muted = False
         stream._on_track_unmuted(muted, muted.track_publications["TR_2"])
-        assert stream._mix_sources["muted"].chan in registered
+        await asyncio.sleep(0.05)
+        assert _mixing_identities(stream) == {"speaker", "muted"}
 
         speaker.track_publications["TR_1"].muted = True
         stream._on_track_muted(speaker, speaker.track_publications["TR_1"])
-        assert stream._mix_sources["speaker"].chan not in registered
+        assert _mixing_identities(stream) == {"muted"}
 
-    # and leaving takes the source with it
-    stream.remove_participant("muted")
-    assert len(registered) == 0
+        # and leaving takes the source with it
+        stream.remove_participant("muted")
+        assert not stream._mixing
+        assert len(stream._mixer._streams) == 0
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_resubscribed_source_gets_a_fresh_channel() -> None:
+    """The old forward task is still winding down; frames it writes must not reach the new mix."""
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, None, mix_participants=True, frame_size_ms=10)
+    participant = _make_mix_participant("speaker", "TR_1")
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        stream.add_participant(participant)
+        await asyncio.sleep(0.05)
+        first_chan = stream._mix_sources["speaker"].chan
+
+        participant.track_publications["TR_1"].muted = True
+        stream._on_track_muted(participant, participant.track_publications["TR_1"])
+        assert first_chan.closed  # closed before its writer is cancelled, so nothing sneaks in
+
+        participant.track_publications["TR_1"].muted = False
+        stream._on_track_unmuted(participant, participant.track_publications["TR_1"])
+        await asyncio.sleep(0.05)
+
+        second_chan = stream._mix_sources["speaker"].chan
+        assert second_chan is not first_chan
+        assert not second_chan.closed
+        assert second_chan in stream._mixer._streams
+        assert first_chan not in stream._mixer._streams
 
     await stream.aclose()
 
@@ -504,10 +544,15 @@ async def test_mixed_pre_connect_buffer_runs_through_the_participants_processor(
         processors.append(_MockFrameProcessor())
         return processors[-1]
 
+    buffered = rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)
+    loaded = asyncio.Event()
     handler = MagicMock()
-    handler.wait_for_data = AsyncMock(
-        return_value=[rtc.AudioFrame(b"\x01\x00" * 240, 24000, 1, 240)]
-    )
+
+    async def _wait_for_data(_sid: str) -> list[rtc.AudioFrame]:
+        await loaded.wait()
+        return [buffered]
+
+    handler.wait_for_data = _wait_for_data
 
     stream = _ParticipantAudioInputStream(
         room,
@@ -523,30 +568,47 @@ async def test_mixed_pre_connect_buffer_runs_through_the_participants_processor(
     participant = _make_mix_participant("speaker", "TR_1")
     participant.track_publications["TR_1"].audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
 
-    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
         stream.add_participant(participant)
+        await asyncio.sleep(0.05)
 
-    source = stream._mix_sources["speaker"]
-    assert source.processor is processors[0]  # kept on the source, not on the shared stream
-    assert source.task is not None
-    await asyncio.wait_for(source.task, timeout=5)
+        source = stream._mix_sources["speaker"]
+        assert source.processor is processors[0]  # kept on the source, not on the shared stream
+        # a source waiting on its buffer would stall every other speaker
+        assert _mixing_identities(stream) == set()
+
+        loaded.set()
+        await asyncio.sleep(0.05)
+        assert _mixing_identities(stream) == {"speaker"}
 
     assert len(processors[0].processed_frames) == 1
+    # pre-join audio is not concurrent with anyone: it reaches the session directly, so it
+    # cannot leave this source permanently behind the mix
+    first = await asyncio.wait_for(stream.__anext__(), timeout=5)
+    assert bytes(first.data) == bytes(buffered.data)
 
     await stream.aclose()
 
 
 class _TickingAudioStream:
-    """Yields a frame on every iteration, forever."""
+    """A live mic: one frame per frame-interval, forever.
+
+    Paced with a real sleep so virtual time can advance between frames; spinning on sleep(0)
+    would keep the loop busy and freeze the clock.
+    """
 
     def __init__(self, samples: int, sample_rate: int) -> None:
         self._frame = rtc.AudioFrame(b"\x01\x00" * samples, sample_rate, 1, samples)
+        self._interval = samples / sample_rate
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        await asyncio.sleep(0)
+        await asyncio.sleep(self._interval)
         return SimpleNamespace(frame=self._frame)
 
     async def aclose(self) -> None:

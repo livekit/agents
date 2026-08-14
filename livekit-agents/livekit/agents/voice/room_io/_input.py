@@ -247,6 +247,8 @@ class _MixedSource:
     """One participant's contribution to the mixed audio input."""
 
     chan: aio.Chan[rtc.AudioFrame]
+    """Replaced on every subscribe. A dying forward task keeps writing into the old channel
+    for a moment, and a fresh one is the only way its frames cannot resurface in the mix."""
     stream: rtc.AudioStream | None = None
     task: asyncio.Task[None] | None = None
     publication_sid: str | None = None
@@ -294,6 +296,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._mix_sources: dict[str, _MixedSource] = {}
         self._mixer: rtc.AudioMixer | None = None
         self._mixer_atask: asyncio.Task[None] | None = None
+        self._mixing: set[aio.Chan[rtc.AudioFrame]] = set()  # channels feeding the mixer
+        self._mix_closed = False
 
         if mix_participants:
             self._room.on("track_muted", self._on_track_muted)
@@ -325,7 +329,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         source = _MixedSource(chan=aio.Chan[rtc.AudioFrame]())
         self._mix_sources[participant.identity] = source
-        self._ensure_mixer()
 
         for publication in participant.track_publications.values():
             if publication.track and self._on_track_available(
@@ -334,12 +337,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 break
 
     def remove_participant(self, identity: str) -> None:
-        source = self._mix_sources.pop(identity, None)
-        if source is None:
-            return
-
-        self._close_mixed_source(source)
-        source.chan.close()
+        if (source := self._mix_sources.pop(identity, None)) is not None:
+            self._close_mixed_source(source)
 
     def _ensure_mixer(self) -> rtc.AudioMixer:
         if self._mixer is None:
@@ -372,16 +371,35 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
 
         self._on_track_available(publication.track, publication, participant)  # type: ignore[arg-type]
 
+    def _mix_chan(self, chan: aio.Chan[rtc.AudioFrame], *, mixing: bool) -> None:
+        """Feed the mixer from this channel, or stop.
+
+        The mixer waits `stream_timeout_ms` on every registered stream for every block, so a
+        stream that isn't delivering paces the whole mix below real time and every live speaker
+        falls behind for as long as it stays registered.
+
+        Keyed on the channel rather than the participant: a forward task that is still shutting
+        down must not unregister the channel its successor just registered.
+        """
+        if mixing:
+            if self._mix_closed:
+                return
+            self._ensure_mixer().add_stream(chan)
+            self._mixing.add(chan)
+            return
+
+        if self._mixer is not None:
+            self._mixer.remove_stream(chan)
+        self._mixing.discard(chan)
+
     def _close_mixed_source(self, source: _MixedSource) -> None:
-        stream, task = source.stream, source.task
+        stream, task, chan = source.stream, source.task, source.chan
         source.stream, source.task, source.publication_sid = None, None, None
 
-        # the mixer waits stream_timeout_ms on every registered stream for every block, so a
-        # source that stopped delivering paces the whole mix below real time
-        if self._mixer is not None:
-            self._mixer.remove_stream(source.chan)
-        while not source.chan.empty():
-            source.chan.recv_nowait()  # in-flight audio would resurface on the next unmute
+        self._mix_chan(chan, mixing=False)
+        # closing before the task is cancelled is what makes this safe: the forward task cannot
+        # sneak a late frame past us, and the next subscribe gets a channel of its own anyway
+        chan.close()
 
         async def _close() -> None:
             if task:
@@ -392,6 +410,38 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         close_task = asyncio.create_task(_close())
         close_task.add_done_callback(self._tasks.discard)
         self._tasks.add(close_task)
+
+    @log_exceptions(logger=logger)
+    async def _forward_mixed_source(
+        self,
+        source: _MixedSource,
+        stream: rtc.AudioStream,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        chan = source.chan  # bound once: source.chan is replaced by the next subscribe
+
+        # pre-connect audio was recorded before this participant joined, so it is not concurrent
+        # with anyone: it goes straight to the session rather than through the mixer, where it
+        # would stall the mix while it loads and then leave this source permanently behind
+        with contextlib.suppress(aio.ChanClosed):
+            await self._flush_pre_connect(publication, participant, source.processor)
+
+        if chan.closed:
+            return  # the source was torn down while the pre-connect buffer loaded
+
+        self._mix_chan(chan, mixing=True)
+        try:
+            await super()._forward_task(None, stream, publication, participant, chan)
+        finally:
+            # a track that ends without being unpublished would otherwise stay registered
+            self._mix_chan(chan, mixing=False)
+            if not self._mixing:
+                # nothing left to mix: the session needs silence to flush the last transcript.
+                # while others are still talking the mix carries on and injecting it would
+                # punch a hole in their audio
+                with contextlib.suppress(aio.ChanClosed):
+                    await self._data_ch.send(self._silent_frame())
 
     @log_exceptions(logger=logger)
     async def _forward_mixed(self, mixer: rtc.AudioMixer) -> None:
@@ -431,16 +481,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if publication.muted:
             return False  # nothing to read yet, track_unmuted brings the source back
 
+        # a fresh channel: the previous forward task is still winding down and anything it
+        # writes must land in the channel it was bound to, never in the new mix
+        source.chan = aio.Chan[rtc.AudioFrame]()
         source.publication_sid = publication.sid
         source.stream = self._create_stream(track, participant)
         # the sink is bound here, once: a participant removed mid-forward must never fall
         # back to _data_ch and reach the session unmixed
         source.task = asyncio.create_task(
-            self._forward_task(
-                None, source.stream, publication, participant, source.chan, source.processor
-            )
+            self._forward_mixed_source(source, source.stream, publication, participant)
         )
-        self._ensure_mixer().add_stream(source.chan)
         return True
 
     @override
@@ -514,68 +564,65 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
         sink: aio.Chan[rtc.AudioFrame],
-        processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None,
     ) -> None:
-        """`processor` filters the pre-connect buffer; the live track is filtered by the stream
-        itself. Defaults to the stream-wide processor, mixed sources pass their own."""
         if old_task:
             await aio.cancel_and_wait(old_task)
 
-        if processor is None:
-            processor = self._processor
-
-        # a mixed participant's sink is closed when they leave, mid-forwarding. the base loop
-        # handles that itself; this covers the pre-connect and flush sends around it.
+        # the base loop handles its own sink closing; this covers the sends around it
         with contextlib.suppress(aio.ChanClosed):
-            if (
-                self._pre_connect_audio_handler
-                and publication.track
-                and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
-            ):
-                logging_extra = {
-                    "track_id": publication.track.sid,
-                    "participant": participant.identity,
-                }
-                try:
-                    duration: float = 0
-                    frames = await self._pre_connect_audio_handler.wait_for_data(
-                        publication.track.sid
-                    )
-                    for frame in self._resample_frames(
-                        self._apply_audio_processor(frames, processor)
-                    ):
-                        if self._should_forward():
-                            await sink.send(frame)
-                            duration += frame.duration
-                    if frames:
-                        logger.debug(
-                            "pre-connect audio buffer pushed",
-                            extra={"duration": duration, **logging_extra},
-                        )
-
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "timeout waiting for pre-connect audio buffer",
-                        extra=logging_extra,
-                    )
-
-                except Exception as e:
-                    logger.error(
-                        "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
-                    )
-
+            await self._flush_pre_connect(publication, participant, self._processor, sink=sink)
             await super()._forward_task(old_task, stream, publication, participant, sink)
-
             # push a silent frame to flush the stt final result if any
-            silent_samples = int(self._sample_rate * 0.5)
-            await sink.send(
-                rtc.AudioFrame(
-                    b"\x00\x00" * silent_samples,
-                    sample_rate=self._sample_rate,
-                    num_channels=self._num_channels,
-                    samples_per_channel=silent_samples,
+            await sink.send(self._silent_frame())
+
+    async def _flush_pre_connect(
+        self,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+        processor: rtc.FrameProcessor[rtc.AudioFrame] | None,
+        *,
+        sink: aio.Chan[rtc.AudioFrame] | None = None,
+    ) -> None:
+        """Push what this participant recorded before connecting.
+
+        `processor` filters the buffer; the live track is filtered by the stream itself.
+        """
+        if not (
+            self._pre_connect_audio_handler
+            and publication.track
+            and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
+        ):
+            return
+
+        sink = sink if sink is not None else self._data_ch
+        logging_extra = {"track_id": publication.track.sid, "participant": participant.identity}
+        try:
+            duration: float = 0
+            frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
+            for frame in self._resample_frames(self._apply_audio_processor(frames, processor)):
+                if self._should_forward():
+                    await sink.send(frame)
+                    duration += frame.duration
+            if frames:
+                logger.debug(
+                    "pre-connect audio buffer pushed",
+                    extra={"duration": duration, **logging_extra},
                 )
-            )
+
+        except asyncio.TimeoutError:
+            logger.warning("timeout waiting for pre-connect audio buffer", extra=logging_extra)
+
+        except Exception as e:
+            logger.error("error reading pre-connect audio buffer", extra=logging_extra, exc_info=e)
+
+    def _silent_frame(self) -> rtc.AudioFrame:
+        silent_samples = int(self._sample_rate * 0.5)
+        return rtc.AudioFrame(
+            b"\x00\x00" * silent_samples,
+            sample_rate=self._sample_rate,
+            num_channels=self._num_channels,
+            samples_per_channel=silent_samples,
+        )
 
     @override
     async def aclose(self) -> None:
@@ -583,13 +630,19 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             self._room.off("track_muted", self._on_track_muted)
             self._room.off("track_unmuted", self._on_track_unmuted)
 
+        self._mix_closed = True  # a late forward task must not resurrect the mixer
         sources, self._mix_sources = list(self._mix_sources.values()), {}
+        self._mixing.clear()
         for source in sources:
             source.chan.close()
             if source.task:
                 await aio.cancel_and_wait(source.task)
             if source.stream:
                 await source.stream.aclose()
+
+        # sources torn down earlier cancel their forward task in the background; let those finish
+        if pending := list(self._tasks):
+            await asyncio.gather(*pending, return_exceptions=True)
 
         if self._mixer_atask:
             await aio.cancel_and_wait(self._mixer_atask)
