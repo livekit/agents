@@ -1,6 +1,6 @@
 # LiveKit Plugins: Phonic
 
-Realtime voice AI integration for [Phonic](https://phonic.co/) with LiveKit Agents.
+Realtime voice AI integration for [Phonic](https://phonic.ai/) with LiveKit Agents.
 
 ## Installation
 
@@ -93,7 +93,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `additional_languages` | `list[str]` | Further ISO 639-1 codes (must not repeat `default_language`) |
 | `multilingual_mode` | `"auto"` \| `"request"` | Per-utterance language detection vs. change on user request (recommended: `request`) |
 | `audio_speed` | `float` | Audio playback speed |
-| `phonic_tools` | `list[str]` | Names of Phonic-side tools available to the assistant: [Webhook tools](https://docs.phonic.co/docs/using-tools/tools_overview#webhook-tools) and [built-in tools](#built-in-tools) (`choose_not_to_respond`, `keypad_input`, `natural_conversation_ending`) |
+| `phonic_tools` | `list[str]` | Names of Phonic-side tools available to the assistant: [Webhook tools](https://docs.phonic.ai/docs/using-tools/tools_overview#webhook-tools) and [built-in tools](#built-in-tools) (`choose_not_to_respond`, `keypad_input`, `natural_conversation_ending`) |
 | `boosted_keywords` | `list[str]` | Keywords to boost in speech recognition |
 | `min_words_to_interrupt` | `int` | Minimum number of user words required to interrupt the assistant |
 | `generate_no_input_poke_text` | `bool` | Auto-generate poke text when user is silent |
