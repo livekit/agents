@@ -210,7 +210,7 @@ def describe_room_options(options: Sequence[RoomOption]) -> str:
 
     One line is one type with one view and that pairing's price. Rolling a type's
     views onto a single line lets a neighbouring line's view bind to the wrong type
-    - a garden-view double queen, which has never existed - and hides that the view
+    - a garden-view king, which has never existed - and hides that the view
     moves the price, so a figure spoken before the view is settled has to change.
     """
     return "\n".join(
