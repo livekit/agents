@@ -502,6 +502,15 @@ class RealtimeSession(llm.RealtimeSession):
         self._active_session: AsyncSession | None = None
         # indicates if the underlying session should end
         self._session_should_close = asyncio.Event()
+        # a tool result produced while the socket is restarting (e.g. update_tools mid-turn)
+        # is stashed here and replayed once the new session is established, otherwise it would
+        # be sent on the dying session and never reach the model (the turn would hang).
+        self._pending_tool_result: types.LiveClientToolResponse | None = None
+        # whether a websocket session has ever been established. used to tell an in-flight
+        # restart (buffer the tool result for replay) apart from the initial context sync /
+        # agent handoff before the first connect (where the chat context legitimately holds
+        # historical tool outputs that must NOT be resent).
+        self._connected_once = False
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
@@ -643,9 +652,7 @@ class RealtimeSession(llm.RealtimeSession):
             exclude_config_update=True,
         )
         async with self._session_lock:
-            if not self._active_session:
-                self._chat_ctx = chat_ctx
-                return
+            active_session = self._active_session
 
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
@@ -664,21 +671,55 @@ class RealtimeSession(llm.RealtimeSession):
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
             )
-            if self._realtime_model.capabilities.mutable_chat_context:
-                turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
-                    format="google", inject_dummy_user_message=False
-                )
-                turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                if turns:
-                    self._send_client_event(
-                        types.LiveClientContent(turns=turns, turn_complete=False)
+            # A restart is in flight when the socket is tearing down (e.g. update_tools()
+            # mid-turn, _active_session still set) or an already-established session has been
+            # closed for reconnect (_main_task nulled _active_session). Only in that window can a
+            # tool result correspond to a call the session being replaced issued: the (re)connect
+            # replays self._chat_ctx for the plain turns, but that replay excludes
+            # function_call/function_call_output items, so the tool result must be buffered and
+            # replayed by _main_task or the turn hangs.
+            restarting = self._session_should_close.is_set() or (
+                active_session is None and self._connected_once
+            )
+            if active_session is not None and not self._session_should_close.is_set():
+                # healthy live session: send immediately
+                if self._realtime_model.capabilities.mutable_chat_context:
+                    turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
+                        format="google", inject_dummy_user_message=False
                     )
-            if tool_results:
-                self._send_client_event(tool_results)
+                    turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                    if turns:
+                        self._send_client_event(
+                            types.LiveClientContent(turns=turns, turn_complete=False)
+                        )
+                if tool_results:
+                    self._send_client_event(tool_results)
+            elif restarting:
+                if tool_results:
+                    logger.debug(
+                        "session restarting; buffering tool result to replay after reconnect"
+                    )
+                    self._buffer_pending_tool_result(tool_results)
+            # else: initial context sync / agent handoff before the first connect. The
+            # connect-time replay of self._chat_ctx delivers the turns; historical tool outputs
+            # in that context belong to a prior session and must not be resent (doing so would
+            # make the model reply to stale results), so they are intentionally dropped here.
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
         self._chat_ctx = chat_ctx
+
+    def _buffer_pending_tool_result(self, tool_results: types.LiveClientToolResponse) -> None:
+        # Accumulate rather than overwrite: more than one tool result can land during a single
+        # reconnect window (update_chat_ctx is called once per tool-execution round), so keep
+        # them all for _main_task to replay once the new session is established.
+        if self._pending_tool_result is None:
+            self._pending_tool_result = tool_results
+        else:
+            self._pending_tool_result.function_responses = [
+                *(self._pending_tool_result.function_responses or []),
+                *(tool_results.function_responses or []),
+            ]
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
@@ -743,15 +784,6 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        if not self._realtime_model.capabilities.mutable_chat_context:
-            logger.warning(
-                f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
-            )
-            fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            fut.set_exception(
-                llm.RealtimeError(f"generate_reply is not compatible with '{self._opts.model}'")
-            )
-            return fut
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
@@ -773,13 +805,21 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
-        turns = []
-        if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
-        self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        # Gemini requires the last message to end with user's turn so we add a placeholder user
+        # turn to trigger a new generation. Mutable-context models accept an appended
+        # client-content turn; the live-preview family ignores appended turns until the next
+        # session, so nudge those with a realtime text input instead.
+        if self._realtime_model.capabilities.mutable_chat_context:
+            turns = []
+            if is_given(instructions):
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+            self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
+        else:
+            if is_given(instructions):
+                self._send_client_event(types.LiveClientRealtimeInput(text=instructions))
+            else:
+                self._send_client_event(types.LiveClientRealtimeInput(text="."))
 
         def _on_timeout() -> None:
             if not fut.done():
@@ -889,6 +929,7 @@ class RealtimeSession(llm.RealtimeSession):
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
+                        self._connected_once = True
 
                         # Check for system/developer messages in initial chat context
                         system_msg_count = sum(
@@ -918,6 +959,24 @@ class RealtimeSession(llm.RealtimeSession):
                                 turns=turns,  # type: ignore
                                 turn_complete=False,
                             )
+
+                    # A tool result produced while the previous session was tearing down was
+                    # buffered instead of being sent on the dying socket. Replay it now so the
+                    # model receives it and can continue the turn.
+                    if self._pending_tool_result is not None and (
+                        function_responses := self._pending_tool_result.function_responses
+                    ):
+                        logger.debug("replaying buffered tool result to the new session")
+                        # Gemini Live auto-generates a reply after a function response
+                        # (auto_tool_reply_generation), so sending the tool result is enough to
+                        # continue the turn. We deliberately do NOT inject a placeholder user
+                        # turn here: it would be a bogus "." message in the transcript and can
+                        # trigger a second, unrelated reply.
+                        await session.send_tool_response(function_responses=function_responses)
+                        # Clear only after the send succeeds. If send_tool_response raises (e.g.
+                        # the fresh socket drops during reconnect churn), the buffer survives so
+                        # the next reconnect can replay it instead of leaving the model hanging.
+                        self._pending_tool_result = None
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
