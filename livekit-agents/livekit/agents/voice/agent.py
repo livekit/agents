@@ -935,8 +935,6 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 )
             )
 
-        # registered only past the checks above: they raise instead of completing the task,
-        # so an early exit must not report the task as finishing prematurely
         current_task.add_done_callback(_handle_task_done)
 
         old_allow_interruptions = True
