@@ -298,6 +298,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._mixer_atask: asyncio.Task[None] | None = None
         self._mixing: set[aio.Chan[rtc.AudioFrame]] = set()  # channels feeding the mixer
         self._mix_closed = False
+        self._pre_connect_flushed: set[str] = set()  # track sids whose buffer was consumed
 
         if mix_participants:
             self._room.on("track_muted", self._on_track_muted)
@@ -594,13 +595,23 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         ):
             return
 
+        track_sid = publication.track.sid
+        if track_sid in self._pre_connect_flushed:
+            # the publication advertises the buffer for the lifetime of the track, but the
+            # handler drops it after the first read. asking again only blocks for the whole
+            # timeout while the freshly subscribed stream backs up behind us
+            return
+        self._pre_connect_flushed.add(track_sid)
+
         sink = sink if sink is not None else self._data_ch
-        logging_extra = {"track_id": publication.track.sid, "participant": participant.identity}
+        logging_extra = {"track_id": track_sid, "participant": participant.identity}
         try:
             duration: float = 0
-            frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
+            frames = await self._pre_connect_audio_handler.wait_for_data(track_sid)
             for frame in self._resample_frames(self._apply_audio_processor(frames, processor)):
-                if self._should_forward():
+                # these go straight to the session, so they need the detached check that
+                # _forward_mixed applies to everything coming out of the mixer
+                if self._attached:
                     await sink.send(frame)
                     duration += frame.duration
             if frames:

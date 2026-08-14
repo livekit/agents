@@ -593,6 +593,98 @@ async def test_mixed_pre_connect_buffer_runs_through_the_participants_processor(
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_unmuting_does_not_wait_for_the_pre_connect_buffer_again() -> None:
+    """The handler drops the buffer after one read, so a second wait just burns the timeout
+    while the freshly subscribed stream backs up."""
+    room = _FakeRoom()
+    reads: list[str] = []
+    handler = MagicMock()
+
+    async def _wait_for_data(sid: str) -> list[rtc.AudioFrame]:
+        reads.append(sid)
+        if len(reads) > 1:
+            await asyncio.sleep(3)  # what the un-resolved future would do
+            raise asyncio.TimeoutError
+        return [rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)]
+
+    handler.wait_for_data = _wait_for_data
+
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=handler,
+        frame_size_ms=10,
+        mix_participants=True,
+    )
+
+    participant = _make_mix_participant("speaker", "TR_1")
+    publication = participant.track_publications["TR_1"]
+    publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    publication.track.sid = "TR_1"
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        stream.add_participant(participant)
+        await asyncio.sleep(0.05)
+        assert reads == ["TR_1"]
+
+        publication.muted = True
+        stream._on_track_muted(participant, publication)
+        publication.muted = False
+        stream._on_track_unmuted(participant, publication)
+        await asyncio.sleep(0.05)
+
+        # the buffer is not read a second time, so the speaker is mixed in straight away
+        assert reads == ["TR_1"]
+        assert _mixing_identities(stream) == {"speaker"}
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_detached_input_drops_pre_connect_audio() -> None:
+    """Pre-connect frames bypass the mixer, so they need their own detached check."""
+    room = _FakeRoom()
+    handler = MagicMock()
+    handler.wait_for_data = AsyncMock(
+        return_value=[rtc.AudioFrame(b"\x07\x00" * 240, 24000, 1, 240)]
+    )
+
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=handler,
+        frame_size_ms=10,
+        mix_participants=True,
+    )
+    stream.on_detached()  # session.input.set_audio_enabled(False)
+
+    participant = _make_mix_participant("speaker", "TR_1")
+    participant.track_publications["TR_1"].audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        stream.add_participant(participant)
+        await asyncio.sleep(0.05)
+
+        # the source still paces the mixer, but nothing reaches the session
+        assert _mixing_identities(stream) == {"speaker"}
+        assert stream._data_ch.empty()
+
+    await stream.aclose()
+
+
 class _TickingAudioStream:
     """A live mic: one frame per frame-interval, forever.
 
