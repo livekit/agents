@@ -824,6 +824,9 @@ async def test_detached_input_drops_pre_connect_audio() -> None:
         # the source still paces the mixer, but nothing reaches the session
         assert _mixing_identities(stream) == {"speaker"}
         assert stream._data_ch.empty()
+        # the buffer was left with the handler, so re-enabling input can still deliver it
+        handler.wait_for_data.assert_not_awaited()
+        assert stream._pre_connect_flushed == set()
 
     await stream.aclose()
 

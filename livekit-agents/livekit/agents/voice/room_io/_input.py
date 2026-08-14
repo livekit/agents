@@ -606,12 +606,19 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         ):
             return
 
+        if not self._attached:
+            # audio input is disabled, so these frames would only be dropped below. return
+            # without touching the handler, leaving the buffer for a later subscribe
+            return
+
         track_sid = publication.track.sid
         if track_sid in self._pre_connect_flushed:
             # the publication advertises the buffer for the lifetime of the track, but the
             # handler drops it after the first read. asking again only blocks for the whole
             # timeout while the freshly subscribed stream backs up behind us
             return
+        # marked before the read, not after: wait_for_data drops the buffer in its own finally
+        # whatever the outcome, so a retry can only stall for the timeout and deliver nothing
         self._pre_connect_flushed.add(track_sid)
 
         sink = sink if sink is not None else self._data_ch
