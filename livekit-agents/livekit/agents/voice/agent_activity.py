@@ -4127,11 +4127,20 @@ class AgentActivity(RecognitionHooks):
 
             # commit results of tools that finished despite the interruption, as the pipeline
             # task does. the calls are already recorded, so each one answers or the model waits
-            interrupted_fnc_outputs = [
-                _interrupted_tool_output(sanitized_out) for sanitized_out in tool_output.output
-            ]
+            interrupted_calls: list[llm.FunctionCall] = []
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
             if interrupted_fnc_outputs:
+                self._session.emit(
+                    "function_tools_executed",
+                    FunctionToolsExecutedEvent(
+                        function_calls=interrupted_calls,
+                        function_call_outputs=interrupted_fnc_outputs,
+                    ),
+                )
                 self._agent._chat_ctx.insert(interrupted_fnc_outputs)
                 self._session._tool_items_added(interrupted_fnc_outputs)
 

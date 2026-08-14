@@ -241,11 +241,22 @@ async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> 
             return "The weather in Tokyo is sunny today."
 
     agent = RealtimeWeatherAgent()
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
     session, model = await run_realtime_tool_turn(
-        agent, tool_executed=agent.tool_executed, interrupt=True
+        agent,
+        tool_executed=agent.tool_executed,
+        interrupt=True,
+        on_session=lambda s: s.on("function_tools_executed", tool_executed_events.append),
     )
 
     _assert_weather_tool_preserved(agent, session)
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].function_calls[0].name == "get_weather"
+    assert (
+        tool_executed_events[0].function_call_outputs[0].output
+        == "The weather in Tokyo is sunny today."
+    )
+
     synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
     assert len(synced) == 1, "the tool output was never synced to the realtime session"
     assert synced[0].call_id == "1"
