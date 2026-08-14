@@ -902,6 +902,27 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
             )
 
+        # Parallel tool calls put every awaited task in the same turn, each pausing the
+        # same activity. Only the last handoff survives, and the others are left waiting
+        # on a result that can no longer be produced - the function calls never return,
+        # so the speech never finishes and the session wedges until close times out.
+        # Refusing the second is what the returned-AgentTask path already does when a
+        # turn yields more than one ("expected to receive only one AgentTask from the
+        # tool executions").
+        #
+        # Raised rather than completed: complete() also hands the result to the enclosing
+        # speech handle, which would make this refusal the whole run's final output. The
+        # claim goes after the interrupted check and before the speech handle is mutated
+        # below, so a refused task leaves both untouched, and the check and the claim stay
+        # in one synchronous block or two tasks both pass the check.
+        if (busy := old_activity._inline_task) is not None:
+            raise ToolError(
+                f"cannot start {self.__class__.__name__}: {busy.__class__.__name__} is "
+                "already running for this turn, and only one can run at a time"
+            )
+
+        old_activity._inline_task = self
+
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
@@ -1001,6 +1022,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 if suspended_handles:
                     run_state._mark_done_if_needed(None)
         except Exception:
+            old_activity._inline_task = None
             self.__inactive_ev.set()
             raise
 
@@ -1049,6 +1071,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 await session._update_activity(
                     old_agent, new_activity="resume", wait_on_enter=False
                 )
+            # released only now: the activity is free for another inline task once it has
+            # been resumed, not while the resume is still in flight.
+            old_activity._inline_task = None
             self.__inactive_ev.set()
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:

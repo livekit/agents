@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import FunctionToolCall, ToolError
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -150,6 +151,111 @@ async def test_handoff_from_pre_run_speech():
 
         await asyncio.wait_for(sess.run(user_input="bye"), timeout=5.0)
         assert isinstance(sess.current_agent, EnterHandoffAgent)
+
+
+class DialogTask(AgentTask):
+    """A task that needs a user turn to complete, like a detail-capture dialog."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="dialog task")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="dialog_greeting")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Called to complete the dialog."""
+        self.complete(None)
+        return "done"
+
+
+class ParallelDialogAgent(Agent):
+    """Two tools that each await an AgentTask, for an LLM turn that calls both."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+        self.outcomes: list[str] = []
+
+    @function_tool
+    async def open_name_dialog(self, ctx: RunContext) -> str:
+        """Collects the name."""
+        return await self._open("name")
+
+    @function_tool
+    async def open_email_dialog(self, ctx: RunContext) -> str:
+        """Collects the email."""
+        return await self._open("email")
+
+    async def _open(self, which: str) -> str:
+        # a refusal is reported back as the tool's output, the way the model would see
+        # it; re-raising would instead surface through the awaiting session.run()
+        try:
+            await DialogTask()
+        except ToolError as e:
+            self.outcomes.append(f"{which}:refused")
+            return f"{which} refused: {e}"
+        self.outcomes.append(f"{which}:ran")
+        return f"{which} captured"
+
+
+@pytest.mark.asyncio
+async def test_parallel_agent_tasks_refuse_the_second() -> None:
+    """Two AgentTasks awaited from one turn's parallel tool calls contend for the same
+    activity. Only one may pause it: the other's handoff would be overwritten, leaving it
+    waiting on a result nothing can produce, so its function call never returns and the
+    speech never finishes. The second is refused with a ToolError instead."""
+    llm = FakeLLM(
+        fake_responses=[
+            # one turn, two tool calls - each tool awaits a DialogTask
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="open_name_dialog", arguments="{}", call_id="call_1"),
+                    FunctionToolCall(name="open_email_dialog", arguments="{}", call_id="call_2"),
+                ],
+            ),
+            FakeLLMResponse(input="dialog_greeting", content="what is it?", ttft=0, duration=0),
+            # user answers the dialog that did run -> it completes and hands back
+            FakeLLMResponse(
+                input="done",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="call_3")],
+            ),
+        ]
+    )
+    agent = ParallelDialogAgent()
+    sess = AgentSession(llm=llm)
+    try:
+        await sess.start(agent)
+
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+        assert isinstance(sess.current_agent, DialogTask)
+
+        await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
+        assert isinstance(sess.current_agent, ParallelDialogAgent)
+    finally:
+        # a refused task that instead hung would leave its function call unfinished, and
+        # the close waiting on it - bounded so that regression reports these assertions
+        # rather than stalling the loop with nothing left to schedule
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(sess.aclose(), timeout=30.0)
+
+    assert sorted(o.split(":")[1] for o in agent.outcomes) == ["ran", "refused"]
+
+    # both calls carry an output: neither func_exec was left awaiting a result forever
+    outputs = {
+        item.call_id: item.output
+        for item in agent.chat_ctx.items
+        if item.type == "function_call_output" and item.call_id in ("call_1", "call_2")
+    }
+    assert set(outputs) == {"call_1", "call_2"}
+    # the refusal reaches the model rather than being silently dropped
+    assert sum(1 for out in outputs.values() if "refused" in out) == 1
 
 
 def _build_fake_llm() -> FakeLLM:
