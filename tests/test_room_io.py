@@ -594,6 +594,39 @@ async def test_mixed_pre_connect_buffer_runs_through_the_participants_processor(
 
 
 @pytest.mark.asyncio
+async def test_resubscribe_before_the_forwarder_starts_leaves_the_live_source_mixed() -> None:
+    """Several room events can be dispatched in one loop iteration, so a forward task can find
+    its source already resubscribed by the time it first runs. It must not touch the successor's
+    channel: writing to it leaks the old track, and unregistering it drops a live speaker."""
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, None, mix_participants=True, frame_size_ms=10)
+    participant = _make_mix_participant("speaker", "TR_1")
+    publication = participant.track_publications["TR_1"]
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        # all synchronous: the first forward task never gets a turn before it is replaced
+        stream.add_participant(participant)
+        first_chan = stream._mix_sources["speaker"].chan
+        publication.muted = True
+        stream._on_track_muted(participant, publication)
+        publication.muted = False
+        stream._on_track_unmuted(participant, publication)
+
+        live_chan = stream._mix_sources["speaker"].chan
+        assert live_chan is not first_chan
+
+        await asyncio.sleep(0.1)  # let the stale task run and then be cancelled
+
+        assert _mixing_identities(stream) == {"speaker"}
+        assert live_chan in stream._mixer._streams
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_unmuting_does_not_wait_for_the_pre_connect_buffer_again() -> None:
     """The handler drops the buffer after one read, so a second wait just burns the timeout
     while the freshly subscribed stream backs up."""

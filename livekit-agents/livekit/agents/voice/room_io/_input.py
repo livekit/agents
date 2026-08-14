@@ -415,18 +415,24 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     @log_exceptions(logger=logger)
     async def _forward_mixed_source(
         self,
-        source: _MixedSource,
+        chan: aio.Chan[rtc.AudioFrame],
+        processor: rtc.FrameProcessor[rtc.AudioFrame] | None,
         stream: rtc.AudioStream,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        chan = source.chan  # bound once: source.chan is replaced by the next subscribe
+        """Everything this task touches is passed in, never read back off the `_MixedSource`.
 
+        Several room events can be dispatched in one loop iteration, so the source may already
+        have been torn down and resubscribed by the time this coroutine first runs. Reading
+        `source.chan` here would bind the successor's channel and, on cancellation, unregister
+        the channel the live task is feeding.
+        """
         # pre-connect audio was recorded before this participant joined, so it is not concurrent
         # with anyone: it goes straight to the session rather than through the mixer, where it
         # would stall the mix while it loads and then leave this source permanently behind
         with contextlib.suppress(aio.ChanClosed):
-            await self._flush_pre_connect(publication, participant, source.processor)
+            await self._flush_pre_connect(publication, participant, processor)
 
         if chan.closed:
             return  # the source was torn down while the pre-connect buffer loaded
@@ -486,11 +492,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         # writes must land in the channel it was bound to, never in the new mix
         source.chan = aio.Chan[rtc.AudioFrame]()
         source.publication_sid = publication.sid
-        source.stream = self._create_stream(track, participant)
-        # the sink is bound here, once: a participant removed mid-forward must never fall
-        # back to _data_ch and reach the session unmixed
+        source.stream = self._create_stream(track, participant)  # sets source.processor
+        # the channel and processor are bound here, at creation: the task may not run until
+        # after another event has already replaced them on the source
         source.task = asyncio.create_task(
-            self._forward_mixed_source(source, source.stream, publication, participant)
+            self._forward_mixed_source(
+                source.chan, source.processor, source.stream, publication, participant
+            )
         )
         return True
 
