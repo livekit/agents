@@ -415,6 +415,17 @@ class RoomIO:
         self._participant_available_fut.set_result(participant)
         self._agent_session._on_room_io_participant_linked(participant)
 
+    def _next_mixed_participant(self, left_identity: str) -> rtc.RemoteParticipant | None:
+        """Another participant still contributing to the mixed input, if any."""
+        if self._audio_input is None or not self._audio_input.mix_participants:
+            return None
+
+        mixed = self._audio_input.mixed_identities
+        for participant in self._room.remote_participants.values():
+            if participant.identity != left_identity and participant.identity in mixed:
+                return participant
+        return None
+
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if self._audio_input and self._audio_input.mix_participants:
             self._audio_input.remove_participant(participant.identity)
@@ -422,6 +433,19 @@ class RoomIO:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+
+        if remaining := self._next_mixed_participant(participant.identity):
+            # the linked participant only drives the outputs, and others are still mixed in:
+            # hand the outputs over rather than ending the conversation for everyone
+            logger.debug(
+                "linked participant left, relinking to another mixed participant",
+                extra={"participant": remaining.identity, "left": participant.identity},
+            )
+            self.set_participant(remaining.identity)
+            if not self._participant_available_fut.done():
+                self._participant_available_fut.set_result(remaining)
+            self._agent_session._on_room_io_participant_linked(remaining)
+            return
 
         if (
             self._options.close_on_disconnect

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, KeysView
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
@@ -141,6 +141,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         stream: rtc.VideoStream | rtc.AudioStream,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
+        sink: aio.Chan[T],
     ) -> None:
         if old_task:
             await aio.cancel_and_wait(old_task)
@@ -150,7 +151,6 @@ class _ParticipantInputStream(Generic[T], ABC):
             "source": rtc.TrackSource.Name(publication.source),
         }
         logger.debug("start reading stream", extra=extra)
-        sink = self._sink(participant)
         try:
             async for event in stream:
                 if not self._attached:
@@ -166,10 +166,6 @@ class _ParticipantInputStream(Generic[T], ABC):
             return
 
         logger.debug("stream closed", extra=extra)
-
-    def _sink(self, participant: rtc.RemoteParticipant) -> aio.Chan[T]:
-        """The channel a participant's frames are forwarded to."""
-        return self._data_ch
 
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
@@ -216,7 +212,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track, participant)
         self._publication = publication
         self._forward_atask = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, publication, participant)
+            self._forward_task(
+                self._forward_atask, self._stream, publication, participant, self._data_ch
+            )
         )
         return True
 
@@ -304,6 +302,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     def mix_participants(self) -> bool:
         return self._mix_participants
 
+    @property
+    def mixed_identities(self) -> KeysView[str]:
+        return self._mix_sources.keys()
+
     def add_participant(self, participant: rtc.RemoteParticipant) -> None:
         """Mix this participant's microphone into the input stream.
 
@@ -370,12 +372,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             await self._data_ch.send(frame)
 
     @override
-    def _sink(self, participant: rtc.RemoteParticipant) -> aio.Chan[rtc.AudioFrame]:
-        if (source := self._mix_sources.get(participant.identity)) is not None:
-            return source.chan
-        return self._data_ch
-
-    @override
     def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
         if self._mix_participants:
             # every accepted participant is mixed in, linking only drives the outputs
@@ -403,8 +399,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._close_mixed_source(source)
         source.publication_sid = publication.sid
         source.stream = self._create_stream(track, participant)
+        # the sink is bound here, once: a participant removed mid-forward must never fall
+        # back to _data_ch and reach the session unmixed
         source.task = asyncio.create_task(
-            self._forward_task(None, source.stream, publication, participant)
+            self._forward_task(None, source.stream, publication, participant, source.chan)
         )
         return True
 
@@ -465,12 +463,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         stream: rtc.AudioStream,  # type: ignore[override]
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
+        sink: aio.Chan[rtc.AudioFrame],
     ) -> None:
         if old_task:
             await aio.cancel_and_wait(old_task)
 
-        sink = self._sink(participant)
-        # the sink of a mixed participant is closed when they leave, mid-forwarding
+        # a mixed participant's sink is closed when they leave, mid-forwarding. the base loop
+        # handles that itself; this covers the pre-connect and flush sends around it.
         with contextlib.suppress(aio.ChanClosed):
             if (
                 self._pre_connect_audio_handler
@@ -507,7 +506,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                         "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                     )
 
-            await super()._forward_task(old_task, stream, publication, participant)
+            await super()._forward_task(old_task, stream, publication, participant, sink)
 
             # push a silent frame to flush the stt final result if any
             silent_samples = int(self._sample_rate * 0.5)

@@ -71,7 +71,11 @@ class AudioInputOptions:
     mix_participants: bool = False
     """Mix the microphone of every accepted participant into a single input stream, instead of
     listening to the linked participant only. The linked participant still drives the outputs
-    (audio, transcription). Transcripts of a mixed input cannot be attributed to a speaker."""
+    (audio, transcription), and is relinked to another mixed participant if they leave.
+    Transcripts of a mixed input cannot be attributed to a speaker.
+
+    `noise_cancellation` must be given as a callable when mixing: a `FrameProcessor` is stateful
+    per stream and cannot be shared by several speakers at once."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0

@@ -528,6 +528,47 @@ async def test_mix_participants_tracks_room_membership() -> None:
     await room_io._audio_input.aclose()
 
 
+@pytest.mark.asyncio
+async def test_mix_relinks_instead_of_closing_when_the_linked_participant_leaves() -> None:
+    """The linked participant is one of N contributors: their exit must not hang up on the rest."""
+    room = _FakeRoom()
+    agent_session = SimpleNamespace(
+        off=MagicMock(),
+        _on_room_io_participant_linked=MagicMock(),
+        _close_soon=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(agent_session, room)
+    room_io._audio_input = _make_audio_input_stream(room, None, mix_participants=True)
+
+    candidate = _make_mix_participant("candidate", "TR_1")
+    interviewer = _make_mix_participant("interviewer", "TR_2")
+    room.remote_participants = {"candidate": candidate, "interviewer": interviewer}
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        room_io._on_participant_connected(candidate)
+        room_io._on_participant_connected(interviewer)
+        assert room_io.linked_participant is candidate
+
+        candidate.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
+        room.remote_participants.pop("candidate")
+        room_io._on_participant_disconnected(candidate)
+
+        # outputs follow the remaining speaker, the session stays up
+        assert room_io.linked_participant is interviewer
+        assert room_io._participant_identity == "interviewer"
+        agent_session._close_soon.assert_not_called()
+
+        # last one out does close it
+        interviewer.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
+        room.remote_participants.pop("interviewer")
+        room_io._on_participant_disconnected(interviewer)
+        agent_session._close_soon.assert_called_once()
+
+    await room_io._audio_input.aclose()
+
+
 # -- audio output tests -------------------------------------------------------
 
 
