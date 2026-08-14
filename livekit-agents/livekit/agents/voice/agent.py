@@ -889,6 +889,19 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
 
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+
+        speech_handle = _SpeechHandleContextVar.get(None)
+        old_activity = _AgentActivityContextVar.get()
+        old_agent = old_activity.agent
+        session = old_activity.session
+        self._old_agent = old_agent
+
+        if speech_handle and speech_handle.interrupted:
+            raise RuntimeError(
+                f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
+            )
+
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():
                 return
@@ -905,26 +918,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 )
             )
 
+        # registered only past the checks above: they raise instead of completing the task,
+        # so an early exit must not report the task as finishing prematurely
         current_task.add_done_callback(_handle_task_done)
-
-        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
-
-        # TODO(theomonnom): add a global lock for inline tasks
-        # This may currently break in the case we use parallel tool calls.
-
-        speech_handle = _SpeechHandleContextVar.get(None)
-        old_activity = _AgentActivityContextVar.get()
-        old_agent = old_activity.agent
-        session = old_activity.session
-        self._old_agent = old_agent
 
         old_allow_interruptions = True
         if speech_handle:
-            if speech_handle.interrupted:
-                raise RuntimeError(
-                    f"{self.__class__.__name__} cannot be awaited inside a function tool that is already interrupted"
-                )
-
             # lock the speech handle to prevent interruptions until the task is complete
             # there should be no await before this line to avoid race conditions
             old_allow_interruptions = speech_handle.allow_interruptions
