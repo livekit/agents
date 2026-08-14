@@ -71,6 +71,7 @@ from .generation import (
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
+    _interrupted_tool_output,
     _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
@@ -3326,8 +3327,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
@@ -3484,14 +3484,13 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # commit results of tools that finished despite the interruption (#3702);
-            # handoffs excluded: not applied when interrupted, must stay retryable
+            # commit results of tools that finished despite the interruption (#3702), so
+            # the next inference doesn't run them again
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
-                    interrupted_calls.append(sanitized_out.fnc_call)
-                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
                 self._session.emit(
@@ -3534,13 +3533,9 @@ class AgentActivity(RecognitionHooks):
                 function_calls=[], function_call_outputs=[]
             )
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None:
-                    new_calls.append(sanitized_out.fnc_call)
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        fnc_executed_ev._reply_required = True
+                new_calls.append(sanitized_out.fnc_call)
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
@@ -3567,7 +3562,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
-            if fnc_executed_ev._reply_required and not speech_handle.interrupted:
+            if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
@@ -3994,8 +3989,7 @@ class AgentActivity(RecognitionHooks):
             self._session._tool_items_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -4130,6 +4124,36 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # commit results of tools that finished despite the interruption, as the pipeline
+            # task does. the calls are already recorded, so each one answers or the model waits
+            interrupted_calls: list[llm.FunctionCall] = []
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
+
+            if interrupted_fnc_outputs:
+                self._session.emit(
+                    "function_tools_executed",
+                    FunctionToolsExecutedEvent(
+                        function_calls=interrupted_calls,
+                        function_call_outputs=interrupted_fnc_outputs,
+                    ),
+                )
+                self._agent._chat_ctx.insert(interrupted_fnc_outputs)
+                self._session._tool_items_added(interrupted_fnc_outputs)
+
+                # unlike the pipeline, a realtime model holds the call open server-side
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.items.extend(interrupted_fnc_outputs)
+                try:
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync the tool results of an interrupted generation",
+                        extra={"error": str(e)},
+                    )
             return
 
         # wait for the tool execution to complete
@@ -4149,7 +4173,6 @@ class AgentActivity(RecognitionHooks):
             speech_handle._num_steps += 1
 
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
@@ -4157,19 +4180,14 @@ class AgentActivity(RecognitionHooks):
             ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
-                if sanitized_out.fnc_call_out is not None:
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        generate_tool_reply = True
-                        fnc_executed_ev._reply_required = True
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                    # add tool output to the chat context
-                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                    self._session._tool_items_added([sanitized_out.fnc_call_out])
+                # add tool output to the chat context
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -4207,7 +4225,7 @@ class AgentActivity(RecognitionHooks):
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev._reply_required
+                    and fnc_executed_ev.has_tool_reply
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -4246,7 +4264,7 @@ class AgentActivity(RecognitionHooks):
                         auto_reply_fut.set_result(None)
 
             if (
-                fnc_executed_ev._reply_required
+                fnc_executed_ev.has_tool_reply
                 and not self._rt_session.capabilities.auto_tool_reply_generation
             ):
                 self._rt_session.interrupt()
@@ -4268,14 +4286,6 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
-                )
-            elif (
-                self._rt_session.capabilities.auto_tool_reply_generation
-                and not fnc_executed_ev._reply_required
-                and generate_tool_reply
-            ):
-                logger.warning(
-                    f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
     def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:

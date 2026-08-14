@@ -1770,6 +1770,13 @@ class RealtimeSession(  # noqa: F811
                 logger.debug(f"function call output: {item}")
                 self._pending_tools.discard(item.call_id)
 
+                if not item.reply_required:
+                    logger.warning(
+                        "a tool result wants no reply, but Nova Sonic will answer it anyway. "
+                        "Sending it regardless, since an unanswered tool use keeps the turn open.",
+                        extra={"function": item.name, "call_id": item.call_id},
+                    )
+
                 # Format tool result as proper JSON
                 if item.is_error:
                     tool_result = json.dumps({"error": str(item.output)})
