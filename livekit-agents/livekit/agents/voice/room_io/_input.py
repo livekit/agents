@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from typing_extensions import override
@@ -148,15 +150,20 @@ class _ParticipantInputStream(Generic[T], ABC):
             "source": rtc.TrackSource.Name(publication.source),
         }
         logger.debug("start reading stream", extra=extra)
+        sink = self._sink(participant)
         async for event in stream:
             if not self._attached:
                 # drop frames if the stream is detached
                 continue
             frame = cast(T, event.frame)
             self._process_frame(frame)
-            await self._data_ch.send(frame)
+            await sink.send(frame)
 
         logger.debug("stream closed", extra=extra)
+
+    def _sink(self, participant: rtc.RemoteParticipant) -> aio.Chan[T]:
+        """The channel a participant's frames are forwarded to."""
+        return self._data_ch
 
     def _process_frame(self, frame: T) -> None:
         """Hook for subclasses to process frames in-place before forwarding."""
@@ -227,6 +234,16 @@ class _ParticipantInputStream(Generic[T], ABC):
                 return
 
 
+@dataclass
+class _MixedSource:
+    """One participant's contribution to the mixed audio input."""
+
+    chan: aio.Chan[rtc.AudioFrame]
+    stream: rtc.AudioStream | None = None
+    task: asyncio.Task[None] | None = None
+    publication_sid: str | None = None
+
+
 class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], AudioInput):
     def __init__(
         self,
@@ -241,6 +258,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        mix_participants: bool = False,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
@@ -263,17 +281,156 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if auto_gain_control:
             self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
 
+        self._mix_participants = mix_participants
+        self._mix_sources: dict[str, _MixedSource] = {}
+        self._mixer: rtc.AudioMixer | None = None
+        self._mixer_atask: asyncio.Task[None] | None = None
+
+    @property
+    def mix_participants(self) -> bool:
+        return self._mix_participants
+
+    def add_participant(self, participant: rtc.RemoteParticipant) -> None:
+        """Mix this participant's microphone into the input stream.
+
+        Only used when `mix_participants` is enabled; a no-op otherwise.
+        """
+        if not self._mix_participants or participant.identity in self._mix_sources:
+            return
+
+        source = _MixedSource(chan=aio.Chan[rtc.AudioFrame]())
+        self._mix_sources[participant.identity] = source
+        self._ensure_mixer().add_stream(source.chan)
+
+        for publication in participant.track_publications.values():
+            if publication.track and self._on_track_available(
+                publication.track, publication, participant
+            ):
+                break
+
+    def remove_participant(self, identity: str) -> None:
+        source = self._mix_sources.pop(identity, None)
+        if source is None:
+            return
+
+        if self._mixer:
+            self._mixer.remove_stream(source.chan)
+        self._close_mixed_source(source)
+        source.chan.close()
+
+    def _ensure_mixer(self) -> rtc.AudioMixer:
+        if self._mixer is None:
+            self._mixer = rtc.AudioMixer(
+                self._sample_rate,
+                self._num_channels,
+                blocksize=int(self._sample_rate * self._frame_size_ms / 1000),
+                # ponytail: a muted/paused participant stops delivering frames, so the mixer
+                # logs a timeout warning per block and pads silence. Harmless, but noisy —
+                # feed silence per source if that ever matters.
+                stream_timeout_ms=max(100, self._frame_size_ms * 2),
+            )
+            self._mixer_atask = asyncio.create_task(self._forward_mixed(self._mixer))
+        return self._mixer
+
+    def _close_mixed_source(self, source: _MixedSource) -> None:
+        stream, task = source.stream, source.task
+        source.stream, source.task, source.publication_sid = None, None, None
+
+        async def _close() -> None:
+            if task:
+                await aio.cancel_and_wait(task)
+            if stream:
+                await stream.aclose()
+
+        close_task = asyncio.create_task(_close())
+        close_task.add_done_callback(self._tasks.discard)
+        self._tasks.add(close_task)
+
+    @log_exceptions(logger=logger)
+    async def _forward_mixed(self, mixer: rtc.AudioMixer) -> None:
+        async for frame in mixer:
+            if not self._attached:
+                continue
+            if self._apm is not None:
+                self._apm.process_stream(frame)
+            await self._data_ch.send(frame)
+
+    @override
+    def _sink(self, participant: rtc.RemoteParticipant) -> aio.Chan[rtc.AudioFrame]:
+        if (source := self._mix_sources.get(participant.identity)) is not None:
+            return source.chan
+        return self._data_ch
+
+    @override
+    def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
+        if self._mix_participants:
+            # every accepted participant is mixed in, linking only drives the outputs
+            return
+        super().set_participant(participant)
+
+    @override
+    def _on_track_available(
+        self,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> bool:
+        if not self._mix_participants:
+            return super()._on_track_available(track, publication, participant)
+
+        source = self._mix_sources.get(participant.identity)
+        if (
+            source is None
+            or publication.source not in self._accepted_sources
+            or source.publication_sid == publication.sid
+        ):
+            return False
+
+        self._close_mixed_source(source)
+        source.publication_sid = publication.sid
+        source.stream = self._create_stream(track, participant)
+        source.task = asyncio.create_task(
+            self._forward_task(None, source.stream, publication, participant)
+        )
+        return True
+
+    @override
+    def _on_track_unavailable(
+        self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
+    ) -> None:
+        if not self._mix_participants:
+            super()._on_track_unavailable(publication, participant)
+            return
+
+        source = self._mix_sources.get(participant.identity)
+        if source is None or source.publication_sid != publication.sid:
+            return
+
+        self._close_mixed_source(source)
+        for publication in participant.track_publications.values():
+            if publication.track and self._on_track_available(
+                publication.track, publication, participant
+            ):
+                return
+
     @override
     def _process_frame(self, frame: rtc.AudioFrame) -> None:
+        if self._mix_participants:
+            return  # AGC runs once on the mixed output instead
+
         if self._apm is not None:
             self._apm.process_stream(frame)
 
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
         noise_cancellation = self._noise_cancellation
+        auto_close_noise_cancellation = False
         if callable(noise_cancellation):
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
-            if isinstance(noise_cancellation, rtc.FrameProcessor):
+            if self._mix_participants:
+                # each mixed participant gets its own processor, tied to its stream
+                auto_close_noise_cancellation = isinstance(noise_cancellation, rtc.FrameProcessor)
+            elif isinstance(noise_cancellation, rtc.FrameProcessor):
                 self._update_processor(noise_cancellation)
             else:
                 self._update_processor(None)
@@ -284,7 +441,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             num_channels=self._num_channels,
             frame_size_ms=self._frame_size_ms,
             noise_cancellation=noise_cancellation,
-            auto_close_noise_cancellation=False,
+            auto_close_noise_cancellation=auto_close_noise_cancellation,
         )
 
     @override
@@ -298,51 +455,75 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         if old_task:
             await aio.cancel_and_wait(old_task)
 
-        if (
-            self._pre_connect_audio_handler
-            and publication.track
-            and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
-        ):
-            logging_extra = {
-                "track_id": publication.track.sid,
-                "participant": participant.identity,
-            }
-            try:
-                duration: float = 0
-                frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
-                for frame in self._resample_frames(self._apply_audio_processor(frames)):
-                    if self._attached:
-                        await self._data_ch.send(frame)
-                        duration += frame.duration
-                if frames:
-                    logger.debug(
-                        "pre-connect audio buffer pushed",
-                        extra={"duration": duration, **logging_extra},
+        sink = self._sink(participant)
+        # the sink of a mixed participant is closed when they leave, mid-forwarding
+        with contextlib.suppress(aio.ChanClosed):
+            if (
+                self._pre_connect_audio_handler
+                and publication.track
+                and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
+            ):
+                logging_extra = {
+                    "track_id": publication.track.sid,
+                    "participant": participant.identity,
+                }
+                try:
+                    duration: float = 0
+                    frames = await self._pre_connect_audio_handler.wait_for_data(
+                        publication.track.sid
+                    )
+                    for frame in self._resample_frames(self._apply_audio_processor(frames)):
+                        if self._attached:
+                            await sink.send(frame)
+                            duration += frame.duration
+                    if frames:
+                        logger.debug(
+                            "pre-connect audio buffer pushed",
+                            extra={"duration": duration, **logging_extra},
+                        )
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "timeout waiting for pre-connect audio buffer",
+                        extra=logging_extra,
                     )
 
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "timeout waiting for pre-connect audio buffer",
-                    extra=logging_extra,
+                except Exception as e:
+                    logger.error(
+                        "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
+                    )
+
+            await super()._forward_task(old_task, stream, publication, participant)
+
+            # push a silent frame to flush the stt final result if any
+            silent_samples = int(self._sample_rate * 0.5)
+            await sink.send(
+                rtc.AudioFrame(
+                    b"\x00\x00" * silent_samples,
+                    sample_rate=self._sample_rate,
+                    num_channels=self._num_channels,
+                    samples_per_channel=silent_samples,
                 )
-
-            except Exception as e:
-                logger.error(
-                    "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
-                )
-
-        await super()._forward_task(old_task, stream, publication, participant)
-
-        # push a silent frame to flush the stt final result if any
-        silent_samples = int(self._sample_rate * 0.5)
-        await self._data_ch.send(
-            rtc.AudioFrame(
-                b"\x00\x00" * silent_samples,
-                sample_rate=self._sample_rate,
-                num_channels=self._num_channels,
-                samples_per_channel=silent_samples,
             )
-        )
+
+    @override
+    async def aclose(self) -> None:
+        sources, self._mix_sources = list(self._mix_sources.values()), {}
+        for source in sources:
+            source.chan.close()
+            if source.task:
+                await aio.cancel_and_wait(source.task)
+            if source.stream:
+                await source.stream.aclose()
+
+        if self._mixer_atask:
+            await aio.cancel_and_wait(self._mixer_atask)
+            self._mixer_atask = None
+        if self._mixer:
+            await self._mixer.aclose()
+            self._mixer = None
+
+        await super().aclose()
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None

@@ -123,6 +123,7 @@ class RoomIO:
                 noise_cancellation=input_audio_options.noise_cancellation,
                 auto_gain_control=input_audio_options.auto_gain_control,
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
+                mix_participants=input_audio_options.mix_participants,
             )
 
         # -- create outputs --
@@ -374,7 +375,25 @@ class RoomIO:
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
 
+    def _add_mixed_participant(self, participant: rtc.RemoteParticipant) -> None:
+        if self._audio_input is None or not self._audio_input.mix_participants:
+            return
+
+        accepted_kinds = self._options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
+        if participant.kind not in accepted_kinds:
+            return
+
+        if (
+            participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
+            == self._room.local_participant.identity
+        ):
+            return  # our own avatar worker, listening to it would loop the agent back on itself
+
+        self._audio_input.add_participant(participant)
+
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
+        self._add_mixed_participant(participant)
+
         if self._participant_available_fut.done():
             return
 
@@ -397,6 +416,9 @@ class RoomIO:
         self._agent_session._on_room_io_participant_linked(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if self._audio_input and self._audio_input.mix_participants:
+            self._audio_input.remove_participant(participant.identity)
+
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()

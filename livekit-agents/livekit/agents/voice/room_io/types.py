@@ -68,6 +68,10 @@ class AudioInputOptions:
     ) = None
     auto_gain_control: bool = True
     """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
+    mix_participants: bool = False
+    """Mix the microphone of every accepted participant into a single input stream, instead of
+    listening to the linked participant only. The linked participant still drives the outputs
+    (audio, transcription). Transcripts of a mixed input cannot be attributed to a speaker."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
