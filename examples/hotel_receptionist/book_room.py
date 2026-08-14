@@ -4,6 +4,7 @@ from datetime import date
 from enum import Enum, auto
 from typing import Annotated
 
+from common import _count_caller_turns
 from context import speech_only
 from get_card import GetCardTask
 from hotel_db import (
@@ -22,7 +23,7 @@ from persona import COMMON_INSTRUCTIONS
 from pydantic import Field
 
 from livekit.agents import NOT_GIVEN, NotGivenOr, beta
-from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.llm import ChatContext
 from livekit.agents.llm.tool_context import ToolError, ToolFlag, function_tool
 from livekit.agents.voice.agent import AgentTask
 
@@ -31,6 +32,40 @@ You're handling a room booking from start to finish.
 
 Before asking anything, scan the conversation so far. If dates, room type, party size, or smoking preference were already discussed, call the matching recording tools (set_stay, choose_room) right away with those values.
 """
+
+
+class _Owed:
+    """Speech the flow owes the caller before it may move on.
+
+    Armed where the flow incurs the obligation and discharged by the caller's
+    next turn, so the model speaks and the turn ends there - the caller's reply
+    is what reopens the tools.
+
+    Reading the caller's turns out of the history is what keeps the gate the same
+    for a caller who types as for one who speaks: `on_user_turn_completed` runs
+    only on the audio end-of-turn path, so an obligation cleared from that hook
+    never clears for text input and the flow never leaves the step.
+    """
+
+    def __init__(self, *, armed: bool) -> None:
+        self._armed = armed
+        self._at: int | None = None
+
+    def arm(self) -> None:
+        self._armed, self._at = True, None
+
+    def pending(self, turns: int) -> bool:
+        if not self._armed:
+            return False
+        if self._at is None:
+            # Stamped when the flow first sees the obligation pending, not when it
+            # is armed: the read-back is incurred while details are still being
+            # captured, and the caller turns spent capturing them are not answers
+            # to it.
+            self._at = turns
+        if turns > self._at:
+            self._armed = False
+        return self._armed
 
 
 class _Step(Enum):
@@ -98,11 +133,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._phone: str | None = None
         self._card_last4: str | None = None
         self._quoted_total: int | None = None
-        # Speech the flow owes the caller before it may move on. Discharged as
-        # the tool-less step is served, so the model speaks and the turn ends
-        # there - the caller's reply is what reopens the tools.
-        self._must_offer: bool = False
-        self._must_read_back: bool = True
+        self._must_offer = _Owed(armed=False)
+        self._must_read_back = _Owed(armed=True)
         super().__init__(
             instructions=f"{COMMON_INSTRUCTIONS}\n\n{_BOOK_ROOM_INSTRUCTIONS}",
             chat_ctx=chat_ctx,
@@ -148,7 +180,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
     def _step(self) -> _Step:
         if self._check_in is None:
             return _Step.NEED_STAY
-        if self._must_offer:
+        turns = _count_caller_turns(self.session.history)
+        if self._must_offer.pending(turns):
             return _Step.OFFERING
         if self._room_type is None:
             return _Step.NEED_ROOM
@@ -156,7 +189,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             return _Step.NEED_EXTRAS
         if self._missing():
             return _Step.CAPTURE
-        if self._must_read_back:
+        if self._must_read_back.pending(turns):
             return _Step.READ_BACK
         return _Step.AWAIT_AGREEMENT
 
@@ -201,16 +234,6 @@ class BookRoomTask(AgentTask[RoomBooking]):
             f"confirmation code exists. Available right now: {', '.join(sorted(allowed))}. "
             f"{self._status()}"
         )
-
-    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
-        # The caller answering is what discharges speech the flow owes them: the
-        # options are offered and picked from, the read-back is spoken and agreed
-        # to. Until then choose_room / confirm_booking stay closed.
-        step = self._step()
-        if step is _Step.OFFERING:
-            self._must_offer = False
-        elif step is _Step.READ_BACK:
-            self._must_read_back = False
 
     def _status(self) -> str:
         # Action-oriented status, NOT a missing-field list. A "still need: card"
@@ -282,7 +305,8 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._check_in, self._check_out, self._guests = check_in, check_out, guests
         # The options have to be spoken before a room can be picked, and new
         # dates invalidate any read-back already given.
-        self._must_offer = self._must_read_back = True
+        self._must_offer.arm()
+        self._must_read_back.arm()
         available_types = {a.type for a in avail}
         if self._room_type and self._room_type not in available_types:
             self._room_type = None  # prior choice no longer fits the new dates
@@ -345,7 +369,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._room_type = room_type
         self._view = view
         self._smoking = smoking_room
-        self._must_read_back = True  # a different room means a different read-back
+        self._must_read_back.arm()  # a different room means a different read-back
         await self._requote()
         rate = min(a.nightly_rate for a in for_type if view is None or a.view == view)
         view_part = f" with a {view} view" if view else ""
@@ -387,7 +411,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         extras = [name for name, wanted in answers if wanted]
         self._extras = extras
         self._extras_set = True
-        self._must_read_back = True  # different extras mean a different read-back
+        self._must_read_back.arm()  # different extras mean a different read-back
         await self._requote()
         chosen = ", ".join(e.replace("_", " ") for e in extras) if extras else "none"
         total_part = (
