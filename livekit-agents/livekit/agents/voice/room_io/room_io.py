@@ -416,13 +416,25 @@ class RoomIO:
         self._agent_session._on_room_io_participant_linked(participant)
 
     def _next_mixed_participant(self, left_identity: str) -> rtc.RemoteParticipant | None:
-        """Another participant still contributing to the mixed input, if any."""
+        """Another participant who could still speak into the mixed input, if any.
+
+        A published microphone is the test, not a currently live one: someone who is merely
+        muted is a person who can unmute, and hanging up on them mid-conversation would be
+        worse than the stale session this avoids. A participant publishing no microphone at
+        all — an observer or dashboard — cannot speak and must not keep the session alive.
+        """
         if self._audio_input is None or not self._audio_input.mix_participants:
             return None
 
         mixed = self._audio_input.mixed_identities
         for participant in self._room.remote_participants.values():
-            if participant.identity != left_identity and participant.identity in mixed:
+            if participant.identity == left_identity or participant.identity not in mixed:
+                continue
+
+            if any(
+                publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+                for publication in participant.track_publications.values()
+            ):
                 return participant
         return None
 

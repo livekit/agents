@@ -811,6 +811,44 @@ async def test_mix_participants_tracks_room_membership() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mix_does_not_relink_to_a_participant_who_cannot_speak() -> None:
+    """An observer publishes no microphone, so it must not keep the session alive on its own.
+    A muted participant can unmute, so it must."""
+    for publishes_mic, expect_closed in ((False, True), (True, False)):
+        room = _FakeRoom()
+        agent_session = SimpleNamespace(
+            off=MagicMock(),
+            _on_room_io_participant_linked=MagicMock(),
+            _close_soon=MagicMock(),
+            input=SimpleNamespace(audio=None, video=None),
+            output=SimpleNamespace(audio=None, transcription=None),
+        )
+        room_io = RoomIO(agent_session, room)
+        room_io._audio_input = _make_audio_input_stream(room, None, mix_participants=True)
+
+        speaker = _make_mix_participant("speaker", "TR_1")
+        # either a muted microphone, or no microphone at all
+        other = _make_mix_participant("other", "TR_2", publishes=publishes_mic, muted=True)
+        room.remote_participants = {"speaker": speaker, "other": other}
+
+        with patch(
+            "livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()
+        ):
+            room_io._on_participant_connected(speaker)
+            room_io._on_participant_connected(other)
+            assert room_io.linked_participant is speaker
+
+            speaker.disconnect_reason = rtc.DisconnectReason.CLIENT_INITIATED
+            room.remote_participants.pop("speaker")
+            room_io._on_participant_disconnected(speaker)
+
+        assert agent_session._close_soon.called is expect_closed
+        assert (room_io.linked_participant is other) is not expect_closed
+
+        await room_io._audio_input.aclose()
+
+
+@pytest.mark.asyncio
 async def test_mix_relinks_instead_of_closing_when_the_linked_participant_leaves() -> None:
     """The linked participant is one of N contributors: their exit must not hang up on the rest."""
     room = _FakeRoom()
