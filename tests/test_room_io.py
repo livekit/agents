@@ -9,6 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -142,6 +143,9 @@ def _make_track_available_args(
 def _make_audio_input_stream(
     room: _FakeRoom,
     noise_cancellation,
+    *,
+    mix_participants: bool = False,
+    frame_size_ms: int = 50,
 ) -> _ParticipantAudioInputStream:
     return _ParticipantAudioInputStream(
         room,
@@ -150,6 +154,8 @@ def _make_audio_input_stream(
         noise_cancellation=noise_cancellation,
         auto_gain_control=False,
         pre_connect_audio_handler=None,
+        frame_size_ms=frame_size_ms,
+        mix_participants=mix_participants,
     )
 
 
@@ -368,6 +374,103 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     assert stream._processor is None
 
     await stream.aclose()
+
+
+# -- multi-participant mixing tests -------------------------------------------
+
+
+class _ConstantAudioStream:
+    """Emits one frame of a constant sample value, then stays open without producing."""
+
+    def __init__(self, value: int, samples: int, sample_rate: int) -> None:
+        self._frame = rtc.AudioFrame(
+            value.to_bytes(2, "little", signed=True) * samples, sample_rate, 1, samples
+        )
+        self._sent = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._sent:
+            await asyncio.Event().wait()  # keep the stream alive, but silent
+        self._sent = True
+        return SimpleNamespace(frame=self._frame)
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _make_mix_participant(
+    identity: str, sid: str, *, kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD, attributes=None
+) -> MagicMock:
+    publication = MagicMock()
+    publication.source = rtc.TrackSource.SOURCE_MICROPHONE
+    publication.sid = sid
+    publication.track = MagicMock()
+    publication.audio_features = []
+
+    participant = MagicMock()
+    participant.identity = identity
+    participant.kind = kind
+    participant.attributes = attributes or {}
+    participant.track_publications = {sid: publication}
+    return participant
+
+
+@pytest.mark.asyncio
+async def test_mix_participants_sums_every_participant_audio() -> None:
+    """Both participants are heard at once: the input yields their mixed samples."""
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, None, mix_participants=True, frame_size_ms=10)
+    samples = 240  # 10ms @ 24kHz
+
+    streams = [_ConstantAudioStream(v, samples, 24000) for v in (100, 200)]
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: streams.pop(0)):
+        stream.add_participant(_make_mix_participant("candidate", "TR_1"))
+        stream.add_participant(_make_mix_participant("interviewer", "TR_2"))
+
+        assert set(stream._mix_sources) == {"candidate", "interviewer"}
+
+        frame = await asyncio.wait_for(stream.__anext__(), timeout=5)
+
+    assert frame.samples_per_channel == samples
+    assert bytes(frame.data) == (300).to_bytes(2, "little", signed=True) * samples
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mix_participants_tracks_room_membership() -> None:
+    """RoomIO mixes in every accepted participant, but never its own avatar worker."""
+    room = _FakeRoom()
+    agent_session = SimpleNamespace(
+        off=MagicMock(),
+        _on_room_io_participant_linked=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(agent_session, room)
+    room_io._audio_input = _make_audio_input_stream(room, None, mix_participants=True)
+
+    candidate = _make_mix_participant("candidate", "TR_1")
+    interviewer = _make_mix_participant("interviewer", "TR_2")
+    avatar = _make_mix_participant(
+        "avatar", "TR_3", attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: "local"}
+    )
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
+        for participant in (candidate, interviewer, avatar):
+            room_io._on_participant_connected(participant)
+
+        assert set(room_io._audio_input._mix_sources) == {"candidate", "interviewer"}
+        # only the first participant is linked, the rest are input-only
+        assert room_io.linked_participant is candidate
+
+        room_io._on_participant_disconnected(interviewer)
+        assert set(room_io._audio_input._mix_sources) == {"candidate"}
+
+    await room_io._audio_input.aclose()
 
 
 # -- audio output tests -------------------------------------------------------
