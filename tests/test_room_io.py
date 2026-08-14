@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -436,6 +437,60 @@ async def test_mix_participants_sums_every_participant_audio() -> None:
 
     assert frame.samples_per_channel == samples
     assert bytes(frame.data) == (300).to_bytes(2, "little", signed=True) * samples
+
+    await stream.aclose()
+
+
+class _TickingAudioStream:
+    """Yields a frame on every iteration, forever."""
+
+    def __init__(self, samples: int, sample_rate: int) -> None:
+        self._frame = rtc.AudioFrame(b"\x01\x00" * samples, sample_rate, 1, samples)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.sleep(0)
+        return SimpleNamespace(frame=self._frame)
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_mix_participant_departure_is_not_logged_as_an_error(caplog) -> None:
+    """A participant leaving closes their sink mid-forward: an expected end, not a crash."""
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, None, mix_participants=True, frame_size_ms=10)
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _TickingAudioStream(240, 24000),
+    ):
+        stream.add_participant(_make_mix_participant("candidate", "TR_1"))
+
+    source = stream._mix_sources["candidate"]
+    assert source.task is not None
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        source.chan.close()  # what remove_participant does while frames are in flight
+        await asyncio.wait_for(source.task, timeout=5)  # returns, never raises ChanClosed
+
+    assert [record.message for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mix_participants_warns_on_a_shared_frame_processor(caplog) -> None:
+    """One stateful processor cannot serve every speaker at once — say so up front."""
+    room = _FakeRoom()
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        stream = _make_audio_input_stream(room, _MockFrameProcessor(), mix_participants=True)
+
+    assert any("noise cancellation processor is shared" in r.message for r in caplog.records)
 
     await stream.aclose()
 

@@ -151,13 +151,19 @@ class _ParticipantInputStream(Generic[T], ABC):
         }
         logger.debug("start reading stream", extra=extra)
         sink = self._sink(participant)
-        async for event in stream:
-            if not self._attached:
-                # drop frames if the stream is detached
-                continue
-            frame = cast(T, event.frame)
-            self._process_frame(frame)
-            await sink.send(frame)
+        try:
+            async for event in stream:
+                if not self._attached:
+                    # drop frames if the stream is detached
+                    continue
+                frame = cast(T, event.frame)
+                self._process_frame(frame)
+                await sink.send(frame)
+        except aio.ChanClosed:
+            # the sink of a mixed participant is closed when they leave, mid-forwarding.
+            # caught here, below @log_exceptions, so a departure isn't logged as a crash.
+            logger.debug("stream sink closed", extra=extra)
+            return
 
         logger.debug("stream closed", extra=extra)
 
@@ -285,6 +291,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._mix_sources: dict[str, _MixedSource] = {}
         self._mixer: rtc.AudioMixer | None = None
         self._mixer_atask: asyncio.Task[None] | None = None
+
+        if mix_participants and isinstance(noise_cancellation, rtc.FrameProcessor):
+            logger.warning(
+                "a single noise cancellation processor is shared by every mixed participant, "
+                "which interleaves speakers through one stateful filter. pass a callable "
+                "returning a new processor per participant instead",
+                extra={"processor": type(noise_cancellation).__name__},
+            )
 
     @property
     def mix_participants(self) -> bool:
