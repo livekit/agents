@@ -76,9 +76,9 @@ def to_chat_ctx(
                     "toolResult": {
                         "toolUseId": msg.call_id,
                         "content": [
-                            {"json": msg.output}
-                            if isinstance(msg.output, dict)
-                            else {"text": msg.output}
+                            {"json": msg.model_output}
+                            if isinstance(msg.model_output, dict)
+                            else {"text": msg.model_output}
                         ],
                         "status": "success",
                     }

@@ -1052,6 +1052,7 @@ def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput
     A handoff answers as a failure, since the interruption left it unapplied.
     """
     fnc_call_out = out.fnc_call_out
+    fnc_call_out.interrupted = True
     if out.agent_task is not None:
         fnc_call_out.output = "the agent handoff was interrupted and did not happen"
         fnc_call_out.is_error = True

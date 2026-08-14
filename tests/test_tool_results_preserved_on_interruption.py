@@ -107,6 +107,9 @@ async def test_tool_results_preserved_when_tool_reply_turn_interrupted(
 
     assert forced_schedules, "the tool reply turn was never scheduled; the test needs updating"
     _assert_weather_tool_preserved(agent, session)
+    for items in (agent.chat_ctx.items, session.history.items):
+        output = next(item for item in items if item.type == "function_call_output")
+        assert output.interrupted
 
     # the interrupted tool reply turn never spoke, its message must not appear
     assistant_texts = [

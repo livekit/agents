@@ -238,6 +238,9 @@ class SpeechHandle:
 
         if not self._interrupt_fut.done():
             self._interrupt_fut.set_result(None)
+            for item in self._chat_items:
+                if isinstance(item, llm.FunctionCallOutput):
+                    item.interrupted = True
 
             def _on_timeout() -> None:
                 logger.error(
@@ -262,6 +265,9 @@ class SpeechHandle:
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
         for item in items:
+            if self.interrupted and isinstance(item, llm.FunctionCallOutput):
+                item.interrupted = True
+
             for cb in list(self._item_added_callbacks):
                 try:
                     cb(item)

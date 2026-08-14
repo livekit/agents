@@ -4106,15 +4106,24 @@ class AgentActivity(RecognitionHooks):
         if trace_text_parts:
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, "\n".join(trace_text_parts))
 
-        # sync local chat ctx to the realtime server to remove any items the
-        # model added but the user never heard (interrupted before we pulled
-        # them, or message_outputs entries left in "skipped")
-        if speech_handle.interrupted and any_skipped and self.llm.capabilities.mutable_chat_context:
+        # sync local chat ctx to the realtime server after removing messages the user
+        # never heard or marking a committed tool output's reply as interrupted
+        has_interrupted_tool_output = any(
+            isinstance(item, llm.FunctionCallOutput)
+            and item.interrupted
+            and self._agent._chat_ctx.get_by_id(item.id) is not None
+            for item in speech_handle.chat_items
+        )
+        if (
+            speech_handle.interrupted
+            and (any_skipped or has_interrupted_tool_output)
+            and self.llm.capabilities.mutable_chat_context
+        ):
             try:
                 await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
             except llm.RealtimeError as e:
                 logger.warning(
-                    "failed to sync chat context to remove never-played messages",
+                    "failed to sync interrupted realtime chat context",
                     extra={"error": str(e)},
                 )
 

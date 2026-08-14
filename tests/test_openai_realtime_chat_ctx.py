@@ -1,4 +1,5 @@
 import asyncio
+import json
 import types
 from unittest.mock import Mock
 
@@ -142,3 +143,40 @@ def test_short_call_id_is_unchanged() -> None:
         llm.FunctionCall(id="item_1", call_id="call_abc", name="get_weather", arguments="{}")
     )
     assert call.call_id == "call_abc"
+
+
+def test_interrupted_tool_output_is_marked_for_realtime() -> None:
+    from livekit.plugins.openai.realtime.utils import livekit_item_to_openai_item
+
+    output = livekit_item_to_openai_item(
+        llm.FunctionCallOutput(
+            id="item_1",
+            call_id="call_abc",
+            output="sunny",
+            is_error=False,
+            interrupted=True,
+        )
+    )
+
+    assert output.output is not None
+    assert json.loads(output.output) == {"output": "sunny", "interrupted": True}
+
+
+def test_interrupted_tool_output_replaces_realtime_context_item() -> None:
+    from openai.types.realtime import ConversationItemCreateEvent
+
+    session = _create_session()
+    original = llm.FunctionCallOutput(
+        id="item_1", call_id="call_abc", output="sunny", is_error=False
+    )
+    session._remote_chat_ctx.insert(None, original)
+
+    chat_ctx = llm.ChatContext([original.model_copy(update={"interrupted": True})])
+
+    events = session._create_update_chat_ctx_events(chat_ctx)
+
+    assert len(events) == 2
+    assert isinstance(events[1], ConversationItemCreateEvent)
+    recreated = events[1].item
+    assert recreated.output is not None
+    assert json.loads(recreated.output) == {"output": "sunny", "interrupted": True}
