@@ -689,6 +689,26 @@ async def test_unmuting_does_not_wait_for_the_pre_connect_buffer_again() -> None
 
 
 @pytest.mark.asyncio
+async def test_stt_flush_frame_is_valid_for_stereo_input() -> None:
+    """samples_per_channel is per channel: rtc.AudioFrame rejects a buffer that is too short."""
+    room = _FakeRoom()
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=2,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+
+    frame = stream._silent_frame()
+    assert frame.samples_per_channel == 12000
+    assert len(frame.data) == 12000 * 2  # int16 samples, both channels
+
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_pre_connect_audio_is_not_spliced_into_an_ongoing_conversation() -> None:
     """It bypasses the mixer, so writing it while others are live would interleave two
     speakers frame by frame in the channel the session reads."""

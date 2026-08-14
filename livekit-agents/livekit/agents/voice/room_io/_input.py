@@ -13,7 +13,7 @@ import livekit.rtc as rtc
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
-from ...utils import aio, log_exceptions
+from ...utils import aio, audio, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
@@ -652,13 +652,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             logger.error("error reading pre-connect audio buffer", extra=logging_extra, exc_info=e)
 
     def _silent_frame(self) -> rtc.AudioFrame:
-        silent_samples = int(self._sample_rate * 0.5)
-        return rtc.AudioFrame(
-            b"\x00\x00" * silent_samples,
-            sample_rate=self._sample_rate,
-            num_channels=self._num_channels,
-            samples_per_channel=silent_samples,
-        )
+        return audio.silence_frame(0.5, self._sample_rate, self._num_channels)
 
     @override
     async def aclose(self) -> None:
