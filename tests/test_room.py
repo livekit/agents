@@ -35,6 +35,8 @@ from .utils.livekit_test import (
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 TIMEOUT = 5.0
+# nothing else bounds `Room.connect`, and a wedged one would hang the whole session
+CONNECT_TIMEOUT = 15.0
 
 
 def _make_token(
@@ -68,7 +70,7 @@ async def connect_room(
 ):
     room = rtc.Room()
     token = _make_token(identity, room_name, kind=kind, agent=agent)
-    await room.connect(LK_URL, token)
+    await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
     try:
         yield room
     finally:
@@ -90,7 +92,7 @@ async def _test_wait_disconnect(wait_fn: Callable[[rtc.Room], Awaitable[object]]
     name = _room_name()
     room = rtc.Room()
     token = _make_token("observer", name)
-    await room.connect(LK_URL, token)
+    await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
 
     task = asyncio.ensure_future(wait_fn(room))
     # ensure the task is running and has registered its event handlers
