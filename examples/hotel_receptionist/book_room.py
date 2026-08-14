@@ -307,16 +307,23 @@ class BookRoomTask(AgentTask[RoomBooking]):
         self._must_read_back.arm()
         # The type+view pairing is what was picked and what carries the rate, so both
         # have to still be open for the choice to survive the new dates.
-        survives = self._room_type is not None and any(
+        had_room = self._room_type is not None
+        survives = had_room and any(
             a.type == self._room_type and (self._view is None or a.view == self._view)
             for a in avail
         )
         if not survives:
             self._room_type = self._view = None
-            # The options have to be spoken before a room can be picked. A pairing that
-            # survives was already offered and picked, and re-arming over it rewinds a
-            # settled step - where a caller correcting one date at the read-back lands.
-            self._must_offer.arm()
+            # Options have to be spoken before a room can be picked, so the offer is owed
+            # only where a pick actually died:
+            # - pick invalidated by the new dates: the caller has to choose again.
+            # - pick that survives: already offered and picked, and re-arming over it
+            #   rewinds a settled step - where a date corrected at the read-back lands.
+            # - no pick yet: the flow's first set_stay has nothing to invalidate; the
+            #   offer behind its values predates the flow, and recording them is what
+            #   this call and choose_room are for.
+            if had_room:
+                self._must_offer.arm()
         # Per-night extras and the room both reprice with the night count.
         await self._requote()
         return (
