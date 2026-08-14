@@ -1015,7 +1015,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                         suspended_handles.append(blocked)
                 if suspended_handles:
                     run_state._mark_done_if_needed(None)
-        except Exception:
+        # BaseException, so a cancellation landing on the handoff still frees the activity
+        except BaseException:
             old_activity._inline_task = None
             self.__inactive_ev.set()
             raise
