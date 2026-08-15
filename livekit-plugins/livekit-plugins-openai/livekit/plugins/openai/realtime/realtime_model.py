@@ -585,7 +585,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
             input_audio_transcription (AudioTranscription | InputAudioTranscription | None | NotGiven): Transcription options; defaults to Azure-optimized values when not provided.
             input_audio_noise_reduction (NoiseReductionType | InputAudioNoiseReduction | None): Input noise reduction settings. Defaults to None.
-            turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values when not provided.
+            turn_detection (RealtimeAudioInputTurnDetection | TurnDetection | None | NotGiven): Server-side VAD; defaults to Azure-optimized values (server_vad) when not provided. Note: Azure has been observed to accept semantic_vad but never emit input_audio_buffer.speech_started, breaking server-side interruption/barge-in.
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
@@ -690,6 +690,13 @@ class RealtimeModel(llm.RealtimeModel):
         can_disable_turn_detection = not is_given(turn_detection)
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
+        elif turn_detection is not None and getattr(turn_detection, "type", None) == "semantic_vad":
+            logger.warning(
+                "semantic_vad on Azure OpenAI Realtime has been observed to accept the "
+                "session config but never emit input_audio_buffer.speech_started, so "
+                "server-side interruption/barge-in will not fire. Consider server_vad "
+                "(the Azure default here) until this is resolved on the Azure side."
+            )
 
         model = RealtimeModel(
             voice=voice,
