@@ -689,9 +689,9 @@ async def _upload_session_report(
             audio_bytes = b""
             logger.warning(
                 "failed to read audio recording for session report upload, "
-                "uploading without the audio part (path=%s): %s",
+                "uploading without the audio part (path=%s)",
                 report.audio_recording_path,
-                e,
+                exc_info=e,
             )
 
     url = f"{observability_url}/observability/recordings/v0"
