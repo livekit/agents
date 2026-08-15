@@ -309,8 +309,27 @@ class LLMStream(llm.LLMStream):
         self._cache_read_tokens = 0
         self._output_tokens = 0
 
+    def _reset_stream_state(self) -> None:
+        """Clear the state a single attempt builds up.
+
+        The base class re-enters `_run` on the same instance, and it only retries when the
+        failed attempt emitted no chunk — a stream that died mid chain-of-thought or mid
+        tool-call would otherwise carry that state into the next attempt, including the
+        `_ignoring_cot` latch that swallows text. `_input_tokens` and `_output_tokens`
+        are reassigned unconditionally at `message_start`, but the cache counters are
+        only assigned there when the new attempt reports a non-zero value, so they are
+        cleared here.
+        """
+        self._tool_call_id = None
+        self._fnc_name = None
+        self._fnc_raw_arguments = None
+        self._ignoring_cot = False
+        self._cache_creation_tokens = 0
+        self._cache_read_tokens = 0
+
     async def _run(self) -> None:
         retryable = True
+        self._reset_stream_state()
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:

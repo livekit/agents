@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import anthropic
 import httpx
 import pytest
 
 from livekit.agents import APIConnectOptions, llm
 from livekit.plugins.anthropic.llm import LLMStream
 
-pytestmark = pytest.mark.plugin("anthropic")
+# these tests are hermetic (fake client, no API key, no network), so they belong to the
+# `unit` category that CI actually runs — no job in `.github/workflows` runs `--plugin`
+pytestmark = pytest.mark.unit
 
 
 def _make_llm(**kwargs):
@@ -86,6 +91,18 @@ class _EmptyAnthropicStream:
         raise StopAsyncIteration
 
 
+class _ScriptedAnthropicStream(_EmptyAnthropicStream):
+    """Yields the given events, then raises — the shape of a stream dying mid-turn."""
+
+    def __init__(self, events: list[Any]) -> None:
+        self._events = list(events)
+
+    async def __anext__(self):
+        if self._events:
+            return self._events.pop(0)
+        raise RuntimeError("stream died mid-turn")
+
+
 class TestAnthropicStreamRetry:
     @pytest.mark.asyncio
     async def test_retry_creates_a_fresh_stream_awaitable(self) -> None:
@@ -114,3 +131,90 @@ class TestAnthropicStreamRetry:
 
         assert calls == 2
         assert response.usage is not None
+
+
+class TestPerAttemptState:
+    """`_run` is re-entered on every retry with the same instance."""
+
+    async def _collect_after_one_failed_attempt(
+        self, first_attempt_events: list[Any]
+    ) -> tuple[LLMStream, llm.CollectedResponse]:
+        attempts = 0
+
+        async def create_stream():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return _ScriptedAnthropicStream(first_attempt_events)
+            return _EmptyAnthropicStream()
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=create_stream,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        )
+        response = await stream.collect()
+        assert attempts == 2
+        return stream, response
+
+    @pytest.mark.asyncio
+    async def test_chain_of_thought_latch_does_not_survive_a_retry(self) -> None:
+        """Left set, it would swallow every text chunk of the successful attempt."""
+        cot = anthropic.types.RawContentBlockDeltaEvent(
+            type="content_block_delta",
+            index=0,
+            delta=anthropic.types.TextDelta(type="text_delta", text="<thinking>reasoning"),
+        )
+
+        stream, _ = await self._collect_after_one_failed_attempt([cot])
+
+        assert stream._ignoring_cot is False
+
+    @pytest.mark.asyncio
+    async def test_half_read_tool_call_does_not_survive_a_retry(self) -> None:
+        start = anthropic.types.RawContentBlockStartEvent(
+            type="content_block_start",
+            index=0,
+            content_block=anthropic.types.ToolUseBlock(
+                type="tool_use", id="toolu_1", name="lookup_order", input={}
+            ),
+        )
+
+        stream, _ = await self._collect_after_one_failed_attempt([start])
+
+        assert stream._tool_call_id is None
+        assert stream._fnc_name is None
+        assert stream._fnc_raw_arguments is None
+
+    @pytest.mark.asyncio
+    async def test_cache_token_counters_do_not_survive_a_retry(self) -> None:
+        """`message_start` only reassigns them when non-zero, so a stale write is double-counted."""
+        # input_tokens is left at 0 so prompt_tokens reflects the cache counters alone
+        start = anthropic.types.RawMessageStartEvent(
+            type="message_start",
+            message=anthropic.types.Message(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                model="claude-opus-5",
+                content=[],
+                usage=anthropic.types.Usage(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_creation_input_tokens=1000,
+                    cache_read_input_tokens=500,
+                ),
+            ),
+        )
+
+        stream, response = await self._collect_after_one_failed_attempt([start])
+
+        assert response.usage is not None
+        assert response.usage.cache_creation_tokens == 0
+        assert response.usage.cache_read_tokens == 0
+        assert response.usage.prompt_cached_tokens == 0
+        assert response.usage.prompt_tokens == 0
+        assert stream._cache_creation_tokens == 0
+        assert stream._cache_read_tokens == 0
