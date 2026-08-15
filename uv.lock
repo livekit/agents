@@ -2593,7 +2593,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.41" },
+    { name = "anthropic", specifier = ">=0.47" },
     { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
