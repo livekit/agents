@@ -72,6 +72,44 @@ class _RecordingInputSession(_ActiveSessionStub):
         self.client_contents.append(kwargs)
 
 
+class _RecordingToolSession(_ActiveSessionStub):
+    def __init__(self, *, fail_send: bool = False) -> None:
+        super().__init__()
+        self.fail_send = fail_send
+        self.sent_order: list[str] = []
+        self.realtime_inputs: list[dict[str, object]] = []
+        self.tool_responses: list[list[types.FunctionResponse]] = []
+        self.tool_response_sent = asyncio.Event()
+
+    async def send_tool_response(self, *, function_responses: list[types.FunctionResponse]) -> None:
+        if self.fail_send:
+            raise RuntimeError("tool response send failed")
+        self.sent_order.append("tool_response")
+        self.tool_responses.append(function_responses)
+        self.tool_response_sent.set()
+
+    async def send_realtime_input(self, **kwargs: object) -> None:
+        self.sent_order.append("realtime_input")
+        self.realtime_inputs.append(kwargs)
+
+    async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+        await asyncio.Event().wait()
+        if False:
+            yield types.LiveServerMessage()
+
+
+class _BlockingToolSession(_RecordingToolSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_response_send_started = asyncio.Event()
+        self.release_tool_response = asyncio.Event()
+
+    async def send_tool_response(self, *, function_responses: list[types.FunctionResponse]) -> None:
+        self.tool_response_send_started.set()
+        await self.release_tool_response.wait()
+        await super().send_tool_response(function_responses=function_responses)
+
+
 async def _drain_queued_events(session: RealtimeSession, active: _RecordingInputSession) -> None:
     channel = session._msg_ch
     channel.close()
@@ -79,9 +117,15 @@ async def _drain_queued_events(session: RealtimeSession, active: _RecordingInput
 
 
 class _ControlledReceiveSession(_ActiveSessionStub):
-    def __init__(self, response: types.LiveServerMessage) -> None:
+    def __init__(
+        self,
+        response: types.LiveServerMessage,
+        *,
+        error_after_response: Exception | None = None,
+    ) -> None:
         super().__init__()
         self.response = response
+        self.error_after_response = error_after_response
         self.receive_started = asyncio.Event()
         self.release_response = asyncio.Event()
 
@@ -89,6 +133,8 @@ class _ControlledReceiveSession(_ActiveSessionStub):
         self.receive_started.set()
         await self.release_response.wait()
         yield self.response
+        if self.error_after_response is not None:
+            raise self.error_after_response
 
 
 class _TimeoutHandle:
@@ -108,7 +154,11 @@ def _input_frame(duration_ms: int, *, fill: int = 0) -> rtc.AudioFrame:
 
 @asynccontextmanager
 async def _make_session(
-    monkeypatch: pytest.MonkeyPatch, *, manual_activity_detection: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    manual_activity_detection: bool = False,
+    activity_handling: types.ActivityHandling | None = None,
+    session_resumption_handle: str | None = None,
 ) -> AsyncIterator[RealtimeSession]:
     """A session whose background connect loop is stopped before it hits the network.
 
@@ -119,16 +169,20 @@ async def _make_session(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     realtime_input_config = (
         types.RealtimeInputConfig(
-            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
+            activity_handling=activity_handling,
         )
         if manual_activity_detection
         else None
     )
-    model = (
-        RealtimeModel(realtime_input_config=realtime_input_config)
-        if realtime_input_config is not None
-        else RealtimeModel()
-    )
+    model_options: dict[str, object] = {}
+    if realtime_input_config is not None:
+        model_options["realtime_input_config"] = realtime_input_config
+    if session_resumption_handle is not None:
+        model_options["session_resumption"] = types.SessionResumptionConfig(
+            handle=session_resumption_handle
+        )
+    model = RealtimeModel(**model_options)  # type: ignore[arg-type]
     session = model.session()
     # cancel the connect loop before the event loop ever schedules it, so no
     # websocket connection is attempted
@@ -947,6 +1001,779 @@ async def test_update_chat_ctx_during_restart_is_replayed_not_queued(
         session._active_session = None
 
 
+async def test_tool_response_added_during_resumption_is_sent_after_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replacement = _RecordingToolSession()
+
+    class _Connect:
+        async def __aenter__(self) -> _RecordingToolSession:
+            return replacement
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    def _connect(_live: Any, **_kwargs: Any) -> _Connect:
+        return _Connect()
+
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._session_should_close.set()
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output()
+        chat_ctx.items.append(output)
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session.chat_ctx.get_by_id(output.id) is not None
+        assert not session._msg_ch.empty()
+
+        session._active_session = None
+        monkeypatch.setattr(type(session._client.aio.live), "connect", _connect)
+        session._main_atask = asyncio.create_task(session._main_task())
+
+        await asyncio.wait_for(replacement.tool_response_sent.wait(), timeout=1.0)
+
+        assert len(replacement.tool_responses) == 1
+        assert len(replacement.tool_responses[0]) == 1
+        assert replacement.tool_responses[0][0].id == "fc_1"
+
+        session._msg_ch.close()
+        session._session_should_close.set()
+        await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=1.0)
+
+
+async def test_resumable_restart_preserves_tool_response_fifo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _RecordingToolSession())
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output()
+        chat_ctx.items.append(output)
+        await session.update_chat_ctx(chat_ctx)
+        session._send_client_event(types.LiveClientRealtimeInput(text="later input"))
+
+        assert len(session._tool_response_outbox) == 1
+
+        session._mark_restart_needed(resume_session=True)
+        session._mark_restart_needed(resume_session=True)
+        assert len(session._tool_response_outbox) == 1
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._queue_pending_tool_responses()
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, channel)
+
+        assert len(replacement.tool_responses) == 1
+        assert replacement.tool_responses[0][0].id == output.call_id
+        assert replacement.sent_order == ["tool_response", "realtime_input"]
+        assert replacement.realtime_inputs == [{"text": "later input"}]
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_tool_response_added_during_resumption_keeps_fifo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _RecordingToolSession())
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        session._mark_restart_needed(resume_session=True)
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+        session._send_client_event(types.LiveClientRealtimeInput(text="later input"))
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._queue_pending_tool_responses()
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, channel)
+
+        assert len(replacement.tool_responses) == 1
+        assert replacement.sent_order == ["tool_response", "realtime_input"]
+        assert replacement.realtime_inputs == [{"text": "later input"}]
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_successful_tool_response_is_not_replayed_after_concurrent_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _BlockingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), session._session_epoch, session._msg_ch)
+        )
+        await asyncio.wait_for(active.tool_response_send_started.wait(), timeout=1.0)
+
+        session._mark_restart_needed(resume_session=True)
+        active.release_tool_response.set()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._queue_pending_tool_responses()
+        replacement_channel = session._msg_ch
+        replacement_channel.close()
+        await session._send_task(
+            cast(Any, replacement), session._session_epoch, replacement_channel
+        )
+
+        assert len(active.tool_responses) == 1
+        assert replacement.tool_responses == []
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_late_tool_response_is_not_sent_to_fresh_provider_session(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _RecordingToolSession())
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call("old_epoch_call"))
+
+        session._mark_restart_needed()
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output("old_epoch_call"))
+        with caplog.at_level(logging.WARNING):
+            await session.update_chat_ctx(chat_ctx)
+
+        session._msg_ch.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, session._msg_ch)
+
+        assert replacement.tool_responses == []
+        assert session._tool_response_outbox == {}
+        assert any("old_epoch_call" in record.message for record in caplog.records)
+        session._active_session = None
+
+
+async def test_mixed_tool_outputs_send_only_calls_owned_by_current_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _RecordingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call("current_call"))
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.extend([_tool_output("current_call"), _tool_output("abandoned_call")])
+        with caplog.at_level(logging.WARNING):
+            await session.update_chat_ctx(chat_ctx)
+
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, active), session._session_epoch, channel)
+
+        assert len(active.tool_responses) == 1
+        assert [response.id for response in active.tool_responses[0]] == ["current_call"]
+        assert session._tool_response_outbox == {}
+        assert any("abandoned_call" in record.message for record in caplog.records)
+        session._active_session = None
+
+
+async def test_cancelled_tool_call_drops_queued_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _RecordingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call("cancelled_call"))
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output("cancelled_call"))
+        await session.update_chat_ctx(chat_ctx)
+        session._handle_tool_call_cancellation(
+            types.LiveServerToolCallCancellation(ids=["cancelled_call"])
+        )
+
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, active), session._session_epoch, channel)
+
+        assert active.tool_responses == []
+        assert session._tool_response_outbox == {}
+        assert session._delivered_tool_response_event_ids == set()
+        session._active_session = None
+
+
+async def test_cancelling_one_call_preserves_other_queued_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _RecordingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[
+                    types.FunctionCall(id="cancelled_call", name="lookup", args={}),
+                    types.FunctionCall(id="retained_call", name="lookup", args={}),
+                ]
+            )
+        )
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.extend([_tool_output("cancelled_call"), _tool_output("retained_call")])
+        await session.update_chat_ctx(chat_ctx)
+        session._handle_tool_call_cancellation(
+            types.LiveServerToolCallCancellation(ids=["cancelled_call"])
+        )
+
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, active), session._session_epoch, channel)
+
+        assert len(active.tool_responses) == 1
+        assert [response.id for response in active.tool_responses[0]] == ["retained_call"]
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_sender_cancellation_requeues_owned_tool_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _BlockingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), session._session_epoch, session._msg_ch)
+        )
+        await asyncio.wait_for(active.tool_response_send_started.wait(), timeout=1.0)
+        send_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await send_task
+
+        assert len(session._tool_response_outbox) == 1
+        assert not session._msg_ch.empty()
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, channel)
+
+        assert len(replacement.tool_responses) == 1
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_fresh_restart_prevents_late_send_from_recreating_outbox_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        active = _BlockingToolSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), session._session_epoch, session._msg_ch)
+        )
+        await asyncio.wait_for(active.tool_response_send_started.wait(), timeout=1.0)
+
+        session._mark_restart_needed(resume_session=True)
+        session._mark_restart_needed()
+        active.release_tool_response.set()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+        assert session._tool_response_outbox == {}
+        assert session._delivered_tool_response_event_ids == set()
+        session._active_session = None
+
+
+async def test_turn_complete_receive_end_starts_next_receive_without_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TurnCompleteReceiveSession(_ActiveSessionStub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.receive_calls = 0
+            self.next_receive_started = asyncio.Event()
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            self.receive_calls += 1
+            if self.receive_calls == 1:
+                yield types.LiveServerMessage(
+                    server_content=types.LiveServerContent(turn_complete=True)
+                )
+                return
+            self.next_receive_started.set()
+            await asyncio.Event().wait()
+            if False:
+                yield types.LiveServerMessage()
+
+    async with _make_session(monkeypatch) as session:
+        active = _TurnCompleteReceiveSession()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        initial_epoch = session._session_epoch
+        session._start_new_generation(initial_epoch)
+
+        recv_task = asyncio.create_task(session._recv_task(cast(Any, active), initial_epoch))
+        await asyncio.wait_for(active.next_receive_started.wait(), timeout=1.0)
+
+        assert active.receive_calls == 2
+        assert session._session_epoch == initial_epoch
+        assert not session._session_should_close.is_set()
+
+        recv_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await recv_task
+        session._active_session = None
+
+
+async def test_resumption_revocation_drops_tool_lineage_before_fresh_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revocation = types.LiveServerMessage(
+        session_resumption_update=types.LiveServerSessionResumptionUpdate(resumable=False)
+    )
+
+    async with _make_session(monkeypatch) as session:
+        active = _ControlledReceiveSession(
+            revocation,
+            error_after_response=llm.RealtimeError("transport closed"),
+        )
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, active)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "prior-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[
+                    types.FunctionCall(id="pending_call", name="lookup", args={}),
+                    types.FunctionCall(id="late_call", name="lookup", args={}),
+                ]
+            )
+        )
+
+        chat_ctx = session.chat_ctx.copy()
+        pending_output = _tool_output("pending_call")
+        chat_ctx.items.append(pending_output)
+        await session.update_chat_ctx(chat_ctx)
+        assert len(session._tool_response_outbox) == 1
+
+        initial_epoch = session._session_epoch
+        recv_task = asyncio.create_task(session._recv_task(cast(Any, active), initial_epoch))
+        await asyncio.wait_for(active.receive_started.wait(), timeout=1.0)
+        active.release_response.set()
+        await asyncio.wait_for(recv_task, timeout=1.0)
+
+        assert session.session_resumption_handle is None
+        assert session._session_epoch == initial_epoch + 1
+        assert session._tool_response_outbox == {}
+        assert session._provider_tool_call_ids == set()
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output("late_call"))
+        await session.update_chat_ctx(chat_ctx)
+        assert session._tool_response_outbox == {}
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, channel)
+
+        assert replacement.tool_responses == []
+        session._active_session = None
+
+
+async def test_send_failure_preserves_observed_tool_call_until_result_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingRealtimeInputSession(_RecordingToolSession):
+        async def send_realtime_input(self, **_kwargs: object) -> None:
+            raise RuntimeError("realtime input send failed")
+
+    async with _make_session(monkeypatch) as session:
+        failing = _FailingRealtimeInputSession()
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, failing)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call("pending_call"))
+        session._send_client_event(types.LiveClientRealtimeInput(text="unrelated input"))
+
+        failed_epoch = session._session_epoch
+        await session._send_task(cast(Any, failing), failed_epoch, session._msg_ch)
+
+        assert session._session_epoch == failed_epoch + 1
+        assert session._session_should_close.is_set()
+        assert session.session_resumption_handle == "resume-handle"
+        assert session._provider_tool_call_ids == {"pending_call"}
+        assert session._tool_response_outbox == {}
+
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output("pending_call")
+        chat_ctx.items.append(output)
+        await session.update_chat_ctx(chat_ctx)
+
+        assert len(session._tool_response_outbox) == 1
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        replacement_channel = session._msg_ch
+        replacement_channel.close()
+        await session._send_task(
+            cast(Any, replacement), session._session_epoch, replacement_channel
+        )
+
+        assert len(replacement.tool_responses) == 1
+        assert [response.id for response in replacement.tool_responses[0]] == ["pending_call"]
+        assert session._tool_response_outbox == {}
+        assert session._provider_tool_call_ids == set()
+        session._active_session = None
+
+
+async def test_tool_choice_none_rejection_send_failure_resumes_provider_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RejectingToolSession(_RecordingToolSession):
+        def __init__(self, *, fail_send: bool) -> None:
+            super().__init__(fail_send=fail_send)
+            self.client_contents: list[dict[str, object]] = []
+
+        async def send_client_content(self, **kwargs: object) -> None:
+            self.client_contents.append(kwargs)
+
+    async with _make_session(monkeypatch) as session:
+        failing = _RejectingToolSession(fail_send=True)
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, failing)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._opts.tool_choice = "none"
+
+        generation_fut = session.generate_reply()
+        session._reject_tool_calls([types.FunctionCall(id="rejected_call", name="lookup", args={})])
+
+        assert session._input_state.name == "IDLE"
+        assert session._provider_turn_active
+        assert not generation_fut.done()
+        assert session._current_generation is None
+        assert len(session._tool_response_outbox) == 1
+
+        failed_epoch = session._session_epoch
+        failed_channel = session._msg_ch
+        failed_channel.close()
+        await session._send_task(cast(Any, failing), failed_epoch, failed_channel)
+
+        assert session._session_epoch == failed_epoch + 1
+        assert session.session_resumption_handle == "resume-handle"
+        assert session._provider_tool_call_ids == {"rejected_call"}
+        assert len(session._tool_response_outbox) == 1
+        with pytest.raises(llm.RealtimeError, match="restarted before generation started"):
+            await generation_fut
+
+        replacement = _RejectingToolSession(fail_send=False)
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        replacement_channel = session._msg_ch
+        replacement_channel.close()
+        await session._send_task(
+            cast(Any, replacement), session._session_epoch, replacement_channel
+        )
+
+        assert len(replacement.tool_responses) == 1
+        assert [response.id for response in replacement.tool_responses[0]] == ["rejected_call"]
+        assert session._tool_response_outbox == {}
+        assert session._provider_tool_call_ids == set()
+        session._active_session = None
+
+
+async def test_tool_choice_none_rejection_waits_for_direct_model_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._opts.tool_choice = "none"
+        generation_fut = session.generate_reply()
+
+        session._reject_tool_calls([types.FunctionCall(id="rejected_call", name="lookup", args={})])
+
+        assert session._input_state.name == "IDLE"
+        assert session._provider_turn_active
+        assert session._current_generation is None
+        assert not generation_fut.done()
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+        assert session._current_generation is not None
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert not session._provider_turn_active
+
+
+async def test_tool_response_send_failure_retries_on_replacement_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        failing = _RecordingToolSession(fail_send=True)
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, failing)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output()
+        chat_ctx.items.append(output)
+        await session.update_chat_ctx(chat_ctx)
+
+        failed_epoch = session._session_epoch
+        failed_channel = session._msg_ch
+        failed_channel.close()
+        await session._send_task(cast(Any, failing), failed_epoch, failed_channel)
+
+        assert session._session_epoch == failed_epoch + 1
+        assert session._session_should_close.is_set()
+        assert session.session_resumption_handle == "resume-handle"
+        assert len(session._tool_response_outbox) == 1
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._queue_pending_tool_responses()
+        replacement_channel = session._msg_ch
+        replacement_channel.close()
+        await session._send_task(
+            cast(Any, replacement), session._session_epoch, replacement_channel
+        )
+
+        assert len(replacement.tool_responses) == 1
+        assert replacement.tool_responses[0][0].id == output.call_id
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_tool_response_send_failure_is_not_replayed_on_fresh_session(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        failing = _RecordingToolSession(fail_send=True)
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, failing)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        failed_channel = session._msg_ch
+        failed_channel.close()
+        with caplog.at_level(logging.WARNING):
+            await session._send_task(cast(Any, failing), session._session_epoch, failed_channel)
+
+        assert session.session_resumption_handle is None
+        assert session._tool_response_outbox == {}
+        assert any("cannot be resumed" in record.message for record in caplog.records)
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        session._queue_pending_tool_responses()
+        session._msg_ch.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, session._msg_ch)
+
+        assert replacement.tool_responses == []
+        session._active_session = None
+
+
+async def test_historical_tool_output_before_first_connection_is_not_replayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output()
+        chat_ctx.items.append(output)
+
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session.chat_ctx.get_by_id(output.id) is not None
+        assert session._tool_response_outbox == {}
+        assert session._msg_ch.empty()
+
+        first_connection = _RecordingToolSession()
+        session._active_session = cast(Any, first_connection)
+        session._session_should_close.clear()
+        session._provider_session_established = True
+        session._queue_pending_tool_responses()
+        session._msg_ch.close()
+        await session._send_task(
+            cast(Any, first_connection), session._session_epoch, session._msg_ch
+        )
+
+        assert first_connection.tool_responses == []
+        session._active_session = None
+
+
+async def test_initial_resumption_handle_does_not_replay_unobserved_tool_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch, session_resumption_handle="external-resume-handle"
+    ) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output("restored_call")
+        chat_ctx.items.append(output)
+
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session.chat_ctx.get_by_id(output.id) is not None
+        assert session._tool_response_outbox == {}
+        assert session._msg_ch.empty()
+
+        replacement = _RecordingToolSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        channel = session._msg_ch
+        channel.close()
+        await session._send_task(cast(Any, replacement), session._session_epoch, channel)
+
+        assert replacement.tool_responses == []
+        assert session._tool_response_outbox == {}
+        session._active_session = None
+
+
+async def test_session_close_clears_unsent_tool_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._session_should_close.set()
+        session._provider_session_established = True
+        session._session_resumption_handle = "resume-handle"
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+
+        await session.update_chat_ctx(chat_ctx)
+        assert len(session._tool_response_outbox) == 1
+
+        await session.aclose()
+
+        assert session._tool_response_outbox == {}
+        assert session._msg_ch.closed
+
+
+async def test_tool_response_during_fresh_reconnect_is_not_registered(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._session_should_close.set()
+        session._provider_session_established = True
+        chat_ctx = session.chat_ctx.copy()
+        output = _tool_output()
+        chat_ctx.items.append(output)
+
+        with caplog.at_level(logging.WARNING):
+            await session.update_chat_ctx(chat_ctx)
+
+        assert session.chat_ctx.get_by_id(output.id) is not None
+        assert session._tool_response_outbox == {}
+        assert any("not owned" in record.message for record in caplog.records)
+        session._active_session = None
+
+
 async def test_new_text_during_resumption_forces_fresh_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1455,6 +2282,9 @@ async def test_new_manual_activity_replays_only_post_clear_audio_once(
         session._msg_ch = utils.aio.Chan[Any]()
         session._session_should_close.clear()
         session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        initial_epoch = session._session_epoch
 
         session.start_user_activity()
         session.push_audio(_input_frame(50, fill=1))
@@ -1469,12 +2299,491 @@ async def test_new_manual_activity_replays_only_post_clear_audio_once(
         session.push_audio(_input_frame(50, fill=3))
         session.start_user_activity()
 
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
         assert len(sent) == 2
         assert isinstance(sent[0], types.LiveClientRealtimeInput)
         assert sent[0].activity_start is not None
         assert isinstance(sent[1], types.LiveClientRealtimeInput)
         assert sent[1].audio is not None
         assert sent[1].audio.data == bytes([3]) * 1600
+
+
+async def test_no_interruption_defers_next_manual_turn_until_output_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        active = _RecordingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[Any]()
+        session._session_should_close.clear()
+        session._start_new_generation()
+        generation = session._current_generation
+        assert generation is not None
+        initial_epoch = session._session_epoch
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        await _drain_queued_events(session, active)
+        session.clear_audio()
+
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        timeout_callbacks: list[object] = []
+        loop = asyncio.get_running_loop()
+
+        def _capture_timeout(delay: float, callback: object) -> _TimeoutHandle:
+            assert delay == 5.0
+            timeout_callbacks.append(callback)
+            return _TimeoutHandle()
+
+        monkeypatch.setattr(loop, "call_later", _capture_timeout)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        next_generation_fut = session.generate_reply()
+
+        assert not generation._done
+        assert session._session_epoch == initial_epoch
+        assert sent == []
+        assert timeout_callbacks == []
+        assert not next_generation_fut.done()
+
+        session._handle_server_content(
+            _audio_content(output_transcription=types.Transcription(text="still complete"))
+        )
+        assert generation.output_text == "still complete"
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 3
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([2]) * 1600
+        assert realtime_inputs[2].activity_end is not None
+        assert len(timeout_callbacks) == 1
+
+        session._start_new_generation()
+        generation_event = await next_generation_fut
+        assert generation_event.user_initiated
+
+
+async def _prepare_no_interruption_deferred_restart(
+    session: RealtimeSession,
+) -> tuple[Any, int]:
+    active = _RecordingInputSession()
+    session._active_session = cast(Any, active)
+    session._msg_ch = utils.aio.Chan[Any]()
+    session._session_should_close.clear()
+    session._start_new_generation()
+    generation = session._current_generation
+    assert generation is not None
+    initial_epoch = session._session_epoch
+
+    session.start_user_activity()
+    session.push_audio(_input_frame(50, fill=1))
+    await _drain_queued_events(session, active)
+    session.clear_audio()
+    return generation, initial_epoch
+
+
+async def test_no_interruption_preserves_pre_activity_audio_in_deferred_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        generation, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        # Manual mode accepts audio before ActivityStart. The deferred transaction must own
+        # this partial buffered prefix just as an immediately started activity does.
+        session.push_audio(_input_frame(20, fill=2))
+        session.start_user_activity()
+        next_generation_fut = session.generate_reply()
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert generation._done
+        assert session._session_epoch == initial_epoch + 1
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 3
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([2]) * 640
+        assert realtime_inputs[2].activity_end is not None
+        assert not any(isinstance(event, types.LiveClientContent) for event in sent)
+
+        session._start_new_generation()
+        generation_event = await next_generation_fut
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_seals_deferred_audio_at_generate_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        next_generation_fut = session.generate_reply()
+        # Audio arriving after EOU cannot be appended to the already committed turn.
+        session.push_audio(_input_frame(50, fill=3))
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([2]) * 1600]
+
+        session._start_new_generation()
+        await next_generation_fut
+
+        # The post-EOU frame is preserved as pre-roll, then enters the following activity
+        # exactly once instead of leaking into or being dropped with the sealed turn.
+        session.start_user_activity()
+        following_generation_fut = session.generate_reply()
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([2]) * 1600]
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([2]) * 1600, bytes([3]) * 1600]
+        session._start_new_generation()
+        await following_generation_fut
+
+
+async def test_no_interruption_cancelled_deferred_turn_cannot_leak_into_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        cancelled_generation = session.generate_reply()
+        cancelled_generation.cancel()
+        assert cancelled_generation.cancelled()
+
+        # Do not yield to the event loop: public lifecycle boundaries must synchronously reap
+        # cancelled ownership instead of depending on a scheduled Future callback.
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        replacement_generation = session.generate_reply()
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([3]) * 1600]
+
+        session._start_new_generation()
+        generation_event = await replacement_generation
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_queues_multiple_complete_turns_fifo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        first_generation_fut = session.generate_reply()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        second_generation_fut = session.generate_reply()
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert session._session_epoch == initial_epoch + 1
+        assert not first_generation_fut.cancelled()
+        assert not second_generation_fut.cancelled()
+        first_turn_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(first_turn_inputs) == 3
+        assert first_turn_inputs[0].activity_start is not None
+        assert first_turn_inputs[1].audio is not None
+        assert first_turn_inputs[1].audio.data == bytes([2]) * 1600
+        assert first_turn_inputs[2].activity_end is not None
+
+        session._start_new_generation()
+        first_event = await first_generation_fut
+        assert first_event.user_initiated
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        all_turn_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(all_turn_inputs) == 6
+        assert all_turn_inputs[3].activity_start is not None
+        assert all_turn_inputs[4].audio is not None
+        assert all_turn_inputs[4].audio.data == bytes([3]) * 1600
+        assert all_turn_inputs[5].activity_end is not None
+        assert session._session_epoch == initial_epoch + 1
+
+        session._start_new_generation()
+        second_event = await second_generation_fut
+        assert second_event.user_initiated
+
+
+async def test_no_interruption_cancelled_fifo_head_does_not_block_later_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        cancelled_generation = session.generate_reply()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        retained_generation = session.generate_reply()
+
+        cancelled_generation.cancel()
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert cancelled_generation.cancelled()
+        assert not retained_generation.cancelled()
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([3]) * 1600]
+        assert session._session_epoch == initial_epoch + 1
+
+        session._start_new_generation()
+        generation_event = await retained_generation
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_clear_discards_fifo_tail_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        generation, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        retained_generation = session.generate_reply()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        discarded_generation = session.generate_reply()
+        session.clear_audio()
+
+        with pytest.raises(llm.RealtimeError, match="discarded before generation started"):
+            await discarded_generation
+        assert not retained_generation.done()
+        assert not generation._done
+        assert session._session_epoch == initial_epoch
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([2]) * 1600]
+        assert session._session_epoch == initial_epoch + 1
+
+        session._start_new_generation()
+        generation_event = await retained_generation
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_repeated_clear_discards_only_staged_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        generation, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        discarded_generation = session.generate_reply()
+        session.clear_audio()
+
+        with pytest.raises(llm.RealtimeError, match="discarded before generation started"):
+            await discarded_generation
+        assert not generation._done
+        assert session._session_epoch == initial_epoch
+        assert sent == []
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        replacement_generation = session.generate_reply()
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([3]) * 1600]
+
+        session._start_new_generation()
+        await replacement_generation
+
+
+async def test_no_interruption_empty_deferred_turn_keeps_legacy_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        next_generation_fut = session.generate_reply(instructions="answer briefly")
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert len(sent) == 1
+        event = sent[0]
+        assert isinstance(event, types.LiveClientContent)
+        assert event.turn_complete is True
+        assert event.turns is not None
+        assert [part.text for turn in event.turns for part in turn.parts or []] == [
+            "answer briefly",
+            ".",
+        ]
+
+        session._start_new_generation()
+        generation_event = await next_generation_fut
+        assert generation_event.user_initiated
+
+
+async def test_session_close_cancels_deferred_manual_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        first_generation_fut = session.generate_reply()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        second_generation_fut = session.generate_reply()
+        assert session._pending_generation_fut is None
+
+        await session.aclose()
+
+        assert first_generation_fut.cancelled()
+        assert second_generation_fut.cancelled()
+        assert not session._deferred_manual_inputs
+        assert not session._deferred_manual_input_pipeline_active
+        assert session._pending_generation_fut is None
+        assert not session._quarantined_manual_audio
+
+
+async def test_terminal_error_fails_all_deferred_fifo_generations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        await _prepare_no_interruption_deferred_restart(session)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        first_generation_fut = session.generate_reply()
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        second_generation_fut = session.generate_reply()
+
+        session._set_terminal_error(llm.RealtimeError("terminal FIFO failure"))
+
+        with pytest.raises(llm.RealtimeError, match="terminal FIFO failure"):
+            await first_generation_fut
+        with pytest.raises(llm.RealtimeError, match="terminal FIFO failure"):
+            await second_generation_fut
+        assert not session._deferred_manual_inputs
+        assert not session._deferred_manual_input_pipeline_active
+        assert session._pending_generation_fut is None
+        assert not session._quarantined_manual_audio
 
 
 async def test_manual_clear_invalidates_queued_input_while_send_is_in_flight(
@@ -1909,6 +3218,7 @@ async def _make_connected_session(
             session._opts.tool_behavior = types.Behavior.NON_BLOCKING
         session._msg_ch = utils.aio.Chan[ClientEvents]()
         session._active_session = object()  # type: ignore[assignment]
+        session._provider_session_established = True
         try:
             yield session
         finally:

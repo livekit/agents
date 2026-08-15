@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 import pytest
 
@@ -70,7 +71,7 @@ async def test_external_stt_text_turn_reaches_realtime_model_once_without_audio(
         turn_handling=TurnHandlingOptions(
             turn_detection="vad",
             realtime_input_mode="text",
-            endpointing={"min_delay": 0.0, "max_delay": 0.0},
+            endpointing={"min_delay": 0.0, "max_delay": 0.5},
         ),
         aec_warmup_duration=None,
     )
@@ -152,6 +153,73 @@ async def test_empty_external_stt_text_turn_is_dropped_and_reset_after_timeout()
         assert recognition._audio_transcript == ""
         assert recognition._audio_interim_transcript == ""
         assert recognition._transcription_timeout_handle is None
+
+
+@pytest.mark.parametrize("realtime_input_mode", ["text", "audio"])
+async def test_unset_transcription_timeout_finalizes_empty_turn_without_event(
+    realtime_input_mode: Literal["text", "audio"],
+) -> None:
+    speech = FakeUserSpeech(start_time=0.0, end_time=0.02, transcript="", stt_delay=0.0)
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(fake_user_speeches=[speech]),
+        vad=FakeVAD(
+            fake_user_speeches=[speech],
+            min_speech_duration=0.005,
+            min_silence_duration=0.005,
+        ),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode=realtime_input_mode,
+            endpointing={"min_delay": 0.0, "max_delay": 0.02},
+        ),
+        aec_warmup_duration=None,
+    )
+    audio_input = FakeAudioInput()
+    session.input.audio = audio_input
+    timeout_events: list[object] = []
+    speaking_seen = asyncio.Event()
+    session.on("user_transcription_timeout", timeout_events.append)
+    session.on(
+        "user_state_changed",
+        lambda event: speaking_seen.set() if event.new_state == "speaking" else None,
+    )
+    agent = Agent(instructions="test")
+
+    async with session:
+        await session.start(agent)
+        audio_input.push(0.05)
+
+        await asyncio.wait_for(speaking_seen.wait(), timeout=1.0)
+        if realtime_input_mode == "audio":
+            await asyncio.wait_for(_wait_for_generation(model), timeout=1.0)
+        await asyncio.wait_for(_wait_for_turn_reset(session), timeout=1.0)
+
+        provider = model.active_session
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        assert session.options.transcription_timeout is None
+        assert timeout_events == []
+        assert recognition._user_turn_start is None
+        assert recognition._transcription_timeout_handle is None
+        assert recognition._audio_transcript == ""
+        assert recognition._audio_interim_transcript == ""
+        if realtime_input_mode == "audio":
+            assert provider.generate_reply_calls == 1
+            assert provider.committed is True
+            assert provider.pushed_audio
+        else:
+            assert provider.generate_reply_calls == 0
+            assert provider.pushed_audio == []
+        assert provider.chat_ctx.messages() == []
+        assert agent.chat_ctx.messages() == []
 
 
 async def test_empty_external_stt_audio_turn_settles_provider_once_after_timeout() -> None:
