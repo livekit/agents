@@ -179,10 +179,12 @@ class AudioByteStream:
             list[rtc.AudioFrame]: A list containing any remaining `AudioFrame` objects.
 
         This method processes any remaining data in the buffer that does not
-        fill a complete frame. If the remaining data forms a partial frame
-        (i.e., its size is not a multiple of the expected sample size), a warning is
-        logged and an empty list is returned. Otherwise, it returns the final
-        `AudioFrame` containing the remaining data.
+        fill a complete frame, and returns it as the final `AudioFrame`.
+
+        If the buffer does not end on a sample boundary, the trailing incomplete
+        sample cannot be represented and is dropped with a warning; the complete
+        samples before it are still returned. The buffer is always left empty, so
+        a partial sample can never offset the samples of a later push.
 
         Use this method when you have no more data to push and want to ensure
         that all buffered audio data has been processed.
@@ -190,8 +192,16 @@ class AudioByteStream:
         if len(self._buf) == 0:
             return []
 
-        if len(self._buf) % self._bytes_per_sample != 0:
-            logger.warning("AudioByteStream: incomplete frame during flush, dropping")
+        remainder = len(self._buf) % self._bytes_per_sample
+        if remainder:
+            logger.warning(
+                "AudioByteStream: buffer does not end on a sample boundary during "
+                "flush, dropping the trailing %d byte(s)",
+                remainder,
+            )
+            del self._buf[len(self._buf) - remainder :]
+
+        if len(self._buf) == 0:
             return []
 
         frames = [
