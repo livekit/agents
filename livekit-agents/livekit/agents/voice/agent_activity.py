@@ -1833,11 +1833,7 @@ class AgentActivity(RecognitionHooks):
             interrupted_speeches.append(self._current_speech)
 
         if self._rt_session is not None:
-            if self._realtime_input_mode == "audio":
-                self._rt_session.interrupt()
-            else:
-                self._rt_session.interrupt()
-                self._clear_realtime_input()
+            self._rt_session.interrupt()
 
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
@@ -2469,11 +2465,7 @@ class AgentActivity(RecognitionHooks):
                     self._restore_interruption_by_audio_activity()
             else:
                 if self._rt_session is not None:
-                    if self._realtime_input_mode == "audio":
-                        self._rt_session.interrupt()
-                    else:
-                        self._rt_session.interrupt()
-                        self._clear_realtime_input()
+                    self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
 
@@ -2792,12 +2784,8 @@ class AgentActivity(RecognitionHooks):
             < self._session.options.interruption["min_words"]
         ):
             self._cancel_preemptive_generation()
-            if (
-                not info.reply_already_triggered
-                and self._rt_session is not None
-                and self._realtime_input_mode == "audio"
-            ):
-                self._discard_latest_realtime_audio_input()
+            # AudioRecognition retains this transcript for the next endpointing verdict.
+            # Keep the matching provider audio under the same logical input owner as well.
             return False
 
         # avoid interruption if backchannel is detected with realtime model. an unjudged overlap
@@ -2861,11 +2849,7 @@ class AgentActivity(RecognitionHooks):
         await current_speech.interrupt()
 
         if self._rt_session is not None:
-            if self._realtime_input_mode == "audio":
-                self._rt_session.interrupt()
-            else:
-                self._rt_session.interrupt()
-                self._clear_realtime_input()
+            self._rt_session.interrupt()
         return True
 
     @utils.log_exceptions(logger=logger)
@@ -2925,10 +2909,9 @@ class AgentActivity(RecognitionHooks):
                 if info.skip_reply:
                     if self._realtime_input_mode == "audio":
                         self._clear_realtime_input_if_owned(audio_input_token)
-                        # Preserve the established default-audio behavior: the provider input is
-                        # discarded, while a finalized external transcript remains observable in
-                        # local conversation history.
-                    if self._realtime_input_mode == "audio" and info.new_transcript != "":
+                    # A skipped finalized transcript remains observable in local conversation
+                    # history even when the explicit text-input mode owns no provider audio.
+                    if info.new_transcript != "":
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
                     return

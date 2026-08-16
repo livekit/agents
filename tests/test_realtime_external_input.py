@@ -691,7 +691,7 @@ async def test_two_text_turns_do_not_share_transcript_state() -> None:
     assert first[0].id != second[0].id
 
 
-async def test_text_mode_skip_reply_clears_input_without_generation() -> None:
+async def test_text_mode_skip_reply_keeps_local_transcript_without_generation() -> None:
     activity, rt_session = _activity()
 
     captured = await _complete_turn(activity, _eot("do not answer", skip_reply=True))
@@ -700,8 +700,19 @@ async def test_text_mode_skip_reply_clears_input_without_generation() -> None:
     assert rt_session.generate_reply_calls == 0
     assert rt_session.committed is False
     assert rt_session.audio_cleared is False
-    assert activity.agent.chat_ctx.items == []
+    messages = activity.agent.chat_ctx.messages()
+    assert len(messages) == 1
+    assert messages[0].raw_text_content == "do not answer"
     assert rt_session.chat_ctx.items == []
+
+
+async def test_text_mode_interrupt_preserves_provider_interruption_signal() -> None:
+    activity, rt_session = _activity()
+
+    await activity.interrupt()
+
+    assert rt_session.interrupted is True
+    assert rt_session.audio_cleared is False
 
 
 async def test_audio_mode_skip_reply_discards_provider_audio_but_keeps_transcript() -> None:
@@ -716,6 +727,27 @@ async def test_audio_mode_skip_reply_discards_provider_audio_but_keeps_transcrip
     assert len(messages) == 1
     assert messages[0].raw_text_content == "do not retain or answer"
     assert rt_session.chat_ctx.items == []
+
+
+async def test_short_external_transcript_retains_matching_realtime_audio() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    activity._session.options.interruption["min_words"] = 2
+    current_speech = MagicMock()
+    current_speech.allow_interruptions = True
+    current_speech.interrupted = False
+    activity._current_speech = cast(Any, current_speech)
+
+    frame = _frame(1)
+    input_token = activity._rt_audio_input_token
+    activity._start_realtime_user_activity()
+    activity.push_audio(frame)
+
+    assert activity.on_end_of_turn(_eot("brief")) is False
+    assert rt_session.provider_audio == [frame]
+    assert rt_session.clear_audio_calls == 0
+    assert activity._rt_audio_input_token is input_token
+    assert activity._rt_user_activity_started
 
 
 async def test_stop_response_discards_turn_and_next_turn_is_ready() -> None:
