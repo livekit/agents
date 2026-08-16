@@ -456,9 +456,51 @@ async def test_agent_activity_external_vad_drives_one_google_audio_turn(
         ]
         assert len(starts) == len(audio) == len(ends) == 1
         assert not any(isinstance(event, types.LiveClientContent) for event in sent)
-        assert rt_session._pending_generation_fut is not None
+        pending_generation = rt_session._pending_generation_fut
+        assert pending_generation is not None
+        generation_epoch = rt_session._session_epoch
+
+        # A new VAD turn can begin after the reply trigger was sent but before Gemini
+        # acknowledges it. The framework must keep that boundary deferred; announcing it in
+        # AUDIO_TRIGGER_SENT would restart the provider epoch and fail the preceding reply.
+        activity.on_start_of_speech(None, now + 0.1)
+        activity.push_audio(_input_frame(50, fill=2))
+        deferred_input_ready = activity._deferred_realtime_audio_inputs[0].ready_fut
+
+        assert rt_session._session_epoch == generation_epoch
+        assert not pending_generation.done()
+        assert (
+            len(
+                [
+                    event
+                    for event in sent
+                    if isinstance(event, types.LiveClientRealtimeInput)
+                    and event.activity_start is not None
+                ]
+            )
+            == 1
+        )
 
         rt_session._start_new_generation()
+        await asyncio.wait_for(asyncio.shield(deferred_input_ready), timeout=0.1)
+
+        assert rt_session._session_epoch == generation_epoch
+        assert pending_generation.done() and pending_generation.exception() is None
+        assert activity._rt_user_activity_started is True
+        assert rt_session._activity_has_realtime_input is True
+        assert (
+            len(
+                [
+                    event
+                    for event in sent
+                    if isinstance(event, types.LiveClientRealtimeInput)
+                    and event.activity_start is not None
+                ]
+            )
+            == 2
+        )
+
+        activity.on_end_of_speech(None)
         rt_session._mark_current_generation_done()
         await asyncio.wait_for(asyncio.gather(*list(activity._speech_tasks)), timeout=0.5)
         assert rt_session._pending_generation_fut is None

@@ -37,6 +37,7 @@ class TestAudioRecognitionAclose:
         audio_recognition._interruption_atask = None
         audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
+        audio_recognition._commit_user_turn_fut = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._vad_ch = None
         audio_recognition._interruption_ch = None

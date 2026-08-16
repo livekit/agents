@@ -306,6 +306,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._agent_speaking = False
     ar._end_of_turn_task = None
     ar._commit_user_turn_atask = None
+    ar._commit_user_turn_fut = None
     ar._turn_disposition = _TurnDisposition()
     ar._agent_speech_started_at = None
     ar._endpointing = MagicMock()

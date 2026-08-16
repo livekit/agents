@@ -109,6 +109,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._closing = asyncio.Event()
     # only touched by _aclose
     ar._commit_user_turn_atask = None
+    ar._commit_user_turn_fut = None
     ar._stt_pipeline = None
     ar._stt_consumer_atask = None
     ar._vad_atask = None

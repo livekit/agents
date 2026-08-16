@@ -4,6 +4,7 @@ import asyncio
 import gc
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -87,6 +88,24 @@ class _EditingAgent(Agent):
         if self._stop_first_turn and self.completed_turns == 1:
             raise StopResponse()
         new_message.content = [f"edited: {new_message.raw_text_content}"]
+
+
+class _BlockingEmptyEditingAgent(Agent):
+    def __init__(self, *, replacement: str | None) -> None:
+        super().__init__(instructions="test")
+        self.replacement = replacement
+        self.hook_started = asyncio.Event()
+        self.release_hook = asyncio.Event()
+        self.completed_turns = 0
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        self.completed_turns += 1
+        self.hook_started.set()
+        await self.release_hook.wait()
+        if self.replacement is not None:
+            new_message.content = [self.replacement]
 
 
 class _CustomSTTNodeAgent(Agent):
@@ -317,9 +336,11 @@ async def test_finishing_realtime_reply_does_not_clear_next_audio_turn() -> None
     await _wait_for_reply_count(rt_session, [second_reply_task], 2)
 
     assert rt_session.generated_audio == [[first_frame], [second_frame]]
-    assert rt_session.provider_audio == [third_frame]
+    assert rt_session.provider_audio == []
     assert rt_session.generate_reply_calls == 2
-    assert rt_session.user_activity_start_calls == 3
+    assert rt_session.user_activity_start_calls == 2
+    assert len(activity._deferred_realtime_audio_inputs) == 1
+    assert activity._deferred_realtime_audio_inputs[0].frames == [third_frame]
 
     rt_session._reply_futs[1].set_result(cast(llm.GenerationCreatedEvent, object()))
     await second_reply_task
@@ -529,9 +550,15 @@ async def test_realtime_reply_setup_failure_clears_only_its_owned_audio_turn() -
     assert activity._rt_audio_input_sealed
 
 
-async def test_deferred_replay_failure_settles_created_provider_generation() -> None:
+async def test_deferred_replay_failure_does_not_abort_created_provider_generation() -> None:
     activity, _ = _activity(mode="audio")
     rt_session = _replace_realtime_session(activity)
+    generation_started = asyncio.Event()
+
+    async def _generation_task(**_: Any) -> None:
+        generation_started.set()
+
+    activity._realtime_generation_task = _generation_task  # type: ignore[method-assign]
 
     first_frame = _frame(1)
     activity._start_realtime_user_activity()
@@ -544,13 +571,14 @@ async def test_deferred_replay_failure_settles_created_provider_generation() -> 
     assert len(activity._deferred_realtime_audio_inputs) == 1
     rt_session.push_audio_error = RuntimeError("deferred replay failed")
     _, reply_task = _create_audio_reply(activity, authorize=True)
+    await _wait_for_reply_count(rt_session, [reply_task], 1)
 
-    with pytest.raises(RuntimeError, match="deferred replay failed"):
-        await reply_task
-
-    assert len(rt_session._reply_futs) == 1
     provider_generation_fut = rt_session._reply_futs[0]
-    assert provider_generation_fut.cancelled()
+    provider_generation_fut.set_result(cast(llm.GenerationCreatedEvent, object()))
+    await reply_task
+
+    assert provider_generation_fut.done() and not provider_generation_fut.cancelled()
+    assert generation_started.is_set()
     assert rt_session.generate_reply_calls == 1
     assert rt_session.generated_audio == [[first_frame]]
     assert not activity._deferred_realtime_audio_inputs
@@ -714,6 +742,46 @@ async def test_empty_text_turn_does_not_generate() -> None:
     assert rt_session.generate_reply_calls == 0
     assert rt_session.committed is False
     assert rt_session.audio_cleared is False
+
+
+@pytest.mark.parametrize("replacement", ["replacement from hook", None])
+async def test_empty_text_turn_runs_hook_before_interrupting_active_speech(
+    replacement: str | None,
+) -> None:
+    agent = _BlockingEmptyEditingAgent(replacement=replacement)
+    activity, _ = _activity(agent=agent)
+    activity._session.options.interruption["min_words"] = 1
+    current_speech = MagicMock()
+    current_speech.allow_interruptions = True
+    current_speech.interrupted = False
+    current_speech.interrupt = AsyncMock()
+    activity._current_speech = cast(Any, current_speech)
+    activity._cancel_speech_pause = AsyncMock()  # type: ignore[method-assign]
+    activity._interrupt_background_speeches = MagicMock(return_value=[])  # type: ignore[method-assign]
+    captured: list[llm.ChatMessage] = []
+
+    def _capture_generate_reply(**kwargs: Any) -> SpeechHandle:
+        captured.append(cast(llm.ChatMessage, kwargs["user_message"]))
+        return SpeechHandle.create()
+
+    activity._generate_reply = _capture_generate_reply  # type: ignore[method-assign]
+
+    assert activity.on_end_of_turn(_eot("")) is True
+    await asyncio.wait_for(agent.hook_started.wait(), timeout=1.0)
+    current_speech.interrupt.assert_not_awaited()
+
+    agent.release_hook.set()
+    assert activity._user_turn_completed_atask is not None
+    await activity._user_turn_completed_atask
+
+    assert agent.completed_turns == 1
+    if replacement is None:
+        current_speech.interrupt.assert_not_awaited()
+        assert captured == []
+    else:
+        current_speech.interrupt.assert_awaited_once()
+        assert len(captured) == 1
+        assert captured[0].raw_text_content == replacement
 
 
 def test_text_mode_requires_realtime_model() -> None:
@@ -1019,6 +1087,161 @@ async def test_text_mode_runtime_none_restores_automatic_stt_turn_detection() ->
         session.update_options(turn_detection=None)
         assert activity._turn_detection == "stt"
         assert recognition._turn_detection_mode == "stt"
+    finally:
+        await session.aclose()
+
+
+async def test_text_mode_runtime_realtime_llm_is_rejected_without_losing_stt_boundary() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=None,
+        turn_handling=TurnHandlingOptions(realtime_input_mode="text"),
+    )
+    await session.start(Agent(instructions="test"))
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        original_setting = session._turn_detection
+        original_explicit = session._turn_detection_explicit
+
+        with pytest.raises(ValueError, match="realtime_llm.*text input"):
+            session.update_options(turn_detection="realtime_llm")
+
+        assert session._turn_detection is original_setting
+        assert session._turn_detection_explicit is original_explicit
+        assert activity._turn_detection == "stt"
+        assert recognition._turn_detection_mode == "stt"
+
+        completed_turns: list[tuple[str, str]] = []
+
+        def _capture_eou(*_: Any, **kwargs: Any) -> None:
+            completed_turns.append((recognition._current_transcript, kwargs["trigger"]))
+
+        recognition._run_eou_detection = _capture_eou  # type: ignore[method-assign]
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
+        await recognition._on_stt_event(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[SpeechData(text="still works", language=LanguageCode("en"))],
+            )
+        )
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+
+        assert completed_turns == [("still works", "stt")]
+    finally:
+        await session.aclose()
+
+
+async def test_runtime_manual_mode_cancels_internal_empty_transcript_fallback() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+            endpointing={"max_delay": 60.0},
+        ),
+    )
+    await session.start(Agent(instructions="test"))
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        assert recognition._finalize_empty_transcript_on_timeout is True
+        recognition._arm_transcription_timeout(1.0, delay=0.0)
+        timeout_handle = recognition._transcription_timeout_handle
+        assert timeout_handle is not None
+
+        session.update_options(turn_detection="manual")
+
+        assert recognition._finalize_empty_transcript_on_timeout is False
+        assert timeout_handle.cancelled()
+        assert recognition._transcription_timeout_handle is None
+    finally:
+        await session.aclose()
+
+
+async def test_runtime_manual_mode_preserves_explicit_transcription_timeout() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        transcription_timeout=60.0,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+    await session.start(Agent(instructions="test"))
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        recognition._arm_transcription_timeout(1.0, delay=0.0)
+        timeout_handle = recognition._transcription_timeout_handle
+        assert timeout_handle is not None
+
+        session.update_options(turn_detection="manual")
+
+        assert recognition._finalize_empty_transcript_on_timeout is False
+        assert recognition._transcription_timeout_handle is timeout_handle
+        assert not timeout_handle.cancelled()
+    finally:
+        await session.aclose()
+
+
+async def test_runtime_vad_mode_enables_internal_empty_transcript_fallback() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="manual",
+            realtime_input_mode="text",
+            endpointing={"max_delay": 60.0},
+        ),
+    )
+    await session.start(Agent(instructions="test"))
+    try:
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+        assert recognition._finalize_empty_transcript_on_timeout is False
+
+        session.update_options(turn_detection="vad")
+        recognition._arm_transcription_timeout(1.0, delay=0.0)
+
+        assert recognition._finalize_empty_transcript_on_timeout is True
+        assert recognition._transcription_timeout_handle is not None
     finally:
         await session.aclose()
 

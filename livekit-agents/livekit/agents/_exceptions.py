@@ -14,6 +14,18 @@ class AssignmentTimeoutError(Exception):
     pass
 
 
+class UserTurnCommitAbortedError(RuntimeError):
+    """Raised when a manually committed user turn is abandoned before STT settles.
+
+    ``partial_transcript`` contains all final and interim text accumulated for that turn at
+    the abandonment boundary.
+    """
+
+    def __init__(self, partial_transcript: str) -> None:
+        super().__init__("the manually committed user turn was abandoned before completion")
+        self.partial_transcript = partial_transcript
+
+
 # errors used by our plugins
 
 

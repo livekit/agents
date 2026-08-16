@@ -28,6 +28,7 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
     UnexpectedModelBehavior,
+    UserTurnCommitAbortedError,
     create_api_error_from_http,
 )
 from .job import (
@@ -237,6 +238,7 @@ __all__ = [
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UserTurnCommitAbortedError",
     "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",

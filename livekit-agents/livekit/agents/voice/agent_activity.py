@@ -440,10 +440,15 @@ class AgentActivity(RecognitionHooks):
         return True
 
     def _validate_turn_detection(
-        self, turn_detection: TurnDetectionMode | None
+        self,
+        turn_detection: TurnDetectionMode | None,
+        *,
+        session_turn_detection_explicit: bool | None = None,
     ) -> TurnDetectionMode | None:
-        turn_detection_explicit = (
-            is_given(self._agent.turn_detection) or self._session._turn_detection_explicit
+        turn_detection_explicit = is_given(self._agent.turn_detection) or (
+            self._session._turn_detection_explicit
+            if session_turn_detection_explicit is None
+            else session_turn_detection_explicit
         )
         if (
             self._realtime_input_mode == "text"
@@ -555,6 +560,15 @@ class AgentActivity(RecognitionHooks):
             )
 
         return mode
+
+    def _should_finalize_empty_transcript_on_timeout(
+        self, turn_detection: TurnDetectionMode | None
+    ) -> bool:
+        return (
+            isinstance(self.llm, llm.RealtimeModel)
+            and not self._rt_turn_detection_enabled
+            and turn_detection != "manual"
+        )
 
     @property
     def scheduling_paused(self) -> bool:
@@ -723,6 +737,7 @@ class AgentActivity(RecognitionHooks):
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        session_turn_detection_explicit: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -749,6 +764,16 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
         if utils.is_given(turn_detection):
+            if (
+                turn_detection == "realtime_llm"
+                and self._realtime_input_mode == "text"
+                and not self._rt_turn_detection_enabled
+            ):
+                raise ValueError(
+                    "turn_detection='realtime_llm' is incompatible with realtime text input; "
+                    "use 'stt', 'manual', or None for automatic STT turn detection"
+                )
+
             # a realtime model's server-side turn detection is resolved once at session start;
             # runtime re-sync isn't supported yet, so warn when an explicit change would flip it.
             if (
@@ -764,7 +789,14 @@ class AgentActivity(RecognitionHooks):
                     "enabled" if self._rt_turn_detection_enabled else "disabled",
                 )
 
-            turn_detection = self._validate_turn_detection(turn_detection)
+            turn_detection = self._validate_turn_detection(
+                turn_detection,
+                session_turn_detection_explicit=(
+                    session_turn_detection_explicit
+                    if is_given(session_turn_detection_explicit)
+                    else None
+                ),
+            )
 
             if self._turn_detection == "manual" or turn_detection == "manual":
                 self._cancel_false_interruption_timer()
@@ -781,6 +813,11 @@ class AgentActivity(RecognitionHooks):
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
+                finalize_empty_transcript_on_timeout=(
+                    self._should_finalize_empty_transcript_on_timeout(self._turn_detection)
+                    if is_given(turn_detection)
+                    else NOT_GIVEN
+                ),
             )
 
     def _update_models(
@@ -1250,9 +1287,9 @@ class AgentActivity(RecognitionHooks):
             turn_detection=self._turn_detection,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
-            finalize_empty_transcript_on_timeout=isinstance(self.llm, llm.RealtimeModel)
-            and not self._rt_turn_detection_enabled
-            and self._turn_detection != "manual",
+            finalize_empty_transcript_on_timeout=(
+                self._should_finalize_empty_transcript_on_timeout(self._turn_detection)
+            ),
         )
         stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
         turn_detector_stream = reuse_resources.turn_detector_stream if reuse_resources else None
@@ -2744,6 +2781,7 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
             and self._session.options.interruption["min_words"] > 0
+            and not (self._realtime_input_mode == "text" and not info.new_transcript.strip())
             and len(split_words(info.new_transcript, split_character=True))
             < self._session.options.interruption["min_words"]
         ):
@@ -2795,6 +2833,35 @@ class AgentActivity(RecognitionHooks):
         )
         return True
 
+    async def _interrupt_current_speech_for_user_turn(
+        self,
+        *,
+        user_input: str,
+        audio_input_token: _RealtimeAudioInputToken | None,
+    ) -> bool:
+        current_speech = self._current_speech
+        if current_speech is None:
+            return True
+        if not current_speech.allow_interruptions:
+            logger.warning(
+                "skipping reply to user input, current speech generation cannot be interrupted",
+                extra={"user_input": user_input},
+            )
+            if self._rt_session is not None and self._realtime_input_mode == "audio":
+                self._clear_realtime_input_if_owned(audio_input_token)
+            return False
+
+        await self._cancel_speech_pause(self._cancel_speech_pause_task)
+        await current_speech.interrupt()
+
+        if self._rt_session is not None:
+            if self._realtime_input_mode == "audio":
+                self._rt_session.interrupt()
+            else:
+                self._rt_session.interrupt()
+                self._clear_realtime_input()
+        return True
+
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
         self,
@@ -2817,6 +2884,9 @@ class AgentActivity(RecognitionHooks):
             self._clear_realtime_input_if_owned(audio_input_ready_fut)
             raise
         self._preemptive_generation_count = 0
+        defer_speech_interruption = (
+            self._realtime_input_mode == "text" and not info.new_transcript.strip()
+        )
 
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
@@ -2825,8 +2895,10 @@ class AgentActivity(RecognitionHooks):
         #  turn)
         #  - generate a reply to the user input
 
-        # interrupt all background speeches and wait for them to finish to update the chat context
-        await asyncio.gather(*self._interrupt_background_speeches(force=False))
+        # Empty realtime text turns first give user code a chance to supply deliberate model
+        # input. Until then, they must not interrupt a valid response or background speech.
+        if not defer_speech_interruption:
+            await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
         user_message = llm.ChatMessage(
             role="user",
@@ -2881,25 +2953,11 @@ class AgentActivity(RecognitionHooks):
                 self._session._conversation_item_added(user_message)
             return
 
-        if (current_speech := self._current_speech) is not None:
-            if not current_speech.allow_interruptions:
-                logger.warning(
-                    "skipping reply to user input, current speech generation cannot be interrupted",
-                    extra={"user_input": info.new_transcript},
-                )
-                if self._rt_session is not None and self._realtime_input_mode == "audio":
-                    self._clear_realtime_input_if_owned(audio_input_token)
-                return
-            await self._cancel_speech_pause(self._cancel_speech_pause_task)
-
-            await current_speech.interrupt()
-
-            if self._rt_session is not None:
-                if self._realtime_input_mode == "audio":
-                    self._rt_session.interrupt()
-                else:
-                    self._rt_session.interrupt()
-                    self._clear_realtime_input()
+        if not defer_speech_interruption and not await self._interrupt_current_speech_for_user_turn(
+            user_input=info.new_transcript,
+            audio_input_token=audio_input_token,
+        ):
+            return
 
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
@@ -2957,6 +3015,24 @@ class AgentActivity(RecognitionHooks):
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
+
+        if defer_speech_interruption:
+            await asyncio.gather(*self._interrupt_background_speeches(force=False))
+            assert user_message is not None
+            if not await self._interrupt_current_speech_for_user_turn(
+                user_input=user_message.raw_text_content or "",
+                audio_input_token=audio_input_token,
+            ):
+                return
+            if self._scheduling_paused or self._new_turns_blocked:
+                logger.warning(
+                    "skipping reply to user input, speech scheduling is paused",
+                    extra={"user_input": user_message.raw_text_content},
+                )
+                if self._session._closing:
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
+                return
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
@@ -4261,18 +4337,6 @@ class AgentActivity(RecognitionHooks):
                     ),
                     tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
                 )
-                try:
-                    if realtime_audio_input_token is not None:
-                        # The synchronous provider call consumes only the input this task owns.
-                        # Retire that ownership before another event-loop turn can expose new audio.
-                        if realtime_audio_input_token is self._rt_audio_input_token:
-                            self._advance_realtime_audio_input()
-                except BaseException:
-                    if not generation_fut.done():
-                        generation_fut.cancel()
-                    elif not generation_fut.cancelled():
-                        generation_fut.exception()
-                    raise
                 return generation_fut
 
             start_generation_task = asyncio.create_task(
@@ -4317,6 +4381,23 @@ class AgentActivity(RecognitionHooks):
                 speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")
                 return
+
+            if (
+                realtime_audio_input_token is not None
+                and realtime_audio_input_token is self._rt_audio_input_token
+            ):
+                try:
+                    # A provider can keep a completed input trigger in flight until it emits
+                    # generation_created. Keep the next activity quarantined until that
+                    # acknowledgement so it cannot supersede the reply just requested.
+                    self._advance_realtime_audio_input()
+                except Exception:
+                    # The provider already created the preceding generation. A failure while
+                    # replaying later input belongs to that later turn and must not discard the
+                    # valid response now in progress.
+                    logger.exception(
+                        "failed to advance deferred realtime input after generation started"
+                    )
 
             # _realtime_generation_task will clear the authorization
             await self._realtime_generation_task(

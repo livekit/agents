@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, utils, vad
-from .._exceptions import APIError
+from .._exceptions import APIError, UserTurnCommitAbortedError
 from ..inference.eot.base import MIN_SILENCE_DURATION_MS
 from ..inference.interruption import (
     _AgentSpeechEndedSentinel,
@@ -265,6 +265,7 @@ class AudioRecognition:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
+        self._commit_user_turn_fut: asyncio.Future[str] | None = None
         self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
@@ -368,12 +369,24 @@ class AudioRecognition:
         *,
         endpointing: NotGivenOr[BaseEndpointing] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        finalize_empty_transcript_on_timeout: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(endpointing):
             self._endpointing = endpointing
+
+        if is_given(finalize_empty_transcript_on_timeout):
+            self._finalize_empty_transcript_on_timeout = finalize_empty_transcript_on_timeout
+            if (
+                not finalize_empty_transcript_on_timeout
+                and self._session.options.transcription_timeout is None
+            ):
+                # This timer exists solely to settle empty client-detected realtime turns.
+                # An explicitly configured timeout remains armed so its public notification
+                # semantics survive a switch to manual turn control.
+                self._cancel_transcription_timeout()
 
         if is_given(turn_detection):
             self._update_turn_detector(
@@ -1057,8 +1070,27 @@ class AudioRecognition:
     def _advance_turn_disposition(self) -> None:
         self._turn_disposition = _TurnDisposition()
 
+    def _settle_abandoned_commit(
+        self,
+        fut: asyncio.Future[str] | None = None,
+        *,
+        partial_transcript: str | None = None,
+    ) -> None:
+        if fut is None:
+            fut = self._commit_user_turn_fut
+        if fut is None or fut.done():
+            return
+        if partial_transcript is None:
+            partial_transcript = self._current_transcript.strip()
+        fut.set_exception(UserTurnCommitAbortedError(partial_transcript))
+        # Abandonment is an expected lifecycle outcome and callers are not required to retain
+        # the returned future. Mark the exception observed without changing what a later await
+        # receives, avoiding a spurious "Future exception was never retrieved" report.
+        fut.exception()
+
     def _abandon_turn_disposition(self) -> None:
         """Detach disposition from work abandoned before its turn can settle."""
+        self._settle_abandoned_commit()
         self._advance_turn_disposition()
         if self._end_of_turn_task is not None and not self._end_of_turn_task.done():
             self._end_of_turn_task.cancel()
@@ -1075,6 +1107,9 @@ class AudioRecognition:
             self._advance_turn_disposition()
 
     def _clear_user_turn(self) -> None:
+        # Capture any partial transcript for a public manual-commit waiter before clearing the
+        # turn's buffers and cancelling its internal STT flush task.
+        self._abandon_turn_disposition()
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -1084,7 +1119,6 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
-        self._abandon_turn_disposition()
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1164,8 +1198,7 @@ class AudioRecognition:
                         )
 
             if turn_disposition is not self._turn_disposition:
-                if not fut.done():
-                    fut.cancel()
+                self._settle_abandoned_commit(fut)
                 return
 
             if self._audio_interim_transcript:
@@ -1207,8 +1240,7 @@ class AudioRecognition:
                     and self._turn_disposition is turn_disposition
                 ):
                     self._advance_turn_disposition()
-                if not fut.done():
-                    fut.cancel()
+                self._settle_abandoned_commit(fut)
             elif exc := task.exception():
                 if (
                     self._commit_user_turn_atask is task
@@ -1219,8 +1251,10 @@ class AudioRecognition:
                     fut.set_exception(exc)
 
         if self._commit_user_turn_atask is not None:
+            self._settle_abandoned_commit(self._commit_user_turn_fut)
             self._commit_user_turn_atask.cancel()
 
+        self._commit_user_turn_fut = fut
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
         self._commit_user_turn_atask.add_done_callback(_on_task_done)
         return fut

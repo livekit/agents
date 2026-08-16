@@ -1380,17 +1380,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._opts.endpointing["alpha"] = alpha
                 self._opts.endpointing_overrides["alpha"] = alpha
 
-        if is_given(turn_detection):
-            self._turn_detection = turn_detection
-            self._turn_detection_explicit = turn_detection is not None
-
         if self._activity is not None:
             self._activity.update_options(
                 endpointing_opts=(
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),
                 turn_detection=turn_detection,
+                session_turn_detection_explicit=(
+                    turn_detection is not None if is_given(turn_detection) else NOT_GIVEN
+                ),
             )
+
+        # Activity validates and applies the prospective detector before the session records the
+        # public setting. An unsupported runtime update therefore cannot leave these two layers
+        # describing different turn boundaries.
+        if is_given(turn_detection):
+            self._turn_detection = turn_detection
+            self._turn_detection_explicit = turn_detection is not None
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
@@ -1599,6 +1605,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
+            UserTurnCommitAbortedError: If the commit is abandoned by a new user turn,
+                ``clear_user_turn()``, or a turn-detection mode change before STT settles.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
