@@ -391,7 +391,9 @@ class AgentActivity(RecognitionHooks):
                 "and no VAD requires explicit turn_detection"
             )
 
-    def _resolve_rt_turn_detection_enabled(self) -> bool:
+    def _resolve_rt_turn_detection_enabled(
+        self, *, session_turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN
+    ) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
 
         Off when the model can hand turn-taking to the client and the user configured
@@ -415,6 +417,9 @@ class AgentActivity(RecognitionHooks):
         if is_given(self._agent.turn_detection):
             client_td: TurnDetectionMode | None = self._agent.turn_detection
             client_td_explicit = True
+        elif is_given(session_turn_detection):
+            client_td = session_turn_detection
+            client_td_explicit = session_turn_detection is not None
         elif self._session._turn_detection_explicit:
             client_td = self._session.turn_detection
             client_td_explicit = True
@@ -780,7 +785,8 @@ class AgentActivity(RecognitionHooks):
                 isinstance(self.llm, llm.RealtimeModel)
                 and self.llm.capabilities.can_disable_turn_detection
                 and turn_detection is not None
-                and self._resolve_rt_turn_detection_enabled() != self._rt_turn_detection_enabled
+                and self._resolve_rt_turn_detection_enabled(session_turn_detection=turn_detection)
+                != self._rt_turn_detection_enabled
             ):
                 logger.warning(
                     "changing turn_detection at runtime does not update a realtime model's "
