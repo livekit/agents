@@ -1608,7 +1608,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
         self._force_pending_discard_restart()
 
-        if self._input_state in (
+        if expects_generation and self._input_state in (
             _InputState.TEXT_TRIGGER_SENT,
             _InputState.AUDIO_TRIGGER_SENT,
             _InputState.LEGACY_TRIGGER_SENT,
