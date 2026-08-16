@@ -2433,6 +2433,74 @@ async def test_no_interruption_preserves_pre_activity_audio_in_deferred_turn(
         assert generation_event.user_initiated
 
 
+async def test_no_interruption_deferred_turn_preserves_audio_beyond_quarantine_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(500, fill=2))
+        session.push_audio(_input_frame(1_000, fill=3))
+        generation_fut = session.generate_reply()
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        audio_payloads = [
+            event.audio.data
+            for event in sent
+            if isinstance(event, types.LiveClientRealtimeInput) and event.audio is not None
+        ]
+        assert audio_payloads == [bytes([2]) * 1600] * 10 + [bytes([3]) * 1600] * 20
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_deferred_turn_becomes_live_without_losing_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(500, fill=2))
+
+        # The provider becomes available while this user turn is still active. Its buffered
+        # prefix must become live input before subsequent audio, without a second ActivityStart.
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert session._session_epoch == initial_epoch + 1
+
+        session.push_audio(_input_frame(500, fill=3))
+        generation_fut = session.generate_reply()
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[-1].activity_end is not None
+        audio_payloads = [event.audio.data for event in realtime_inputs if event.audio is not None]
+        assert audio_payloads == [bytes([2]) * 1600] * 10 + [bytes([3]) * 1600] * 10
+        assert not any(isinstance(event, types.LiveClientContent) for event in sent)
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+
+
 async def test_no_interruption_seals_deferred_audio_at_generate_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2942,6 +3010,10 @@ async def test_manual_audio_quarantine_truncation_is_explicit(
                 session.push_audio(_input_frame(50, fill=fill))
 
         assert "manual audio quarantine exceeded" in caplog.text
+        assert 0 < session._quarantined_manual_audio_duration <= 1.0
+        assert len(session._quarantined_manual_audio) < 21
+        assert session._quarantined_manual_audio[0].data.tobytes() != bytes([2]) * 1600
+        assert session._quarantined_manual_audio[-1].data.tobytes() == bytes([22]) * 1600
 
 
 async def test_manual_clear_invalidates_dequeued_input_before_second_send_lock(

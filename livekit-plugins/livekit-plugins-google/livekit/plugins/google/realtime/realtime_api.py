@@ -657,6 +657,12 @@ class RealtimeSession(llm.RealtimeSession):
         self._quarantined_manual_audio_duration = 0.0
         self._manual_audio_quarantine_truncation_warned = False
 
+    def _move_quarantined_manual_audio(self, destination: deque[rtc.AudioFrame]) -> None:
+        while self._quarantined_manual_audio:
+            destination.append(self._quarantined_manual_audio.popleft())
+        self._quarantined_manual_audio_duration = 0.0
+        self._manual_audio_quarantine_truncation_warned = False
+
     def _send_input_event(self, event: ClientEvents) -> bool:
         self._input_event_sequences[id(event)] = self._input_event_sequence
         accepted = self._send_client_event(event)
@@ -812,10 +818,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         if not deferred.sealed:
             self._flush_audio_input()
-            deferred.audio = self._quarantined_manual_audio
-            self._quarantined_manual_audio = deque()
-            self._quarantined_manual_audio_duration = 0.0
-            self._manual_audio_quarantine_truncation_warned = False
+            self._move_quarantined_manual_audio(deferred.audio)
             deferred.has_realtime_input = bool(deferred.audio)
             deferred.sealed = True
 
@@ -859,6 +862,10 @@ class RealtimeSession(llm.RealtimeSession):
             start_accepted = self._send_input_event(
                 types.LiveClientRealtimeInput(activity_start=types.ActivityStart())
             )
+            if deferred.audio:
+                self._activity_has_realtime_input = True
+            while deferred.audio:
+                self._send_audio_frame(deferred.audio.popleft())
             self._replay_quarantined_manual_audio()
             if not start_accepted:
                 self._input_state = _InputState.ABORTED
@@ -1296,10 +1303,16 @@ class RealtimeSession(llm.RealtimeSession):
         return self._session_resumption_handle
 
     def _queue_audio_frame(self, frame: rtc.AudioFrame) -> None:
-        if self._manual_activity_detection and self._manual_audio_quarantine_active:
-            self._buffer_quarantined_manual_audio(frame)
-        else:
-            self._send_audio_frame(frame)
+        if self._manual_activity_detection:
+            if self._deferred_manual_inputs and not self._deferred_manual_inputs[-1].sealed:
+                deferred = self._deferred_manual_inputs[-1]
+                deferred.audio.append(frame)
+                deferred.has_realtime_input = True
+                return
+            if self._manual_audio_quarantine_active:
+                self._buffer_quarantined_manual_audio(frame)
+                return
+        self._send_audio_frame(frame)
 
     def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
         event = types.LiveClientRealtimeInput(
@@ -1572,6 +1585,11 @@ class RealtimeSession(llm.RealtimeSession):
         ):
             if not self._deferred_manual_inputs or self._deferred_manual_inputs[-1].sealed:
                 self._deferred_manual_inputs.append(_DeferredManualInput())
+            deferred = self._deferred_manual_inputs[-1]
+            # ActivityStart turns bounded post-discard residue into input owned by this turn.
+            # Later frames bypass the residue cap and accumulate on the same transaction.
+            self._move_quarantined_manual_audio(deferred.audio)
+            deferred.has_realtime_input = bool(deferred.audio)
             self._deferred_manual_input_pipeline_active = True
             return
         self._force_pending_discard_restart()
