@@ -1622,7 +1622,7 @@ class AudioRecognition:
         if (
             self._stt
             and not self._audio_transcript
-            and trigger != "manual"
+            and self._turn_detection_mode != "manual"
             and not allow_empty_transcript
         ):
             # stt enabled but no transcript yet
