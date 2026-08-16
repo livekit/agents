@@ -41,12 +41,12 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
-There is no bootstrap call. Importing the plugin registers it with the worker, and setting `STANDIN_SECRET` arms it: the call listener starts with the worker on the agreed layout, port **8080** at **`/msteams/calling`** (`STANDIN_PORT` / `STANDIN_WS_PATH` override), and stops with it. A worker without `STANDIN_SECRET` behaves as if the plugin were not installed. The agent name is read off `@server.rtc_session(agent_name=...)`, so it is declared exactly once.
+There is no bootstrap call. Importing the plugin registers it with the worker, and setting `STANDIN_SECRET` arms it: the call listener starts with the worker on the StandIn plugin layout, port **9442** at **`/msteams/calling`** (`STANDIN_PORT` / `STANDIN_HOST` / `STANDIN_WS_PATH` override; the host defaults to `0.0.0.0` for containers, set `127.0.0.1` when only a local tunnel should reach it), and stops with it. A worker without `STANDIN_SECRET` behaves as if the plugin were not installed. The agent name is read off `@server.rtc_session(agent_name=...)`, so it is declared exactly once.
 
 Expose the port and register the public URL as the identity's **Agent voice URL** in the portal, for example:
 
 ```bash
-tailscale funnel --bg --set-path /msteams/calling http://127.0.0.1:8080/msteams/calling
+tailscale funnel --bg --set-path /msteams/calling http://127.0.0.1:9442/msteams/calling
 ```
 
 Per call, the plugin verifies StandIn's HMAC handshake, creates room `msteams-{callId}`, dispatches your agent with the call metadata, publishes the caller's audio as a room track, and relays your agent's audio back to Teams. In the entrypoint, `TeamsCall().start()` reads `CallInfo` (`caller_name`, `tenant_id`, `call_id`, `thread_id`, `user_id`, `direction`) and handles the two data topics:

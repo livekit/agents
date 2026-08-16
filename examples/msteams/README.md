@@ -19,7 +19,7 @@ LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
 ```
 
-Put those in `.env`, run the worker, then expose its port with a tunnel or ingress and register the public URL in the StandIn portal as the agent voice URL: `wss://<your-host>/msteams/calling`.
+Put those in `.env`, run the worker, then expose its port (9442 by default) with a tunnel or ingress, for example `tailscale funnel --bg --set-path /msteams/calling http://127.0.0.1:9442/msteams/calling`, and register the public URL in the StandIn portal as the agent voice URL: `wss://<your-host>/msteams/calling`.
 
 ## What the agent gets
 

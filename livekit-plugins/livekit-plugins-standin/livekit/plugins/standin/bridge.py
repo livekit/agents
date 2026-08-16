@@ -21,9 +21,9 @@ side. Per call it creates one LiveKit room, dispatches the worker's own agent
 into it by name, publishes the caller's audio as a room track, and relays the
 agent's audio back to Teams.
 
-Defaults match the agreed livekit layout: port **8080**, path
+Defaults match the StandIn plugin layout: port **9442**, path
 ``/msteams/calling``. Expose the port (for example
-``tailscale funnel --bg --set-path /msteams/calling http://127.0.0.1:8080/msteams/calling``)
+``tailscale funnel --bg --set-path /msteams/calling http://127.0.0.1:9442/msteams/calling``)
 and register the public ``wss://`` URL as the identity's agent voice URL.
 
 The room is the hand-off to the entrypoint: the dispatched job sees the caller
@@ -311,7 +311,7 @@ class _Call:
         self._room = room
         self._wire_room_events(room)
         await room.connect(bridge._livekit_url, token, rtc.RoomOptions(auto_subscribe=True))
-        logger.info('standin: call %s joined room "%s"', self._call_id, self._room_name)
+        logger.info('standin: call %s joined room "%s"', _safe(self._call_id), self._room_name)
 
         # Dispatch AFTER connect, because connect is what creates the room.
         await self._dispatch_agent(start)
@@ -343,7 +343,7 @@ class _Call:
             if last is not None and time.monotonic() - last > idle:
                 logger.warning(
                     "standin: call %s got no caller audio for %.0fs; ending it",
-                    self._call_id,
+                    _safe(self._call_id),
                     idle,
                 )
                 self._closing_reason = "caller-idle-timeout"
@@ -565,8 +565,11 @@ class CallBridge:
             set explicitly only when embedding.
         livekit_url / livekit_api_key / livekit_api_secret: your LiveKit
             project, defaulting to the standard env variables.
-        host / port / ws_path: where the listener binds. Defaults to the agreed
-            livekit layout, ``0.0.0.0:8080`` at ``/msteams/calling``.
+        host / port / ws_path: where the listener binds. Defaults to the StandIn
+            plugin layout, ``0.0.0.0:9442`` at ``/msteams/calling``. ``0.0.0.0``
+            because the worker usually runs in a container behind an ingress; bind
+            ``127.0.0.1`` when only a local tunnel should reach the listener (the
+            upgrade is HMAC-authenticated either way).
         room_prefix: room names are ``{room_prefix}{callId}``.
         delete_room_on_end: delete the room at teardown so the agent job ends
             immediately.
@@ -588,7 +591,7 @@ class CallBridge:
         livekit_api_key: str | None = None,
         livekit_api_secret: str | None = None,
         host: str = "0.0.0.0",
-        port: int = 8080,
+        port: int = 9442,
         ws_path: str = "/msteams/calling",
         room_prefix: str = "msteams-",
         delete_room_on_end: bool = True,

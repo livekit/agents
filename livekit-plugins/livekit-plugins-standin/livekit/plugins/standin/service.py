@@ -43,9 +43,11 @@ cannot live inside the entrypoint. It lives inside the worker's own lifecycle
 instead, where the developer never sees it.
 
 Configuration is environment-only, matching how every other plugin reads its
-keys: ``STANDIN_SECRET`` (arms the plugin), ``STANDIN_PORT`` (default 8080),
-``STANDIN_WS_PATH`` (default /msteams/calling), plus the standard ``LIVEKIT_*``
-project variables the worker already has.
+keys: ``STANDIN_SECRET`` (arms the plugin), ``STANDIN_PORT`` (default 9442, the
+port every StandIn plugin listens on), ``STANDIN_HOST`` (default 0.0.0.0; set
+127.0.0.1 when only a local tunnel should reach the listener), ``STANDIN_WS_PATH``
+(default /msteams/calling), plus the standard ``LIVEKIT_*`` project variables the
+worker already has.
 """
 
 from __future__ import annotations
@@ -98,7 +100,8 @@ def _on_worker_started(server: AgentServer) -> None:
     try:
         bridge = CallBridge(
             secret=secret,
-            port=int(os.environ.get("STANDIN_PORT", "8080")),
+            host=os.environ.get("STANDIN_HOST", "0.0.0.0"),
+            port=int(os.environ.get("STANDIN_PORT", "9442")),
             ws_path=os.environ.get("STANDIN_WS_PATH", "/msteams/calling"),
         )
     except Exception:

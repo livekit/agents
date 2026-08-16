@@ -151,7 +151,7 @@ class TeamsCall:
     ) -> None:
         self._on_context = on_context
         self._on_goodbye = on_goodbye
-        self._session: AgentSession | None = None
+        self._session: AgentSession[Any] | None = None
         self._info: CallInfo | None = None
 
     @property
@@ -163,7 +163,7 @@ class TeamsCall:
 
     async def start(
         self,
-        session: AgentSession,
+        session: AgentSession[Any],
         *,
         ctx: JobContext | None = None,
         room: rtc.Room | None = None,
@@ -223,9 +223,12 @@ class TeamsCall:
         if session is None:
             return
         # Interrupt: the call ends shortly after this, so a goodbye queued
-        # behind a long answer is a goodbye the caller never hears.
+        # behind a long answer is a goodbye the caller never hears. Two blocks on
+        # purpose: interrupt() raises when nothing is speaking yet or the current
+        # speech disallows interruptions, and the goodbye must still be spoken.
         with contextlib.suppress(Exception):
             session.interrupt()
+        with contextlib.suppress(Exception):
             session.say(text)
 
     @staticmethod

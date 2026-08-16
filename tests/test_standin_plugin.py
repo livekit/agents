@@ -141,6 +141,21 @@ async def test_goodbye_interrupts_the_turn_and_speaks_the_line() -> None:
     assert session.calls == [("interrupt", ""), ("say", "Wrapping up now.")]
 
 
+async def test_goodbye_is_still_spoken_when_interrupt_raises() -> None:
+    # interrupt() raises RuntimeError when nothing is speaking yet or the current
+    # speech disallows interruptions; the goodbye must still be spoken. (Both
+    # calls used to share one suppress block, so the farewell was skipped.)
+    class _TouchySession(_FakeSession):
+        def interrupt(self) -> None:
+            self.calls.append(("interrupt", ""))
+            raise RuntimeError("no speech to interrupt")
+
+    room, session = _FakeRoom(), _TouchySession()
+    await TeamsCall().start(session, ctx=_teams_job(), room=room)  # type: ignore[arg-type]
+    room.emit_data(TOPIC_GOODBYE, {"text": "Wrapping up now."})
+    assert session.calls == [("interrupt", ""), ("say", "Wrapping up now.")]
+
+
 async def test_goodbye_handler_override_replaces_the_default() -> None:
     room, session = _FakeRoom(), _FakeSession()
     heard: list[str] = []
