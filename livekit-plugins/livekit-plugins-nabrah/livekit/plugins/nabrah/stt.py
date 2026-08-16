@@ -9,7 +9,7 @@ Wire contract (server -> client):
     {"type": "ready"}
     {"type": "error", "message": ...}
     {"type": "transcript", "text": ..., "is_final": bool,
-     "audio_processed": float} 
+     "audio_processed": float}
 
 Two facts drive the whole design:
 
@@ -22,6 +22,7 @@ Two facts drive the whole design:
   of realtime when input arrives in bursts. The key may be absent on older
   backends, so the local counter stays as a fallback.
 """
+
 import asyncio
 import json
 import logging
@@ -33,14 +34,15 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
+    APIConnectOptions,
     APIError,
     APIStatusError,
-    DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectOptions,
     stt,
     utils,
 )
+from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
@@ -114,9 +116,7 @@ class STT(stt.STT):
                 offline_recognize=False,
             ),
         )
-        nabrah_api_key = (
-            api_key if is_given(api_key) else os.environ.get("NABRAH_API_KEY")
-        )
+        nabrah_api_key = api_key if is_given(api_key) else os.environ.get("NABRAH_API_KEY")
         if not nabrah_api_key:
             raise ValueError(
                 "Nabrah API key is required, either as argument or by setting "
@@ -124,8 +124,11 @@ class STT(stt.STT):
             )
         self._api_key = nabrah_api_key
         self._base_url = (
-            base_url if is_given(base_url) else os.environ.get(
-                "NABRAH_STT_URL", DEFAULT_BASE_URL,
+            base_url
+            if is_given(base_url)
+            else os.environ.get(
+                "NABRAH_STT_URL",
+                DEFAULT_BASE_URL,
             )
         )
 
@@ -153,8 +156,14 @@ class STT(stt.STT):
             self._session = utils.http_context.http_session()
         return self._session
 
-    def _recognize_impl(self, _buffer, **_kwargs) -> stt.SpeechEvent:
-        raise NotImplementedError
+    async def _recognize_impl(
+        self,
+        buffer: utils.AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.SpeechEvent:
+        raise NotImplementedError("nabrah STT does not support single-shot recognition")
 
     def stream(
         self,
@@ -190,8 +199,8 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
     ):
         super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
-        self._stt = stt_instance
-        self._language = language
+        self._stt: STT = stt_instance
+        self._language = LanguageCode(language)
         self._session = http_session
 
         self._is_speaking = False
@@ -308,9 +317,7 @@ class SpeechStream(stt.SpeechStream):
                 if isinstance(data, rtc.AudioFrame):
                     audio_bytes = data.data.tobytes()
                     if audio_bytes:
-                        self._audio_position += (
-                            data.samples_per_channel / data.sample_rate
-                        )
+                        self._audio_position += data.samples_per_channel / data.sample_rate
                         await ws.send_bytes(audio_bytes)
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
@@ -362,45 +369,53 @@ class SpeechStream(stt.SpeechStream):
 
     def _flush_eos(self) -> None:
         text = self._current_text()
-        end_time = self._segment_end_time or (
-            self._audio_clock() + self.start_time_offset
-        )
+        end_time = self._segment_end_time or (self._audio_clock() + self.start_time_offset)
         start_time = min(self._segment_start_time, end_time)
 
         if text:
-            self._emit(stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=self._request_id,
-                alternatives=[stt.SpeechData(
-                    language=self._language,
-                    text=text,
-                    start_time=start_time,
-                    end_time=end_time,
-                    words=list(self._turn_word_list()) or None,
-                )],
-            ))
+            self._emit(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            language=self._language,
+                            text=text,
+                            start_time=start_time,
+                            end_time=end_time,
+                            words=list(self._turn_word_list()) or None,
+                        )
+                    ],
+                )
+            )
 
             audio_clock = self._audio_clock()
             usage_duration = audio_clock - self._reported_audio_position
             if usage_duration > 0:
-                self._emit(stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=usage_duration,
-                    ),
-                ))
+                self._emit(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.RECOGNITION_USAGE,
+                        recognition_usage=stt.RecognitionUsage(
+                            audio_duration=usage_duration,
+                        ),
+                    )
+                )
                 self._reported_audio_position = audio_clock
 
         if self._is_speaking:
-            self._emit(stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                alternatives=[stt.SpeechData(
-                    language=self._language,
-                    text="",
-                    start_time=start_time,
-                    end_time=end_time,
-                )],
-            ))
+            self._emit(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=[
+                        stt.SpeechData(
+                            language=self._language,
+                            text="",
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    ],
+                )
+            )
 
         self._utt_flushed_clean = _normalize_whitespace(
             self._utt_flushed_clean + " " + self._utt_clean,
@@ -422,16 +437,20 @@ class SpeechStream(stt.SpeechStream):
         if not text:
             return
 
-        self._emit(stt.SpeechEvent(
-            type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            request_id=self._request_id,
-            alternatives=[stt.SpeechData(
-                language=self._language,
-                text=text,
-                start_time=self._segment_start_time,
-                end_time=self._segment_end_time,
-            )],
-        ))
+        self._emit(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                request_id=self._request_id,
+                alternatives=[
+                    stt.SpeechData(
+                        language=self._language,
+                        text=text,
+                        start_time=self._segment_start_time,
+                        end_time=self._segment_end_time,
+                    )
+                ],
+            )
+        )
 
     def _process_message(self, data: dict) -> None:
         msg_type = data.get("type")
@@ -454,8 +473,7 @@ class SpeechStream(stt.SpeechStream):
         previous_audio_position = self._last_message_position
         reported = data.get("audio_processed")
         if reported is not None and (
-            self._latest_audio_processed is None
-            or reported > self._latest_audio_processed
+            self._latest_audio_processed is None or reported > self._latest_audio_processed
         ):
             self._latest_audio_processed = reported
         self._last_message_position = self._audio_clock()
@@ -493,14 +511,11 @@ class SpeechStream(stt.SpeechStream):
                 if _word_text(w)
             )
 
-        new_text = (
-            text[len(self._utt_raw) :] if text.startswith(self._utt_raw) else text
-        )
+        new_text = text[len(self._utt_raw) :] if text.startswith(self._utt_raw) else text
         _, is_eot = _strip_and_detect_eot(new_text)
         self._utt_clean = (
             clean_now[len(self._utt_flushed_clean) :]
-            if self._utt_flushed_clean
-            and clean_now.startswith(self._utt_flushed_clean)
+            if self._utt_flushed_clean and clean_now.startswith(self._utt_flushed_clean)
             else clean_now
         )
         self._utt_raw = text
@@ -518,26 +533,26 @@ class SpeechStream(stt.SpeechStream):
 
             turn_words = self._turn_word_list()
 
+            word_start = turn_words[0].start_time if turn_words else NOT_GIVEN
+            word_end = turn_words[-1].end_time if turn_words else NOT_GIVEN
+
             if not self._is_speaking:
                 self._is_speaking = True
                 self._segment_start_time = (
-                    turn_words[0].start_time
-                    if turn_words
-                    else min(previous_audio_position, self._audio_clock())
-                    + self.start_time_offset
+                    word_start
+                    if is_given(word_start)
+                    else min(previous_audio_position, self._audio_clock()) + self.start_time_offset
                 )
-                self._emit(stt.SpeechEvent(
-                    type=stt.SpeechEventType.START_OF_SPEECH,
-                    speech_start_time=(
-                        self.start_time
-                        - self.start_time_offset
-                        + self._segment_start_time
-                    ),
-                ))
+                self._emit(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
+                        speech_start_time=(
+                            self.start_time - self.start_time_offset + self._segment_start_time
+                        ),
+                    )
+                )
             self._segment_end_time = (
-                turn_words[-1].end_time
-                if turn_words
-                else self._audio_clock() + self.start_time_offset
+                word_end if is_given(word_end) else self._audio_clock() + self.start_time_offset
             )
 
         if not self._request_id:
@@ -545,10 +560,12 @@ class SpeechStream(stt.SpeechStream):
 
         current = self._current_text()
         if current:
-            self._emit(stt.SpeechEvent(
-                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                alternatives=[stt.SpeechData(language=self._language, text=current)],
-            ))
+            self._emit(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language=self._language, text=current)],
+                )
+            )
 
         if is_eot:
             if self._stt._end_of_turn_confirm_delay_seconds is None:

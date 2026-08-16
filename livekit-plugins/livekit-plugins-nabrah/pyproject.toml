@@ -5,13 +5,43 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-nabrah"
 dynamic = ["version"]
-dependencies = [
-    "livekit-agents>=1.5.0",
-    "aiohttp"
+description = "LiveKit Agents plugin for Nabrah Arabic speech-to-text"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+keywords = [
+    "webrtc",
+    "realtime",
+    "audio",
+    "livekit",
+    "livekit-agents",
+    "nabrah",
+    "arabic",
+    "stt",
+    "speech-to-text",
+    "streaming",
+    "websocket",
 ]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["livekit-agents>=1.6.10", "aiohttp"]
+
+[project.urls]
+Homepage = "https://nabrah.ai"
 
 [tool.hatch.version]
 path = "livekit/plugins/nabrah/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]

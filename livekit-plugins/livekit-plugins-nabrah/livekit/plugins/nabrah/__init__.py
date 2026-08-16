@@ -1,8 +1,8 @@
-from .stt import STT, NabrahRecognitionModel, SpeechStream
-
 from livekit.agents import Plugin
-from .version import __version__
+
 from .log import logger
+from .stt import STT, NabrahRecognitionModel, SpeechStream
+from .version import __version__
 
 
 class NabrahPlugin(Plugin):
