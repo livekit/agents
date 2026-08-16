@@ -189,6 +189,7 @@ class SpeechStream(stt.SpeechStream):
     _turn_words: tuple[TimedString, ...] = ()
     _utt_words: tuple[TimedString, ...] = ()
     _utt_flushed_words: int = 0
+    _utt_raw_seen: int = 0
 
     def __init__(
         self,
@@ -213,6 +214,7 @@ class SpeechStream(stt.SpeechStream):
         self._turn_words = ()
         self._utt_words = ()
         self._utt_flushed_words = 0
+        self._utt_raw_seen = 0
 
         self._segment_start_time: float = 0.0
         self._segment_end_time: float = 0.0
@@ -420,7 +422,10 @@ class SpeechStream(stt.SpeechStream):
         self._utt_flushed_clean = _normalize_whitespace(
             self._utt_flushed_clean + " " + self._utt_clean,
         )
-        self._utt_flushed_words += len(self._utt_words)
+        # index into the backend's raw `words` list, so count raw entries consumed,
+        # not the filtered survivors, or blank entries shift the cursor backwards
+        # and already-emitted words get replayed.
+        self._utt_flushed_words = self._utt_raw_seen
 
         self._turn_text = ""
         self._utt_clean = ""
@@ -501,6 +506,7 @@ class SpeechStream(stt.SpeechStream):
             self._turn_words = self._turn_words + self._utt_words
             self._utt_words = ()
             self._utt_flushed_words = 0
+            self._utt_raw_seen = 0
         self._utt_closed = False
 
         raw_words = data.get("words") or []
@@ -510,6 +516,7 @@ class SpeechStream(stt.SpeechStream):
                 for w in raw_words[self._utt_flushed_words :]
                 if _word_text(w)
             )
+            self._utt_raw_seen = len(raw_words)
 
         new_text = text[len(self._utt_raw) :] if text.startswith(self._utt_raw) else text
         _, is_eot = _strip_and_detect_eot(new_text)
