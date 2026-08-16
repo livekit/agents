@@ -2438,6 +2438,87 @@ async def _prepare_no_interruption_deferred_restart(
     return generation, initial_epoch
 
 
+async def test_no_interruption_deferred_video_replays_inside_owned_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        monkeypatch.setattr(
+            "livekit.plugins.google.realtime.realtime_api.images.encode",
+            lambda frame, options: b"deferred-video",
+        )
+
+        session.start_user_activity()
+        session.push_video(rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGB24, bytes(range(12))))
+        generation_fut = session.generate_reply()
+
+        assert sent == []
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 3
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].video is not None
+        assert realtime_inputs[1].video.data == b"deferred-video"
+        assert realtime_inputs[2].activity_end is not None
+        assert not any(isinstance(event, types.LiveClientContent) for event in sent)
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+
+
+async def test_no_interruption_deferred_media_preserves_fifo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, _ = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        monkeypatch.setattr(
+            "livekit.plugins.google.realtime.realtime_api.images.encode",
+            lambda frame, options: b"ordered-video",
+        )
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        session.push_video(rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGB24, bytes(range(12))))
+        session.push_audio(_input_frame(50, fill=3))
+        generation_fut = session.generate_reply()
+
+        assert sent == []
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 5
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([2]) * 1600
+        assert realtime_inputs[2].video is not None
+        assert realtime_inputs[2].video.data == b"ordered-video"
+        assert realtime_inputs[3].audio is not None
+        assert realtime_inputs[3].audio.data == bytes([3]) * 1600
+        assert realtime_inputs[4].activity_end is not None
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+
+
 async def test_no_interruption_preserves_pre_activity_audio_in_deferred_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

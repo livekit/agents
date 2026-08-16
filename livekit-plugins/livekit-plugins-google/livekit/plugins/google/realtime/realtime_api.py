@@ -153,7 +153,7 @@ class _ToolResponseOutboxEntry:
 
 @dataclass
 class _DeferredManualInput:
-    audio: deque[rtc.AudioFrame] = field(default_factory=deque)
+    realtime_inputs: deque[types.LiveClientRealtimeInput] = field(default_factory=deque)
     has_realtime_input: bool = False
     sealed: bool = False
     generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -657,9 +657,13 @@ class RealtimeSession(llm.RealtimeSession):
         self._quarantined_manual_audio_duration = 0.0
         self._manual_audio_quarantine_truncation_warned = False
 
-    def _move_quarantined_manual_audio(self, destination: deque[rtc.AudioFrame]) -> None:
+    def _move_quarantined_manual_audio(
+        self, destination: deque[types.LiveClientRealtimeInput]
+    ) -> None:
         while self._quarantined_manual_audio:
-            destination.append(self._quarantined_manual_audio.popleft())
+            destination.append(
+                self._audio_frame_to_realtime_input(self._quarantined_manual_audio.popleft())
+            )
         self._quarantined_manual_audio_duration = 0.0
         self._manual_audio_quarantine_truncation_warned = False
 
@@ -780,7 +784,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._clear_local_audio_input()
         self._activity_has_realtime_input = False
         for deferred in deferred_inputs:
-            deferred.audio.clear()
+            deferred.realtime_inputs.clear()
             fut = deferred.generation_fut
             if fut is None or fut.done():
                 continue
@@ -797,7 +801,7 @@ class RealtimeSession(llm.RealtimeSession):
         for deferred in self._deferred_manual_inputs:
             fut = deferred.generation_fut
             if fut is not None and fut.cancelled():
-                deferred.audio.clear()
+                deferred.realtime_inputs.clear()
                 continue
             retained.append(deferred)
         self._deferred_manual_inputs = retained
@@ -818,8 +822,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         if not deferred.sealed:
             self._flush_audio_input()
-            self._move_quarantined_manual_audio(deferred.audio)
-            deferred.has_realtime_input = bool(deferred.audio)
+            self._move_quarantined_manual_audio(deferred.realtime_inputs)
+            deferred.has_realtime_input = bool(deferred.realtime_inputs)
             deferred.sealed = True
 
         if deferred.has_realtime_input:
@@ -849,7 +853,7 @@ class RealtimeSession(llm.RealtimeSession):
             fut = deferred.generation_fut
             if fut is None or not fut.done():
                 break
-            deferred.audio.clear()
+            deferred.realtime_inputs.clear()
         else:
             self._deferred_manual_input_pipeline_active = False
             return
@@ -862,10 +866,10 @@ class RealtimeSession(llm.RealtimeSession):
             start_accepted = self._send_input_event(
                 types.LiveClientRealtimeInput(activity_start=types.ActivityStart())
             )
-            if deferred.audio:
+            if deferred.realtime_inputs:
                 self._activity_has_realtime_input = True
-            while deferred.audio:
-                self._send_audio_frame(deferred.audio.popleft())
+            while deferred.realtime_inputs:
+                self._send_input_event(deferred.realtime_inputs.popleft())
             self._replay_quarantined_manual_audio()
             if not start_accepted:
                 self._input_state = _InputState.ABORTED
@@ -898,8 +902,8 @@ class RealtimeSession(llm.RealtimeSession):
         start_accepted = self._send_input_event(
             types.LiveClientRealtimeInput(activity_start=types.ActivityStart())
         )
-        while deferred.audio:
-            self._send_audio_frame(deferred.audio.popleft())
+        while deferred.realtime_inputs:
+            self._send_input_event(deferred.realtime_inputs.popleft())
 
         end_accepted = self._send_input_event(
             types.LiveClientRealtimeInput(activity_end=types.ActivityEnd())
@@ -1306,7 +1310,7 @@ class RealtimeSession(llm.RealtimeSession):
         if self._manual_activity_detection:
             if self._deferred_manual_inputs and not self._deferred_manual_inputs[-1].sealed:
                 deferred = self._deferred_manual_inputs[-1]
-                deferred.audio.append(frame)
+                deferred.realtime_inputs.append(self._audio_frame_to_realtime_input(frame))
                 deferred.has_realtime_input = True
                 return
             if self._manual_audio_quarantine_active:
@@ -1314,13 +1318,18 @@ class RealtimeSession(llm.RealtimeSession):
                 return
         self._send_audio_frame(frame)
 
-    def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
-        event = types.LiveClientRealtimeInput(
+    def _audio_frame_to_realtime_input(
+        self, frame: rtc.AudioFrame
+    ) -> types.LiveClientRealtimeInput:
+        return types.LiveClientRealtimeInput(
             audio=types.Blob(
                 data=frame.data.tobytes(),
                 mime_type=f"audio/pcm;rate={INPUT_AUDIO_SAMPLE_RATE}",
             )
         )
+
+    def _send_audio_frame(self, frame: rtc.AudioFrame) -> None:
+        event = self._audio_frame_to_realtime_input(frame)
         if self._manual_activity_detection:
             self._send_input_event(event)
         else:
@@ -1368,6 +1377,11 @@ class RealtimeSession(llm.RealtimeSession):
             video=types.Blob(data=encoded_data, mime_type="image/jpeg")
         )
         if self._manual_activity_detection:
+            if self._deferred_manual_inputs and not self._deferred_manual_inputs[-1].sealed:
+                deferred = self._deferred_manual_inputs[-1]
+                deferred.realtime_inputs.append(realtime_input)
+                deferred.has_realtime_input = True
+                return
             self._send_input_event(realtime_input)
         else:
             self._send_client_event(realtime_input)
@@ -1588,8 +1602,8 @@ class RealtimeSession(llm.RealtimeSession):
             deferred = self._deferred_manual_inputs[-1]
             # ActivityStart turns bounded post-discard residue into input owned by this turn.
             # Later frames bypass the residue cap and accumulate on the same transaction.
-            self._move_quarantined_manual_audio(deferred.audio)
-            deferred.has_realtime_input = bool(deferred.audio)
+            self._move_quarantined_manual_audio(deferred.realtime_inputs)
+            deferred.has_realtime_input = bool(deferred.realtime_inputs)
             self._deferred_manual_input_pipeline_active = True
             return
         self._force_pending_discard_restart()
