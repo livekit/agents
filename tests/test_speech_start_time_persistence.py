@@ -286,3 +286,30 @@ class TestUserTurnStartPersistence:
         )
 
         assert seen == [pytest.approx(0.48), pytest.approx(0.51)]
+
+    @pytest.mark.asyncio
+    async def test_stt_speaking_zero_vad_inference_keeps_duration_unknown(self):
+        """STT can mark speaking before VAD has a voiced duration.
+
+        ``turn_detection="stt"`` sets ``_speaking`` on START_OF_SPEECH while
+        Silero still emits ``speech_duration=0`` until its own onset. Writing
+        that zero into ``_vad_speech_duration`` turns "unknown" into 0.0, so
+        ``interruption.min_duration`` blocks the STT-failsafe barge-in.
+        """
+        audio_recognition = self._create_audio_recognition()
+        audio_recognition._turn_detection_mode = "stt"
+        audio_recognition._speaking = True
+        assert audio_recognition._vad_speech_duration is None
+        assert audio_recognition.current_speech_duration is None
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.0)
+        )
+
+        assert audio_recognition._vad_speech_duration is None
+        assert audio_recognition.current_speech_duration is None
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.INFERENCE_DONE, speech_duration=0.42)
+        )
+        assert audio_recognition.current_speech_duration == pytest.approx(0.42)

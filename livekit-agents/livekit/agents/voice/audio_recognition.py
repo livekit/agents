@@ -1449,10 +1449,12 @@ class AudioRecognition:
             # _interrupt_by_audio_activity reads current_speech_duration, which
             # must match ev.speech_duration on the same frame or barge-in is
             # delayed by one VAD window (~32ms).
-            # Silero resets pub_speech_duration to 0 after END_OF_SPEECH; do not
-            # clobber the segment's final voiced duration with that zero or a late
-            # STT final will look "too short" for interruption.min_duration.
-            if self._speaking or ev.speech_duration > 0.0:
+            # Only positive VAD durations. Silero zeros pub_speech_duration after
+            # EOS; writing that 0 makes a late STT final look "too short".
+            # `_speaking` is not a substitute: turn_detection="stt" sets it from
+            # STT START_OF_SPEECH while Silero still reports 0, which would
+            # store 0.0 instead of None and disable the VAD-miss failsafe.
+            if ev.speech_duration > 0.0:
                 self._vad_speech_duration = ev.speech_duration
             self._hooks.on_vad_inference_done(ev)
 
