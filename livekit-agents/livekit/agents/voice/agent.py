@@ -291,10 +291,6 @@ class Agent:
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
-        if is_given(expressive):
-            # resolved per turn (agent value over session), no live plumbing needed
-            self._expressive = expressive
-
         if self._activity is None:
             # not running: replace stored config, applied on the next start
             if is_given(stt):
@@ -305,9 +301,15 @@ class Agent:
                 self._llm = llm
             if is_given(tts):
                 self._tts = tts
+            if is_given(expressive):
+                self._expressive = expressive
             return
 
         self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+        if is_given(expressive):
+            # after _update_models so a rejected model swap leaves expressive untouched;
+            # resolved per turn (agent value over session), no live plumbing needed
+            self._expressive = expressive
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
