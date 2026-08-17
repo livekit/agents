@@ -411,6 +411,42 @@ async def test_update_options_vad_check_is_atomic() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_detector_rejection_preserves_policy_and_listeners() -> None:
+    detector = inference.TurnDetector(version="v1-mini")
+    agent = Agent(
+        instructions="test",
+        stt=FakeSTT(),
+        vad=_LowSilenceVAD(),
+        llm=FakeLLM(),
+        tts=FakeTTS(),
+    )
+    session = AgentSession(turn_handling={"turn_detection": "vad"})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        original_policy = activity._turn_policy
+        original_timeout_policy = recognition._finalize_empty_transcript_on_timeout
+
+        with pytest.raises(ValueError, match="min_silence_duration"):
+            session.update_options(turn_detection=detector)
+
+        assert activity._turn_policy is original_policy
+        assert activity._turn_detection == "vad"
+        assert recognition._turn_detection_mode == "vad"
+        assert recognition._turn_detector is None
+        assert recognition._finalize_empty_transcript_on_timeout is original_timeout_policy
+        assert activity._turn_detection_metrics_source is None
+        assert activity._on_metrics_collected not in detector._events.get(
+            "metrics_collected", set()
+        )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_text_mode_streaming_detector_falls_back_to_stt_without_vad() -> None:
     from unittest.mock import MagicMock
 

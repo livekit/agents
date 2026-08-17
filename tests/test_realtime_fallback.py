@@ -6,8 +6,9 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.llm import ChatContext, RealtimeModelFallbackAdapter
+from livekit.agents.llm.realtime import _UserMessageSyncResult, _UserMessageSyncStatus
 
-from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
 
 pytestmark = pytest.mark.unit
 
@@ -58,6 +59,31 @@ class _NamedRealtimeModel(FakeRealtimeModel):
     @property
     def provider(self) -> str:
         return self._provider_name
+
+
+class _SyncRealtimeSession(FakeRealtimeSession):
+    def __init__(self, model: FakeRealtimeModel, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__(model)
+        self._sync_status = sync_status
+
+    async def _sync_user_message(
+        self, chat_ctx: ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        del chat_ctx, message_id
+        error = RuntimeError("child synchronization uncertain")
+        return _UserMessageSyncResult(self._sync_status, error)
+
+
+class _SyncRealtimeModel(FakeRealtimeModel):
+    def __init__(self, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__()
+        self._sync_status = sync_status
+
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        session = _SyncRealtimeSession(self, sync_status=self._sync_status)
+        session.turn_detection_disabled = turn_detection_disabled
+        self.created_sessions.append(session)
+        return session
 
 
 async def test_reports_active_model_and_provider() -> None:
@@ -202,6 +228,35 @@ async def test_switch_session_moves_to_next_model() -> None:
     assert old.closed is True
     assert session._active_index == 1
     assert session._active is backup.active_session
+
+
+@pytest.mark.parametrize(
+    "sync_status",
+    [_UserMessageSyncStatus.REJECTED, _UserMessageSyncStatus.UNKNOWN],
+)
+async def test_sync_user_message_waits_for_swap_and_preserves_child_result(
+    sync_status: _UserMessageSyncStatus,
+) -> None:
+    primary = FakeRealtimeModel()
+    backup = _SyncRealtimeModel(sync_status=sync_status)
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    old = primary.active_session
+    release_old = asyncio.Event()
+    old.block_aclose = release_old
+
+    old.emit_error(recoverable=False)
+    await old.aclose_entered.wait()
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="synchronize exactly once")
+    sync_task = asyncio.create_task(session._sync_user_message(chat_ctx, message.id))
+
+    release_old.set()
+    await session._swap_task
+    result = await sync_task
+
+    assert result.status is sync_status
+    assert isinstance(result.error, RuntimeError)
 
 
 async def test_switch_session_wraps_around() -> None:

@@ -111,6 +111,18 @@ class _BlockingToolSession(_RecordingToolSession):
         await super().send_tool_response(function_responses=function_responses)
 
 
+class _BlockingInputSession(_RecordingInputSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.input_send_started = asyncio.Event()
+        self.release_input_send = asyncio.Event()
+
+    async def send_realtime_input(self, **kwargs: object) -> None:
+        self.input_send_started.set()
+        await self.release_input_send.wait()
+        await super().send_realtime_input(**kwargs)
+
+
 async def _drain_queued_events(session: RealtimeSession, active: _RecordingInputSession) -> None:
     channel = session._msg_ch
     channel.close()
@@ -3196,6 +3208,81 @@ async def test_manual_audio_quarantine_truncation_is_explicit(
         assert last_audio.data == bytes([22]) * 1600
 
 
+async def test_manual_media_quarantine_bounds_audio_and_video_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        session._manual_audio_quarantine_active = True
+        encoded = iter((b"video-1", b"video-2", b"video-3"))
+        monkeypatch.setattr(
+            "livekit.plugins.google.realtime.realtime_api.images.encode",
+            lambda frame, options: next(encoded),
+        )
+
+        session.push_audio(_input_frame(500, fill=1))
+        for _ in range(3):
+            session.push_video(rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGB24, bytes(range(12))))
+        session.push_audio(_input_frame(600, fill=2))
+
+        retained = list(session._quarantined_manual_inputs)
+        retained_video = [
+            item.realtime_input.video for item in retained if item.realtime_input.video
+        ]
+        retained_audio = [item for item in retained if item.realtime_input.audio]
+        assert session._quarantined_manual_audio_duration <= 1.0
+        assert 0 < len(retained_audio) <= 20
+        assert len(retained_video) == 1
+        assert retained_video[0].data == b"video-3"
+        video_index = next(i for i, item in enumerate(retained) if item.realtime_input.video)
+        assert any(item.realtime_input.audio for item in retained[:video_index])
+        assert any(item.realtime_input.audio for item in retained[video_index + 1 :])
+
+
+@pytest.mark.parametrize("old_send_succeeds", [False, True])
+async def test_resumable_restart_preserves_exact_dequeued_input(
+    monkeypatch: pytest.MonkeyPatch,
+    old_send_succeeds: bool,
+) -> None:
+    async with _make_session(monkeypatch, session_resumption_handle="resume-handle") as session:
+        active = _BlockingInputSession()
+        session._active_session = cast(Any, active)
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        event = types.LiveClientRealtimeInput(text="owned dequeued input")
+        assert session._send_input_event(event)
+        old_epoch = session._session_epoch
+        send_task = asyncio.create_task(
+            session._send_task(cast(Any, active), old_epoch, session._msg_ch)
+        )
+        await asyncio.wait_for(active.input_send_started.wait(), timeout=1.0)
+
+        session._mark_restart_needed(resume_session=True)
+        if old_send_succeeds:
+            active.release_input_send.set()
+            await asyncio.wait_for(send_task, timeout=1.0)
+        else:
+            send_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await send_task
+
+        replacement = _RecordingInputSession()
+        session._active_session = cast(Any, replacement)
+        session._session_should_close.clear()
+        replacement_channel = session._msg_ch
+        replacement_channel.close()
+        await session._send_task(
+            cast(Any, replacement), session._session_epoch, replacement_channel
+        )
+
+        assert active.realtime_inputs == (
+            [{"text": "owned dequeued input"}] if old_send_succeeds else []
+        )
+        assert replacement.realtime_inputs == (
+            [] if old_send_succeeds else [{"text": "owned dequeued input"}]
+        )
+        session._active_session = None
+
+
 async def test_manual_clear_invalidates_dequeued_input_before_second_send_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3821,6 +3908,49 @@ async def test_go_away_restarts_idle_session_with_current_resumption_handle(
         assert session._session_should_close.is_set()
         assert session.session_resumption_handle == "idle-handle"
         assert session._go_away_deadline_handle is None
+        session._active_session = None
+
+
+@pytest.mark.parametrize("resumption_handle", [None, "resume-handle"])
+async def test_go_away_activates_only_one_consecutive_deferred_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    resumption_handle: str | None,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+        session_resumption_handle=resumption_handle,
+    ) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        session._deferred_manual_input_pipeline_active = True
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=1))
+        first_generation = session.generate_reply()
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=2))
+        second_generation = session.generate_reply()
+
+        session._handle_go_away(types.LiveServerGoAway(time_left="10s"))
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 3
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([1]) * 1600
+        assert realtime_inputs[2].activity_end is not None
+        assert len(session._deferred_manual_inputs) == 1
+        assert not first_generation.done()
+        assert not second_generation.done()
+        first_generation.cancel()
+        second_generation.cancel()
         session._active_session = None
 
 

@@ -95,6 +95,19 @@ class _EditingAgent(Agent):
         new_message.content = [f"edited: {new_message.raw_text_content}"]
 
 
+class _RejectingAgent(Agent):
+    def __init__(self, *, stop_response: bool) -> None:
+        super().__init__(instructions="test")
+        self._stop_response = stop_response
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        if self._stop_response:
+            raise StopResponse()
+        raise RuntimeError("reject finalized turn")
+
+
 class _BlockingEmptyEditingAgent(Agent):
     def __init__(self, *, replacement: str | None) -> None:
         super().__init__(instructions="test")
@@ -768,6 +781,25 @@ async def test_stop_response_discards_turn_and_next_turn_is_ready() -> None:
     assert len(second) == 1
     assert second[0] is not None
     assert second[0].raw_text_content == "edited: continue"
+
+
+@pytest.mark.parametrize("stop_response", [True, False])
+async def test_rejected_audio_turn_is_not_submitted_before_hook_finishes(
+    stop_response: bool,
+) -> None:
+    activity, _ = _activity(agent=_RejectingAgent(stop_response=stop_response), mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    frame = _frame(4)
+    activity._start_realtime_user_activity()
+    activity.push_audio(frame)
+
+    captured = await _complete_turn(activity, _eot("reject this turn"))
+
+    assert captured == []
+    assert rt_session.commit_audio_calls == 0
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.clear_audio_calls == 1
+    assert rt_session.provider_audio == []
 
 
 async def test_empty_text_turn_does_not_generate() -> None:
