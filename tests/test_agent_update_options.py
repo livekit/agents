@@ -447,6 +447,45 @@ async def test_runtime_detector_rejection_preserves_policy_and_listeners() -> No
 
 
 @pytest.mark.asyncio
+async def test_rejected_detector_update_preserves_combined_endpointing_options() -> None:
+    detector = inference.TurnDetector(version="v1-mini")
+    agent = Agent(
+        instructions="test",
+        stt=FakeSTT(),
+        vad=_LowSilenceVAD(),
+        llm=FakeLLM(),
+        tts=FakeTTS(),
+    )
+    session = AgentSession(
+        turn_handling={
+            "turn_detection": "vad",
+            "endpointing": {"min_delay": 0.4, "max_delay": 1.2},
+        }
+    )
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        original_endpointing = session.options.endpointing.copy()
+        original_overrides = session.options.endpointing_overrides.copy()
+        original_recognition_endpointing = recognition._endpointing
+
+        with pytest.raises(ValueError, match="min_silence_duration"):
+            session.update_options(
+                endpointing_opts={"min_delay": 2.0, "max_delay": 3.0},
+                turn_detection=detector,
+            )
+
+        assert session.options.endpointing == original_endpointing
+        assert session.options.endpointing_overrides == original_overrides
+        assert recognition._endpointing is original_recognition_endpointing
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_text_mode_streaming_detector_falls_back_to_stt_without_vad() -> None:
     from unittest.mock import MagicMock
 

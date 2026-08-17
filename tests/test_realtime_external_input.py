@@ -724,6 +724,41 @@ async def test_text_mode_skip_reply_keeps_local_transcript_without_generation() 
     assert rt_session.chat_ctx.items == []
 
 
+async def test_text_mode_skip_reply_stays_local_after_fallback_restart() -> None:
+    primary = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    adapter = llm.RealtimeModelFallbackAdapter([primary])
+    session = AgentSession(
+        llm=adapter,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = adapter.session(turn_detection_disabled=True)
+    activity._rt_session = rt_session
+    activity._scheduling_paused = False
+    session._activity = activity
+    session._agent = activity.agent
+    rt_session._agent_session = session
+
+    await _complete_turn(activity, _eot("keep local only", skip_reply=True))
+    await adapter.restart_session()
+
+    assert [message.raw_text_content for message in activity.agent.chat_ctx.messages()] == [
+        "keep local only"
+    ]
+    assert rt_session.chat_ctx.messages() == []
+
+
 async def test_text_mode_interrupt_preserves_provider_interruption_signal() -> None:
     activity, rt_session = _activity()
 
@@ -1311,6 +1346,46 @@ async def test_runtime_vad_mode_enables_internal_empty_transcript_fallback() -> 
 
         assert recognition._finalize_empty_transcript_on_timeout is True
         assert recognition._transcription_timeout_handle is not None
+    finally:
+        await session.aclose()
+
+
+async def test_transcription_timeout_clear_does_not_finalize_replaced_turn() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        transcription_timeout=60.0,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+    await session.start(Agent(instructions="test"))
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        recognition._user_turn_start = 1.0
+        recognition._turn_speech_duration = 0.5
+        recognition._turn_transcript_received = False
+        recognition._finalize_empty_transcript_on_timeout = True
+        run_eou_detection = MagicMock()
+        recognition._run_eou_detection = run_eou_detection  # type: ignore[method-assign]
+        session.on("user_transcription_timeout", lambda _: session.clear_user_turn())
+
+        recognition._on_transcription_timeout()
+
+        run_eou_detection.assert_not_called()
+        assert model.active_session.generate_reply_calls == 0
     finally:
         await session.aclose()
 
