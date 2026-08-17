@@ -49,6 +49,13 @@ SAMPLE_RATES = (8000, 16000, 24000, 44100, 48000)
 # long conversational gap rather than handing back one the server already dropped.
 _MAX_SESSION_DURATION = 50
 
+# How long a barge-in waits for the cancelled turn's terminal before giving up on
+# the socket. Answering `cancel` is a state flip on the server, so this only ever
+# covers a round trip; anything slower is a socket worth replacing. Deliberately
+# not derived from `conn_options.timeout` — that budget is for establishing a
+# connection, and spending it here stalls the next turn behind a dead one.
+_CANCEL_DRAIN_TIMEOUT = 0.5
+
 # Errors that a retry cannot fix: bad credentials, a bad request, or an account that
 # needs attention. Everything else (synthesis failures, a busy concurrency pool) is
 # worth another attempt.
@@ -466,11 +473,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if data.get("type") == "error":
                     # An admission failure creates no turn and emits no terminal, so
                     # there is nothing left to drain to. Returning here would hand the
-                    # socket back reusable — but a server that refuses a context can
-                    # answer each delta of it separately, and any error still queued
-                    # would then surface against the next, unrelated turn. Raising
-                    # closes the socket, which costs one reconnect on a path that has
-                    # already failed and keeps turns from contaminating each other.
+                    # socket back reusable — but from this side an admission refusal
+                    # is indistinguishable from a mid-turn error whose terminal is
+                    # still in flight, and that terminal would surface against the
+                    # next, unrelated turn. Raising closes the socket, which costs one
+                    # reconnect on a path that has already failed and keeps turns from
+                    # contaminating each other.
                     raise _api_error(data)
 
         cancelled: asyncio.CancelledError | None = None
@@ -499,11 +507,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise
                     if text_sent:
                         try:
-                            # The server answers cancel immediately. Bounding this keeps
-                            # shutdown deterministic if the connection is unhealthy.
+                            # Bounded: a socket that does not answer must not hold up
+                            # the barge-in that is waiting on this teardown.
                             await asyncio.wait_for(
-                                cancel_and_drain(ws),
-                                timeout=min(self._conn_options.timeout, 2.0),
+                                cancel_and_drain(ws), timeout=_CANCEL_DRAIN_TIMEOUT
                             )
                         except asyncio.CancelledError:
                             try:

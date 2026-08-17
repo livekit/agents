@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+import time
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -835,9 +836,8 @@ def test_update_options_without_changes_keeps_the_session():
 
 
 class _RefusingWSServer:
-    """Refuses admission on every ``speak``, as the server does per delta, and
-    holds the replies back until ``cancel`` so they are queued behind a
-    cancelling client's receive task."""
+    """Refuses admission for the turn's context, holding the reply back until
+    ``cancel`` so it is queued behind a cancelling client's receive task."""
 
     def __init__(self) -> None:
         self.speaks: list[dict[str, Any]] = []
@@ -866,11 +866,13 @@ class _RefusingWSServer:
                 if len(self.speaks) == 2:
                     self.two_speaks.set()
             elif message["type"] == "cancel":
-                for speak in self.speaks[:2]:
+                # One error per refused context, not per delta: the server records
+                # the context it turned away and drops its later deltas silently.
+                for context_id in dict.fromkeys(s["context_id"] for s in self.speaks):
                     await ws.send_json(
                         {
                             "type": "error",
-                            "context_id": speak["context_id"],
+                            "context_id": context_id,
                             "code": "insufficient_credits",
                             "message": "wallet depleted",
                         }
@@ -899,10 +901,10 @@ class _RefusingWSServer:
 async def test_refused_turn_does_not_contaminate_the_next_one():
     """A cancelled turn whose admission was refused must not poison the pool.
 
-    A refused context never becomes a turn, so the server can answer every one of
-    its deltas separately. Draining only the first reply would hand the socket
-    back with the rest still queued, and the next turn would read someone else's
-    failure as its own.
+    A refused context never becomes a turn, so no terminal arrives for the drain to
+    stop on. Handing the socket back on the refusal instead would leave whatever the
+    server still had to say queued on it, and the next turn would read someone
+    else's failure as its own.
     """
     from livekit.plugins.bland import TTS
 
@@ -958,6 +960,33 @@ async def test_failed_cancel_stays_a_cancellation():
 
     # The interrupted text must not be spoken again.
     assert [m["text"] for m in srv.of_type("speak")] == ["hello"]
+
+
+async def test_barge_in_does_not_wait_out_the_connect_budget():
+    """A socket that never answers `cancel` must not hold up the next turn.
+
+    Teardown drains the cancelled turn so the session can be reused, but a barge-in
+    is waiting on it: the user has already started talking and the agent's reply is
+    queued behind this. Bounding the drain by the connect timeout put a
+    conversational pause at the mercy of a socket that had stopped answering.
+    """
+    from livekit.plugins.bland import TTS
+    from livekit.plugins.bland.tts import _CANCEL_DRAIN_TIMEOUT
+
+    async with _WSServer(acknowledge_cancel=False) as srv:
+        tts = TTS(api_key="k", base_url=srv.base_url)
+        tts._session = srv.session
+        # A generous connect budget, which is what the bound used to be taken from.
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+        stream.push_text("hello")
+        await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
+
+        started = time.monotonic()
+        await stream.aclose()
+        elapsed = time.monotonic() - started
+        await tts.aclose()
+
+    assert elapsed < _CANCEL_DRAIN_TIMEOUT * 2, elapsed
 
 
 def test_streaming_can_be_disabled():
