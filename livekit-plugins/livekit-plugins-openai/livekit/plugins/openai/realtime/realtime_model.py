@@ -1861,14 +1861,17 @@ class RealtimeSession(
     def _handle_input_audio_buffer_speech_started(
         self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        if event.item_id:
+        if event.item_id and self._opts.input_audio_transcription is not None:
             self._input_speech_started_at[event.item_id] = time.time()
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
-        self, _: InputAudioBufferSpeechStoppedEvent
+        self, event: InputAudioBufferSpeechStoppedEvent
     ) -> None:
         user_transcription_enabled = self._opts.input_audio_transcription is not None
+        if not user_transcription_enabled and event.item_id:
+            self._input_speech_started_at.pop(event.item_id, None)
+
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
