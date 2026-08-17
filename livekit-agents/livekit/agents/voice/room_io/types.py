@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from livekit import rtc
 
@@ -37,6 +37,8 @@ class NoiseCancellationParams:
     track: rtc.Track
 
 
+ParticipantsMode: TypeAlias = Literal["linked", "mix", "pick"]
+
 NoiseCancellationSelector: TypeAlias = Callable[
     [NoiseCancellationParams],
     rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
@@ -68,6 +70,16 @@ class AudioInputOptions:
     ) = None
     auto_gain_control: bool = True
     """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
+    participants: ParticipantsMode = "linked"
+    """Which participants the agent listens to. Every speaker lands in the same chat context,
+    transcribed as if they were the linked participant. Only "linked" is affected by
+    `RoomOptions.participant_identity` and `RoomIO.set_participant`.
+
+    - ``"linked"``: only the linked participant (default).
+    - ``"mix"``: every accepted participant, summed together. Keeps overlapping speech.
+    - ``"pick"``: the participant the server reports as speaking, one at a time. Cleaner audio
+      for the STT, but whatever the others say meanwhile is dropped.
+    """
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
@@ -122,7 +134,9 @@ class RoomOptions:
     accept `DEFAULT_PARTICIPANT_KINDS`."""
     participant_identity: NotGivenOr[str] = NOT_GIVEN
     """The participant to link to. If not provided, link to the first participant.
-    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
+    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`.
+    When `AudioInputOptions.participants` is not "linked", this only picks the linked
+    participant: the agent still listens to every accepted one."""
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
