@@ -191,6 +191,18 @@ class RealtimeModel(llm.RealtimeModel):
                 "Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
             )
 
+        if is_given(external_voice):
+            if not external_voice:
+                raise ValueError(
+                    "external_voice must be a non-empty dict. "
+                    "Omit it to use the built-in `voice` instead."
+                )
+            if voice != DEFAULT_VOICE:
+                logger.warning(
+                    "both `voice` and `external_voice` were provided; "
+                    "`external_voice` takes precedence and `voice` will be ignored."
+                )
+
         self._opts = _UltravoxOptions(
             model_id=model,
             voice=voice,
