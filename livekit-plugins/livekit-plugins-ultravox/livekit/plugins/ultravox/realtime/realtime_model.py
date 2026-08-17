@@ -408,10 +408,10 @@ class RealtimeSession(
                 if getattr(item, "is_error", False):
                     tool_result.error_type = "implementation-error"
                     tool_result.error_message = (
-                        getattr(item, "error_message", None) or item.model_output
+                        getattr(item, "error_message", None) or item.output_for_model
                     )
                 else:
-                    tool_result.result = item.model_output
+                    tool_result.result = item.output_for_model
 
                 self._send_client_event(tool_result)
 

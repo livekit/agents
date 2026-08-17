@@ -69,9 +69,9 @@ def to_chat_ctx(
                 }
             )
         elif msg.type == "function_call_output":
-            result_content: list[Any] | str = msg.model_output
+            result_content: list[Any] | str = msg.output_for_model
             try:
-                parsed = json.loads(msg.model_output)
+                parsed = json.loads(msg.output_for_model)
                 if isinstance(parsed, list):
                     result_content = parsed
             except (json.JSONDecodeError, TypeError):

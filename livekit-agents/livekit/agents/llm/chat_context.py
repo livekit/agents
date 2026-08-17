@@ -386,8 +386,8 @@ class FunctionCallOutput(BaseModel):
     """
 
     @property
-    def model_output(self) -> str:
-        """Return the output with the assistant reply delivery state for the model."""
+    def output_for_model(self) -> str:
+        """Return the output with its reply delivery state for model inference."""
         if not self.reply_interrupted:
             return self.output
         return json.dumps({"output": self.output, "reply_interrupted": True}, ensure_ascii=False)
@@ -1043,7 +1043,9 @@ def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> C
             content=[
                 to_xml(
                     "function_call_output",
-                    item.model_output if not item.is_error else to_xml("error", item.model_output),
+                    item.output_for_model
+                    if not item.is_error
+                    else to_xml("error", item.output_for_model),
                     attrs={
                         "call_id": item.call_id,
                         "name": item.name,
