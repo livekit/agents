@@ -101,6 +101,7 @@ __all__ = [
     "ToolFlag",
     "DuplicateScope",
     "StopResponse",
+    "ToolFlag",
     "utils",
     "remote_chat_context",
     "FunctionToolCall",

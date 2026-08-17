@@ -1,6 +1,7 @@
 import hashlib
 from dataclasses import dataclass
 from types import FunctionType
+from typing import Any
 
 
 @dataclass
@@ -13,7 +14,7 @@ class RegisteredFunction:
     lineno: int
     hash: str
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         return {
             "key": self.key,
             "filename": self.filename,
@@ -21,7 +22,7 @@ class RegisteredFunction:
             "hash": self.hash,
         }
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict[str, Any]) -> None:
         key, filename, lineno, code_hash = (
             state["key"],
             state["filename"],
@@ -41,7 +42,7 @@ class RegisteredFunction:
 
         # mypy 1.10.0 seems to report a false positive here:
         # error: Incompatible types in assignment (expression has type "FunctionType", variable has type "MethodType")  [assignment]
-        self.fn = rfn.fn  # type: ignore
+        self.fn = rfn.fn
         self.key = key
         self.filename = filename
         self.lineno = lineno
@@ -105,7 +106,7 @@ def lookup_function(key: str) -> RegisteredFunction:
     return _REGISTRY[key]
 
 
-def unregister_function(key: str):
+def unregister_function(key: str) -> None:
     """Unregister a function by key.
 
     Args:
@@ -117,6 +118,6 @@ def unregister_function(key: str):
     del _REGISTRY[key]
 
 
-def clear_functions():
+def clear_functions() -> None:
     """Clear functions clears the registry."""
     _REGISTRY.clear()

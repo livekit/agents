@@ -306,6 +306,7 @@ class _JobProc:
             on_connect=_on_ctx_connect,
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
+            ipc_client=self._client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
@@ -338,7 +339,7 @@ class _JobProc:
         )
 
         async def _warn_not_connected_task() -> None:
-            if self._job_ctx.is_fake_job():
+            if self._job_ctx.is_fake_job() or self._job_ctx.text_message_context is not None:
                 return
 
             await asyncio.sleep(10)
@@ -364,7 +365,7 @@ class _JobProc:
                         _ShutdownInfo(user_initiated=False, reason="job crashed")
                     )
             elif not self._ctx_connect_called and not self._ctx_shutdown_called:
-                if self._job_ctx.is_fake_job():
+                if self._job_ctx.is_fake_job() or self._job_ctx.text_message_context is not None:
                     return
 
                 logger.warning(

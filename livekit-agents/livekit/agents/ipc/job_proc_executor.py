@@ -26,6 +26,7 @@ class ProcJobExecutor(SupervisedProc):
         initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
+        text_response_fnc: Callable[[proto.TextResponse], None],
         simulation_end_fnc: Callable[[Any], Any] | None,
         inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
@@ -58,6 +59,7 @@ class ProcJobExecutor(SupervisedProc):
         self._running_job: RunningJobInfo | None = None
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
+        self._text_response_fnc = text_response_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
@@ -125,6 +127,8 @@ class ProcJobExecutor(SupervisedProc):
                     task = asyncio.create_task(self._do_inference_task(msg))
                     self._inference_tasks.add(task)
                     task.add_done_callback(self._inference_tasks.discard)
+                elif isinstance(msg, proto.TextResponse):
+                    self._text_response_fnc(msg)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 

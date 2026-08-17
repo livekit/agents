@@ -122,6 +122,8 @@ def _generate_fake_job() -> job.RunningJobInfo:
         accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
         worker_id="fake_id",
         fake_job=True,
+        text_endpoint="",
+        text_request=None,
     )
 
 
