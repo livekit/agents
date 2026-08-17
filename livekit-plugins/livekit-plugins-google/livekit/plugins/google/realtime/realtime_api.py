@@ -171,6 +171,14 @@ class _QuarantinedManualInput:
 
 
 @dataclass
+class _InputSendInFlight:
+    event: ClientEvents
+    sequence: int
+    epoch: int
+    migrated_epoch: int | None = None
+
+
+@dataclass
 class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None
@@ -544,6 +552,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._input_event_sequences: dict[int, int] = {}
         self._invalid_input_event_sequences: set[int] = set()
         self._input_send_in_flight_sequence: int | None = None
+        self._input_send_in_flight: _InputSendInFlight | None = None
+        self._delivered_input_event_ids: set[int] = set()
         self._provider_visible_input_sequence: int | None = None
         self._pending_text_input_item_id: str | None = None
         self._provider_turn_active = False
@@ -647,6 +657,15 @@ class RealtimeSession(llm.RealtimeSession):
         *,
         audio_duration: float = 0.0,
     ) -> None:
+        if realtime_input.video is not None:
+            # Gemini consumes at most one video frame per second. Keep only the latest
+            # unowned frame without disturbing the relative order of retained audio.
+            self._quarantined_manual_inputs = deque(
+                item
+                for item in self._quarantined_manual_inputs
+                if item.realtime_input.video is None
+            )
+
         self._quarantined_manual_inputs.append(
             _QuarantinedManualInput(
                 realtime_input=realtime_input,
@@ -655,12 +674,19 @@ class RealtimeSession(llm.RealtimeSession):
         )
         self._quarantined_manual_audio_duration += audio_duration
         truncated = False
+        quarantined_audio_count = sum(
+            item.audio_duration > 0.0 for item in self._quarantined_manual_inputs
+        )
         while (
             self._quarantined_manual_audio_duration > MANUAL_AUDIO_QUARANTINE_MAX_DURATION
-            and len(self._quarantined_manual_inputs) > 1
+            and quarantined_audio_count > 1
         ):
-            removed = self._quarantined_manual_inputs.popleft()
-            self._quarantined_manual_audio_duration -= removed.audio_duration
+            for index, item in enumerate(self._quarantined_manual_inputs):
+                if item.audio_duration > 0.0:
+                    del self._quarantined_manual_inputs[index]
+                    self._quarantined_manual_audio_duration -= item.audio_duration
+                    break
+            quarantined_audio_count -= 1
             truncated = True
 
         if truncated and not self._manual_audio_quarantine_truncation_warned:
@@ -1046,6 +1072,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._provider_turn_active = False
         self._provider_visible_input_sequence = None
         self._input_send_in_flight_sequence = None
+        self._input_send_in_flight = None
+        self._delivered_input_event_ids.clear()
         self._pending_text_input_item_id = None
         self._manual_audio_quarantine_active = False
         self._activity_has_realtime_input = False
@@ -1064,9 +1092,9 @@ class RealtimeSession(llm.RealtimeSession):
         on_error: bool = False,
         resume_session: bool = False,
         preserve_manual_audio: bool = False,
-    ) -> None:
+    ) -> bool:
         if self._closed or self._terminal_error is not None:
-            return
+            return False
 
         self._cancel_go_away_deadline()
         self._go_away_restart_epoch = None
@@ -1122,6 +1150,8 @@ class RealtimeSession(llm.RealtimeSession):
                 self._manual_audio_quarantine_active = False
             self._provider_visible_input_sequence = None
             self._input_send_in_flight_sequence = None
+            self._input_send_in_flight = None
+            self._delivered_input_event_ids.clear()
             self._provider_turn_active = False
             self._activity_has_realtime_input = False
             # A fresh epoch cannot continue channels belonging to the abandoned response.
@@ -1140,6 +1170,16 @@ class RealtimeSession(llm.RealtimeSession):
         old_msg_ch = self._msg_ch
         new_msg_ch = utils.aio.Chan[ClientEvents]()
         if resume_session:
+            input_in_flight = self._input_send_in_flight
+            if (
+                input_in_flight is not None
+                and input_in_flight.epoch == self._session_epoch - 1
+                and input_in_flight.migrated_epoch is None
+            ):
+                input_in_flight.migrated_epoch = self._session_epoch
+                self._input_event_sequences[id(input_in_flight.event)] = input_in_flight.sequence
+                new_msg_ch.send_nowait(input_in_flight.event)
+
             # The sender may already have removed one response from the old queue. Restore its
             # original position ahead of later queued input. If the old SDK send subsequently
             # succeeds, its delivery tombstone makes this placeholder a no-op.
@@ -1152,6 +1192,11 @@ class RealtimeSession(llm.RealtimeSession):
 
         while not old_msg_ch.empty():
             msg = old_msg_ch.recv_nowait()
+            if id(msg) in self._delivered_input_event_ids:
+                self._delivered_input_event_ids.discard(id(msg))
+                self._input_event_sequences.pop(id(msg), None)
+                continue
+
             if id(msg) in self._delivered_tool_response_event_ids:
                 self._delivered_tool_response_event_ids.discard(id(msg))
                 continue
@@ -1186,6 +1231,8 @@ class RealtimeSession(llm.RealtimeSession):
             self._provider_session_established = False
             self._invalid_input_event_sequences.clear()
             self._activate_next_deferred_manual_input()
+
+        return resume_session
 
     def update_options(
         self,
@@ -1864,6 +1911,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._provider_turn_active = False
         self._provider_visible_input_sequence = None
         self._input_send_in_flight_sequence = None
+        self._input_send_in_flight = None
+        self._delivered_input_event_ids.clear()
         self._pending_text_input_item_id = None
         self._manual_audio_quarantine_active = False
         self._activity_has_realtime_input = False
@@ -2120,6 +2169,11 @@ class RealtimeSession(llm.RealtimeSession):
                 except utils.aio.ChanClosed:
                     break
 
+                if id(msg) in self._delivered_input_event_ids:
+                    self._delivered_input_event_ids.discard(id(msg))
+                    self._input_event_sequences.pop(id(msg), None)
+                    continue
+
                 if id(msg) in self._delivered_tool_response_event_ids:
                     self._delivered_tool_response_event_ids.discard(id(msg))
                     continue
@@ -2152,8 +2206,13 @@ class RealtimeSession(llm.RealtimeSession):
                     tool_response_entry.queued_epoch = None
                     tool_response_entry.in_flight_epoch = session_epoch
 
+                input_send_in_flight: _InputSendInFlight | None = None
                 input_sequence = self._input_event_sequences.pop(id(msg), None)
                 if input_sequence is not None:
+                    input_send_in_flight = _InputSendInFlight(
+                        event=msg, sequence=input_sequence, epoch=session_epoch
+                    )
+                    self._input_send_in_flight = input_send_in_flight
                     self._input_send_in_flight_sequence = input_sequence
                 try:
                     if input_sequence in self._invalid_input_event_sequences:
@@ -2172,6 +2231,12 @@ class RealtimeSession(llm.RealtimeSession):
                             continue
 
                     await self._send_message(session, msg)
+                    if (
+                        input_send_in_flight is not None
+                        and self._input_send_in_flight is input_send_in_flight
+                        and input_send_in_flight.migrated_epoch is not None
+                    ):
+                        self._delivered_input_event_ids.add(id(msg))
 
                     if tool_response_entry is not None:
                         # Awaiting the SDK call only confirms the websocket send, but it is the
@@ -2212,6 +2277,9 @@ class RealtimeSession(llm.RealtimeSession):
                         self._queue_pending_tool_responses()
                     raise
                 finally:
+                    if self._input_send_in_flight is input_send_in_flight:
+                        self._input_send_in_flight = None
+
                     if self._input_send_in_flight_sequence == input_sequence:
                         self._input_send_in_flight_sequence = None
                     if input_sequence is not None:
@@ -2630,7 +2698,8 @@ class RealtimeSession(llm.RealtimeSession):
         if self._go_away_restart_epoch == session_epoch and self._input_state == _InputState.IDLE:
             # generation_created acknowledged the input and the provider has now completed every
             # output/tool continuation it owns. This is Gemini's safe resumption boundary.
-            self._mark_restart_needed(resume_session=True)
+            if not self._mark_restart_needed(resume_session=True):
+                return
 
         if self._deferred_manual_input_pipeline_active or self._deferred_manual_inputs:
             self._activate_next_deferred_manual_input()
@@ -2808,8 +2877,10 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         if not self._provider_turn_active and self._input_state == _InputState.IDLE:
-            self._mark_restart_needed(resume_session=True)
-            if self._deferred_manual_input_pipeline_active or self._deferred_manual_inputs:
+            resumed = self._mark_restart_needed(resume_session=True)
+            if resumed and (
+                self._deferred_manual_input_pipeline_active or self._deferred_manual_inputs
+            ):
                 self._activate_next_deferred_manual_input()
             return
 
