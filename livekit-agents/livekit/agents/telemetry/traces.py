@@ -685,8 +685,14 @@ async def _upload_session_report(
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
-        except Exception:
+        except Exception as e:
             audio_bytes = b""
+            logger.warning(
+                "failed to read audio recording for session report upload, "
+                "uploading without the audio part (path=%s)",
+                report.audio_recording_path,
+                exc_info=e,
+            )
 
     url = f"{observability_url}/observability/recordings/v0"
 
