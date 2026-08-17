@@ -79,13 +79,13 @@ async def test_connect_ws_generic_error_does_not_chain_cause():
     assert SECRET_API_KEY not in str(err)
 
 
-def test_aligned_transcript_enabled_for_supported_language() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="en", word_timestamps=True)
+def test_aligned_transcript_auto_enabled_for_supported_language() -> None:
+    tts = cartesia_tts.TTS(api_key="test-key", language="en")
     assert tts.capabilities.aligned_transcript is True
 
 
-def test_aligned_transcript_disabled_for_unsupported_language() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
+def test_aligned_transcript_auto_disabled_for_unsupported_language() -> None:
+    tts = cartesia_tts.TTS(api_key="test-key", language="ja")
     assert tts.capabilities.aligned_transcript is False
 
 
@@ -94,26 +94,23 @@ def test_aligned_transcript_disabled_when_word_timestamps_off() -> None:
     assert tts.capabilities.aligned_transcript is False
 
 
-def test_aligned_transcript_allowed_for_preview_model_any_language() -> None:
-    tts = cartesia_tts.TTS(
-        api_key="test-key",
-        model="sonic-preview",
-        language="ja",
-        word_timestamps=True,
-    )
+def test_aligned_transcript_auto_enabled_for_preview_model_any_language() -> None:
+    tts = cartesia_tts.TTS(api_key="test-key", model="sonic-preview", language="ja")
     assert tts.capabilities.aligned_transcript is True
 
 
-def test_unsupported_config_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_explicit_word_timestamps_true_skips_gate_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
         tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
 
-    assert tts.capabilities.aligned_transcript is False
-    assert any("does not support aligned transcript" in record.message for record in caplog.records)
+    assert tts.capabilities.aligned_transcript is True
+    assert any("word_timestamps was requested" in record.message for record in caplog.records)
 
 
 def test_update_options_narrows_capability_when_language_becomes_unsupported() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="en", word_timestamps=True)
+    tts = cartesia_tts.TTS(api_key="test-key", language="en")
     assert tts.capabilities.aligned_transcript is True
 
     tts.update_options(language="ja")
@@ -121,7 +118,7 @@ def test_update_options_narrows_capability_when_language_becomes_unsupported() -
 
 
 def test_update_options_restores_capability_when_language_becomes_supported() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
+    tts = cartesia_tts.TTS(api_key="test-key", language="ja")
     assert tts.capabilities.aligned_transcript is False
 
     tts.update_options(language="fr")
@@ -129,26 +126,30 @@ def test_update_options_restores_capability_when_language_becomes_supported() ->
 
 
 def test_update_options_to_preview_model_enables_capability() -> None:
-    tts = cartesia_tts.TTS(
-        api_key="test-key",
-        model="sonic-3",
-        language="ja",
-        word_timestamps=True,
-    )
+    tts = cartesia_tts.TTS(api_key="test-key", model="sonic-3", language="ja")
     assert tts.capabilities.aligned_transcript is False
 
     tts.update_options(model="sonic-preview")
     assert tts.capabilities.aligned_transcript is True
 
 
-def test_add_timestamps_omitted_when_unsupported() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
+def test_update_options_keeps_explicit_word_timestamps_true() -> None:
+    tts = cartesia_tts.TTS(api_key="test-key", language="en", word_timestamps=True)
+    tts.update_options(language="ja")
+    assert tts.capabilities.aligned_transcript is True
+
+    options = cartesia_tts._to_cartesia_options(tts._opts, streaming=True)
+    assert options["add_timestamps"] is True
+
+
+def test_add_timestamps_omitted_when_auto_unsupported() -> None:
+    tts = cartesia_tts.TTS(api_key="test-key", language="ja")
     options = cartesia_tts._to_cartesia_options(tts._opts, streaming=True)
     assert options["add_timestamps"] is False
 
 
 def test_add_timestamps_requested_when_supported() -> None:
-    tts = cartesia_tts.TTS(api_key="test-key", language="en", word_timestamps=True)
+    tts = cartesia_tts.TTS(api_key="test-key", language="en")
     options = cartesia_tts._to_cartesia_options(tts._opts, streaming=True)
     assert options["add_timestamps"] is True
 

@@ -110,7 +110,7 @@ class TTS(tts.TTS):
         emotion: TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None = None,
         volume: float | None = None,
         sample_rate: int = 24000,
-        word_timestamps: bool = True,
+        word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         pronunciation_dict_id: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -132,7 +132,7 @@ class TTS(tts.TTS):
             emotion (list[TTSVoiceEmotion], optional): Emotion of the speech (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-emotion)
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
-            word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
+            word_timestamps (bool, optional): Whether to add word timestamps to the output. When not given, timestamps are enabled if the model/language combo is known to deliver them. Set True to always request them, or False to disable.
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
@@ -142,12 +142,12 @@ class TTS(tts.TTS):
         """  # noqa: E501
 
         language_code = LanguageCode(language) if language else None
-        aligned_transcript = word_timestamps and _supports_word_timestamps(model, language_code)
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=aligned_transcript,
+                # resolved by _sync_aligned_transcript below
+                aligned_transcript=False,
             ),
             sample_rate=sample_rate,
             num_channels=1,
@@ -162,6 +162,7 @@ class TTS(tts.TTS):
         if isinstance(emotion, str):
             emotion = [emotion]
 
+        self._word_timestamps = word_timestamps
         self._opts = _TTSOptions(
             model=model,
             language=language_code,
@@ -173,10 +174,12 @@ class TTS(tts.TTS):
             volume=volume,
             api_key=cartesia_api_key,
             base_url=base_url,
-            word_timestamps=word_timestamps,
+            # resolved by _sync_aligned_transcript below
+            word_timestamps=False,
             api_version=api_version,
             pronunciation_dict_id=pronunciation_dict_id,
         )
+        self._sync_aligned_transcript()
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
@@ -197,8 +200,6 @@ class TTS(tts.TTS):
             self._stream_pacer = tts.SentenceStreamPacer()
         elif isinstance(text_pacing, tts.SentenceStreamPacer):
             self._stream_pacer = text_pacing
-
-        self._warn_if_aligned_transcript_unsupported()
 
     class Markup(tts.TTS.Markup):
         # markup delegation lives in the base class, keyed on _provider_key()
@@ -305,28 +306,26 @@ class TTS(tts.TTS):
             self._check_generation_config()
 
         # model/language changes can enable or disable timestamp delivery (#6493)
-        self._refresh_aligned_transcript_capability()
+        self._sync_aligned_transcript()
 
-    def _refresh_aligned_transcript_capability(self) -> None:
-        """Narrow ``capabilities.aligned_transcript`` to configs that can deliver timestamps."""
+    def _sync_aligned_transcript(self) -> None:
+        """Resolve word_timestamps for the current model/language and mirror it on the capability."""
         supported = _supports_word_timestamps(self._opts.model, self._opts.language)
-        self._capabilities.aligned_transcript = self._opts.word_timestamps and supported
-        self._warn_if_aligned_transcript_unsupported()
+        if is_given(self._word_timestamps):
+            enabled = self._word_timestamps
+            if enabled and not supported:
+                # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
+                logger.warning(
+                    "word_timestamps was requested for model %s with language %s, which is not "
+                    "known to return them, aligned transcripts may be empty",
+                    self._opts.model,
+                    self._opts.language.language if self._opts.language else None,
+                )
+        else:
+            enabled = supported
 
-    def _warn_if_aligned_transcript_unsupported(self) -> None:
-        if not self._opts.word_timestamps:
-            return
-        if _supports_word_timestamps(self._opts.model, self._opts.language):
-            return
-        # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
-        logger.warning(
-            "model configuration does not support aligned transcript "
-            "(word_timestamps); disabling capabilities.aligned_transcript. "
-            "Supported: languages en, de, es, and fr with `sonic` models, "
-            "or all languages with `preview` models. model=%s language=%s",
-            self._opts.model,
-            self._opts.language.language if self._opts.language else None,
-        )
+        self._opts.word_timestamps = enabled
+        self._capabilities.aligned_transcript = enabled
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -643,9 +642,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
             options["generation_config"] = generation_config
 
     if streaming:
-        # only request timestamps when the model/language combo can deliver them
-        options["add_timestamps"] = opts.word_timestamps and _supports_word_timestamps(
-            opts.model, opts.language
-        )
+        # already resolved against the model/language combo in _sync_aligned_transcript
+        options["add_timestamps"] = opts.word_timestamps
 
     return options
