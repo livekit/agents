@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,6 +15,30 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+async def _settle_genai_finalizers() -> AsyncIterator[None]:
+    """Finish the genai client teardown this test started, before the next one.
+
+    ``AsyncClient.__del__`` schedules ``aclose()`` on whatever event loop is
+    running when the collector reaches it, with no check for a client that was
+    already closed explicitly -- so even the sessions this module closes
+    properly leave a finalizer behind. Collected here, while this test still
+    owns the loop, those tasks would otherwise surface as leaked tasks in an
+    unrelated test in a later module.
+    """
+    yield
+    # gc.collect() runs the finalizers synchronously, so anything they schedule
+    # is already registered by the time it returns.
+    gc.collect()
+    if pending := [
+        task
+        for task in asyncio.all_tasks()
+        if not task.done() and "aclose" in (getattr(task.get_coro(), "__qualname__", "") or "")
+    ]:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
 _PCM_FRAME = b"\x00\x01" * 240
