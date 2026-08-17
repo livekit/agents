@@ -2997,7 +2997,7 @@ async def test_session_close_cancels_deferred_manual_generation(
         assert not session._deferred_manual_inputs
         assert not session._deferred_manual_input_pipeline_active
         assert session._pending_generation_fut is None
-        assert not session._quarantined_manual_audio
+        assert not session._quarantined_manual_inputs
 
 
 async def test_terminal_error_fails_all_deferred_fifo_generations(
@@ -3027,7 +3027,7 @@ async def test_terminal_error_fails_all_deferred_fifo_generations(
         assert not session._deferred_manual_inputs
         assert not session._deferred_manual_input_pipeline_active
         assert session._pending_generation_fut is None
-        assert not session._quarantined_manual_audio
+        assert not session._quarantined_manual_inputs
 
 
 async def test_manual_clear_invalidates_queued_input_while_send_is_in_flight(
@@ -3187,9 +3187,13 @@ async def test_manual_audio_quarantine_truncation_is_explicit(
 
         assert "manual audio quarantine exceeded" in caplog.text
         assert 0 < session._quarantined_manual_audio_duration <= 1.0
-        assert len(session._quarantined_manual_audio) < 21
-        assert session._quarantined_manual_audio[0].data.tobytes() != bytes([2]) * 1600
-        assert session._quarantined_manual_audio[-1].data.tobytes() == bytes([22]) * 1600
+        assert len(session._quarantined_manual_inputs) < 21
+        first_audio = session._quarantined_manual_inputs[0].realtime_input.audio
+        last_audio = session._quarantined_manual_inputs[-1].realtime_input.audio
+        assert first_audio is not None
+        assert last_audio is not None
+        assert first_audio.data != bytes([2]) * 1600
+        assert last_audio.data == bytes([22]) * 1600
 
 
 async def test_manual_clear_invalidates_dequeued_input_before_second_send_lock(
