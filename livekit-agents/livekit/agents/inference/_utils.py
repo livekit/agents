@@ -121,12 +121,12 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
 
 def create_inference_request_id(
     session_id: str | None,
-    inference_type: Literal["tts", "eot"],
+    request_kind: Literal["tts", "eot"],
     *,
     fallback_prefix: str = "",
 ) -> str:
     """Create a logical request ID linked to its inference connection."""
-    prefix = f"{session_id}_{inference_type}_" if session_id else fallback_prefix
+    prefix = f"{session_id}_{request_kind}_" if session_id else fallback_prefix
     return shortuuid(prefix)
 
 
