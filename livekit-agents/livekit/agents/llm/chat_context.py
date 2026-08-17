@@ -386,7 +386,7 @@ class FunctionCallOutput(BaseModel):
     """
 
     @property
-    def output_with_states(self) -> str:
+    def output_with_metadata(self) -> str:
         """Return the output with its framework-managed state metadata."""
         if not self.reply_interrupted:
             return self.output
@@ -1043,9 +1043,9 @@ def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> C
             content=[
                 to_xml(
                     "function_call_output",
-                    item.output_with_states
+                    item.output_with_metadata
                     if not item.is_error
-                    else to_xml("error", item.output_with_states),
+                    else to_xml("error", item.output_with_metadata),
                     attrs={
                         "call_id": item.call_id,
                         "name": item.name,

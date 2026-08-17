@@ -97,7 +97,7 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         return {
             "role": "tool",
             "tool_call_id": msg.call_id,
-            "content": msg.output_with_states,
+            "content": msg.output_with_metadata,
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
@@ -205,7 +205,7 @@ def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         return {
             "type": "function_call_output",
             "call_id": msg.call_id,
-            "output": msg.output_with_states,
+            "output": msg.output_with_metadata,
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
