@@ -2523,6 +2523,55 @@ async def test_no_interruption_deferred_media_preserves_fifo(
         assert generation_event.user_initiated
 
 
+async def test_quarantined_video_waits_for_deferred_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+    ) as session:
+        _, initial_epoch = await _prepare_no_interruption_deferred_restart(session)
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        monkeypatch.setattr(
+            "livekit.plugins.google.realtime.realtime_api.images.encode",
+            lambda frame, options: b"quarantined-video",
+        )
+
+        session.push_audio(_input_frame(50, fill=2))
+        session.push_video(rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGB24, bytes(range(12))))
+
+        # Neither medium may leak onto the abandoned provider epoch before the next
+        # logical activity owns the quarantined residue.
+        assert sent == []
+
+        session.start_user_activity()
+        session.push_audio(_input_frame(50, fill=3))
+        generation_fut = session.generate_reply()
+        assert sent == []
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        realtime_inputs = [
+            event for event in sent if isinstance(event, types.LiveClientRealtimeInput)
+        ]
+        assert len(realtime_inputs) == 5
+        assert realtime_inputs[0].activity_start is not None
+        assert realtime_inputs[1].audio is not None
+        assert realtime_inputs[1].audio.data == bytes([2]) * 1600
+        assert realtime_inputs[2].video is not None
+        assert realtime_inputs[2].video.data == b"quarantined-video"
+        assert realtime_inputs[3].audio is not None
+        assert realtime_inputs[3].audio.data == bytes([3]) * 1600
+        assert realtime_inputs[4].activity_end is not None
+        assert session._session_epoch == initial_epoch + 1
+
+        session._start_new_generation()
+        generation_event = await generation_fut
+        assert generation_event.user_initiated
+
+
 async def test_no_interruption_preserves_pre_activity_audio_in_deferred_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

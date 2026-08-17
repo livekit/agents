@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, inference
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -444,5 +444,77 @@ async def test_text_mode_streaming_detector_falls_back_to_stt_without_vad() -> N
         assert activity._turn_detection == "stt"
         assert recognition._turn_detection_mode == "stt"
         assert activity._on_metrics_collected not in old_vad._events.get("metrics_collected", set())
+    finally:
+        await session.aclose()
+
+
+class _LegacyTurnDetector:
+    model = "legacy-text-detector"
+    provider = "test"
+
+    async def unlikely_threshold(self, language: object) -> float:
+        return 0.5
+
+    async def supports_language(self, language: object) -> bool:
+        return True
+
+    async def predict_end_of_turn(self, chat_ctx: object, *, timeout: float | None = None) -> float:
+        return 0.9
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_turn_detector_survives_policy_resolution() -> None:
+    detector = _LegacyTurnDetector()
+    agent = Agent(
+        instructions="test",
+        stt=FakeSTT(),
+        vad=FakeVAD(),
+        llm=FakeLLM(),
+        tts=FakeTTS(),
+    )
+    session = AgentSession(turn_handling={"turn_detection": detector})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+
+        assert activity._turn_policy.turn_detection is detector
+        assert activity._turn_detection is detector
+        assert recognition._turn_detector is detector
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_detector_activation_moves_metrics_listener() -> None:
+    detector = inference.TurnDetector(version="v1-mini")
+    agent = Agent(instructions="test", stt=FakeSTT(), vad=None, llm=FakeLLM(), tts=FakeTTS())
+    session = AgentSession(turn_handling={"turn_detection": detector})
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        assert activity._turn_detection is None
+        assert activity._on_metrics_collected not in detector._events.get(
+            "metrics_collected", set()
+        )
+
+        agent.update_options(vad=FakeVAD())
+
+        assert activity._turn_detection is detector
+        assert recognition._turn_detector is detector
+        assert activity._on_metrics_collected in detector._events.get("metrics_collected", set())
+
+        agent.update_options(vad=None)
+
+        assert activity._turn_detection is None
+        assert recognition._turn_detector is None
+        assert activity._on_metrics_collected not in detector._events.get(
+            "metrics_collected", set()
+        )
     finally:
         await session.aclose()
