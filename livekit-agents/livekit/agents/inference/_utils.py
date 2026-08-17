@@ -4,6 +4,7 @@ import datetime
 import os
 import platform
 from collections.abc import Mapping
+from typing import Literal
 
 from livekit import api
 
@@ -120,7 +121,7 @@ def get_inference_headers(*, inference_class: str | None = None) -> dict[str, st
 
 def create_inference_request_id(
     session_id: str | None,
-    inference_type: str,
+    inference_type: Literal["tts", "eot"],
     *,
     fallback_prefix: str = "",
 ) -> str:
