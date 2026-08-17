@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
@@ -50,6 +50,7 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -94,6 +95,7 @@ class Agent:
         self._llm = llm
         self._tts = tts
         self._vad = vad
+        self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
 
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
         self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
@@ -267,13 +269,16 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
     ) -> None:
-        """Swap the STT, VAD, LLM, or TTS on this agent. Only the models passed are changed.
+        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting.
+        Only the options passed are changed.
 
         Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
         Strings resolve to inference models like the constructor. Pass ``None`` to disable a
         model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
-        the swap applies to the live pipeline.
+        the swap applies to the live pipeline. ``expressive`` overrides the session value and
+        takes effect on the next reply; pass ``False`` to force it off for this agent.
 
         Raises:
             RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
@@ -285,6 +290,10 @@ class Agent:
             llm = inference.LLM.from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
+
+        if is_given(expressive):
+            # resolved per turn (agent value over session), no live plumbing needed
+            self._expressive = expressive
 
         if self._activity is None:
             # not running: replace stored config, applied on the next start
@@ -686,6 +695,21 @@ class Agent:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
         """  # noqa: E501
         return self._tts
+
+    @property
+    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
+        """
+        Retrieves the expressive TTS delivery setting for the agent.
+
+        If this property was not set at Agent creation, the ``AgentSession``'s ``expressive``
+        value will be used at runtime instead. When set, it overrides the session value for
+        this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
+
+        Returns:
+            NotGivenOr[bool | ExpressiveOptions]: Whether expressive delivery is enabled,
+                or its configuration.
+        """
+        return self._expressive
 
     @property
     def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
