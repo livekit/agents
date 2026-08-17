@@ -68,8 +68,15 @@ InworldModels = Literal["inworld/inworld-stt-1",]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    min_volume: float  # default: not specified
-    max_silence_duration_secs: float  # default: not specified
+    min_volume: float  # ink-whisper only; default: not specified
+    max_silence_duration_secs: float  # ink-whisper only; default: not specified
+    # Turn-detection tuning for turn-detecting models (e.g. ink-2). The gateway
+    # validates these against Cartesia's documented ranges.
+    turn_start_threshold: float  # range 0.5-0.9, default 0.8
+    turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
+    turn_end_threshold: float  # range 0.05-0.5, default 0.2
+    turn_end_timeout_ms: int  # range 640-11200, default 5600
+    keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
@@ -251,6 +258,46 @@ _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
 def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> bool:
     """True if the model natively carries agent_context (AssemblyAI U3 Pro family)."""
     return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
+
+
+# Models verified to carry word timings. Unknown models stay disabled until verified.
+_WORD_ALIGNED_MODELS = frozenset(
+    {
+        "deepgram/nova-3",
+        "deepgram/nova-3-medical",
+        "deepgram/nova-2",
+        "deepgram/nova-2-medical",
+        "deepgram/nova-2-conversationalai",
+        "deepgram/nova-2-phonecall",
+        "deepgram/flux-general",
+        "deepgram/flux-general-en",
+        "deepgram/flux-general-multi",
+        "cartesia/ink-whisper",
+        "assemblyai/universal-streaming",
+        "assemblyai/universal-streaming-multilingual",
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "elevenlabs/scribe_v2_realtime",
+        "xai/stt-1",
+        "speechmatics/enhanced",
+        "speechmatics/standard",
+    }
+)
+
+
+def _aligned_transcript_for_model(
+    model: NotGivenOr[STTModels | str],
+) -> Literal["word", False]:
+    """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
+
+    False when the model sends no word timings, and for "auto", where the provider is
+    picked server-side per language and so can't be known here. Claiming alignment we
+    don't have is the costlier error: it enables adaptive interruption, which then turns
+    off the fast VAD barge-in path it can't actually replace.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    return "word" if model in _WORD_ALIGNED_MODELS else False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -566,13 +613,23 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_models = _normalize_fallback(fallback)
+        models = [model]
+        if is_given(fallback_models):
+            models.extend(item["model"] for item in fallback_models)
+        aligned_transcript: Literal["word", False] = (
+            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+        )
+
         # chat_context follows the model's native support; the session decides whether to forward
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
                 diarization=diarization_enabled,
-                aligned_transcript="word",
+                aligned_transcript=aligned_transcript,
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
@@ -600,9 +657,6 @@ class STT(stt.STT):
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
-        if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)
 
         self._opts = STTOptions(
             model=model,
@@ -694,10 +748,16 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            models = [self._opts.model]
+            if is_given(self._opts.fallback):
+                models.extend(item["model"] for item in self._opts.fallback)
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
+                aligned_transcript=(
+                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+                ),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -924,6 +984,8 @@ class SpeechStream(stt.SpeechStream):
                 msg_type = data.get("type")
                 if msg_type == "session.created":
                     pass
+                elif msg_type == "start_of_speech":
+                    self._process_start_of_speech()
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
                 elif msg_type == "preflight_transcript":
@@ -1070,17 +1132,24 @@ class SpeechStream(stt.SpeechStream):
         )
         self._event_ch.send_nowait(event)
 
+    def _process_start_of_speech(self) -> None:
+        """Onset reported by a provider that detects it server-side (e.g. Cartesia Ink-2).
+
+        Without this the first transcript has to stand in for onset, which lands about
+        800ms late because it waits for a word to be decoded.
+        """
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
 
         if not text and not is_final:
             return
-        # We'll have a more accurate way of detecting when speech started when we have VAD
-        if not self._speaking:
-            self._speaking = True
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+        self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 

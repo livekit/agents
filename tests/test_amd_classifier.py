@@ -51,6 +51,22 @@ def _make_classifier(
     )
 
 
+class _RecordingClassifier:
+    def __init__(self) -> None:
+        self.timer_calls = 0
+        self.listening = False
+        self.settled: list[tuple[AMDCategory, str]] = []
+
+    def start_detection_timer(self) -> None:
+        self.timer_calls += 1
+
+    def start_listening(self) -> None:
+        self.listening = True
+
+    def settle(self, category: AMDCategory, reason: str) -> None:
+        self.settled.append((category, reason))
+
+
 def _machine_vm_response(transcript: str = "voicemail greeting") -> FakeLLMResponse:
     return FakeLLMResponse(
         input=transcript,
@@ -724,23 +740,15 @@ class TestAMDClassifier:
         assert clf is not None
         assert clf._wait_until_finished is False
 
-    async def test_setup_resets_detection_timer_after_track_subscription(
+    async def test_setup_arms_detection_timer_only_at_listening(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = 0
-
-        class FakeClassifier:
-            listening = False
-
-            def start_detection_timer(self) -> None:
-                nonlocal calls
-                calls += 1
-
-            def start_listening(self) -> None:
-                self.listening = True
+        classifier = _RecordingClassifier()
 
         async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
-            assert calls == 1
+            assert classifier.timer_calls == 0, (
+                "no detection timer must be armed while waiting for the track"
+            )
             return SimpleNamespace(sid="track_sid")
 
         monkeypatch.setattr(
@@ -768,8 +776,156 @@ class TestAMDClassifier:
             suppress_compatibility_warning=True,
         )
         detector._stt = NOT_GIVEN
-        detector._classifier = FakeClassifier()  # type: ignore[assignment]
+        detector._classifier = classifier  # type: ignore[assignment]
 
         await detector._setup(session)  # type: ignore[arg-type]
 
-        assert calls == 2
+        assert classifier.timer_calls == 1
+        assert classifier.listening is True
+        assert classifier.settled == []
+
+    async def test_setup_settles_when_participant_disconnects_before_track(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            raise RuntimeError("participant 'callee' disconnected while waiting")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_setup_settles_when_track_publication_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            await asyncio.Future[None]()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(amd_detector, "_TRACK_PUBLICATION_TIMEOUT", 0.1)
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_setup_settles_when_participant_disappears_after_track(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            participant_identity="callee",
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_sip_answer_failure_settles(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            raise RuntimeError("participant 'callee' disconnected while waiting for sip.callStatus")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(llm=llm, _activity=None)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._wait_for_sip_answer(SimpleNamespace(), "callee")  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_settle_emits_uncertain_before_listening(self) -> None:
+        clf = _make_classifier()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
+
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.UNCERTAIN
+        assert results[0].reason == "participant_missing"
+        assert clf._verdict_ready.is_set()
+
+        await clf.close()

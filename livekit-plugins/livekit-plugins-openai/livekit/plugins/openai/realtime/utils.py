@@ -115,6 +115,8 @@ def to_turn_detection(
                 kwargs["silence_duration_ms"] = turn_detection.silence_duration_ms
             if turn_detection.create_response is not None:
                 kwargs["create_response"] = turn_detection.create_response
+            if turn_detection.interrupt_response is not None:
+                kwargs["interrupt_response"] = turn_detection.interrupt_response
             return realtime.realtime_audio_input_turn_detection.ServerVad(**kwargs)
         elif turn_detection.type == "semantic_vad":
             kwargs["type"] = "semantic_vad"

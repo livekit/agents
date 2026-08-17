@@ -394,6 +394,7 @@ class RoomIO:
             return
 
         self._participant_available_fut.set_result(participant)
+        self._agent_session._on_room_io_participant_linked(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:

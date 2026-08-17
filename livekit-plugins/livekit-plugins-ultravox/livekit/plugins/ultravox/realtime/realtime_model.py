@@ -224,7 +224,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._http_session = utils.http_context.http_session()
         return self._http_session
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Create a new Ultravox real-time session.
 
         Returns
@@ -232,6 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
         RealtimeSession
             An instance of the Ultravox real-time session.
         """
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(realtime_model=self)
         self._sessions.add(sess)
         return sess
@@ -400,7 +401,8 @@ class RealtimeSession(
 
                 tool_result = ClientToolResultEvent(
                     invocationId=item.call_id,
-                    agent_reaction="speaks",
+                    # a result that wants no reply is recorded without speech
+                    agent_reaction="speaks" if item.reply_required else "listens",
                 )
 
                 if getattr(item, "is_error", False):
