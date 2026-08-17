@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import logging
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -24,6 +25,7 @@ from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
 from livekit.agents.voice.speech_handle import InputDetails, SpeechHandle
+from livekit.agents.voice.turn import _StreamingTurnDetector
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
@@ -43,6 +45,7 @@ class _BufferedRealtimeSession(FakeRealtimeSession):
         self.clear_audio_calls = 0
         self.commit_audio_calls = 0
         self.commit_audio_error: Exception | None = None
+        self.clear_audio_error: Exception | None = None
         self.push_audio_error: Exception | None = None
         self.generate_reply_error: Exception | None = None
         self.resolve_replies_immediately = False
@@ -54,8 +57,10 @@ class _BufferedRealtimeSession(FakeRealtimeSession):
         self.provider_audio.append(frame)
 
     def clear_audio(self) -> None:
-        super().clear_audio()
         self.clear_audio_calls += 1
+        if self.clear_audio_error is not None:
+            raise self.clear_audio_error
+        super().clear_audio()
         self.provider_audio.clear()
 
     def commit_audio(self) -> None:
@@ -1813,3 +1818,244 @@ async def test_finalized_turn_syncs_exact_message_and_starts_one_provider_genera
     with pytest.raises(asyncio.CancelledError):
         await reply_tasks[0]
     assert rt_session._reply_futs[0].cancelled()
+
+
+def test_text_mode_reselects_stt_after_explicit_unavailable_vad() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=None,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+
+    activity = AgentActivity(Agent(instructions="test"), session)
+
+    assert activity._turn_detection == "stt"
+
+
+def test_runtime_explicit_detector_warning_uses_prospective_setting(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(realtime_input_mode="audio"),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    detector = MagicMock(spec=_StreamingTurnDetector)
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        activity.update_options(
+            turn_detection=detector,
+            session_turn_detection_explicit=True,
+        )
+
+    assert "ignoring the turn_detection setting" in caplog.text
+
+
+def test_removing_vad_reselects_streaming_stt_boundary_in_text_mode() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+
+    activity._update_models(new_vad=None)
+
+    assert activity.vad is None
+    assert activity._turn_detection == "stt"
+
+
+async def test_unknown_text_sync_still_generates_once() -> None:
+    activity, _ = _activity(mode="text")
+    rt_session = _replace_realtime_session(activity)
+    rt_session.resolve_replies_immediately = True
+    activity._authorization_allowed.set()
+    activity._user_silence_event.set()
+
+    async def _timeout_without_mirror_update(_: llm.ChatContext) -> None:
+        raise llm.RealtimeError("provider acknowledgement timed out")
+
+    rt_session.update_chat_ctx = _timeout_without_mirror_update  # type: ignore[method-assign]
+    activity._realtime_generation_task = AsyncMock()  # type: ignore[method-assign]
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    message = llm.ChatMessage(role="user", content=["final external text"])
+
+    await activity._realtime_reply_task(
+        speech_handle=handle,
+        model_settings=ModelSettings(),
+        user_message=message,
+    )
+
+    assert rt_session.generate_reply_calls == 1
+    assert activity.agent.chat_ctx.get_by_id(message.id) is message
+
+
+@pytest.mark.parametrize("skip_reply", [False, True])
+async def test_server_detected_manual_commit_never_seals_or_clears_provider_audio(
+    skip_reply: bool,
+) -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling=TurnHandlingOptions(realtime_input_mode="audio"),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _BufferedRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._started = True
+    generated: list[dict[str, object]] = []
+
+    class _Recognition:
+        def _push_audio(self, *_: object, **__: object) -> None:
+            pass
+
+        def _commit_user_turn(self, **kwargs: object) -> asyncio.Future[str]:
+            assert kwargs["reply_already_triggered"] is True
+            fut = asyncio.Future[str]()
+            fut.set_result("provider-owned")
+            return fut
+
+    activity._audio_recognition = cast(Any, _Recognition())
+    activity._session.generate_reply = (  # type: ignore[method-assign]
+        lambda **kwargs: generated.append(kwargs)
+    )
+    frame = _frame(7)
+    activity.push_audio(frame)
+
+    await activity.commit_user_turn(
+        transcript_timeout=1.0,
+        stt_flush_duration=0.1,
+        skip_reply=skip_reply,
+    )
+
+    assert activity._rt_turn_detection_enabled
+    assert rt_session.commit_audio_calls == 1
+    assert rt_session.clear_audio_calls == 0
+    assert rt_session.provider_audio == [frame]
+    assert not activity._rt_audio_input_sealed
+    assert generated == ([] if skip_reply else [{"input_modality": "audio"}])
+
+
+async def test_clear_user_turn_does_not_discard_submitted_audio_reply() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    recognition_clears = 0
+
+    class _Recognition:
+        def _push_audio(self, *_: object, **__: object) -> None:
+            pass
+
+        def _commit_user_turn(self, **_: object) -> asyncio.Future[str]:
+            fut = asyncio.Future[str]()
+            fut.set_result("committed")
+            return fut
+
+        def _clear_user_turn(self) -> None:
+            nonlocal recognition_clears
+            recognition_clears += 1
+
+    activity._audio_recognition = cast(Any, _Recognition())
+    activity._session.generate_reply = lambda **_: object()  # type: ignore[method-assign]
+    frame = _frame(3)
+    activity._start_realtime_user_activity()
+    activity.push_audio(frame)
+    await activity.commit_user_turn(transcript_timeout=1.0, stt_flush_duration=0.1)
+
+    activity.clear_user_turn()
+
+    assert recognition_clears == 1
+    assert rt_session.clear_audio_calls == 0
+    assert rt_session.provider_audio == [frame]
+
+
+async def test_clear_audio_preserves_primary_error_when_deferred_replay_also_fails() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    activity._start_realtime_user_activity()
+    activity.push_audio(_frame(1))
+    activity._seal_realtime_audio_input()
+    activity._start_realtime_user_activity()
+    activity.push_audio(_frame(2))
+    deferred_ready = activity._seal_realtime_audio_input()
+    primary = RuntimeError("primary clear failure")
+    secondary = RuntimeError("secondary replay failure")
+    rt_session.clear_audio_error = primary
+    rt_session.push_audio_error = secondary
+
+    with pytest.raises(RuntimeError, match="primary clear failure") as exc_info:
+        activity._clear_realtime_input()
+
+    assert exc_info.value is primary
+    assert deferred_ready.done()
+    assert deferred_ready.exception() is secondary
+
+
+async def test_cancellation_after_generation_creation_interrupts_owned_provider_output() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    activity._authorization_allowed.set()
+    activity._user_silence_event.set()
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    owner = activity._rt_audio_input_token
+    reply_task: asyncio.Task[None] | None = None
+
+    def _create_then_cancel(**_: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        assert reply_task is not None
+        rt_session.generate_reply_calls += 1
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        fut.set_result(cast(llm.GenerationCreatedEvent, object()))
+        reply_task.cancel()
+        return fut
+
+    rt_session.generate_reply = _create_then_cancel  # type: ignore[method-assign]
+    reply_task = asyncio.create_task(
+        activity._realtime_reply_task(
+            speech_handle=handle,
+            model_settings=ModelSettings(),
+            realtime_audio_input_owner=owner,
+        )
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await reply_task
+
+    assert rt_session.interrupted is True

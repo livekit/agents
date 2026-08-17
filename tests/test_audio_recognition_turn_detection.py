@@ -1055,3 +1055,29 @@ class TestVadMinSilenceRequirement:
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
         detector.stream.assert_not_called()
+
+
+async def test_duplicate_vad_and_stt_onsets_keep_same_manual_turn() -> None:
+    ar = _make_full_recognition_for_eou()
+    ar._turn_detection_mode = "stt"
+    ar._vad = MagicMock()
+    ar._audio_interim_transcript = ""
+
+    await ar._on_vad_event(_start_of_speech())
+    pending_commit: asyncio.Future[str] = asyncio.Future()
+    blocked_commit = asyncio.create_task(asyncio.Event().wait())
+    ar._commit_user_turn_fut = pending_commit
+    ar._commit_user_turn_atask = blocked_commit
+    ar._turn_disposition = _TurnDisposition(skip_reply=True)
+
+    try:
+        await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+        assert not pending_commit.done()
+        assert not blocked_commit.done()
+        assert ar._turn_disposition.skip_reply is True
+    finally:
+        if not blocked_commit.done():
+            await aio.cancel_and_wait(blocked_commit)
+        if not pending_commit.done():
+            pending_commit.cancel()

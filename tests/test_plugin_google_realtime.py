@@ -138,8 +138,11 @@ class _ControlledReceiveSession(_ActiveSessionStub):
 
 
 class _TimeoutHandle:
+    def __init__(self) -> None:
+        self.cancelled = False
+
     def cancel(self) -> None:
-        pass
+        self.cancelled = True
 
 
 def _input_frame(duration_ms: int, *, fill: int = 0) -> rtc.AudioFrame:
@@ -3539,3 +3542,136 @@ def test_gemini_api_scheduling_does_not_warn(
         RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
 
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+
+async def test_pending_user_text_survives_unrelated_assistant_append(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
+        chat_ctx = llm.ChatContext.empty()
+        user_message = chat_ctx.add_message(role="user", content="owned external turn")
+        await session.update_chat_ctx(chat_ctx)
+
+        chat_ctx = session.chat_ctx
+        chat_ctx.add_message(role="assistant", content="unrelated local append")
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session._client_content_user_turn_pending is True
+        assert session._pending_text_input_item_id == user_message.id
+
+        generation_fut = session.generate_reply()
+        all_text = [
+            part.text
+            for event in sent
+            if isinstance(event, types.LiveClientContent)
+            for turn in event.turns or []
+            for part in turn.parts or []
+        ]
+        assert all_text == ["owned external turn", "unrelated local append"]
+        assert "." not in all_text
+
+        session._start_new_generation()
+        await generation_fut
+        session._active_session = None
+
+
+async def test_go_away_waits_for_owned_provider_turn_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        session_resumption_handle="resume-at-boundary",
+    ) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        monkeypatch.setattr(session, "_send_client_event", lambda event: True)
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="finish this owned turn")
+        await session.update_chat_ctx(chat_ctx)
+        generation_fut = session.generate_reply()
+        session._start_new_generation()
+        await generation_fut
+        initial_epoch = session._session_epoch
+
+        session._handle_go_away(types.LiveServerGoAway(time_left="10s"))
+
+        assert session._session_epoch == initial_epoch
+        assert not session._session_should_close.is_set()
+        assert session.session_resumption_handle == "resume-at-boundary"
+
+        session._mark_current_generation_done()
+        session._finish_provider_turn()
+
+        assert session._session_epoch == initial_epoch + 1
+        assert session._session_should_close.is_set()
+        assert session.session_resumption_handle == "resume-at-boundary"
+        session._active_session = None
+
+
+async def test_go_away_deadline_replays_exact_pending_text_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        session_resumption_handle="expiring-handle",
+    ) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", sent.append)
+        chat_ctx = llm.ChatContext.empty()
+        user_message = chat_ctx.add_message(role="user", content="replay me exactly")
+        await session.update_chat_ctx(chat_ctx)
+        generation_fut = session.generate_reply()
+        generation_fut.add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
+        sent.clear()
+        initial_epoch = session._session_epoch
+
+        loop = asyncio.get_running_loop()
+        original_call_later = loop.call_later
+        deadline_callbacks: list[tuple[float, object]] = []
+
+        def _capture_deadline(delay: float, callback: object, *args: object) -> _TimeoutHandle:
+            assert not args
+            deadline_callbacks.append((delay, callback))
+            return _TimeoutHandle()
+
+        monkeypatch.setattr(loop, "call_later", _capture_deadline)
+        session._handle_go_away(types.LiveServerGoAway(time_left="10s"))
+
+        assert session._session_epoch == initial_epoch
+        assert len(deadline_callbacks) == 1
+        assert 0.0 < deadline_callbacks[0][0] < 10.0
+
+        cast(Any, deadline_callbacks[0][1])()
+        monkeypatch.setattr(loop, "call_later", original_call_later)
+
+        assert session._session_epoch == initial_epoch + 1
+        assert not generation_fut.done()
+        assert session._pending_text_input_item_id == user_message.id
+        assert [
+            item.raw_text_content
+            for item in session.chat_ctx.messages()
+            if item.id == user_message.id
+        ] == ["replay me exactly"]
+        completions = [
+            event
+            for event in sent
+            if isinstance(event, types.LiveClientContent)
+            and event.turn_complete is True
+            and not event.turns
+        ]
+        assert len(completions) == 1
+
+        session._start_new_generation()
+        await generation_fut
+        session._active_session = None
