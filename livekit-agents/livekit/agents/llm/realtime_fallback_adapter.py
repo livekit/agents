@@ -23,6 +23,7 @@ from .realtime import (
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
     _UserMessageSyncResult,
+    _UserMessageSyncStatus,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -172,6 +173,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._instructions: NotGivenOr[str] = NOT_GIVEN
         self._tools: NotGivenOr[list[Tool]] = NOT_GIVEN
         self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
+        self._provider_replay_excluded_item_ids: set[str] = set()
 
         # stable per-event forwarders so they can be detached on swap
         def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
@@ -300,6 +302,15 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                 chat_ctx = self._agent_session.current_agent.chat_ctx
             else:
                 chat_ctx = self._active.chat_ctx
+            if self._provider_replay_excluded_item_ids:
+                chat_ctx = chat_ctx.copy()
+                replay_item_ids = {item.id for item in chat_ctx.items}
+                self._provider_replay_excluded_item_ids.intersection_update(replay_item_ids)
+                chat_ctx.items = [
+                    item
+                    for item in chat_ctx.items
+                    if item.id not in self._provider_replay_excluded_item_ids
+                ]
 
             # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
             # return the error so the caller can try the next model
@@ -389,12 +400,20 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             # dropped; the swap replays the agent chat context afterwards
             return
         await self._active.update_chat_ctx(chat_ctx)
+        # An explicit complete-context update makes every retained local item provider-visible.
+        self._provider_replay_excluded_item_ids.clear()
+
+    def _exclude_chat_ctx_item_from_replay(self, item_id: str) -> None:
+        self._provider_replay_excluded_item_ids.add(item_id)
 
     async def _sync_user_message(
         self, chat_ctx: ChatContext, message_id: str
     ) -> _UserMessageSyncResult:
         async with self._swap_lock:
-            return await self._active._sync_user_message(chat_ctx, message_id)
+            result = await self._active._sync_user_message(chat_ctx, message_id)
+            if result.status is not _UserMessageSyncStatus.REJECTED:
+                self._provider_replay_excluded_item_ids.discard(message_id)
+            return result
 
     async def update_tools(self, tools: list[Tool]) -> None:
         self._tools = tools

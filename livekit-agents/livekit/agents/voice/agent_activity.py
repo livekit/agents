@@ -3264,6 +3264,7 @@ class AgentActivity(RecognitionHooks):
 
             if self._rt_session is not None:
                 if info.skip_reply:
+                    self._rt_session._exclude_chat_ctx_item_from_replay(user_message.id)
                     if self._realtime_input_mode == "audio":
                         self._clear_realtime_input_if_owned(audio_input_token)
                     # A skipped finalized transcript remains observable in local conversation

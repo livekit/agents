@@ -275,6 +275,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
             return _UserMessageSyncResult(_UserMessageSyncStatus.UNKNOWN, error)
         return _UserMessageSyncResult(_UserMessageSyncStatus.ACCEPTED)
 
+    def _exclude_chat_ctx_item_from_replay(self, item_id: str) -> None:
+        """Keep a locally observable item out of adapter-driven provider replay."""
+
+        del item_id  # only session wrappers that rebuild provider state need to track this
+
     @abstractmethod
     async def update_tools(self, tools: list[Tool]) -> None: ...
 
