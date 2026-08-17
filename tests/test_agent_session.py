@@ -1337,6 +1337,158 @@ async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
         await _close_test_session(session)
 
 
+def _transcript_away_signal_session(timeout: float) -> AgentSession:
+    session = create_session(
+        FakeActions(),
+        extra_kwargs={"user_away_timeout": timeout, "user_away_signal": "transcript"},
+    )
+    session._agent_state = "listening"
+    session._user_state = "listening"
+    session._set_user_away_timer()
+    return session
+
+
+async def test_audio_away_signal_defers_away_on_untranscribed_speech() -> None:
+    """Default signal: any detected speech re-arms the full window."""
+    session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 0.3})
+    session._agent_state = "listening"
+    session._user_state = "listening"
+    session._set_user_away_timer()
+    try:
+        await asyncio.sleep(0.2)
+        session._update_user_state("speaking")
+        session._update_user_state("listening")
+
+        await asyncio.sleep(0.2)
+        assert session.user_state == "listening"
+
+        await asyncio.sleep(0.2)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_ignores_untranscribed_speech() -> None:
+    """Noise that produces no transcript must not hold off "away" (#6030)."""
+    session = _transcript_away_signal_session(0.3)
+    try:
+        # noise flips, then noise that leaves the user stuck in "speaking"
+        session._update_user_state("speaking")
+        session._update_user_state("listening")
+        session._update_user_state("speaking")
+
+        await asyncio.sleep(0.5)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_interim_holds_off_away() -> None:
+    """A long answer must not trip "away" before the final transcript arrives."""
+    states: list[str] = []
+    session = _transcript_away_signal_session(0.3)
+    session.on("user_state_changed", lambda ev: states.append(ev.new_state))
+    try:
+        session._update_user_state("speaking")
+        for _ in range(4):
+            await asyncio.sleep(0.15)
+            session._user_input_transcribed(
+                UserInputTranscribedEvent(transcript="still answering", is_final=False)
+            )
+
+        assert states == ["speaking"]
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_away_survives_noise() -> None:
+    """Once away, speech activity alone must not bring the user back."""
+    session = _transcript_away_signal_session(0.2)
+    try:
+        await asyncio.sleep(0.3)
+        assert session.user_state == "away"
+
+        session._update_user_state("speaking")
+        assert session.user_state == "away"
+        session._update_user_state("listening")
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_interim_ends_away_as_speaking() -> None:
+    """An interim means the user is mid-turn, so end "away" into "speaking"."""
+    session = _transcript_away_signal_session(0.2)
+    try:
+        await asyncio.sleep(0.3)
+        assert session.user_state == "away"
+
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="i'm here", is_final=False)
+        )
+        assert session.user_state == "speaking"
+        assert session._user_away_timer is not None
+
+        # the speech end that closes this turn is still to come
+        session._update_user_state("listening")
+        assert session.user_state == "listening"
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_final_ends_away_as_listening() -> None:
+    """A final may land after the speech end was swallowed, so never strand "speaking"."""
+    session = _transcript_away_signal_session(0.2)
+    try:
+        await asyncio.sleep(0.3)
+        assert session.user_state == "away"
+
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="i'm here", is_final=True)
+        )
+        assert session.user_state == "listening"
+        assert session._user_away_timer is not None
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_away_recovery_waits_for_agent() -> None:
+    """Leaving away while the agent talks must not arm the timer."""
+    session = _transcript_away_signal_session(15.0)
+    try:
+        session._update_user_state("away")
+        session._update_agent_state("speaking")
+
+        session._user_input_transcribed(
+            UserInputTranscribedEvent(transcript="i'm back", is_final=True)
+        )
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+        session._update_agent_state("listening")
+        assert session._user_away_timer is not None
+    finally:
+        await _close_test_session(session)
+
+
+async def test_transcript_away_signal_rearms_after_agent_turn_during_noise() -> None:
+    """The countdown resumes when the agent idles, even if noise still says speaking."""
+    session = _transcript_away_signal_session(0.3)
+    try:
+        session._update_user_state("speaking")
+
+        session._update_agent_state("speaking")
+        assert session._user_away_timer is None
+
+        session._update_agent_state("listening")
+        assert session._user_away_timer is not None
+
+        await asyncio.sleep(0.5)
+        assert session.user_state == "away"
+    finally:
+        await _close_test_session(session)
+
+
 async def test_stt_error_count_resets_on_user_transcript() -> None:
     from livekit.agents.voice.agent_session import SessionConnectOptions
 
