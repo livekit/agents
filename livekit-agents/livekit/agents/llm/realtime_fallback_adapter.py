@@ -22,6 +22,7 @@ from .realtime import (
     RealtimeModelError,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
+    _UserMessageSyncResult,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -388,6 +389,12 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             # dropped; the swap replays the agent chat context afterwards
             return
         await self._active.update_chat_ctx(chat_ctx)
+
+    async def _sync_user_message(
+        self, chat_ctx: ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        async with self._swap_lock:
+            return await self._active._sync_user_message(chat_ctx, message_id)
 
     async def update_tools(self, tools: list[Tool]) -> None:
         self._tools = tools
