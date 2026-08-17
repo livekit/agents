@@ -125,7 +125,7 @@ class _BosonOptions:
     model: str
     voice: str
     instructions: str
-    temperature: float
+    temperature: NotGivenOr[float]
     max_output_tokens: int | Literal["inf"]
     tool_choice: llm.ToolChoice | None
     speed: float
@@ -167,7 +167,7 @@ class RealtimeModel(openai_rt.RealtimeModel):
         voice: str = "default",
         instructions: str = "You are a helpful AI assistant",
         output_modalities: list[Literal["text", "audio"]] | None = None,
-        temperature: float = 0.7,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: int | Literal["inf"] = "inf",
         tool_choice: llm.ToolChoice | None = "auto",
         speed: float = 1.0,
@@ -201,7 +201,8 @@ class RealtimeModel(openai_rt.RealtimeModel):
             output_modalities: Exactly one of ``["text"]`` or ``["audio"]``.
                 ``None`` selects ``["audio"]``. Mixed and empty lists raise
                 ``ValueError`` -- the server has no combined mode.
-            temperature: Sampling temperature.
+            temperature: Optional sampling temperature. Omit it to use the
+                server default.
             max_output_tokens: Cap on tokens per response, or ``"inf"``.
             tool_choice: How the model picks tools (``"auto"``, ``"none"``,
                 ``"required"``, or a specific function). Applies to the session:
@@ -895,10 +896,11 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 tools if tools is not None else self._tools.flatten()
             ),
             "tool_choice": _tool_choice_to_boson(self._boson_opts.tool_choice),
-            "temperature": self._boson_opts.temperature,
             "max_output_tokens": self._boson_opts.max_output_tokens,
             "truncation": self._boson_opts.truncation,
         }
+        if is_given(self._boson_opts.temperature):
+            payload["temperature"] = self._boson_opts.temperature
         return {
             "type": "session.update",
             "event_id": utils.shortuuid(event_prefix),

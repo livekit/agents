@@ -50,7 +50,7 @@ python examples/agent.py console
 | `voice` | Sent as `session.audio.output.voice`. |
 | `instructions` | Sent as `session.instructions`. |
 | `output_modalities` | `["audio"]` by default. `["text"]` is also supported for text-only responses. |
-| `temperature` | Sent as `session.temperature`. |
+| `temperature` | Optional. Sent as `session.temperature` when set; otherwise the server default is used. |
 | `max_output_tokens` | Sent as `session.max_output_tokens`. |
 | `tool_choice` | Sent as `session.tool_choice`. |
 | `speed` | Sent as `session.audio.output.speed`. Not currently supported for output audio; kept for wire compatibility. |
