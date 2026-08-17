@@ -12,6 +12,7 @@ from google.genai import types
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions, llm, utils
+from livekit.agents.llm.realtime import _UserMessageSyncStatus
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
 from livekit.agents.voice.speech_handle import SpeechHandle
@@ -3544,6 +3545,47 @@ def test_gemini_api_scheduling_does_not_warn(
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
 
 
+async def test_sync_user_message_rejects_an_unqueued_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        monkeypatch.setattr(session, "_send_client_event", lambda event: False)
+        chat_ctx = llm.ChatContext.empty()
+        user_message = chat_ctx.add_message(role="user", content="must be queued")
+
+        result = await session._sync_user_message(chat_ctx, user_message.id)
+
+        assert result.status == _UserMessageSyncStatus.REJECTED
+        assert isinstance(result.error, llm.RealtimeError)
+        assert session.chat_ctx.get_by_id(user_message.id) is None
+        assert session._pending_text_input_item_id is None
+        session._active_session = None
+
+
+async def test_sync_user_message_classifies_terminal_queue_race_as_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+
+        async def fail_before_queue(
+            chat_ctx: llm.ChatContext, *, target_message_id: str | None = None
+        ) -> bool | None:
+            del chat_ctx, target_message_id
+            raise llm.RealtimeError("transport became terminal before queue insertion")
+
+        monkeypatch.setattr(session, "_update_chat_ctx", fail_before_queue)
+        chat_ctx = llm.ChatContext.empty()
+        user_message = chat_ctx.add_message(role="user", content="race")
+
+        result = await session._sync_user_message(chat_ctx, user_message.id)
+
+        assert result.status == _UserMessageSyncStatus.REJECTED
+        assert isinstance(result.error, llm.RealtimeError)
+
+
 async def test_pending_user_text_survives_unrelated_assistant_append(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3577,6 +3619,36 @@ async def test_pending_user_text_survives_unrelated_assistant_append(
 
         session._start_new_generation()
         await generation_fut
+        session._active_session = None
+
+
+async def test_batched_history_ending_with_assistant_does_not_open_text_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch, manual_activity_detection=True) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        sent: list[object] = []
+        monkeypatch.setattr(session, "_send_client_event", lambda event: sent.append(event) or True)
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="historical question")
+        chat_ctx.add_message(role="assistant", content="historical answer")
+
+        await session.update_chat_ctx(chat_ctx)
+
+        assert session._client_content_user_turn_pending is False
+        assert session._pending_text_input_item_id is None
+        generation_fut = session.generate_reply()
+        placeholders = [
+            part.text
+            for event in sent
+            if isinstance(event, types.LiveClientContent) and event.turn_complete is True
+            for turn in event.turns or []
+            for part in turn.parts or []
+        ]
+        assert placeholders == ["."]
+        generation_fut.cancel()
         session._active_session = None
 
 
@@ -3675,3 +3747,73 @@ async def test_go_away_deadline_replays_exact_pending_text_once(
         session._start_new_generation()
         await generation_fut
         session._active_session = None
+
+
+async def test_go_away_restarts_idle_session_with_current_resumption_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        session_resumption_handle="idle-handle",
+    ) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        initial_epoch = session._session_epoch
+
+        session._handle_go_away(types.LiveServerGoAway(time_left="10s"))
+
+        assert session._session_epoch == initial_epoch + 1
+        assert session._session_should_close.is_set()
+        assert session.session_resumption_handle == "idle-handle"
+        assert session._go_away_deadline_handle is None
+        session._active_session = None
+
+
+async def test_go_away_deadline_fails_non_replayable_audio_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(
+        monkeypatch,
+        manual_activity_detection=True,
+        session_resumption_handle="expiring-handle",
+    ) as session:
+        session._active_session = cast(Any, _ActiveSessionStub())
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._session_should_close.clear()
+        monkeypatch.setattr(session, "_send_client_event", lambda event: True)
+        session.start_user_activity()
+        session.push_audio(_input_frame(50))
+        generation_fut = session.generate_reply()
+        generation_fut.add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
+        initial_epoch = session._session_epoch
+
+        loop = asyncio.get_running_loop()
+        original_call_later = loop.call_later
+        deadline_callbacks: list[tuple[float, object]] = []
+
+        def _capture_deadline(delay: float, callback: object, *args: object) -> _TimeoutHandle:
+            assert not args
+            deadline_callbacks.append((delay, callback))
+            return _TimeoutHandle()
+
+        monkeypatch.setattr(loop, "call_later", _capture_deadline)
+        session._handle_go_away(types.LiveServerGoAway(time_left="10s"))
+        cast(Any, deadline_callbacks[0][1])()
+        monkeypatch.setattr(loop, "call_later", original_call_later)
+
+        with pytest.raises(llm.RealtimeError, match="raw audio input cannot be replayed"):
+            await generation_fut
+        assert session._session_epoch == initial_epoch + 1
+        assert session.session_resumption_handle is None
+        session._active_session = None
+
+
+@pytest.mark.parametrize("time_left", ["0s", "0.001s", "0.01s"])
+def test_go_away_restart_delay_never_exceeds_short_deadline(time_left: str) -> None:
+    seconds = float(time_left.removesuffix("s"))
+
+    delay = RealtimeSession._go_away_restart_delay(time_left)
+
+    assert 0.0 <= delay <= seconds

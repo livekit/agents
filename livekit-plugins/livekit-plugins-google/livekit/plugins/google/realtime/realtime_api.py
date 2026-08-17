@@ -17,6 +17,10 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import LanguageCode, llm, utils
+from livekit.agents.llm.realtime import (
+    _UserMessageSyncResult,
+    _UserMessageSyncStatus,
+)
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -538,6 +542,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._pending_text_input_item_id: str | None = None
         self._provider_turn_active = False
         self._restart_after_provider_turn_epoch: int | None = None
+        self._go_away_restart_epoch: int | None = None
+        self._go_away_deadline_handle: asyncio.TimerHandle | None = None
         self._deferred_manual_inputs: deque[_DeferredManualInput] = deque()
         self._deferred_manual_input_pipeline_active = False
 
@@ -670,9 +676,12 @@ class RealtimeSession(llm.RealtimeSession):
     def _send_input_event(self, event: ClientEvents) -> bool:
         self._input_event_sequences[id(event)] = self._input_event_sequence
         accepted = self._send_client_event(event)
-        if not accepted:
+        # Historically this private seam was void-returning, and existing integrations/tests
+        # commonly replace it with a recorder whose successful return is None. Only the
+        # provider queue's explicit False means that insertion was rejected.
+        if accepted is False:
             self._input_event_sequences.pop(id(event), None)
-        return accepted
+        return accepted is not False
 
     def _advance_input_sequence(self, *, invalidate: bool = False) -> int:
         sequence = self._input_event_sequence
@@ -707,6 +716,88 @@ class RealtimeSession(llm.RealtimeSession):
             return
         self._restart_after_provider_turn_epoch = None
         self._mark_restart_needed(preserve_manual_audio=True)
+
+    def _cancel_go_away_deadline(self) -> None:
+        handle = self._go_away_deadline_handle
+        self._go_away_deadline_handle = None
+        if handle is not None:
+            handle.cancel()
+
+    @staticmethod
+    def _go_away_restart_delay(time_left: str | None) -> float:
+        if not time_left:
+            return 0.1
+        value = time_left.strip()
+        if value.endswith("s"):
+            value = value[:-1]
+        try:
+            seconds = float(value)
+        except ValueError:
+            logger.warning(
+                "Gemini returned an unrecognized GoAway deadline; restarting promptly",
+                extra={"time_left": time_left},
+            )
+            return 0.1
+        return max(min(seconds * 0.9, seconds - 0.05), 0.0)
+
+    def _schedule_go_away_restart(self, time_left: str | None) -> None:
+        self._cancel_go_away_deadline()
+        restart_epoch = self._session_epoch
+        self._go_away_restart_epoch = restart_epoch
+
+        def _on_deadline() -> None:
+            if self._go_away_restart_epoch != restart_epoch:
+                return
+            self._go_away_deadline_handle = None
+            self._force_go_away_restart()
+
+        self._go_away_deadline_handle = asyncio.get_running_loop().call_later(
+            self._go_away_restart_delay(time_left), _on_deadline
+        )
+
+    def _force_go_away_restart(self) -> None:
+        if self._go_away_restart_epoch != self._session_epoch:
+            return
+
+        self._go_away_restart_epoch = None
+        self._cancel_go_away_deadline()
+        previous_input_state = self._input_state
+
+        if previous_input_state == _InputState.TEXT_TRIGGER_SENT:
+            pending_fut = self._pending_generation_fut
+            if pending_fut is not None and not pending_fut.done():
+                # Preserve the exact logical request while moving its provider acknowledgement
+                # to the fresh epoch. The old timeout callback is epoch-guarded.
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+                self._input_state = _InputState.TEXT_PENDING
+                self._mark_restart_needed()
+                self._track_pending_generation(pending_fut)
+                completion_accepted = self._send_input_event(
+                    types.LiveClientContent(turn_complete=True)
+                )
+                self._advance_input_sequence()
+                self._input_state = _InputState.TEXT_TRIGGER_SENT
+                if not completion_accepted:
+                    self._input_state = _InputState.ABORTED
+                    self._settle_pending_generation(
+                        llm.RealtimeError(
+                            "Gemini Realtime could not replay the pending text completion"
+                        )
+                    )
+                return
+
+        if previous_input_state in (_InputState.AUDIO_ACTIVE, _InputState.AUDIO_TRIGGER_SENT):
+            self._settle_pending_generation(
+                llm.RealtimeError(
+                    "Gemini Realtime raw audio input cannot be replayed after the GoAway deadline"
+                )
+            )
+            self._input_state = _InputState.ABORTED
+
+        # A forced deadline cannot trust the active provider checkpoint. Rebuild from the
+        # authoritative text history; _mark_restart_needed preserves TEXT_PENDING exactly.
+        self._mark_restart_needed()
 
     def _settle_pending_generation(self, error: llm.RealtimeError) -> None:
         if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -935,6 +1026,8 @@ class RealtimeSession(llm.RealtimeSession):
         # Settle every public surface immediately while leaving aclose() responsible for
         # releasing the active session and the owned GenAI client.
         self._discard_deferred_manual_input(error=self._terminal_error, all_inputs=True)
+        self._cancel_go_away_deadline()
+        self._go_away_restart_epoch = None
         self._input_state = _InputState.IDLE
         self._restart_after_provider_turn_epoch = None
         self._provider_turn_active = False
@@ -962,6 +1055,8 @@ class RealtimeSession(llm.RealtimeSession):
         if self._closed or self._terminal_error is not None:
             return
 
+        self._cancel_go_away_deadline()
+        self._go_away_restart_epoch = None
         self._restart_after_provider_turn_epoch = None
         preserve_manual_audio = preserve_manual_audio or self._manual_audio_quarantine_active
         previous_input_state = self._input_state
@@ -1000,6 +1095,9 @@ class RealtimeSession(llm.RealtimeSession):
             self._input_state = _InputState.ABORTED
         else:
             self._input_state = _InputState.IDLE
+
+        if previous_input_state != _InputState.TEXT_PENDING:
+            self._pending_text_input_item_id = None
 
         if not resume_session:
             # Session resumption restores provider-side activity/audio. Intentional restarts
@@ -1155,12 +1253,44 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        await self._update_chat_ctx(chat_ctx)
+
+    async def _sync_user_message(
+        self, chat_ctx: llm.ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        if self._terminal_error is not None:
+            error = llm.RealtimeError(
+                f"Gemini Realtime session is unavailable: {self._terminal_error}"
+            )
+            return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, error)
+        if self._closed:
+            error = llm.RealtimeError("Gemini Realtime session is closed")
+            return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, error)
+
+        try:
+            accepted = await self._update_chat_ctx(chat_ctx, target_message_id=message_id)
+        except llm.RealtimeError as error:
+            return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, error)
+
+        if accepted is False:
+            rejected_error = llm.RealtimeError(
+                "Gemini Realtime rejected the finalized user message before queueing it"
+            )
+            return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, rejected_error)
+        return _UserMessageSyncResult(_UserMessageSyncStatus.ACCEPTED)
+
+    async def _update_chat_ctx(
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        target_message_id: str | None = None,
+    ) -> bool | None:
         if self._terminal_error is not None:
             raise llm.RealtimeError(
                 f"Gemini Realtime session is unavailable: {self._terminal_error}"
             )
         if self._closed:
-            return
+            return False if target_message_id is not None else None
 
         # Check for system/developer messages that will be dropped
         system_msg_count = sum(
@@ -1181,6 +1311,12 @@ class RealtimeSession(llm.RealtimeSession):
             exclude_config_update=True,
         )
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+        created_ids = {item_id for _, item_id in diff_ops.to_create}
+        target_already_present = (
+            target_message_id is not None
+            and target_message_id not in created_ids
+            and self._chat_ctx.get_by_id(target_message_id) is not None
+        )
 
         append_ctx = llm.ChatContext.empty()
         for _, item_id in diff_ops.to_create:
@@ -1195,21 +1331,23 @@ class RealtimeSession(llm.RealtimeSession):
             )
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
 
-        next_input_state: _InputState | None = None
-        next_pending_text_input_item_id: str | None = None
-        if turns:
-            next_input_state = (
-                _InputState.TEXT_PENDING if turns[-1].role == "user" else _InputState.IDLE
+        pending_user = (
+            next(
+                (
+                    item
+                    for item in reversed(append_ctx.items)
+                    if isinstance(item, llm.ChatMessage) and item.role == "user"
+                ),
+                None,
             )
-            if next_input_state == _InputState.TEXT_PENDING:
-                next_pending_text_input_item_id = next(
-                    (
-                        item.id
-                        for item in reversed(append_ctx.items)
-                        if isinstance(item, llm.ChatMessage) and item.role == "user"
-                    ),
-                    None,
-                )
+            if turns and turns[-1].role == "user"
+            else None
+        )
+        next_pending_text_input_item_id = pending_user.id if pending_user is not None else None
+        next_input_state = _InputState.TEXT_PENDING if pending_user is not None else None
+        target_is_pending_user = (
+            target_message_id is not None and next_pending_text_input_item_id == target_message_id
+        )
 
         if next_input_state == _InputState.TEXT_PENDING:
             self._discard_deferred_manual_input(
@@ -1229,7 +1367,7 @@ class RealtimeSession(llm.RealtimeSession):
                     f"Gemini Realtime session is unavailable: {self._terminal_error}"
                 )
             if self._closed:
-                return
+                return False if target_message_id is not None else None
 
             if tool_response := self._build_owned_tool_response(append_ctx):
                 event, call_ids = tool_response
@@ -1242,7 +1380,9 @@ class RealtimeSession(llm.RealtimeSession):
                 if next_input_state is not None:
                     self._input_state = next_input_state
                     self._pending_text_input_item_id = next_pending_text_input_item_id
-                return
+                if target_message_id is not None:
+                    return target_already_present or target_is_pending_user
+                return None
 
         if diff_ops.to_remove:
             logger.warning("Gemini Live does not support removing messages")
@@ -1255,26 +1395,35 @@ class RealtimeSession(llm.RealtimeSession):
             # the old transport without resumption and replay the authoritative context once.
             self._mark_restart_needed()
             self._chat_ctx = chat_ctx
-            assert next_input_state is not None
-            self._input_state = next_input_state
-            self._pending_text_input_item_id = next_pending_text_input_item_id
-            return
+            if next_input_state is not None:
+                self._input_state = next_input_state
+                self._pending_text_input_item_id = next_pending_text_input_item_id
+            if target_message_id is not None:
+                return target_already_present or target_is_pending_user
+            return None
 
-        if append_ctx.items:
-            if self._realtime_model.capabilities.mutable_chat_context:
-                if turns:
-                    assert next_input_state is not None
-                    content_event = types.LiveClientContent(turns=turns, turn_complete=False)
-                    if next_input_state == _InputState.TEXT_PENDING:
-                        self._send_input_event(content_event)
-                    else:
-                        self._send_client_event(content_event)
-                    self._input_state = next_input_state
-                    self._pending_text_input_item_id = next_pending_text_input_item_id
+        target_accepted: bool | None = True if target_already_present else None
+        if append_ctx.items and self._realtime_model.capabilities.mutable_chat_context and turns:
+            content_event = types.LiveClientContent(turns=turns, turn_complete=False)
+            if next_input_state == _InputState.TEXT_PENDING:
+                input_accepted = self._send_input_event(content_event)
+                if target_is_pending_user:
+                    target_accepted = input_accepted
+                if not input_accepted and target_is_pending_user:
+                    return False
+            else:
+                self._send_client_event(content_event)
 
-        # since we don't have a view of the history on the server side, we'll assume
-        # the current state is accurate. this isn't perfect because removals aren't done.
+            if next_input_state is not None:
+                self._input_state = next_input_state
+                self._pending_text_input_item_id = next_pending_text_input_item_id
+
+        # Since Gemini does not expose its server-side history, accepted queue insertion or
+        # authoritative reconnect replay is the provider synchronization boundary.
         self._chat_ctx = chat_ctx
+        if target_message_id is not None:
+            return target_accepted is True
+        return None
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         tool_ctx = llm.ToolContext(tools)
@@ -1550,9 +1699,16 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             # update_chat_ctx sent the finalized user text with turn_complete=False. Complete
             # that same turn without manufacturing another model-visible user message.
-            self._send_input_event(types.LiveClientContent(turn_complete=True))
-            self._pending_text_input_item_id = None
+            completion_accepted = self._send_input_event(
+                types.LiveClientContent(turn_complete=True)
+            )
             self._advance_input_sequence()
+            if not completion_accepted:
+                self._input_state = _InputState.ABORTED
+                self._settle_pending_generation(
+                    llm.RealtimeError("Gemini Realtime user message completion was not queued")
+                )
+                return fut
             self._input_state = _InputState.TEXT_TRIGGER_SENT
         elif self._input_state == _InputState.AUDIO_ACTIVE:
             if is_given(instructions):
@@ -1681,6 +1837,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._msg_ch.close()
         self._session_should_close.set()
+        self._cancel_go_away_deadline()
+        self._go_away_restart_epoch = None
         self._session_epoch += 1
         self._input_state = _InputState.IDLE
         self._restart_after_provider_turn_epoch = None
@@ -2450,6 +2608,11 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_restart_needed(preserve_manual_audio=True)
             return
 
+        if self._go_away_restart_epoch == session_epoch and self._input_state == _InputState.IDLE:
+            # generation_created acknowledged the input and the provider has now completed every
+            # output/tool continuation it owns. This is Gemini's safe resumption boundary.
+            self._mark_restart_needed(resume_session=True)
+
         if self._deferred_manual_input_pipeline_active or self._deferred_manual_inputs:
             self._activate_next_deferred_manual_input()
 
@@ -2622,8 +2785,16 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning(
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
-        # TODO(dz): this isn't a seamless reconnection just yet
-        self._mark_restart_needed(resume_session=True)
+        if self._closed or self._terminal_error is not None:
+            return
+
+        if not self._provider_turn_active and self._input_state == _InputState.IDLE:
+            self._mark_restart_needed(resume_session=True)
+            if self._deferred_manual_input_pipeline_active or self._deferred_manual_inputs:
+                self._activate_next_deferred_manual_input()
+            return
+
+        self._schedule_go_away_restart(go_away.time_left)
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by Gemini Realtime API.")
