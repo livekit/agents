@@ -167,6 +167,7 @@ async def test_boson_realtime_session_sends_full_session_update(monkeypatch):
         assert "transcription" not in event["session"]["audio"]["input"]
         assert event["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad"
         assert event["session"]["output_modalities"] == ["audio"]
+        assert "temperature" not in event["session"]
         assert model.capabilities.audio_output is True
         # The server preserves client-supplied item ids, so the base
         # diff/create/delete chat-context synchronization works.
@@ -240,6 +241,7 @@ async def test_boson_realtime_session_sends_boson_options(monkeypatch):
         api_key="test-key",
         model="llm-model",
         voice="en_woman",
+        temperature=0.2,
         input_audio_transcription={
             "model": "asr-model",
             "language": "english",
@@ -261,6 +263,7 @@ async def test_boson_realtime_session_sends_boson_options(monkeypatch):
         }
         assert session_update["audio"]["input"]["turn_detection"] == turn_detection
         assert session_update["audio"]["output"]["voice"] == "en_woman"
+        assert session_update["temperature"] == 0.2
         assert model.capabilities.user_transcription is True
     finally:
         await session.aclose()
