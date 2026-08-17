@@ -321,7 +321,7 @@ def _resolve_realtime_turn_policy(
                     )
                 )
             resolved_detection = None
-    else:
+    elif resolved_detection is None or isinstance(resolved_detection, str):
         mode = resolved_detection if isinstance(resolved_detection, str) else None
         if mode == "vad" and vad_model is None:
             diagnostics.append(
@@ -389,6 +389,8 @@ def _resolve_realtime_turn_policy(
             )
             mode = None
         resolved_detection = mode
+    # Legacy turn detectors expose predict_end_of_turn() instead of stream(). They
+    # have no VAD prerequisite, so a valid configured instance remains authoritative.
 
     if (
         input_mode == "text"
@@ -586,6 +588,7 @@ class AgentActivity(RecognitionHooks):
         )
         self._rt_turn_detection_enabled = self._turn_policy.server_turn_detection_enabled
         self._turn_detection = self._turn_policy.turn_detection
+        self._turn_detection_metrics_source: inference.TurnDetector | None = None
         self._validate_realtime_input_mode()
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -751,6 +754,12 @@ class AgentActivity(RecognitionHooks):
         self._turn_policy = policy
         self._rt_turn_detection_enabled = policy.server_turn_detection_enabled
         self._turn_detection = policy.turn_detection
+        if self._started and not self._new_turns_blocked:
+            self._set_turn_detection_metrics_source(
+                self._turn_detection
+                if isinstance(self._turn_detection, inference.TurnDetector)
+                else None
+            )
         self._default_interruption_by_audio_activity_enabled = (
             policy.interruption_owner == "framework"
             and policy.turn_detection not in ("manual", "realtime_llm")
@@ -762,6 +771,16 @@ class AgentActivity(RecognitionHooks):
             and not self._realtime_turn.provider_activity_started
         ):
             self._realtime_turn = self._new_realtime_turn()
+
+    def _set_turn_detection_metrics_source(self, detector: inference.TurnDetector | None) -> None:
+        if self._turn_detection_metrics_source is detector:
+            return
+
+        if self._turn_detection_metrics_source is not None:
+            self._turn_detection_metrics_source.off("metrics_collected", self._on_metrics_collected)
+        self._turn_detection_metrics_source = detector
+        if detector is not None:
+            detector.on("metrics_collected", self._on_metrics_collected)
 
     def _new_realtime_turn(self) -> _RealtimeTurnTransaction:
         self._next_realtime_turn_id += 1
@@ -1394,8 +1413,11 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.on("error", self._on_error)
             self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.TurnDetector):
-            self._turn_detection.on("metrics_collected", self._on_metrics_collected)
+        self._set_turn_detection_metrics_source(
+            self._turn_detection
+            if isinstance(self._turn_detection, inference.TurnDetector)
+            else None
+        )
 
         # keyterm detection runs its own LLM, surface its usage
         self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
@@ -1716,8 +1738,7 @@ class AgentActivity(RecognitionHooks):
             self._interruption_detector.off("error", self._on_error)
             self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
-        if isinstance(self._turn_detection, inference.TurnDetector):
-            self._turn_detection.off("metrics_collected", self._on_metrics_collected)
+        self._set_turn_detection_metrics_source(None)
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
