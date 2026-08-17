@@ -18,9 +18,9 @@ load_dotenv()
 class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="You are Jessica, a helpful assistant",
+            instructions="You are Jessica, a helpful assistant. Keep replies under 5 sentences unless the user asks for more detail.",
             llm=RealtimeModel(
-                model="google-ai-studio/gemini-3.1-flash-lite",
+                model="inworld/models/gemma-4-31b-it",
                 voice="Ashley",
                 tts_model="inworld-tts-2",
                 stt_model="inworld/inworld-stt-1",
