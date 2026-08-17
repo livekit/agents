@@ -103,3 +103,52 @@ async def test_close_retains_bounded_turn_without_starting_provider_work() -> No
         "already bounded before close"
     ]
     assert rt_session.commit_audio_calls == 0
+
+
+async def test_close_retains_bounded_deferred_turn_without_provider_replay() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(llm=model)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _BlockingCloseRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._scheduling_paused = True
+    session._closing = True
+    activity._seal_realtime_audio_input()
+    deferred_ready = activity._seal_realtime_audio_input()
+    bounded_turn_started = asyncio.Event()
+    bounded_turn_finished = asyncio.Event()
+
+    async def _finish_bounded_turn() -> None:
+        bounded_turn_started.set()
+        try:
+            await activity._user_turn_completed_task(None, _bounded_turn(), deferred_ready)
+        finally:
+            bounded_turn_finished.set()
+
+    bounded_turn_task = asyncio.create_task(_finish_bounded_turn())
+    await bounded_turn_started.wait()
+    activity._user_turn_completed_atask = bounded_turn_task
+    recognition = _ClosingRecognition(bounded_turn_task)
+    activity._audio_recognition = cast(Any, recognition)
+
+    async def _close() -> None:
+        async with activity._lock:
+            await activity._close_session()
+
+    close_task = asyncio.create_task(_close())
+    await rt_session.close_entered.wait()
+    await bounded_turn_finished.wait()
+    rt_session.close_release.set()
+    await close_task
+
+    assert recognition.closed
+    assert not recognition.cancelled_bounded_turn
+    assert [message.raw_text_content for message in activity.agent.chat_ctx.messages()] == [
+        "already bounded before close"
+    ]
+    assert rt_session.commit_audio_calls == 0

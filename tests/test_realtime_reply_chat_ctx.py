@@ -1,11 +1,9 @@
 """
 Tests for the chat-context push inside AgentActivity._realtime_reply_task.
 
-When a provider reports an acknowledgement failure after recording the exact
-finalized message locally, the reply is still generated instead of dropping the
-turn. A failure before that exact update, including stale content under the same
-message ID, marks the SpeechHandle done with the error (observable via
-SpeechHandle.exception()) without generating against inconsistent context.
+Provider-specific synchronization can reject a finalized item explicitly. A missing
+acknowledgement is intentionally UNKNOWN and preserves the historical best-effort reply,
+without relying on a provider chat-context mirror as a correctness gate.
 """
 
 from __future__ import annotations
@@ -19,6 +17,10 @@ from typing import Any, cast
 import pytest
 
 from livekit.agents import llm
+from livekit.agents.llm.realtime import (
+    _UserMessageSyncResult,
+    _UserMessageSyncStatus,
+)
 from livekit.agents.voice import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.speech_handle import SpeechHandle
@@ -65,6 +67,11 @@ class _FakeActivity(SimpleNamespace):
         )
         self._commit_realtime_user_message = AgentActivity._commit_realtime_user_message.__get__(
             self, _FakeActivity
+        )
+        self._interrupt_created_realtime_generation_if_owned = (
+            AgentActivity._interrupt_created_realtime_generation_if_owned.__get__(
+                self, _FakeActivity
+            )
         )
 
 
@@ -212,7 +219,7 @@ async def test_ack_error_accepts_exact_text_when_provider_drops_local_metadata()
     assert rt_session.generate_reply_calls == 1
 
 
-async def test_update_chat_ctx_realtime_error_before_provider_update_fails_consistently() -> None:
+async def test_realtime_error_before_provider_ack_is_unknown_and_generates() -> None:
     rt_session = FakeRealtimeModel().session()
     rt_session.update_error = llm.RealtimeError("update_chat_ctx failed before provider update")
     activity = _FakeActivity(rt_session)
@@ -222,23 +229,52 @@ async def test_update_chat_ctx_realtime_error_before_provider_update_fails_consi
     handle._authorize_generation()
     message = llm.ChatMessage(role="user", content=["unsynchronized turn"])
 
-    await _run_reply_task(activity, handle, user_message=message)
+    task = _run_reply_task(activity, handle, user_message=message)
+    await _resolve_reply_future(rt_session, task)
+    await task
 
-    assert rt_session.generate_reply_calls == 0
-    assert activity.generation_calls == []
+    assert rt_session.generate_reply_calls == 1
+    assert len(activity.generation_calls) == 1
     assert rt_session.chat_ctx.get_by_id(message.id) is None
-    assert activity._agent._chat_ctx.get_by_id(message.id) is None
-    assert added == []
-    assert handle.done()
-    assert isinstance(handle.exception(), llm.RealtimeError)
+    assert activity._agent._chat_ctx.get_by_id(message.id) is message
+    assert added == [message]
+    assert not handle.done()
 
 
-async def test_update_chat_ctx_success_without_provider_item_does_not_generate() -> None:
-    class _RejectingRealtimeSession(FakeRealtimeSession):
+async def test_default_sync_completion_does_not_require_a_provider_mirror_item() -> None:
+    class _NonMirroringRealtimeSession(FakeRealtimeSession):
         async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
             del chat_ctx
-            # Some providers expose rejected create results only through logs and return normally.
-            return
+
+    model = FakeRealtimeModel()
+    rt_session = _NonMirroringRealtimeSession(model)
+    activity = _FakeActivity(rt_session)
+    added: list[llm.ChatMessage] = []
+    activity._session._conversation_item_added = added.append
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    message = llm.ChatMessage(role="user", content=["provider normalizes this item"])
+
+    task = _run_reply_task(activity, handle, user_message=message)
+    await _resolve_reply_future(rt_session, task)
+    await task
+
+    assert rt_session.generate_reply_calls == 1
+    assert len(activity.generation_calls) == 1
+    assert rt_session.chat_ctx.get_by_id(message.id) is None
+    assert activity._agent._chat_ctx.get_by_id(message.id) is message
+    assert added == [message]
+    assert not handle.done()
+
+
+async def test_explicit_provider_rejection_fails_without_generation() -> None:
+    class _RejectingRealtimeSession(FakeRealtimeSession):
+        async def _sync_user_message(
+            self, chat_ctx: llm.ChatContext, message_id: str
+        ) -> _UserMessageSyncResult:
+            del chat_ctx, message_id
+            error = llm.RealtimeError("provider rejected finalized item")
+            return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, error)
 
     model = FakeRealtimeModel()
     rt_session = _RejectingRealtimeSession(model)
@@ -296,7 +332,7 @@ async def test_provider_echo_during_context_update_emits_finalized_item_once() -
     assert rt_session.generate_reply_calls == 1
 
 
-async def test_update_chat_ctx_error_with_stale_same_id_does_not_generate() -> None:
+async def test_unknown_sync_ignores_stale_provider_mirror_content() -> None:
     class _StaleContextRealtimeSession(FakeRealtimeSession):
         async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
             finalized = chat_ctx.messages()[-1]
@@ -317,15 +353,16 @@ async def test_update_chat_ctx_error_with_stale_same_id_does_not_generate() -> N
         content=["finalized edited transcript"],
     )
 
-    await _run_reply_task(activity, handle, user_message=message)
+    task = _run_reply_task(activity, handle, user_message=message)
+    await _resolve_reply_future(rt_session, task)
+    await task
 
-    assert rt_session.generate_reply_calls == 0
-    assert activity.generation_calls == []
+    assert rt_session.generate_reply_calls == 1
+    assert len(activity.generation_calls) == 1
     assert rt_session.chat_ctx.get_by_id(message.id) != message
-    assert activity._agent._chat_ctx.get_by_id(message.id) is None
-    assert added == []
-    assert handle.done()
-    assert isinstance(handle.exception(), llm.RealtimeError)
+    assert activity._agent._chat_ctx.get_by_id(message.id) is message
+    assert added == [message]
+    assert not handle.done()
 
 
 async def test_reply_task_cancellation_settles_pending_provider_generation() -> None:
@@ -400,6 +437,70 @@ async def test_cancellation_retrieves_already_failed_generation_future() -> None
         for context in unhandled
         if context.get("message") == "Future exception was never retrieved"
     ]
+
+
+async def test_text_cancellation_after_generation_creation_interrupts_owned_output() -> None:
+    class _CreatedThenCancelledRealtimeSession(FakeRealtimeSession):
+        activity: _FakeActivity
+        reply_task: asyncio.Task[None]
+
+        def generate_reply(self, **kwargs: Any) -> asyncio.Future[llm.GenerationCreatedEvent]:
+            del kwargs
+            self.generate_reply_calls += 1
+            generation = cast(
+                llm.GenerationCreatedEvent,
+                SimpleNamespace(user_initiated=True),
+            )
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(generation)
+            self.activity._active_realtime_generation = generation
+            self.reply_task.cancel()
+            return future
+
+    model = FakeRealtimeModel()
+    rt_session = _CreatedThenCancelledRealtimeSession(model)
+    activity = _FakeActivity(rt_session)
+    rt_session.activity = activity
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    reply_task = _run_reply_task(activity, handle)
+    rt_session.reply_task = reply_task
+
+    with pytest.raises(asyncio.CancelledError):
+        await reply_task
+
+    assert rt_session.interrupted is True
+
+
+async def test_handle_interruption_after_generation_creation_interrupts_owned_output() -> None:
+    class _CreatedThenInterruptedRealtimeSession(FakeRealtimeSession):
+        activity: _FakeActivity
+        handle: SpeechHandle
+
+        def generate_reply(self, **kwargs: Any) -> asyncio.Future[llm.GenerationCreatedEvent]:
+            del kwargs
+            self.generate_reply_calls += 1
+            generation = cast(
+                llm.GenerationCreatedEvent,
+                SimpleNamespace(user_initiated=True),
+            )
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(generation)
+            self.activity._active_realtime_generation = generation
+            self.handle.interrupt()
+            return future
+
+    model = FakeRealtimeModel()
+    rt_session = _CreatedThenInterruptedRealtimeSession(model)
+    activity = _FakeActivity(rt_session)
+    rt_session.activity = activity
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    rt_session.handle = handle
+
+    await _run_reply_task(activity, handle)
+
+    assert rt_session.interrupted is True
 
 
 async def test_cancellation_before_authorization_cleans_up_all_wait_tasks() -> None:
@@ -572,16 +673,16 @@ async def test_exact_local_message_is_committed_after_provider_sync_once() -> No
     assert added[0].metrics == {"transcription_delay": 0.2}
 
 
-async def test_update_chat_ctx_unexpected_error_fails_speech_handle() -> None:
-    # a non-RealtimeError is unexpected: the turn is marked failed on the
-    # SpeechHandle instead of crashing the task, and no reply is requested
+async def test_update_chat_ctx_unexpected_error_propagates_and_fails_speech_handle() -> None:
+    # A non-RealtimeError is an implementation failure, not an ambiguous provider ack.
     rt_session = FakeRealtimeModel().session()
     rt_session.update_error = RuntimeError("boom")
     activity = _FakeActivity(rt_session)
     handle = SpeechHandle.create()
     handle._authorize_generation()
 
-    await _run_reply_task(activity, handle)
+    with pytest.raises(RuntimeError, match="boom"):
+        await _run_reply_task(activity, handle)
 
     assert rt_session.generate_reply_calls == 0
     assert activity.generation_calls == []

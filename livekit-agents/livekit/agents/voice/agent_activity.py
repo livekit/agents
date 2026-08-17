@@ -7,13 +7,16 @@ import json
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
-from livekit.agents.llm.realtime import MessageGeneration
+from livekit.agents.llm.realtime import (
+    MessageGeneration,
+    _UserMessageSyncStatus,
+)
 from livekit.agents.metrics.base import Metadata
 
 from .. import inference, llm, stt, tts, utils, vad
@@ -207,20 +210,301 @@ class _PausedSpeechInfo:
     timeout: float
 
 
-class _RealtimeAudioInputToken:
-    """Identity for one logical realtime-model audio input."""
+@dataclass(frozen=True)
+class _TurnPolicyDiagnostic:
+    level: Literal["info", "warning"]
+    message: str
 
 
-_RealtimeAudioInputOwner = _RealtimeAudioInputToken | asyncio.Future[_RealtimeAudioInputToken]
+@dataclass(frozen=True)
+class _ResolvedRealtimeTurnPolicy:
+    input_mode: RealtimeInputMode
+    turn_detection: TurnDetectionMode | None
+    turn_detection_explicit: bool
+    server_turn_detection_enabled: bool
+    input_owner: Literal["framework", "provider"]
+    interruption_owner: Literal["disabled", "framework", "provider"]
+    finalize_empty_transcript_on_timeout: bool
+    diagnostics: tuple[_TurnPolicyDiagnostic, ...] = ()
+
+
+def _resolve_realtime_turn_policy(
+    *,
+    input_mode: RealtimeInputMode,
+    llm_model: llm.LLM | llm.RealtimeModel | None,
+    configured_turn_detection: TurnDetectionMode | None,
+    turn_detection_explicit: bool,
+    vad_model: vad.VAD | None,
+    stt_model: stt.STT | None,
+    using_default_vad: bool,
+    interruption_detection_configured: bool,
+    allow_interruptions: bool,
+    preserve_existing_stt_boundary: bool = False,
+    active_server_turn_detection_enabled: bool | None = None,
+) -> _ResolvedRealtimeTurnPolicy:
+    """Resolve every owner of a user turn without mutating live session state."""
+
+    diagnostics: list[_TurnPolicyDiagnostic] = []
+    realtime_model = llm_model if isinstance(llm_model, llm.RealtimeModel) else None
+    caps = realtime_model.capabilities if realtime_model is not None else None
+
+    if input_mode == "text" and configured_turn_detection == "realtime_llm":
+        raise ValueError(
+            "turn_detection='realtime_llm' is incompatible with realtime text input; "
+            "use 'stt', 'manual', or None for automatic STT turn detection"
+        )
+
+    desired_server_detection = False
+    if caps is not None:
+        if input_mode == "text":
+            desired_server_detection = caps.turn_detection and not caps.can_disable_turn_detection
+        elif not caps.turn_detection or not caps.can_disable_turn_detection:
+            desired_server_detection = caps.turn_detection
+        elif turn_detection_explicit and configured_turn_detection == "realtime_llm":
+            desired_server_detection = True
+        elif turn_detection_explicit and configured_turn_detection == "manual":
+            desired_server_detection = False
+        elif vad_model is not None and (
+            (
+                turn_detection_explicit
+                and (
+                    isinstance(configured_turn_detection, _StreamingTurnDetector)
+                    or configured_turn_detection == "vad"
+                )
+            )
+            or interruption_detection_configured
+        ):
+            desired_server_detection = False
+        else:
+            desired_server_detection = True
+
+    server_detection = (
+        desired_server_detection
+        if active_server_turn_detection_enabled is None
+        else active_server_turn_detection_enabled
+    )
+    if (
+        active_server_turn_detection_enabled is not None
+        and turn_detection_explicit
+        and desired_server_detection != active_server_turn_detection_enabled
+    ):
+        diagnostics.append(
+            _TurnPolicyDiagnostic(
+                "warning",
+                "changing turn_detection at runtime does not update a realtime model's "
+                "server-side turn detection (resolved at session start); it stays "
+                f"{'enabled' if active_server_turn_detection_enabled else 'disabled'} "
+                "for this session.",
+            )
+        )
+
+    resolved_detection = configured_turn_detection
+    unavailable_detector = False
+    if isinstance(resolved_detection, _StreamingTurnDetector):
+        if vad_model is None:
+            diagnostics.append(
+                _TurnPolicyDiagnostic(
+                    "warning",
+                    "TurnDetector requires a VAD model. Pass vad=inference.VAD() to "
+                    "AgentSession/Agent or turn_detection=None to disable the default TurnDetector",
+                )
+            )
+            resolved_detection = None
+            unavailable_detector = True
+        elif server_detection:
+            if turn_detection_explicit:
+                diagnostics.append(
+                    _TurnPolicyDiagnostic(
+                        "warning",
+                        "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
+                        "with server-side turn detection enabled, ignoring the turn_detection setting",
+                    )
+                )
+            resolved_detection = None
+    else:
+        mode = resolved_detection if isinstance(resolved_detection, str) else None
+        if mode == "vad" and vad_model is None:
+            diagnostics.append(
+                _TurnPolicyDiagnostic(
+                    "warning",
+                    "turn_detection is set to 'vad', but no VAD model is provided. "
+                    "Pass a VAD instance, e.g. Agent(vad=silero.VAD.load())",
+                )
+            )
+            mode = None
+            unavailable_detector = True
+        if mode == "stt" and stt_model is None:
+            diagnostics.append(
+                _TurnPolicyDiagnostic(
+                    "warning",
+                    "turn_detection is set to 'stt', but no STT model is provided. "
+                    "Pass an STT instance, e.g. Agent(stt=deepgram.STT())",
+                )
+            )
+            mode = None
+            unavailable_detector = True
+
+        if realtime_model is not None:
+            if mode == "realtime_llm" and not server_detection:
+                diagnostics.append(
+                    _TurnPolicyDiagnostic(
+                        "warning",
+                        "turn_detection is set to 'realtime_llm', but the LLM is not a "
+                        "RealtimeModel or the server-side turn detection is not supported/enabled, "
+                        "ignoring the turn_detection setting",
+                    )
+                )
+                mode = None
+            if mode == "stt" and input_mode != "text":
+                diagnostics.append(
+                    _TurnPolicyDiagnostic(
+                        "warning",
+                        "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
+                        "ignoring the turn_detection setting",
+                    )
+                )
+                mode = None
+            elif mode and mode != "realtime_llm" and server_detection:
+                diagnostics.append(
+                    _TurnPolicyDiagnostic(
+                        "warning",
+                        f"turn_detection is set to '{mode}', but the LLM is a RealtimeModel "
+                        "and server-side turn detection enabled, ignoring the turn_detection setting",
+                    )
+                )
+                mode = None
+            if (
+                not server_detection
+                and vad_model is not None
+                and not using_default_vad
+                and mode is None
+            ):
+                mode = "vad"
+        elif mode == "realtime_llm":
+            diagnostics.append(
+                _TurnPolicyDiagnostic(
+                    "warning",
+                    "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel",
+                )
+            )
+            mode = None
+        resolved_detection = mode
+
+    if (
+        input_mode == "text"
+        and resolved_detection is None
+        and vad_model is None
+        and stt_model is not None
+        and (stt_model.capabilities.streaming or preserve_existing_stt_boundary)
+        and (not turn_detection_explicit or unavailable_detector)
+    ):
+        diagnostics.append(
+            _TurnPolicyDiagnostic(
+                "info",
+                "using STT end-of-speech events for realtime text input because no usable "
+                "VAD or turn detector is configured",
+            )
+        )
+        resolved_detection = "stt"
+
+    if (
+        vad_model is None
+        and stt_model is not None
+        and not stt_model.capabilities.streaming
+        and isinstance(llm_model, llm.LLM)
+        and allow_interruptions
+        and resolved_detection is None
+    ):
+        diagnostics.append(
+            _TurnPolicyDiagnostic(
+                "warning",
+                "VAD is not set. Enabling VAD is recommended when using LLM and "
+                "non-streaming STT for more responsive interruption handling.",
+            )
+        )
+
+    if server_detection and not allow_interruptions:
+        raise ValueError(
+            "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot "
+            "be False, disable turn_detection in the RealtimeModel and use VAD on the "
+            "AgentSession instead"
+        )
+
+    input_owner: Literal["framework", "provider"] = "provider" if server_detection else "framework"
+    interruption_owner: Literal["disabled", "framework", "provider"] = (
+        "disabled" if not allow_interruptions else input_owner
+    )
+    return _ResolvedRealtimeTurnPolicy(
+        input_mode=input_mode,
+        turn_detection=resolved_detection,
+        turn_detection_explicit=turn_detection_explicit,
+        server_turn_detection_enabled=server_detection,
+        input_owner=input_owner,
+        interruption_owner=interruption_owner,
+        finalize_empty_transcript_on_timeout=(
+            realtime_model is not None and not server_detection and resolved_detection != "manual"
+        ),
+        diagnostics=tuple(diagnostics),
+    )
+
+
+_RealtimeTurnState = Literal[
+    "open",
+    "sealed",
+    "input_submitted",
+    "generation_pending",
+    "generation_created",
+    "settled",
+]
 
 
 @dataclass
-class _DeferredRealtimeAudioInput:
-    frames: list[rtc.AudioFrame]
-    token: _RealtimeAudioInputToken
-    ready_fut: asyncio.Future[_RealtimeAudioInputToken]
-    activity_started: bool = False
-    turn_complete: bool = False
+class _RealtimeTurnTransaction:
+    turn_id: int
+    policy: _ResolvedRealtimeTurnPolicy
+    state: _RealtimeTurnState = "open"
+    disposition: Literal["active", "abandoned"] = "active"
+    frames: list[rtc.AudioFrame] = field(default_factory=list)
+    input_observed: bool = False
+    provider_activity_started: bool = False
+    ready_fut: asyncio.Future[_RealtimeTurnTransaction] | None = None
+    speech_handle: SpeechHandle | None = None
+    generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+
+    @property
+    def token(self) -> _RealtimeTurnTransaction:
+        return self
+
+    @property
+    def activity_started(self) -> bool:
+        return self.provider_activity_started
+
+    @activity_started.setter
+    def activity_started(self, value: bool) -> None:
+        self.provider_activity_started = value
+
+    @property
+    def turn_complete(self) -> bool:
+        return self.state != "open"
+
+    @turn_complete.setter
+    def turn_complete(self, value: bool) -> None:
+        if value and self.state == "open":
+            self.state = "sealed"
+        elif not value and self.state == "sealed":
+            self.state = "open"
+
+    @property
+    def input_submitted(self) -> bool:
+        return self.state in (
+            "input_submitted",
+            "generation_pending",
+            "generation_created",
+            "settled",
+        )
+
+
+_RealtimeAudioInputOwner = _RealtimeTurnTransaction | asyncio.Future[_RealtimeTurnTransaction]
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -233,10 +517,6 @@ class AgentActivity(RecognitionHooks):
         self._lock = asyncio.Lock()
         self._realtime_chat_ctx_lock = asyncio.Lock()
         self._pending_realtime_user_message_ids: set[str] = set()
-        self._rt_user_activity_started = False
-        self._rt_audio_input_sealed = False
-        self._rt_audio_input_token = _RealtimeAudioInputToken()
-        self._deferred_realtime_audio_inputs: deque[_DeferredRealtimeAudioInput] = deque()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -245,6 +525,7 @@ class AgentActivity(RecognitionHooks):
         self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
+        self._active_realtime_generation: llm.GenerationCreatedEvent | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
         self._user_silence_event: asyncio.Event = asyncio.Event()
         self._user_silence_event.set()
@@ -291,9 +572,20 @@ class AgentActivity(RecognitionHooks):
         self._on_exit_task: asyncio.Task | None = None
 
         self._realtime_input_mode = self._resolve_realtime_input_mode()
-
-        # session-scoped truth read by every server-side turn-detection check below
-        self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
+        configured_turn_detection = (
+            self._agent.turn_detection
+            if is_given(self._agent.turn_detection)
+            else self._session.turn_detection
+        )
+        turn_detection_explicit = (
+            is_given(self._agent.turn_detection) or self._session._turn_detection_explicit
+        )
+        self._turn_policy = self._resolve_turn_policy(
+            configured_turn_detection=configured_turn_detection,
+            turn_detection_explicit=turn_detection_explicit,
+        )
+        self._rt_turn_detection_enabled = self._turn_policy.server_turn_detection_enabled
+        self._turn_detection = self._turn_policy.turn_detection
         self._validate_realtime_input_mode()
         if (
             isinstance(self.llm, llm.RealtimeModel)
@@ -305,20 +597,9 @@ class AgentActivity(RecognitionHooks):
                 "turn detection."
             )
 
-        if self._rt_turn_detection_enabled and not self.allow_interruptions:
-            raise ValueError(
-                "the RealtimeModel uses a server-side turn detection, "
-                "allow_interruptions cannot be False, disable turn_detection in "
-                "the RealtimeModel and use VAD on the AgentSession instead"
-            )
-
-        # validate turn detection mode and turn detector
-        turn_detection = (
-            self._agent.turn_detection
-            if is_given(self._agent.turn_detection)
-            else self._session.turn_detection
-        )
-        self._turn_detection = self._validate_turn_detection(turn_detection)
+        self._next_realtime_turn_id = 0
+        self._realtime_turn = self._new_realtime_turn()
+        self._deferred_realtime_turns: deque[_RealtimeTurnTransaction] = deque()
 
         self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
             self._resolve_interruption_detection()
@@ -327,10 +608,9 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detected: bool = False
 
         # this allows taking over audio interruption temporarily until interruption is detected
-        # by default it is true unless turn_detection is manual or realtime_llm
-        self._interruption_by_audio_activity_enabled: bool = self._turn_detection not in (
-            "manual",
-            "realtime_llm",
+        self._interruption_by_audio_activity_enabled = (
+            self._turn_policy.interruption_owner == "framework"
+            and self._turn_detection not in ("manual", "realtime_llm")
         )
         self._default_interruption_by_audio_activity_enabled = (
             self._interruption_by_audio_activity_enabled
@@ -360,19 +640,14 @@ class AgentActivity(RecognitionHooks):
         self._validate_text_mode_stt_path(
             resolved_stt=self.stt,
             resolved_vad=self.vad,
-            resolved_turn_detection=None,
+            resolved_turn_detection=self._turn_policy.turn_detection,
         )
         if not self.llm.capabilities.mutable_chat_context:
             raise ValueError(
                 "realtime_input_mode='text' requires a RealtimeModel with mutable chat context"
             )
 
-        turn_detection = (
-            self._agent.turn_detection
-            if is_given(self._agent.turn_detection)
-            else self._session.turn_detection
-        )
-        if turn_detection == "realtime_llm" or self._rt_turn_detection_enabled:
+        if self._rt_turn_detection_enabled:
             raise ValueError(
                 "realtime_input_mode='text' requires server-side turn detection to be disabled"
             )
@@ -414,189 +689,106 @@ class AgentActivity(RecognitionHooks):
                 "and no VAD requires explicit turn_detection"
             )
 
-    def _resolve_rt_turn_detection_enabled(
-        self, *, session_turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN
-    ) -> bool:
-        """Whether a realtime model's server-side turn detection is on for this session.
-
-        Off when the model can hand turn-taking to the client and the user configured
-        client-side turn-taking; otherwise the model's own setting stands.
-        """
-        if not isinstance(self.llm, llm.RealtimeModel):
-            return False
-
-        caps = self.llm.capabilities
-        if self._realtime_input_mode == "text":
-            # Text mode is itself an explicit client-side turn-taking choice. Models that
-            # cannot disable their active server turn detector are rejected below.
-            return caps.turn_detection and not caps.can_disable_turn_detection
-
-        # a model that without turn_detection
-        # or can't hand turn-taking to the client keeps its own setting
-        if not caps.turn_detection or not caps.can_disable_turn_detection:
-            return caps.turn_detection
-
-        # resolve client-side turn detection (agent overrides session)
-        if is_given(self._agent.turn_detection):
-            client_td: TurnDetectionMode | None = self._agent.turn_detection
-            client_td_explicit = True
-        elif is_given(session_turn_detection):
-            client_td = session_turn_detection
-            client_td_explicit = session_turn_detection is not None
-        elif self._session._turn_detection_explicit:
-            client_td = self._session.turn_detection
-            client_td_explicit = True
-        else:
-            client_td = None
-            client_td_explicit = False
-
-        if client_td_explicit and client_td == "realtime_llm":
-            return True  # user wants the model to keep doing turn-taking
-        if client_td_explicit and client_td == "manual":
-            return False  # client commits turns manually, no VAD needed
-
-        # disable server-side turn detection if the user has a client-side turn detector or interruption detection
-        if self.vad is not None and (
-            (
-                client_td_explicit
-                and (isinstance(client_td, _StreamingTurnDetector) or client_td == "vad")
-            )
-            or is_given(self._agent.interruption_detection)
-            or is_given(self._session.interruption_detection)
-        ):
-            return False
-        return True
-
-    def _validate_turn_detection(
+    def _resolve_turn_policy(
         self,
-        turn_detection: TurnDetectionMode | None,
         *,
-        session_turn_detection_explicit: bool | None = None,
-    ) -> TurnDetectionMode | None:
-        turn_detection_explicit = is_given(self._agent.turn_detection) or (
-            self._session._turn_detection_explicit
-            if session_turn_detection_explicit is None
-            else session_turn_detection_explicit
+        configured_turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        turn_detection_explicit: NotGivenOr[bool] = NOT_GIVEN,
+        vad_model: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        stt_model: NotGivenOr[stt.STT | None] = NOT_GIVEN,
+        llm_model: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
+        preserve_existing_stt_boundary: bool = False,
+        active_server_turn_detection_enabled: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> _ResolvedRealtimeTurnPolicy:
+        if is_given(configured_turn_detection):
+            effective_turn_detection = configured_turn_detection
+            effective_explicit = (
+                turn_detection_explicit
+                if is_given(turn_detection_explicit)
+                else configured_turn_detection is not None
+            )
+        elif is_given(self._agent.turn_detection):
+            effective_turn_detection = self._agent.turn_detection
+            effective_explicit = True
+        else:
+            effective_turn_detection = self._session.turn_detection
+            effective_explicit = self._session._turn_detection_explicit
+
+        effective_vad = vad_model if is_given(vad_model) else self.vad
+        effective_stt = stt_model if is_given(stt_model) else self.stt
+        effective_llm = llm_model if is_given(llm_model) else self.llm
+        policy = _resolve_realtime_turn_policy(
+            input_mode=self._realtime_input_mode,
+            llm_model=effective_llm,
+            configured_turn_detection=effective_turn_detection,
+            turn_detection_explicit=effective_explicit,
+            vad_model=effective_vad,
+            stt_model=effective_stt,
+            using_default_vad=self.using_default_vad if not is_given(vad_model) else False,
+            interruption_detection_configured=(
+                is_given(self._agent.interruption_detection)
+                or is_given(self._session.interruption_detection)
+            ),
+            allow_interruptions=self.allow_interruptions,
+            preserve_existing_stt_boundary=preserve_existing_stt_boundary,
+            active_server_turn_detection_enabled=(
+                active_server_turn_detection_enabled
+                if is_given(active_server_turn_detection_enabled)
+                else None
+            ),
+        )
+        for diagnostic in policy.diagnostics:
+            if diagnostic.level == "warning":
+                logger.warning(diagnostic.message)
+            else:
+                logger.info(diagnostic.message)
+        return policy
+
+    def _apply_turn_policy(self, policy: _ResolvedRealtimeTurnPolicy) -> None:
+        if self._turn_detection == "manual" or policy.turn_detection == "manual":
+            self._cancel_false_interruption_timer()
+
+        self._turn_policy = policy
+        self._rt_turn_detection_enabled = policy.server_turn_detection_enabled
+        self._turn_detection = policy.turn_detection
+        self._default_interruption_by_audio_activity_enabled = (
+            policy.interruption_owner == "framework"
+            and policy.turn_detection not in ("manual", "realtime_llm")
         )
         if (
-            self._realtime_input_mode == "text"
-            and self.vad is None
-            and self.stt is not None
-            and self.stt.capabilities.streaming
-            and not turn_detection_explicit
-            and (turn_detection is None or isinstance(turn_detection, _StreamingTurnDetector))
+            self._realtime_turn.state == "open"
+            and not self._realtime_turn.frames
+            and not self._realtime_turn.input_observed
+            and not self._realtime_turn.provider_activity_started
         ):
-            logger.info(
-                "using streaming STT end-of-speech events for realtime text input because "
-                "no VAD or turn detector was explicitly configured"
-            )
-            return "stt"
-        if turn_detection is not None and not isinstance(turn_detection, str):
-            if isinstance(turn_detection, _StreamingTurnDetector):
-                if self.vad is None:
-                    logger.warning(
-                        "TurnDetector requires a VAD model. Pass vad=inference.VAD() to AgentSession/Agent"
-                        " or turn_detection=None to disable the default TurnDetector"
-                    )
-                    return None
+            self._realtime_turn = self._new_realtime_turn()
 
-                if self._rt_turn_detection_enabled:
-                    # only warn when the user asked for a TurnDetector, the eager default is
-                    # silently superseded by the server-side turn detection
-                    if (
-                        is_given(self._agent.turn_detection)
-                        or self._session._turn_detection_explicit
-                    ):
-                        logger.warning(
-                            "turn_detection is a TurnDetector, but the LLM is a RealtimeModel "
-                            "with server-side turn detection enabled, "
-                            "ignoring the turn_detection setting"
-                        )
-                    return None
-
-            return turn_detection
-
-        mode = turn_detection if isinstance(turn_detection, str) else None
-        vad_model = self.vad
-        stt_model = self.stt
-        llm_model = self.llm
-
-        if mode == "vad" and not vad_model:
-            logger.warning(
-                "turn_detection is set to 'vad', but no VAD model is provided. "
-                "Pass a VAD instance, e.g. Agent(vad=silero.VAD.load())"
-            )
-            mode = None
-
-        if mode == "stt" and not stt_model:
-            logger.warning(
-                "turn_detection is set to 'stt', but no STT model is provided. "
-                "Pass an STT instance, e.g. Agent(stt=deepgram.STT())"
-            )
-            mode = None
-
-        if isinstance(llm_model, llm.RealtimeModel):
-            if mode == "realtime_llm" and not self._rt_turn_detection_enabled:
-                logger.warning(
-                    "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel "
-                    "or the server-side turn detection is not supported/enabled, "
-                    "ignoring the turn_detection setting"
-                )
-                mode = None
-
-            if mode == "stt" and self._realtime_input_mode != "text":
-                logger.warning(
-                    "turn_detection is set to 'stt', but the LLM is a RealtimeModel, "
-                    "ignoring the turn_detection setting"
-                )
-                mode = None
-
-            elif mode and mode != "realtime_llm" and self._rt_turn_detection_enabled:
-                logger.warning(
-                    f"turn_detection is set to '{mode}', but the LLM "
-                    "is a RealtimeModel and server-side turn detection enabled, "
-                    "ignoring the turn_detection setting"
-                )
-                mode = None
-
-            # fallback to VAD if server side turn detection is disabled and user supplied VAD is available
-            if (
-                not self._rt_turn_detection_enabled
-                and vad_model is not None
-                and not self.using_default_vad
-                and mode is None
-            ):
-                mode = "vad"
-
-        elif mode == "realtime_llm":
-            logger.warning(
-                "turn_detection is set to 'realtime_llm', but the LLM is not a RealtimeModel"
-            )
-            mode = None
-
-        if (
-            not vad_model
-            and stt_model
-            and not stt_model.capabilities.streaming
-            and isinstance(llm_model, llm.LLM)
-            and self.allow_interruptions
-            and mode is None
-        ):
-            logger.warning(
-                "VAD is not set. Enabling VAD is recommended when using LLM and non-streaming STT "
-                "for more responsive interruption handling."
-            )
-
-        return mode
-
-    def _should_finalize_empty_transcript_on_timeout(
-        self, turn_detection: TurnDetectionMode | None
-    ) -> bool:
-        return (
-            isinstance(self.llm, llm.RealtimeModel)
-            and not self._rt_turn_detection_enabled
-            and turn_detection != "manual"
+    def _new_realtime_turn(self) -> _RealtimeTurnTransaction:
+        self._next_realtime_turn_id += 1
+        return _RealtimeTurnTransaction(
+            turn_id=self._next_realtime_turn_id,
+            policy=self._turn_policy,
         )
+
+    @property
+    def _rt_audio_input_token(self) -> _RealtimeTurnTransaction:
+        """Compatibility view of the current framework-owned turn identity."""
+
+        return self._realtime_turn
+
+    @property
+    def _rt_audio_input_sealed(self) -> bool:
+        return self._realtime_turn.turn_complete
+
+    @property
+    def _rt_user_activity_started(self) -> bool:
+        return self._realtime_turn.provider_activity_started
+
+    @property
+    def _deferred_realtime_audio_inputs(self) -> deque[_RealtimeTurnTransaction]:
+        """Compatibility view of FIFO transactions waiting for provider ownership."""
+
+        return self._deferred_realtime_turns
 
     @property
     def scheduling_paused(self) -> bool:
@@ -792,49 +984,23 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.update_options(tool_choice=self._tool_choice)
 
         if utils.is_given(turn_detection):
-            if (
-                turn_detection == "realtime_llm"
-                and self._realtime_input_mode == "text"
-                and not self._rt_turn_detection_enabled
-            ):
-                raise ValueError(
-                    "turn_detection='realtime_llm' is incompatible with realtime text input; "
-                    "use 'stt', 'manual', or None for automatic STT turn detection"
-                )
-
-            # a realtime model's server-side turn detection is resolved once at session start;
-            # runtime re-sync isn't supported yet, so warn when an explicit change would flip it.
-            if (
-                isinstance(self.llm, llm.RealtimeModel)
-                and self.llm.capabilities.can_disable_turn_detection
-                and turn_detection is not None
-                and self._resolve_rt_turn_detection_enabled(session_turn_detection=turn_detection)
-                != self._rt_turn_detection_enabled
-            ):
-                logger.warning(
-                    "changing turn_detection at runtime does not update a realtime model's "
-                    "server-side turn detection (resolved at session start); it stays %s "
-                    "for this session.",
-                    "enabled" if self._rt_turn_detection_enabled else "disabled",
-                )
-
-            turn_detection = self._validate_turn_detection(
-                turn_detection,
-                session_turn_detection_explicit=(
+            policy = self._resolve_turn_policy(
+                configured_turn_detection=turn_detection,
+                turn_detection_explicit=(
                     session_turn_detection_explicit
                     if is_given(session_turn_detection_explicit)
-                    else None
+                    else turn_detection is not None
                 ),
+                active_server_turn_detection_enabled=self._rt_turn_detection_enabled,
             )
-
-            if self._turn_detection == "manual" or turn_detection == "manual":
-                self._cancel_false_interruption_timer()
-
-            self._turn_detection = turn_detection
-            self._default_interruption_by_audio_activity_enabled = self._turn_detection not in (
-                "manual",
-                "realtime_llm",
-            )
+            if self._realtime_input_mode == "text":
+                self._validate_text_mode_stt_path(
+                    resolved_stt=self.stt,
+                    resolved_vad=self.vad,
+                    resolved_turn_detection=policy.turn_detection,
+                )
+            self._apply_turn_policy(policy)
+            turn_detection = policy.turn_detection
 
         if self._audio_recognition:
             self._audio_recognition._update_options(
@@ -843,7 +1009,7 @@ class AgentActivity(RecognitionHooks):
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
                 finalize_empty_transcript_on_timeout=(
-                    self._should_finalize_empty_transcript_on_timeout(self._turn_detection)
+                    self._turn_policy.finalize_empty_transcript_on_timeout
                     if is_given(turn_detection)
                     else NOT_GIVEN
                 ),
@@ -857,25 +1023,7 @@ class AgentActivity(RecognitionHooks):
         new_llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         new_tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
-        if self._realtime_input_mode == "text":
-            prospective_stt = new_stt if is_given(new_stt) else self.stt
-            prospective_vad = new_vad if is_given(new_vad) else self.vad
-            self._validate_text_mode_stt_path(
-                resolved_stt=prospective_stt,
-                resolved_vad=prospective_vad,
-                resolved_turn_detection=self._turn_detection,
-            )
-        if (
-            is_given(new_vad)
-            and new_vad is None
-            and self._realtime_input_mode == "text"
-            and (
-                self._turn_detection == "vad"
-                or isinstance(self._turn_detection, _StreamingTurnDetector)
-            )
-        ):
-            raise ValueError("realtime_input_mode='text' with this turn detection requires a VAD")
-        # a RealtimeModel owns a live session; reject before mutating to stay all-or-nothing
+        # A RealtimeModel owns a live session; reject before mutating to stay all-or-nothing.
         if is_given(new_llm) and (
             isinstance(new_llm, llm.RealtimeModel) or isinstance(self.llm, llm.RealtimeModel)
         ):
@@ -883,9 +1031,41 @@ class AgentActivity(RecognitionHooks):
                 "cannot swap to or from a RealtimeModel while the agent is running, "
                 "use AgentSession.update_agent() instead"
             )
-        # a new vad must satisfy the streaming turn detector's min_silence requirement
+
+        prospective_stt = new_stt if is_given(new_stt) else self.stt
+        prospective_vad = new_vad if is_given(new_vad) else self.vad
+        policy: _ResolvedRealtimeTurnPolicy | None = None
+        if is_given(new_stt) or is_given(new_vad) or is_given(new_llm):
+            policy = self._resolve_turn_policy(
+                stt_model=new_stt,
+                vad_model=new_vad,
+                llm_model=new_llm,
+                preserve_existing_stt_boundary=(
+                    is_given(new_stt)
+                    and prospective_stt is not None
+                    and type(self._agent).stt_node is not Agent.stt_node
+                    and self._turn_policy.turn_detection == "stt"
+                ),
+                active_server_turn_detection_enabled=self._rt_turn_detection_enabled,
+            )
+            if self._realtime_input_mode == "text":
+                self._validate_text_mode_stt_path(
+                    resolved_stt=prospective_stt,
+                    resolved_vad=prospective_vad,
+                    resolved_turn_detection=policy.turn_detection,
+                )
+
+        # A new VAD must satisfy the resolved detector's minimum-silence requirement.
         if is_given(new_vad) and self._audio_recognition is not None:
-            self._audio_recognition._check_vad_silence_requirement(vad=new_vad)
+            self._audio_recognition._check_vad_silence_requirement(
+                detector=(
+                    policy.turn_detection
+                    if policy is not None
+                    and isinstance(policy.turn_detection, _StreamingTurnDetector)
+                    else None
+                ),
+                vad=new_vad,
+            )
 
         if is_given(new_stt):
             old_stt = self.stt
@@ -937,6 +1117,16 @@ class AgentActivity(RecognitionHooks):
                 self.llm.prewarm()
                 self.llm.on("metrics_collected", self._on_metrics_collected)
                 self.llm.on("error", self._on_error)
+
+        if policy is not None:
+            self._apply_turn_policy(policy)
+            if self._audio_recognition is not None:
+                self._audio_recognition._update_options(
+                    turn_detection=policy.turn_detection,
+                    finalize_empty_transcript_on_timeout=(
+                        policy.finalize_empty_transcript_on_timeout
+                    ),
+                )
 
         if is_given(new_tts):
             old_tts = self.tts
@@ -1317,7 +1507,7 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
             finalize_empty_transcript_on_timeout=(
-                self._should_finalize_empty_transcript_on_timeout(self._turn_detection)
+                self._turn_policy.finalize_empty_transcript_on_timeout
             ),
         )
         stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
@@ -1487,6 +1677,10 @@ class AgentActivity(RecognitionHooks):
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
 
+        # Freeze turn admission before either recognition or provider teardown can race a
+        # bounded callback. Existing bounded text may still settle into local history.
+        self._new_turns_blocked = True
+
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
             self.llm.off("error", self._on_error)
@@ -1527,18 +1721,44 @@ class AgentActivity(RecognitionHooks):
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
+        # A bounded deferred EOU may be waiting for its provider-input turn. Release only that
+        # local waiter before abandoning the provider queue; the admission gate above ensures it
+        # records the transcript without committing or generating on the closing session.
+        for transaction in self._deferred_realtime_turns:
+            if transaction.ready_fut is not None and not transaction.ready_fut.done():
+                transaction.ready_fut.set_result(transaction)
         self._reset_realtime_audio_input_state()
-
-        # Stop recognition first so a transcription timeout cannot schedule provider work
-        # while the realtime transport is closing.
-        if self._audio_recognition is not None:
-            await self._audio_recognition._aclose()
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()
 
+        # Begin closing the provider so a blocked receive loop can unwind, while the admission
+        # gate above lets an already-bounded recognition task retain its text without starting
+        # provider work. Recognition teardown happens only after that task has settled.
+        rt_close_task: asyncio.Task[None] | None = None
         if self._rt_session is not None:
-            await self._rt_session.aclose()
+            rt_close_task = asyncio.create_task(
+                self._rt_session.aclose(), name="AgentActivity.close_realtime_session"
+            )
+
+        bounded_turn_task = self._user_turn_completed_atask
+        current_task = asyncio.current_task()
+        if bounded_turn_task is not None and bounded_turn_task is not current_task:
+            await asyncio.shield(bounded_turn_task)
+
+        if rt_close_task is not None:
+            await rt_close_task
+
+        latest_bounded_turn_task = self._user_turn_completed_atask
+        if (
+            latest_bounded_turn_task is not None
+            and latest_bounded_turn_task is not bounded_turn_task
+            and latest_bounded_turn_task is not current_task
+        ):
+            await asyncio.shield(latest_bounded_turn_task)
+
+        if self._audio_recognition is not None:
+            await self._audio_recognition._aclose()
 
         await self._cancel_speech_pause(
             old_task=self._cancel_speech_pause_task,
@@ -1612,11 +1832,16 @@ class AgentActivity(RecognitionHooks):
         if should_discard:
             stt_frame = utils.audio.silence_frame_like(frame)
 
-        if self._rt_session is not None and self._realtime_input_mode == "audio":
+        if (
+            self._rt_session is not None
+            and self._realtime_input_mode == "audio"
+            and not self._new_turns_blocked
+        ):
             model_frame = stt_frame if stt_frame is not None else frame
             if self._rt_audio_input_sealed:
                 self._get_deferred_realtime_audio_input().frames.append(model_frame)
             else:
+                self._realtime_turn.input_observed = True
                 self._rt_session.push_audio(model_frame)
 
         if self._audio_recognition is not None:
@@ -1772,6 +1997,13 @@ class AgentActivity(RecognitionHooks):
                 and (self._rt_user_activity_started or self._rt_audio_input_sealed)
             ):
                 realtime_audio_input_owner = self._rt_audio_input_token
+            if isinstance(realtime_audio_input_owner, _RealtimeTurnTransaction):
+                realtime_audio_input_owner.speech_handle = handle
+            elif isinstance(realtime_audio_input_owner, asyncio.Future):
+                for transaction in self._deferred_realtime_turns:
+                    if transaction.ready_fut is realtime_audio_input_owner:
+                        transaction.speech_handle = handle
+                        break
             self._create_speech_task(
                 self._realtime_reply_task(
                     speech_handle=handle,
@@ -1891,135 +2123,161 @@ class AgentActivity(RecognitionHooks):
         if (
             self._rt_session is None
             or self._realtime_input_mode != "audio"
-            or self._rt_turn_detection_enabled
+            or self._realtime_turn.policy.input_owner != "framework"
+            or self._new_turns_blocked
         ):
             return
-        if self._rt_audio_input_sealed:
-            self._get_deferred_realtime_audio_input().activity_started = True
+        if self._realtime_turn.turn_complete:
+            self._get_deferred_realtime_audio_input().provider_activity_started = True
             return
-        if self._rt_user_activity_started:
+        if self._realtime_turn.provider_activity_started:
             return
 
         # Set the latch before calling the provider so a synchronous callback cannot start the
         # same logical activity twice. Roll it back if the provider rejects the notification.
-        self._rt_user_activity_started = True
+        self._realtime_turn.provider_activity_started = True
         try:
             self._rt_session.start_user_activity()
         except BaseException:
-            self._rt_user_activity_started = False
+            self._realtime_turn.provider_activity_started = False
             raise
 
-    def _get_deferred_realtime_audio_input(self) -> _DeferredRealtimeAudioInput:
-        if (
-            not self._deferred_realtime_audio_inputs
-            or self._deferred_realtime_audio_inputs[-1].turn_complete
-        ):
-            self._deferred_realtime_audio_inputs.append(
-                _DeferredRealtimeAudioInput(
-                    token=_RealtimeAudioInputToken(),
-                    frames=[],
-                    ready_fut=asyncio.get_running_loop().create_future(),
-                )
-            )
-        return self._deferred_realtime_audio_inputs[-1]
+    def _get_deferred_realtime_audio_input(self) -> _RealtimeTurnTransaction:
+        if not self._deferred_realtime_turns or self._deferred_realtime_turns[-1].turn_complete:
+            transaction = self._new_realtime_turn()
+            transaction.ready_fut = asyncio.get_running_loop().create_future()
+            self._deferred_realtime_turns.append(transaction)
+        return self._deferred_realtime_turns[-1]
 
-    def _seal_realtime_audio_input(self) -> asyncio.Future[_RealtimeAudioInputToken]:
-        if not self._rt_audio_input_sealed:
-            self._rt_audio_input_sealed = True
+    def _seal_realtime_audio_input(self) -> asyncio.Future[_RealtimeTurnTransaction]:
+        if not self._realtime_turn.turn_complete:
+            self._realtime_turn.state = "sealed"
             ready_fut = asyncio.get_running_loop().create_future()
-            ready_fut.set_result(self._rt_audio_input_token)
+            ready_fut.set_result(self._realtime_turn)
+            self._realtime_turn.ready_fut = ready_fut
             return ready_fut
 
         deferred = self._get_deferred_realtime_audio_input()
-        deferred.turn_complete = True
+        deferred.state = "sealed"
+        assert deferred.ready_fut is not None
         return deferred.ready_fut
 
     def _advance_realtime_audio_input(self) -> None:
-        self._rt_user_activity_started = False
-        if self._rt_session is None or not self._deferred_realtime_audio_inputs:
-            self._rt_audio_input_token = _RealtimeAudioInputToken()
-            self._rt_audio_input_sealed = False
+        previous = self._realtime_turn
+        previous.provider_activity_started = False
+        previous.state = "settled"
+        if self._rt_session is None or not self._deferred_realtime_turns:
+            self._realtime_turn = self._new_realtime_turn()
             return
 
-        deferred = self._deferred_realtime_audio_inputs.popleft()
-        self._rt_audio_input_token = deferred.token
+        deferred = self._deferred_realtime_turns.popleft()
+        self._realtime_turn = deferred
+        ready_fut = deferred.ready_fut
+        assert ready_fut is not None
         try:
-            if deferred.activity_started:
+            if deferred.provider_activity_started:
                 # Advance to the already-observed next VAD turn only after the previous
                 # provider input was completed or discarded.
                 self._rt_session.start_user_activity()
-                self._rt_user_activity_started = True
             # Audio reaches this path before external VAD can report activity. Preserve those
             # frames just as the unsealed path forwards frames before start_user_activity().
             for frame in deferred.frames:
                 self._rt_session.push_audio(frame)
-            self._rt_audio_input_sealed = deferred.turn_complete
-            if not deferred.ready_fut.done():
-                deferred.ready_fut.set_result(deferred.token)
+            if not ready_fut.done():
+                ready_fut.set_result(deferred)
         except BaseException as e:
             try:
                 self._rt_session.clear_audio()
             except BaseException:
                 logger.exception("failed to clear realtime input after deferred replay failure")
 
-            self._rt_audio_input_token = _RealtimeAudioInputToken()
-            self._rt_user_activity_started = False
-            self._rt_audio_input_sealed = False
-            if not deferred.ready_fut.done():
-                deferred.ready_fut.set_exception(e)
+            deferred.disposition = "abandoned"
+            deferred.state = "settled"
+            self._realtime_turn = self._new_realtime_turn()
+            if not ready_fut.done():
+                ready_fut.set_exception(e)
                 # Replay can fail before EOU owns this future. Mark it observed while retaining
                 # the same exception for any waiter that already captured it.
-                deferred.ready_fut.exception()
+                ready_fut.exception()
             self._abort_deferred_realtime_audio()
             raise
 
     def _abort_deferred_realtime_audio(self) -> None:
-        self._rt_audio_input_sealed = False
-        while self._deferred_realtime_audio_inputs:
-            deferred = self._deferred_realtime_audio_inputs.popleft()
+        while self._deferred_realtime_turns:
+            deferred = self._deferred_realtime_turns.popleft()
+            deferred.disposition = "abandoned"
+            deferred.state = "settled"
+            assert deferred.ready_fut is not None
             if not deferred.ready_fut.done():
                 deferred.ready_fut.cancel()
 
     def _reset_realtime_audio_input_state(self) -> None:
-        self._rt_audio_input_token = _RealtimeAudioInputToken()
-        self._rt_user_activity_started = False
+        self._realtime_turn.disposition = "abandoned"
+        self._realtime_turn.state = "settled"
+        self._realtime_turn = self._new_realtime_turn()
         self._abort_deferred_realtime_audio()
 
     def _discard_latest_realtime_audio_input(self) -> None:
         """Discard the newest logical input without disturbing older provider-current audio."""
 
-        if self._deferred_realtime_audio_inputs:
-            deferred = self._deferred_realtime_audio_inputs.pop()
+        if self._deferred_realtime_turns:
+            deferred = self._deferred_realtime_turns[-1]
+            if deferred.policy.input_owner != "framework":
+                return
+            if deferred.input_submitted:
+                return
+            self._deferred_realtime_turns.pop()
+            deferred.disposition = "abandoned"
+            deferred.state = "settled"
+            assert deferred.ready_fut is not None
             if not deferred.ready_fut.done():
                 deferred.ready_fut.cancel()
+            return
+        if (
+            self._realtime_turn.policy.input_owner != "framework"
+            or self._realtime_turn.input_submitted
+        ):
             return
         self._clear_realtime_input()
 
     def _clear_realtime_input(self, *, advance_deferred: bool = True) -> None:
         if self._rt_session is None:
-            self._rt_audio_input_token = _RealtimeAudioInputToken()
-            self._rt_user_activity_started = False
-            self._abort_deferred_realtime_audio()
+            self._reset_realtime_audio_input_state()
             return
+
+        clear_error: BaseException | None = None
         try:
             self._rt_session.clear_audio()
-        finally:
+        except BaseException as e:
+            clear_error = e
+
+        self._realtime_turn.disposition = "abandoned"
+        try:
             if advance_deferred and self._realtime_input_mode == "audio":
                 self._advance_realtime_audio_input()
             else:
-                self._rt_audio_input_token = _RealtimeAudioInputToken()
-                self._rt_user_activity_started = False
+                self._realtime_turn.state = "settled"
+                self._realtime_turn = self._new_realtime_turn()
+        except BaseException:
+            if clear_error is None:
+                raise
+            logger.exception("failed to advance deferred input after clear_audio failed")
+
+        if clear_error is not None:
+            raise clear_error
 
     def _clear_realtime_input_if_owned(self, input_owner: _RealtimeAudioInputOwner | None) -> None:
         if input_owner is None:
             return
 
-        input_token: _RealtimeAudioInputToken
+        input_token: _RealtimeTurnTransaction
         if isinstance(input_owner, asyncio.Future):
             if not input_owner.done():
-                for deferred in tuple(self._deferred_realtime_audio_inputs):
+                for deferred in tuple(self._deferred_realtime_turns):
                     if deferred.ready_fut is input_owner:
-                        self._deferred_realtime_audio_inputs.remove(deferred)
+                        self._deferred_realtime_turns.remove(deferred)
+                        deferred.disposition = "abandoned"
+                        deferred.state = "settled"
                         input_owner.cancel()
                         return
                 return
@@ -2030,7 +2288,9 @@ class AgentActivity(RecognitionHooks):
         else:
             input_token = input_owner
 
-        if input_token is not self._rt_audio_input_token:
+        if input_token.policy.input_owner != "framework":
+            return
+        if input_token is not self._realtime_turn:
             return
         self._clear_realtime_input()
 
@@ -2038,7 +2298,11 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition:
             self._audio_recognition._clear_user_turn()
 
-        if self._rt_session is not None and self._realtime_input_mode == "audio":
+        if (
+            self._rt_session is not None
+            and self._realtime_input_mode == "audio"
+            and self._turn_policy.input_owner == "framework"
+        ):
             self._discard_latest_realtime_audio_input()
 
     def commit_user_turn(
@@ -2046,7 +2310,14 @@ class AgentActivity(RecognitionHooks):
     ) -> asyncio.Future[str]:
         reply_already_triggered = False
         if self._rt_session is not None and self._realtime_input_mode == "audio":
-            if skip_reply:
+            if self._turn_policy.input_owner == "provider":
+                # Manual commit is an explicit provider boundary even when the provider owns
+                # detection. It never enters framework seal/defer/clear machinery.
+                self._rt_session.commit_audio()
+                if not skip_reply:
+                    self._session.generate_reply(input_modality="audio")
+                reply_already_triggered = True
+            elif skip_reply:
                 # Do not make deliberately skipped input model-visible. This also handles the
                 # no-STT case, where no end-of-turn callback will arrive to discard the buffer.
                 # Mark the provider disposition complete so a later external-STT callback keeps
@@ -2064,9 +2335,13 @@ class AgentActivity(RecognitionHooks):
                     if input_ready_fut.done():
                         # The current input is ready, so preserve the established synchronous
                         # manual-commit behavior and let AgentSession track the returned handle.
-                        input_ready_fut.result()
+                        transaction = input_ready_fut.result()
+                        transaction.state = "input_submitted"
                         self._rt_session.commit_audio()
-                        self._session.generate_reply(input_modality="audio")
+                        transaction.state = "generation_pending"
+                        handle = self._session.generate_reply(input_modality="audio")
+                        if isinstance(handle, SpeechHandle):
+                            transaction.speech_handle = handle
                     else:
                         # A reply handle must exist now so interruption/cancellation can discard
                         # this exact deferred input before it becomes provider-visible.
@@ -2075,6 +2350,10 @@ class AgentActivity(RecognitionHooks):
                             realtime_audio_input_owner=input_ready_fut,
                             commit_realtime_audio=True,
                         )
+                        for transaction in self._deferred_realtime_turns:
+                            if transaction.ready_fut is input_ready_fut:
+                                transaction.speech_handle = handle
+                                break
                         if run_state := self._session._global_run_state:
                             run_state._watch_handle(handle)
                 except BaseException:
@@ -2382,6 +2661,7 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
+        self._active_realtime_generation = ev
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
             return
@@ -2834,7 +3114,7 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
-        audio_input_ready_fut: asyncio.Future[_RealtimeAudioInputToken] | None = None
+        audio_input_ready_fut: asyncio.Future[_RealtimeTurnTransaction] | None = None
         if (
             self._rt_session is not None
             and self._realtime_input_mode == "audio"
@@ -2854,7 +3134,7 @@ class AgentActivity(RecognitionHooks):
         self,
         *,
         user_input: str,
-        audio_input_token: _RealtimeAudioInputToken | None,
+        audio_input_token: _RealtimeTurnTransaction | None,
     ) -> bool:
         current_speech = self._current_speech
         if current_speech is None:
@@ -2880,9 +3160,9 @@ class AgentActivity(RecognitionHooks):
         self,
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
-        audio_input_ready_fut: asyncio.Future[_RealtimeAudioInputToken] | None = None,
+        audio_input_ready_fut: asyncio.Future[_RealtimeTurnTransaction] | None = None,
     ) -> None:
-        audio_input_token: _RealtimeAudioInputToken | None = None
+        audio_input_token: _RealtimeTurnTransaction | None = None
         try:
             if old_task is not None:
                 # We never cancel user code as this is very confusing.
@@ -2910,9 +3190,6 @@ class AgentActivity(RecognitionHooks):
 
         # Empty realtime text turns first give user code a chance to supply deliberate model
         # input. Until then, they must not interrupt a valid response or background speech.
-        if not defer_speech_interruption:
-            await asyncio.gather(*self._interrupt_background_speeches(force=False))
-
         user_message = llm.ChatMessage(
             role="user",
             content=[info.new_transcript],
@@ -2923,6 +3200,23 @@ class AgentActivity(RecognitionHooks):
 
         if user_message is not None:
             user_message.metrics = metrics_report
+
+        # A turn that was already bounded before close/handoff remains locally observable, but
+        # the shutdown boundary must not submit input or begin new provider work.
+        if self._scheduling_paused or self._new_turns_blocked:
+            logger.warning(
+                "skipping on_user_turn_completed, speech scheduling is paused",
+                extra={"user_input": info.new_transcript},
+            )
+            if self._session._closing:
+                self._agent._chat_ctx.items.append(user_message)
+                self._session._conversation_item_added(user_message)
+            if self._rt_session is not None and self._realtime_input_mode == "audio":
+                self._clear_realtime_input_if_owned(audio_input_token)
+            return
+
+        if not defer_speech_interruption:
+            await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
         if isinstance(self.llm, llm.RealtimeModel):
             if self._rt_turn_detection_enabled:
@@ -2953,6 +3247,7 @@ class AgentActivity(RecognitionHooks):
                 if self._realtime_input_mode == "audio":
                     if audio_input_token is not self._rt_audio_input_token:
                         return
+                    audio_input_token.state = "input_submitted"
                     try:
                         self._rt_session.commit_audio()
                     except BaseException:
@@ -2969,18 +3264,6 @@ class AgentActivity(RecognitionHooks):
             user_input=info.new_transcript,
             audio_input_token=audio_input_token,
         ):
-            return
-
-        if self._scheduling_paused or self._new_turns_blocked:
-            logger.warning(
-                "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
-            )
-            if self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
-            if self._rt_session is not None and self._realtime_input_mode == "audio":
-                self._clear_realtime_input_if_owned(audio_input_token)
             return
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
@@ -4168,46 +4451,32 @@ class AgentActivity(RecognitionHooks):
             chat_ctx = self._rt_session.chat_ctx.copy()
             chat_ctx._upsert_item(user_message)
             self._pending_realtime_user_message_ids.add(user_message.id)
-            sync_error: llm.RealtimeError | None = None
             try:
-                try:
-                    await self._rt_session.update_chat_ctx(chat_ctx)
-                except llm.RealtimeError as e:
-                    sync_error = e
-                except Exception as e:
-                    logger.exception(
-                        "failed to update the chat context before generating the reply"
-                    )
-                    speech_handle._mark_done(error=e)
-                    return False
-
-                # update_chat_ctx may report a rejected item by returning normally, while some
-                # providers raise only because an acknowledgement timed out after retaining it.
-                # In both cases the session's authoritative mirror must contain the exact
-                # model-facing message before generation can be requested.
-                confirmed_message = self._rt_session.chat_ctx.get_by_id(user_message.id)
-                if (
-                    not isinstance(confirmed_message, llm.ChatMessage)
-                    or confirmed_message.role != user_message.role
-                    or confirmed_message.content != user_message.content
-                ):
-                    error = sync_error or llm.RealtimeError(
-                        "realtime provider did not retain the finalized user turn"
-                    )
-                    logger.error(
-                        "failed to synchronize the user turn before generating the reply",
-                        extra={"error": str(error)},
-                    )
-                    speech_handle._mark_done(error=error)
-                    return False
-
-                if sync_error is not None:
-                    logger.warning(
-                        "user turn synchronization acknowledgement failed after local provider update",
-                        extra={"error": str(sync_error)},
-                    )
+                sync_result = await self._rt_session._sync_user_message(chat_ctx, user_message.id)
+            except Exception as error:
+                logger.exception("failed to synchronize the user turn before generating the reply")
+                speech_handle._mark_done(error=error)
+                raise
             finally:
                 self._pending_realtime_user_message_ids.discard(user_message.id)
+
+            if sync_result.status == _UserMessageSyncStatus.REJECTED:
+                sync_error = sync_result.error or llm.RealtimeError(
+                    "realtime provider rejected the finalized user turn"
+                )
+                logger.error(
+                    "failed to synchronize the user turn before generating the reply",
+                    extra={"error": str(sync_error)},
+                )
+                speech_handle._mark_done(error=sync_error)
+                return False
+
+            if sync_result.status == _UserMessageSyncStatus.UNKNOWN:
+                logger.warning(
+                    "user turn synchronization acknowledgement is unknown; preserving "
+                    "best-effort realtime behavior",
+                    extra={"error": str(sync_result.error) if sync_result.error else None},
+                )
 
             self._commit_realtime_user_message(user_message)
         return True
@@ -4217,6 +4486,31 @@ class AgentActivity(RecognitionHooks):
         self._agent._chat_ctx._upsert_item(user_message)
         if is_new_message:
             self._session._conversation_item_added(user_message)
+
+    def _interrupt_created_realtime_generation_if_owned(
+        self,
+        generation_fut: asyncio.Future[llm.GenerationCreatedEvent],
+        input_token: _RealtimeTurnTransaction | None,
+    ) -> None:
+        """Settle a completed generation future and stop only its still-owned output."""
+
+        assert self._rt_session is not None, "rt_session is not available"
+        if not generation_fut.done() or generation_fut.cancelled():
+            return
+
+        # Retrieving an error is required even during cancellation so a synchronously failed
+        # provider future cannot surface later as an unhandled exception.
+        if generation_fut.exception() is not None:
+            return
+
+        generation_ev = generation_fut.result()
+        input_still_owned = input_token is None or input_token is self._realtime_turn
+        if input_token is not None and input_still_owned:
+            input_token.state = "generation_created"
+        if input_still_owned and self._active_realtime_generation is generation_ev:
+            # Text turns use the exact generation identity directly. Audio also requires its
+            # transaction to remain current so a stale owner cannot interrupt newer output.
+            self._rt_session.interrupt()
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
@@ -4254,7 +4548,7 @@ class AgentActivity(RecognitionHooks):
                 self._clear_realtime_input_if_owned(realtime_audio_input_owner)
             return
 
-        realtime_audio_input_token: _RealtimeAudioInputToken | None
+        realtime_audio_input_token: _RealtimeTurnTransaction | None
         if isinstance(realtime_audio_input_owner, asyncio.Future):
             try:
                 await speech_handle.wait_if_not_interrupted([realtime_audio_input_owner])
@@ -4269,6 +4563,9 @@ class AgentActivity(RecognitionHooks):
             realtime_audio_input_token = realtime_audio_input_owner.result()
         else:
             realtime_audio_input_token = realtime_audio_input_owner
+
+        if realtime_audio_input_token is not None:
+            realtime_audio_input_token.speech_handle = speech_handle
 
         if (
             realtime_audio_input_token is not None
@@ -4344,7 +4641,10 @@ class AgentActivity(RecognitionHooks):
                     return None
                 if commit_realtime_audio:
                     assert realtime_audio_input_token is not None
+                    realtime_audio_input_token.state = "input_submitted"
                     rt_session.commit_audio()
+                if realtime_audio_input_token is not None:
+                    realtime_audio_input_token.state = "generation_pending"
                 generation_fut = rt_session.generate_reply(
                     instructions=instructions or NOT_GIVEN,
                     tool_choice=(
@@ -4352,6 +4652,8 @@ class AgentActivity(RecognitionHooks):
                     ),
                     tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
                 )
+                if realtime_audio_input_token is not None:
+                    realtime_audio_input_token.generation_fut = generation_fut
                 return generation_fut
 
             start_generation_task = asyncio.create_task(
@@ -4372,9 +4674,9 @@ class AgentActivity(RecognitionHooks):
                         cancelled_generation_fut is not None
                         and not cancelled_generation_fut.cancelled()
                     ):
-                        # Retrieve a synchronously failed future so cancellation cannot leave an
-                        # unhandled exception between the atomic provider call and this task.
-                        cancelled_generation_fut.exception()
+                        self._interrupt_created_realtime_generation_if_owned(
+                            cancelled_generation_fut, realtime_audio_input_token
+                        )
                 raise
             if generate_reply_fut is None:
                 return
@@ -4383,6 +4685,10 @@ class AgentActivity(RecognitionHooks):
                 # cancel the pending generation; the plugin emits response.cancel
                 if not generate_reply_fut.done():
                     generate_reply_fut.cancel()
+                elif not generate_reply_fut.cancelled():
+                    self._interrupt_created_realtime_generation_if_owned(
+                        generate_reply_fut, realtime_audio_input_token
+                    )
                 return
 
             try:
@@ -4397,6 +4703,8 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 return
 
+            if realtime_audio_input_token is not None:
+                realtime_audio_input_token.state = "generation_created"
             if (
                 realtime_audio_input_token is not None
                 and realtime_audio_input_token is self._rt_audio_input_token
@@ -4466,12 +4774,16 @@ class AgentActivity(RecognitionHooks):
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
             speech_handle._agent_turn_context = otel_context.get_current()
 
-            await self._realtime_generation_task_impl(
-                speech_handle=speech_handle,
-                generation_ev=generation_ev,
-                model_settings=model_settings,
-                instructions=instructions,
-            )
+            try:
+                await self._realtime_generation_task_impl(
+                    speech_handle=speech_handle,
+                    generation_ev=generation_ev,
+                    model_settings=model_settings,
+                    instructions=instructions,
+                )
+            finally:
+                if self._active_realtime_generation is generation_ev:
+                    self._active_realtime_generation = None
 
     async def _realtime_generation_task_impl(
         self,

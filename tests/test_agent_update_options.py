@@ -181,7 +181,7 @@ async def test_update_options_running_rejects_disabling_text_mode_stt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_options_running_rejects_disabling_text_mode_vad() -> None:
+async def test_update_options_running_falls_back_to_stt_when_text_mode_vad_is_disabled() -> None:
     old_vad = FakeVAD()
     agent = Agent(
         instructions="test",
@@ -201,15 +201,14 @@ async def test_update_options_running_rejects_disabling_text_mode_vad() -> None:
         assert activity is not None and activity.vad is old_vad
         recognition = activity._audio_recognition
         assert recognition is not None
-        old_stream = recognition._vad_stream
+        agent.update_options(vad=None)
 
-        with pytest.raises(ValueError, match="requires a VAD"):
-            agent.update_options(vad=None)
-
-        assert agent.vad is old_vad
-        assert activity.vad is old_vad
-        assert recognition._vad_stream is old_stream
-        assert activity._on_metrics_collected in old_vad._events.get("metrics_collected", set())
+        assert agent.vad is None
+        assert activity.vad is None
+        assert recognition._vad is None
+        assert activity._turn_detection == "stt"
+        assert recognition._turn_detection_mode == "stt"
+        assert activity._on_metrics_collected not in old_vad._events.get("metrics_collected", set())
     finally:
         await session.aclose()
 
@@ -397,7 +396,9 @@ async def test_update_options_vad_check_is_atomic() -> None:
         recognition = session._activity._audio_recognition
         assert recognition is not None
         # a streaming turn detector constrains the VAD's min_silence_duration
-        recognition._turn_detector = MagicMock(spec=_StreamingTurnDetector)
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        agent._turn_detection = detector
+        recognition._turn_detector = detector
 
         with pytest.raises(ValueError, match="min_silence_duration"):
             agent.update_options(stt=FakeSTT(), vad=_LowSilenceVAD())
@@ -410,7 +411,7 @@ async def test_update_options_vad_check_is_atomic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_text_mode_cannot_remove_streaming_turn_detectors_vad() -> None:
+async def test_text_mode_streaming_detector_falls_back_to_stt_without_vad() -> None:
     from unittest.mock import MagicMock
 
     from livekit.agents.voice.turn import _StreamingTurnDetector
@@ -429,12 +430,19 @@ async def test_text_mode_cannot_remove_streaming_turn_detectors_vad() -> None:
     try:
         activity = session._activity
         assert activity is not None
-        activity._turn_detection = MagicMock(spec=_StreamingTurnDetector)
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        agent._turn_detection = detector
+        activity._turn_detection = detector
+        recognition._turn_detector = detector
 
-        with pytest.raises(ValueError, match="requires a VAD"):
-            agent.update_options(vad=None)
+        agent.update_options(vad=None)
 
-        assert agent.vad is old_vad
-        assert activity.vad is old_vad
+        assert agent.vad is None
+        assert activity.vad is None
+        assert activity._turn_detection == "stt"
+        assert recognition._turn_detection_mode == "stt"
+        assert activity._on_metrics_collected not in old_vad._events.get("metrics_collected", set())
     finally:
         await session.aclose()

@@ -1386,9 +1386,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 endpointing_opts=(
                     self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
                 ),
-                turn_detection=turn_detection,
+                turn_detection=(
+                    turn_detection
+                    if not is_given(self._activity.agent.turn_detection)
+                    else NOT_GIVEN
+                ),
                 session_turn_detection_explicit=(
-                    turn_detection is not None if is_given(turn_detection) else NOT_GIVEN
+                    (turn_detection is not None if is_given(turn_detection) else NOT_GIVEN)
+                    if not is_given(self._activity.agent.turn_detection)
+                    else NOT_GIVEN
                 ),
             )
 

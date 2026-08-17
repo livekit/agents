@@ -575,7 +575,11 @@ class AudioRecognition:
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
     ) -> None:
-        self._abandon_turn_disposition()
+        # VAD and streaming STT can both announce the same onset. Only the first signal
+        # opens a logical turn; a duplicate attaches to it and must not abandon a pending
+        # manual commit for that turn.
+        if not self._speaking:
+            self._abandon_turn_disposition()
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
         )

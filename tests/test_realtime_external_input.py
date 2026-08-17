@@ -1843,6 +1843,31 @@ def test_text_mode_reselects_stt_after_explicit_unavailable_vad() -> None:
     assert activity._turn_detection == "stt"
 
 
+def test_adding_vad_restores_explicit_vad_after_temporary_stt_fallback() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=None,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="text",
+        ),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    assert activity._turn_detection == "stt"
+
+    activity._update_models(new_vad=FakeVAD(fake_user_speeches=[]))
+
+    assert activity._turn_detection == "vad"
+
+
 def test_runtime_explicit_detector_warning_uses_prospective_setting(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1869,6 +1894,27 @@ def test_runtime_explicit_detector_warning_uses_prospective_setting(
         )
 
     assert "ignoring the turn_detection setting" in caplog.text
+
+
+def test_runtime_policy_update_preserves_turn_that_already_owns_audio() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    activity._started = True
+    owning_turn = activity._rt_audio_input_token
+    owning_policy = owning_turn.policy
+    frame = _frame(10)
+
+    activity.push_audio(frame)
+    activity._audio_recognition = None
+    activity.update_options(
+        turn_detection="manual",
+        session_turn_detection_explicit=True,
+    )
+
+    assert activity._turn_policy.turn_detection == "manual"
+    assert activity._rt_audio_input_token is owning_turn
+    assert owning_turn.policy is owning_policy
+    assert rt_session.provider_audio == [frame]
 
 
 def test_removing_vad_reselects_streaming_stt_boundary_in_text_mode() -> None:
@@ -1974,6 +2020,69 @@ async def test_server_detected_manual_commit_never_seals_or_clears_provider_audi
     assert generated == ([] if skip_reply else [{"input_modality": "audio"}])
 
 
+async def test_clear_user_turn_does_not_clear_provider_owned_audio() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling=TurnHandlingOptions(realtime_input_mode="audio"),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _BufferedRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._started = True
+    recognition_clears = 0
+
+    class _Recognition:
+        def _push_audio(self, *_: object, **__: object) -> None:
+            pass
+
+        def _clear_user_turn(self) -> None:
+            nonlocal recognition_clears
+            recognition_clears += 1
+
+    activity._audio_recognition = cast(Any, _Recognition())
+    frame = _frame(8)
+    activity.push_audio(frame)
+
+    activity.clear_user_turn()
+
+    assert recognition_clears == 1
+    assert rt_session.clear_audio_calls == 0
+    assert rt_session.provider_audio == [frame]
+
+
+async def test_blocked_delayed_eou_does_not_clear_provider_owned_audio() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling=TurnHandlingOptions(realtime_input_mode="audio"),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _BufferedRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._started = True
+    activity._scheduling_paused = True
+    frame = _frame(9)
+    activity.push_audio(frame)
+
+    assert activity.on_end_of_turn(_eot("late detector verdict"))
+
+    assert rt_session.clear_audio_calls == 0
+    assert rt_session.provider_audio == [frame]
+
+
 async def test_clear_user_turn_does_not_discard_submitted_audio_reply() -> None:
     activity, _ = _activity(mode="audio")
     rt_session = _replace_realtime_session(activity)
@@ -2042,11 +2151,14 @@ async def test_cancellation_after_generation_creation_interrupts_owned_provider_
         assert reply_task is not None
         rt_session.generate_reply_calls += 1
         fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
-        fut.set_result(cast(llm.GenerationCreatedEvent, object()))
+        generation = MagicMock(spec=llm.GenerationCreatedEvent)
+        generation.user_initiated = True
+        fut.set_result(generation)
+        activity._on_generation_created(generation)
         reply_task.cancel()
         return fut
 
-    rt_session.generate_reply = _create_then_cancel  # type: ignore[method-assign]
+    cast(Any, rt_session).generate_reply = _create_then_cancel
     reply_task = asyncio.create_task(
         activity._realtime_reply_task(
             speech_handle=handle,
@@ -2059,3 +2171,42 @@ async def test_cancellation_after_generation_creation_interrupts_owned_provider_
         await reply_task
 
     assert rt_session.interrupted is True
+
+
+async def test_cancellation_does_not_interrupt_newer_provider_output() -> None:
+    activity, _ = _activity(mode="audio")
+    rt_session = _replace_realtime_session(activity)
+    activity._authorization_allowed.set()
+    activity._user_silence_event.set()
+    handle = SpeechHandle.create()
+    handle._authorize_generation()
+    owner = activity._rt_audio_input_token
+    reply_task: asyncio.Task[None] | None = None
+
+    def _create_then_supersede(**_: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        assert reply_task is not None
+        rt_session.generate_reply_calls += 1
+        owned_generation = MagicMock(spec=llm.GenerationCreatedEvent)
+        owned_generation.user_initiated = True
+        newer_generation = MagicMock(spec=llm.GenerationCreatedEvent)
+        newer_generation.user_initiated = True
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+        fut.set_result(owned_generation)
+        activity._on_generation_created(owned_generation)
+        activity._on_generation_created(newer_generation)
+        reply_task.cancel()
+        return fut
+
+    cast(Any, rt_session).generate_reply = _create_then_supersede
+    reply_task = asyncio.create_task(
+        activity._realtime_reply_task(
+            speech_handle=handle,
+            model_settings=ModelSettings(),
+            realtime_audio_input_owner=owner,
+        )
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await reply_task
+
+    assert rt_session.interrupted is False

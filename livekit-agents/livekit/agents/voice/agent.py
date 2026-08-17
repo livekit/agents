@@ -648,10 +648,12 @@ class Agent:
 
     @turn_detection.setter
     def turn_detection(self, value: TurnDetectionMode | None) -> None:
-        self._turn_detection = value
-
         if self._activity is not None:
-            self._activity.update_options(turn_detection=value)
+            # Resolve and validate the prospective policy before publishing the new setting.
+            self._activity.update_options(
+                turn_detection=value, session_turn_detection_explicit=True
+            )
+        self._turn_detection = value
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
