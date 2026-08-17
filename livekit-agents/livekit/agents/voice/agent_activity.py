@@ -1018,6 +1018,15 @@ class AgentActivity(RecognitionHooks):
                     resolved_vad=self.vad,
                     resolved_turn_detection=policy.turn_detection,
                 )
+            if self._audio_recognition is not None:
+                self._audio_recognition._check_vad_silence_requirement(
+                    detector=(
+                        policy.turn_detection
+                        if isinstance(policy.turn_detection, _StreamingTurnDetector)
+                        else None
+                    ),
+                    vad=self.vad,
+                )
             self._apply_turn_policy(policy)
             turn_detection = policy.turn_detection
 
@@ -1074,16 +1083,15 @@ class AgentActivity(RecognitionHooks):
                     resolved_turn_detection=policy.turn_detection,
                 )
 
-        # A new VAD must satisfy the resolved detector's minimum-silence requirement.
-        if is_given(new_vad) and self._audio_recognition is not None:
+        # Validate the complete prospective policy before mutating any model or listener.
+        if policy is not None and self._audio_recognition is not None:
             self._audio_recognition._check_vad_silence_requirement(
                 detector=(
                     policy.turn_detection
-                    if policy is not None
-                    and isinstance(policy.turn_detection, _StreamingTurnDetector)
+                    if isinstance(policy.turn_detection, _StreamingTurnDetector)
                     else None
                 ),
-                vad=new_vad,
+                vad=prospective_vad,
             )
 
         if is_given(new_stt):
@@ -1762,21 +1770,32 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.aclose(), name="AgentActivity.close_realtime_session"
             )
 
-        bounded_turn_task = self._user_turn_completed_atask
         current_task = asyncio.current_task()
-        if bounded_turn_task is not None and bounded_turn_task is not current_task:
-            await asyncio.shield(bounded_turn_task)
+
+        async def _settle_bounded_turn(task: asyncio.Task[None] | None) -> None:
+            if task is None or task is current_task:
+                return
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # An inner cancellation is already reflected by the bounded turn. Cancellation
+                # of this teardown task itself must remain observable to its caller.
+                if current_task is not None and current_task.cancelling():
+                    raise
+            except Exception:
+                # _user_turn_completed_task logs its own failure. Teardown must still close the
+                # provider, recognition pipeline, and paused speech state.
+                pass
+
+        bounded_turn_task = self._user_turn_completed_atask
+        await _settle_bounded_turn(bounded_turn_task)
 
         if rt_close_task is not None:
             await rt_close_task
 
         latest_bounded_turn_task = self._user_turn_completed_atask
-        if (
-            latest_bounded_turn_task is not None
-            and latest_bounded_turn_task is not bounded_turn_task
-            and latest_bounded_turn_task is not current_task
-        ):
-            await asyncio.shield(latest_bounded_turn_task)
+        if latest_bounded_turn_task is not bounded_turn_task:
+            await _settle_bounded_turn(latest_bounded_turn_task)
 
         if self._audio_recognition is not None:
             await self._audio_recognition._aclose()
@@ -3268,12 +3287,6 @@ class AgentActivity(RecognitionHooks):
                 if self._realtime_input_mode == "audio":
                     if audio_input_token is not self._rt_audio_input_token:
                         return
-                    audio_input_token.state = "input_submitted"
-                    try:
-                        self._rt_session.commit_audio()
-                    except BaseException:
-                        self._clear_realtime_input_if_owned(audio_input_token)
-                        raise
 
         if info.skip_reply:
             if info.new_transcript != "":
@@ -3394,6 +3407,9 @@ class AgentActivity(RecognitionHooks):
                     modality="text" if self._realtime_input_mode == "text" else "audio"
                 ),
                 realtime_audio_input_owner=audio_input_token,
+                commit_realtime_audio=(
+                    self._realtime_input_mode == "audio" and audio_input_token is not None
+                ),
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():
@@ -4662,8 +4678,8 @@ class AgentActivity(RecognitionHooks):
                     return None
                 if commit_realtime_audio:
                     assert realtime_audio_input_token is not None
-                    realtime_audio_input_token.state = "input_submitted"
                     rt_session.commit_audio()
+                    realtime_audio_input_token.state = "input_submitted"
                 if realtime_audio_input_token is not None:
                     realtime_audio_input_token.state = "generation_pending"
                 generation_fut = rt_session.generate_reply(
