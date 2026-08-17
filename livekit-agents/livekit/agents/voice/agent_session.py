@@ -1074,10 +1074,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state = RunResult(output_type=None)
                 self._global_run_state = run_state
 
-            # it is ok to await it directly, there is no previous task to drain
-            tasks.append(
-                asyncio.create_task(self._update_activity(self._agent, wait_on_enter=False))
-            )
+            # it is ok to await it directly, there is no previous task to drain.
+            # _update_activity_task also watches on_enter on the run state: without it
+            # the run completes as soon as the first speech does, dropping whatever
+            # on_enter produces next — and never completes when on_enter says nothing.
+            tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
 
             try:
                 await asyncio.gather(*tasks)
