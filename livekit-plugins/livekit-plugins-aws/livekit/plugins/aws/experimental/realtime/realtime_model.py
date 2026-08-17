@@ -1779,9 +1779,9 @@ class RealtimeSession(  # noqa: F811
 
                 # Format tool result as proper JSON
                 if item.is_error:
-                    tool_result = json.dumps({"error": item.output_for_model})
+                    tool_result = json.dumps({"error": item.output_with_states})
                 else:
-                    tool_result = item.output_for_model
+                    tool_result = item.output_with_states
 
                 self._tool_results_ch.send_nowait(
                     {

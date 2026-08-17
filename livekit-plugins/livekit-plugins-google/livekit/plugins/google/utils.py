@@ -68,9 +68,9 @@ def create_function_response(
     res = types.FunctionResponse(
         name=output.name,
         response=(
-            {"error": output.output_for_model}
+            {"error": output.output_with_states}
             if output.is_error
-            else {"output": output.output_for_model}
+            else {"output": output.output_with_states}
         ),
     )
     if not vertexai:

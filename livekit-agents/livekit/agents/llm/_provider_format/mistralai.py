@@ -61,7 +61,7 @@ def to_conversations_ctx(
                 {
                     "type": "function.result",
                     "tool_call_id": tool_output.call_id,
-                    "result": tool_output.output_for_model,
+                    "result": tool_output.output_with_states,
                 }
             )
 

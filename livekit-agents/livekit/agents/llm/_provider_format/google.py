@@ -74,9 +74,9 @@ def to_chat_ctx(
             parts.append(fc_part)
         elif msg.type == "function_call_output":
             response = (
-                {"output": msg.output_for_model}
+                {"output": msg.output_with_states}
                 if not msg.is_error
-                else {"error": msg.output_for_model}
+                else {"error": msg.output_with_states}
             )
             parts.append(
                 {

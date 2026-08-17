@@ -482,7 +482,7 @@ class RealtimeSession(llm.RealtimeSession):
                     await self._socket.send_tool_call_output(
                         ToolCallOutputPayload(
                             tool_call_id=item.call_id,
-                            output=item.output_for_model,
+                            output=item.output_with_states,
                         )
                     )
                     sent_tool_call_output = True

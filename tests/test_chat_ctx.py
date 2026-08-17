@@ -137,7 +137,7 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
 def test_normal_tool_output_is_unchanged_for_the_model() -> None:
     output = FunctionCallOutput(name="lookup", call_id="call-1", output="sunny", is_error=False)
 
-    assert output.output_for_model == "sunny"
+    assert output.output_with_states == "sunny"
 
 
 @pytest.mark.parametrize(
