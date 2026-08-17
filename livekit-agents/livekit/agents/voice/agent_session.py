@@ -1367,24 +1367,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(max_endpointing_delay):
                 endpointing_opts["max_delay"] = max_endpointing_delay
 
+        prospective_endpointing: EndpointingOptions | None = None
+        prospective_endpointing_overrides: EndpointingOptions | None = None
         if is_given(endpointing_opts):
+            prospective_endpointing = EndpointingOptions(**self._opts.endpointing)
+            prospective_endpointing_overrides = EndpointingOptions(
+                **self._opts.endpointing_overrides
+            )
             if (mode := endpointing_opts.get("mode")) is not None:
-                self._opts.endpointing["mode"] = mode
-                self._opts.endpointing_overrides["mode"] = mode
+                prospective_endpointing["mode"] = mode
+                prospective_endpointing_overrides["mode"] = mode
             if (min_delay := endpointing_opts.get("min_delay")) is not None:
-                self._opts.endpointing["min_delay"] = min_delay
-                self._opts.endpointing_overrides["min_delay"] = min_delay
+                prospective_endpointing["min_delay"] = min_delay
+                prospective_endpointing_overrides["min_delay"] = min_delay
             if (max_delay := endpointing_opts.get("max_delay")) is not None:
-                self._opts.endpointing["max_delay"] = max_delay
-                self._opts.endpointing_overrides["max_delay"] = max_delay
+                prospective_endpointing["max_delay"] = max_delay
+                prospective_endpointing_overrides["max_delay"] = max_delay
             if (alpha := endpointing_opts.get("alpha")) is not None:
-                self._opts.endpointing["alpha"] = alpha
-                self._opts.endpointing_overrides["alpha"] = alpha
+                prospective_endpointing["alpha"] = alpha
+                prospective_endpointing_overrides["alpha"] = alpha
 
         if self._activity is not None:
             self._activity.update_options(
                 endpointing_opts=(
-                    self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
+                    prospective_endpointing if prospective_endpointing is not None else NOT_GIVEN
                 ),
                 turn_detection=(
                     turn_detection
@@ -1397,6 +1403,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     else NOT_GIVEN
                 ),
             )
+
+        if prospective_endpointing is not None:
+            assert prospective_endpointing_overrides is not None
+            self._opts.endpointing.update(prospective_endpointing)
+            self._opts.endpointing_overrides.update(prospective_endpointing_overrides)
 
         # Activity validates and applies the prospective detector before the session records the
         # public setting. An unsupported runtime update therefore cannot leave these two layers

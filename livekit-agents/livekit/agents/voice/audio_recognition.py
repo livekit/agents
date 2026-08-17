@@ -2097,10 +2097,14 @@ class AudioRecognition:
         if self._user_turn_start is None or self._turn_transcript_received:
             return
 
+        timed_out_turn = self._turn_disposition
         if self._session.options.transcription_timeout is not None:
             self._hooks.on_transcription_timeout(
                 speech_duration=self._turn_speech_duration, turn_start=self._user_turn_start
             )
+        if timed_out_turn is not self._turn_disposition:
+            return
+
         if self._finalize_empty_transcript_on_timeout:
             # External VAD has already supplied the turn boundary. The configured STT
             # deadline, or the internal endpointing fallback when notifications are disabled,
@@ -2108,6 +2112,7 @@ class AudioRecognition:
             self._run_eou_detection(
                 self._hooks.retrieve_chat_ctx().copy(),
                 trigger="vad",
+                turn_disposition=timed_out_turn,
                 allow_empty_transcript=True,
             )
 
