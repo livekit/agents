@@ -2258,7 +2258,7 @@ class TestToolCallEvents:
             assert last.status == expected
             deferred_outputs = [output for _, output in run_ctx._updates[1:]]
             assert deferred_outputs
-            assert all(output.interrupted is interrupted for output in deferred_outputs)
+            assert all(output.reply_interrupted is interrupted for output in deferred_outputs)
 
     @pytest.mark.asyncio
     async def test_error_after_update_is_deferred_with_final_id(self):

@@ -269,14 +269,14 @@ def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> Non
 
 def test_interrupted_tool_output_is_marked_in_function_response() -> None:
     output = _tool_output()
-    output.interrupted = True
+    output.reply_interrupted = True
 
     response = create_function_response(output)
 
     assert response.response is not None
     assert json.loads(response.response["output"]) == {
         "output": "42",
-        "interrupted": True,
+        "reply_interrupted": True,
     }
 
 

@@ -154,12 +154,15 @@ def test_interrupted_tool_output_is_marked_for_realtime() -> None:
             call_id="call_abc",
             output="sunny",
             is_error=False,
-            interrupted=True,
+            reply_interrupted=True,
         )
     )
 
     assert output.output is not None
-    assert json.loads(output.output) == {"output": "sunny", "interrupted": True}
+    assert json.loads(output.output) == {
+        "output": "sunny",
+        "reply_interrupted": True,
+    }
 
 
 def test_interrupted_tool_output_replaces_realtime_context_item() -> None:
@@ -171,7 +174,7 @@ def test_interrupted_tool_output_replaces_realtime_context_item() -> None:
     )
     session._remote_chat_ctx.insert(None, original)
 
-    chat_ctx = llm.ChatContext([original.model_copy(update={"interrupted": True})])
+    chat_ctx = llm.ChatContext([original.model_copy(update={"reply_interrupted": True})])
 
     events = session._create_update_chat_ctx_events(chat_ctx)
 
@@ -179,4 +182,7 @@ def test_interrupted_tool_output_replaces_realtime_context_item() -> None:
     assert isinstance(events[1], ConversationItemCreateEvent)
     recreated = events[1].item
     assert recreated.output is not None
-    assert json.loads(recreated.output) == {"output": "sunny", "interrupted": True}
+    assert json.loads(recreated.output) == {
+        "output": "sunny",
+        "reply_interrupted": True,
+    }

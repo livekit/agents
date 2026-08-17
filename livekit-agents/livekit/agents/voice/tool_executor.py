@@ -628,7 +628,7 @@ class _ToolExecutor:
                 reply_status = "interrupted"
                 for item in pending_items:
                     if item.type == "function_call_output":
-                        item.interrupted = True
+                        item.reply_interrupted = True
             elif not speech.chat_items:
                 # the LLM judged the content already covered and produced no output
                 reply_status = "skipped"

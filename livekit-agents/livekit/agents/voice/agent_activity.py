@@ -4110,7 +4110,7 @@ class AgentActivity(RecognitionHooks):
         # never heard or marking a committed tool output's reply as interrupted
         has_interrupted_tool_output = any(
             isinstance(item, llm.FunctionCallOutput)
-            and item.interrupted
+            and item.reply_interrupted
             and self._agent._chat_ctx.get_by_id(item.id) is not None
             for item in speech_handle.chat_items
         )

@@ -376,8 +376,8 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
     is_error: bool
-    interrupted: bool = False
-    """Whether the assistant reply for this output was interrupted."""
+    reply_interrupted: bool = False
+    """Whether delivery of the assistant reply for this output was interrupted."""
     created_at: float = Field(default_factory=time.time)
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
@@ -387,10 +387,10 @@ class FunctionCallOutput(BaseModel):
 
     @property
     def model_output(self) -> str:
-        """Return the output with its interrupted delivery state for the model."""
-        if not self.interrupted:
+        """Return the output with the assistant reply delivery state for the model."""
+        if not self.reply_interrupted:
             return self.output
-        return json.dumps({"output": self.output, "interrupted": True}, ensure_ascii=False)
+        return json.dumps({"output": self.output, "reply_interrupted": True}, ensure_ascii=False)
 
 
 class AgentHandoff(BaseModel):
@@ -932,7 +932,7 @@ class ChatContext:
           - Messages: compares the full `content` list, `role` and `interrupted`.
           - Function calls: compares `name`, `call_id`, and `arguments`.
           - Function call outputs: compares `name`, `call_id`, `output`, `is_error`, and
-            `interrupted`.
+            `reply_interrupted`.
 
         Does not consider timestamps or other metadata.
         """
@@ -960,7 +960,7 @@ class ChatContext:
                     or a.call_id != b.call_id
                     or a.output != b.output
                     or a.is_error != b.is_error
-                    or a.interrupted != b.interrupted
+                    or a.reply_interrupted != b.reply_interrupted
                 ):
                     return False
 

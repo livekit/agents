@@ -165,14 +165,17 @@ def test_interrupted_tool_output_is_marked_for_the_model(
                 call_id="call-1",
                 output="sunny",
                 is_error=False,
-                interrupted=True,
+                reply_interrupted=True,
             ),
         ]
     )
 
     items, _ = chat_ctx.to_provider_format(format=provider_format)
 
-    assert json.loads(extract_output(items)) == {"output": "sunny", "interrupted": True}
+    assert json.loads(extract_output(items)) == {
+        "output": "sunny",
+        "reply_interrupted": True,
+    }
 
 
 @skip_if_no_credentials()
