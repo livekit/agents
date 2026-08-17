@@ -162,6 +162,12 @@ until a later `update_chat_ctx()` recreates it (at the tail) once its transcript
 exists. The plugin logs a warning naming the affected item ids whenever this
 happens.
 
+The same limit applies without a rebuild. A change to a turn's text goes out as
+a delete plus a create under one id, so clearing that text leaves a create with
+nothing to send: the turn is deleted rather than emptied. The delete is kept —
+the caller asked for that text to leave the context — and the same warning names
+the item, which returns on a later sync once it has text again.
+
 ## Limitations
 
 - The plugin expects the current realtime event names, such as

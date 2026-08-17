@@ -775,8 +775,13 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # Safety net: a create the conversion still cannot express is not sent;
         # remap a previous_item_id pointing at it to its own predecessor.
         dropped: dict[str, str | None] = {}
+        deleted_ids: set[str] = set()
+        # Ids the server is losing outright because a delete went out and the
+        # create meant to follow it was one of the dropped ones.
+        unrecreatable_updates: list[str] = []
         for ev in base_events:
             if not isinstance(ev, ConversationItemCreateEvent):
+                deleted_ids.add(ev.item_id)
                 events.append(ev)
                 continue
             assert ev.item.id is not None
@@ -795,6 +800,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 # conversation.item.added echo would never resolve the
                 # create future.
                 dropped[ev.item.id] = previous_item_id
+                if ev.item.id in deleted_ids:
+                    unrecreatable_updates.append(ev.item.id)
                 continue
             events.append(
                 _BosonConversationItemCreateEvent(
@@ -803,6 +810,26 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     previous_item_id=previous_item_id,
                     item=_BosonConversationItem(**payload),
                 )
+            )
+        if unrecreatable_updates:
+            # The base states a content change -- and a reorder -- as a delete
+            # followed by a create under one id. When the create is one this
+            # client cannot express, because the item's new content has no text
+            # left, the delete stands alone: the server drops the turn instead
+            # of updating it.
+            #
+            # The delete is kept rather than suppressed. The caller asked for
+            # that text to leave the context, and holding on to the server's
+            # copy would keep feeding the model something they took out. But the
+            # outcome is bigger than an emptied item, so say so: the turn leaves
+            # the model's view entirely, and the remote mirror with it, until a
+            # later sync gives it text again.
+            logger.warning(
+                "%d item(s) the server was holding are being deleted rather than updated; "
+                "their new content has no text this client can send. Each returns on a "
+                "later sync once it has text again",
+                len(unrecreatable_updates),
+                extra={"item_ids": unrecreatable_updates},
             )
         return events
 
