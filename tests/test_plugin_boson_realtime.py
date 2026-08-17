@@ -2848,6 +2848,104 @@ async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(monke
 
 
 @pytest.mark.asyncio
+async def test_boson_realtime_emptied_turn_is_deleted_loudly(monkeypatch, caplog):
+    # The base states a content change as a delete plus a create under one id.
+    # When the new content has no text there is no create to send -- the server
+    # stores nothing for a textless item -- so only the delete goes out and the
+    # turn leaves the conversation instead of being updated in place. The delete
+    # is the honest translation of "this text is no longer in the context", but
+    # losing the turn outright is a bigger outcome than emptying it, so it is
+    # reported the same way the rebuild path reports what it cannot put back.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        # Each added item goes in at the head, so this leaves the server holding
+        # [user_1, user_2] -- user_2 is not at the head, which is what keeps this
+        # on the incremental path instead of the rebuild one.
+        _server_event(
+            session, _user_item_added("user_2", [{"type": "input_text", "text": "there"}])
+        )
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+        assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [
+            "user_1",
+            "user_2",
+        ]
+
+        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+            update_task = asyncio.create_task(
+                session.update_chat_ctx(
+                    llm.ChatContext(
+                        [
+                            llm.ChatMessage(id="user_1", role="user", content=["hi"]),
+                            llm.ChatMessage(id="user_2", role="user", content=[]),
+                        ]
+                    )
+                )
+            )
+            events = [await session._msg_ch.recv()]
+            assert session._msg_ch.empty()
+
+        assert [e["type"] for e in events] == ["conversation.item.delete"]
+        assert events[0]["item_id"] == "user_2"
+        assert "user_2" in [
+            item_id for record in caplog.records for item_id in getattr(record, "item_ids", [])
+        ]
+
+        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_2"})
+        await asyncio.wait_for(update_task, timeout=1.0)
+        # Gone from the mirror too, so the turn comes back as a create -- after
+        # the predecessor it still sits behind -- once it has text again.
+        assert session._remote_chat_ctx.get("user_2") is None
+        events = session._create_update_chat_ctx_events(
+            llm.ChatContext(
+                [
+                    llm.ChatMessage(id="user_1", role="user", content=["hi"]),
+                    llm.ChatMessage(id="user_2", role="user", content=["there again"]),
+                ]
+            )
+        )
+        assert [ev.type for ev in events] == ["conversation.item.create"]
+        assert events[0].item.id == "user_2"
+        assert events[0].previous_item_id == "user_1"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_untouched_turn_is_not_reported_as_deleted(monkeypatch, caplog):
+    # The warning must key on a delete actually going out for the same id, not
+    # on a create being dropped: an item the conversion cannot express but that
+    # the server never held is no loss and must stay quiet.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+
+        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+            events = session._create_update_chat_ctx_events(
+                llm.ChatContext(
+                    [
+                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
+                        llm.ChatMessage(id="sys_1", role="system", content=["Be brief."]),
+                    ]
+                )
+            )
+
+        assert events == []
+        assert not [record for record in caplog.records if hasattr(record, "item_ids")]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_boson_realtime_update_chat_ctx_deletes_removed_items(monkeypatch):
     # Client-supplied item ids are preserved by the server, so removed items
     # are addressable: the base diff issues conversation.item.delete for them.
