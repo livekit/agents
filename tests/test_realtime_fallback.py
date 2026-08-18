@@ -36,11 +36,13 @@ class _StubAgentSession:
     def __init__(self, agent_state: str = "listening", chat_ctx: ChatContext | None = None) -> None:
         self.agent_state = agent_state
         self.interrupt_calls = 0
+        self.interrupt_entered = asyncio.Event()
         self.generate_reply_calls = 0
         self.current_agent = _StubAgent(chat_ctx if chat_ctx is not None else ChatContext.empty())
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         self.interrupt_calls += 1
+        self.interrupt_entered.set()
         fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         fut.set_result(None)
         return fut
@@ -353,11 +355,7 @@ async def test_sync_during_interrupting_swap_replays_on_replacement_without_watc
     assert result.status is _UserMessageSyncStatus.UNKNOWN
     assert primary.active_session.generate_reply_calls == 0
 
-    async def _wait_for_replacement_generation() -> None:
-        while backup.active_session.generate_reply_calls == 0:
-            await asyncio.sleep(0)
-
-    await asyncio.wait_for(_wait_for_replacement_generation(), timeout=0.25)
+    await asyncio.wait_for(backup.active_session.generate_reply_entered.wait(), timeout=0.25)
     assert backup.active_session.generate_reply_calls == 1
     assert [item.id for item in backup.active_session.chat_ctx.items].count(message.id) == 1
 
@@ -380,12 +378,7 @@ async def test_retiring_child_rejection_becomes_unknown_after_swap_starts() -> N
     await old.sync_entered.wait()
     swap_task = asyncio.create_task(session.restart(switch_model=True))
     try:
-
-        async def _wait_for_interrupt() -> None:
-            while agent_session.interrupt_calls == 0:
-                await asyncio.sleep(0)
-
-        await asyncio.wait_for(_wait_for_interrupt(), timeout=0.25)
+        await asyncio.wait_for(agent_session.interrupt_entered.wait(), timeout=0.25)
         old.release_sync.set()
         result = await asyncio.wait_for(sync_task, timeout=0.25)
         await asyncio.wait_for(swap_task, timeout=0.25)

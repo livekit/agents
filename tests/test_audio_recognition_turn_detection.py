@@ -694,6 +694,14 @@ class TestTurnDispositionLifecycle:
         ar._hooks.on_end_of_turn.return_value = True
         ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
         chat_ctx = _make_chat_ctx_stub()
+        bounce_waiting = asyncio.Event()
+        closing_wait = ar._closing.wait
+
+        async def _observe_close_wait() -> None:
+            bounce_waiting.set()
+            await closing_wait()
+
+        ar._closing.wait = _observe_close_wait  # type: ignore[method-assign]
 
         ar._run_eou_detection(
             chat_ctx,
@@ -702,7 +710,7 @@ class TestTurnDispositionLifecycle:
         )
         empty_bounce = ar._end_of_turn_task
         assert empty_bounce is not None
-        await asyncio.sleep(0)
+        await asyncio.wait_for(bounce_waiting.wait(), timeout=0.25)
 
         ar._audio_transcript = "late finalized text"
         ar._endpointing.min_delay = 0.0
@@ -728,6 +736,14 @@ class TestTurnDispositionLifecycle:
         ar._endpointing.min_delay = 60.0
         ar._hooks.on_end_of_turn.return_value = True
         ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+        bounce_waiting = asyncio.Event()
+        closing_wait = ar._closing.wait
+
+        async def _observe_close_wait() -> None:
+            bounce_waiting.set()
+            await closing_wait()
+
+        ar._closing.wait = _observe_close_wait  # type: ignore[method-assign]
 
         ar._run_eou_detection(
             _make_chat_ctx_stub(),
@@ -736,7 +752,7 @@ class TestTurnDispositionLifecycle:
         )
         bounce = ar._end_of_turn_task
         assert bounce is not None
-        await asyncio.sleep(0)
+        await asyncio.wait_for(bounce_waiting.wait(), timeout=0.25)
 
         ar._audio_transcript = "late finalized text"
         ar._closing.set()
