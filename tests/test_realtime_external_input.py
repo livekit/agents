@@ -803,6 +803,81 @@ async def test_short_external_transcript_retains_matching_realtime_audio() -> No
     assert activity._rt_user_activity_started
 
 
+async def test_empty_audio_timeout_bypasses_min_words_and_settles_provider_input() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(turn_detection=False, can_disable_turn_detection=False)
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            realtime_input_mode="audio",
+            endpointing={"min_delay": 0.0, "max_delay": 0.0},
+        ),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    activity._session.options.interruption["min_words"] = 2
+    await activity.start()
+
+    generated: list[dict[str, Any]] = []
+
+    def _capture_generate_reply(**kwargs: Any) -> SpeechHandle:
+        generated.append(kwargs)
+        return SpeechHandle.create()
+
+    try:
+        recognition = activity._audio_recognition
+        assert recognition is not None
+        assert recognition._finalize_empty_transcript_on_timeout
+
+        recognition._user_turn_start = 1.0
+        recognition._turn_speech_duration = 0.5
+        recognition._turn_transcript_received = False
+        recognition._audio_transcript = ""
+        recognition._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+
+        current_speech = MagicMock()
+        current_speech.allow_interruptions = True
+        current_speech.interrupted = False
+        current_speech.interrupt = AsyncMock()
+        activity._current_speech = cast(Any, current_speech)
+        activity._cancel_speech_pause = AsyncMock()  # type: ignore[method-assign]
+        activity._interrupt_background_speeches = MagicMock(  # type: ignore[method-assign]
+            return_value=[]
+        )
+        activity._generate_reply = _capture_generate_reply  # type: ignore[method-assign]
+
+        frame = _frame(7)
+        input_token = activity._rt_audio_input_token
+        activity._start_realtime_user_activity()
+        activity.push_audio(frame)
+
+        recognition._on_transcription_timeout()
+        eou_task = recognition._end_of_turn_task
+        assert eou_task is not None
+        await eou_task
+
+        completion_task = activity._user_turn_completed_atask
+        assert completion_task is not None
+        await completion_task
+
+        assert len(generated) == 1
+        assert generated[0]["user_message"] is None
+        assert generated[0]["input_details"].modality == "audio"
+        assert generated[0]["realtime_audio_input_owner"] is input_token
+        assert generated[0]["commit_realtime_audio"] is True
+        assert input_token.state == "sealed"
+        assert input_token.disposition == "active"
+        assert model.active_session.pushed_audio == [frame]
+        assert not model.active_session.audio_cleared
+        recognition._restart_stt_input.assert_called_once_with()
+    finally:
+        activity._current_speech = None
+        await activity.aclose()
+
+
 async def test_stop_response_discards_turn_and_next_turn_is_ready() -> None:
     activity, rt_session = _activity(agent=_EditingAgent(stop_first_turn=True))
 
