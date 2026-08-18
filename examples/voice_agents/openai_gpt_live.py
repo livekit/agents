@@ -85,10 +85,11 @@ class Assistant(Agent):
 
     async def on_enter(self) -> None:
         self.session.generate_reply(
-            instructions=(
-                "greet the caller by picking up where the earlier conversation left off, "
-                "and ask how you can help."
-            )
+            user_input="What is the weather in New York?",
+            # instructions=(
+            #     "greet the caller by picking up where the earlier conversation left off, "
+            #     "and ask how you can help."
+            # )
         )
 
     @function_tool

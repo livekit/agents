@@ -47,6 +47,7 @@ DEFAULT_BACKEND_MODEL = "gpt-5.6-sol"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 ALPHA_VALUE = "quicksilver=v2"
 
+# TODO: tune the prompts and caps
 # service caps, budgeted at the usual ~4 characters a token since there is no tokenizer here
 _MAX_INITIAL_ITEMS = 128
 _MAX_INITIAL_CHARS = 8192 * 4
@@ -55,7 +56,8 @@ _MAX_FEEDBACK_CHARS = 4096
 
 # no client event asks for a turn, so a reply is requested by putting the ask in the context
 _SPEAK_NOW = (
-    "Speak now. Do not wait for the user to say anything first. Afterwards, pause and listen."
+    # "Speak now. Do not wait for the user to say anything first. Afterwards, pause and listen."
+    "User said something, reply to it."
 )
 
 # session.closed carries the final usage; the service drains first, capped at 10s server-side
