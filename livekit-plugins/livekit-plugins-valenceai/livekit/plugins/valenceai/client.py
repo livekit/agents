@@ -306,11 +306,17 @@ class ValenceWebSocketClient:
             end_ms: End of the time range in milliseconds.
 
         Returns:
-            dict with 'dominant', 'confidence', and 'all_emotions' keys.
+            dict with 'dominant', 'confidence', 'all_emotions', and
+            'timestamp_ms' (audio position of the matched prediction) keys.
         """
         async with self._emotion_history_lock:
             if not self._emotion_history:
-                return {"dominant": "neutral", "confidence": 0.0, "all_emotions": {}}
+                return {
+                    "dominant": "neutral",
+                    "confidence": 0.0,
+                    "all_emotions": {},
+                    "timestamp_ms": 0.0,
+                }
 
             midpoint = (start_ms + end_ms) / 2.0
             closest = min(
@@ -321,6 +327,7 @@ class ValenceWebSocketClient:
                 "dominant": closest["dominant"],
                 "confidence": closest["confidence"],
                 "all_emotions": closest["all_emotions"],
+                "timestamp_ms": closest["timestamp_ms"],
             }
 
     # ── Legacy batch mode ────────────────────────────────────────────────

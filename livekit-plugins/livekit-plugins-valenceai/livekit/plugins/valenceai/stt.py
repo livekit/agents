@@ -97,50 +97,30 @@ class STT(stt.STT):
         super().__init__(capabilities=underlying_stt.capabilities)
 
         self._underlying_stt = underlying_stt
-        self._api_key = api_key or os.getenv("VALENCE_API_KEY")
-        if not self._api_key:
+        key = api_key or os.getenv("VALENCE_API_KEY")
+        if not key:
             raise ValueError(
                 "Valence API key is required. Provide it via the 'api_key' parameter "
                 "or set the VALENCE_API_KEY environment variable."
             )
+        self._api_key: str = key
         self._server_url = server_url
         self._model = model
         self._min_confidence = min_confidence
 
-        # Valence client will be initialized on first use
-        self._valence_client: ValenceWebSocketClient | None = None
-        self._valence_connected = False
+    def _create_client(self) -> ValenceWebSocketClient:
+        """Create a new Valence client.
 
-    async def _ensure_valence_connected(self) -> bool:
-        """Ensure Valence client is connected, reconnecting if necessary.
-
-        Returns:
-            bool: True if connected, False otherwise.
+        Each stream (and each batch recognize call) owns its own client so that
+        concurrent streams never share connection state: one Valence connection
+        maps to one server-side audio session, and the per-session emotion
+        history and audio clock must not be reset by another stream starting.
         """
-        # Check if we have a client and it's actually connected
-        if self._valence_client and self._valence_client.is_connected:
-            return True
-
-        # Reset state if we had a stale connection
-        if self._valence_client and not self._valence_client.is_connected:
-            logger.warning("Valence connection was lost, attempting to reconnect...")
-            self._valence_connected = False
-
-        try:
-            # Create new client if needed
-            if not self._valence_client:
-                self._valence_client = ValenceWebSocketClient(
-                    api_key=self._api_key,
-                    server_url=self._server_url,
-                    model=self._model,
-                )
-            await self._valence_client.connect()
-            self._valence_connected = True
-            logger.info("Connected to Valence AI emotion detection API")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to connect to Valence: {e}")
-            return False
+        return ValenceWebSocketClient(
+            api_key=self._api_key,
+            server_url=self._server_url,
+            model=self._model,
+        )
 
     @property
     def model(self) -> str:
@@ -194,52 +174,60 @@ class STT(stt.STT):
         Returns:
             SpeechEvent: Recognition result with emotion-enriched text.
         """
-        await self._ensure_valence_connected()
-
         # Get transcription from underlying STT
         result = await self._underlying_stt.recognize(
             buffer, language=language, conn_options=conn_options
         )
 
-        # If we have audio and Valence is connected, detect emotion per sentence
-        if self._valence_client and self._valence_connected:
-            try:
-                # Combine frames if buffer is a list of AudioFrames
-                combined = rtc.combine_audio_frames(buffer) if isinstance(buffer, list) else buffer
-                samples = np.frombuffer(combined.data, dtype=np.int16)
+        # This path owns a short-lived client; if Valence is unavailable the
+        # plain transcription is returned unchanged.
+        valence_client = self._create_client()
+        try:
+            await valence_client.connect()
+        except Exception as e:
+            logger.error(f"Failed to connect to Valence: {e}")
+            return result
 
-                # Enrich the transcription with emotions per sentence
-                if result.alternatives:
-                    new_alternatives = []
-                    for alt in result.alternatives:
-                        enriched_text = await self._enrich_text_with_emotions(
-                            alt.text, samples, combined.sample_rate
-                        )
-                        new_alternatives.append(
-                            stt.SpeechData(
-                                language=alt.language,
-                                text=enriched_text,
-                                start_time=alt.start_time,
-                                end_time=alt.end_time,
-                                confidence=alt.confidence,
-                                speaker_id=alt.speaker_id,
-                                is_primary_speaker=alt.is_primary_speaker,
-                            )
-                        )
-                    result = stt.SpeechEvent(
-                        type=result.type,
-                        request_id=result.request_id,
-                        alternatives=new_alternatives,
-                        recognition_usage=result.recognition_usage,
+        try:
+            # Combine frames if buffer is a list of AudioFrames
+            combined = rtc.combine_audio_frames(buffer) if isinstance(buffer, list) else buffer
+            samples = np.frombuffer(combined.data, dtype=np.int16)
+
+            # Enrich the transcription with emotions per sentence
+            if result.alternatives:
+                new_alternatives = []
+                for alt in result.alternatives:
+                    enriched_text = await self._enrich_text_with_emotions(
+                        valence_client, alt.text, samples, combined.sample_rate
                     )
+                    new_alternatives.append(
+                        stt.SpeechData(
+                            language=alt.language,
+                            text=enriched_text,
+                            start_time=alt.start_time,
+                            end_time=alt.end_time,
+                            confidence=alt.confidence,
+                            speaker_id=alt.speaker_id,
+                            is_primary_speaker=alt.is_primary_speaker,
+                        )
+                    )
+                result = stt.SpeechEvent(
+                    type=result.type,
+                    request_id=result.request_id,
+                    alternatives=new_alternatives,
+                    recognition_usage=result.recognition_usage,
+                )
 
-            except Exception as e:
-                logger.error(f"Error detecting emotion: {e}")
+        except Exception as e:
+            logger.error(f"Error detecting emotion: {e}")
+        finally:
+            await valence_client.disconnect()
 
         return result
 
     async def _enrich_text_with_emotions(
         self,
+        valence_client: ValenceWebSocketClient,
         text: str,
         samples: np.ndarray,
         sample_rate: int,
@@ -254,13 +242,12 @@ class STT(stt.STT):
 
         # If only one sentence, detect emotion for the whole audio
         if len(sentences) == 1:
-            assert self._valence_client is not None
-            emotions = await self._valence_client.process_audio(samples, sample_rate)
+            emotions = await valence_client.process_audio(samples, sample_rate)
             emotion = emotions.get("dominant", "neutral")
             confidence = emotions.get("confidence", 0.0)
             if confidence >= self._min_confidence:
                 return f"[{emotion.capitalize()}] {sentences[0]}"
-            return sentences[0]
+            return f"[Neutral] {sentences[0]}"
 
         # Multiple sentences - divide audio proportionally by character count
         total_chars = sum(len(s) for s in sentences)
@@ -279,8 +266,7 @@ class STT(stt.STT):
 
             if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
                 try:
-                    assert self._valence_client is not None
-                    emotions = await self._valence_client.process_audio(audio_segment, sample_rate)
+                    emotions = await valence_client.process_audio(audio_segment, sample_rate)
                     emotion = emotions.get("dominant", "neutral")
                     confidence = emotions.get("confidence", 0.0)
 
@@ -298,8 +284,6 @@ class STT(stt.STT):
 
     async def aclose(self) -> None:
         """Close the STT and cleanup resources."""
-        if self._valence_client:
-            await self._valence_client.disconnect()
         await self._underlying_stt.aclose()
 
 
@@ -374,14 +358,19 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         """Main processing loop with continuous Valence streaming."""
         logger.debug("Starting emotion-aware streaming recognition (continuous)")
 
-        # Ensure Valence is connected
-        valence_connected = await self._parent_stt._ensure_valence_connected()
-        valence_client = self._parent_stt._valence_client
-        logger.debug(f"Valence connected: {valence_connected}")
-
-        # Start continuous streaming to Valence
-        if valence_client and valence_connected:
-            await valence_client.start_streaming()
+        # Each stream owns its own client: one Valence connection maps to one
+        # server-side audio session, so concurrent streams must never share
+        # a connection or its emotion history. If Valence is unavailable the
+        # stream degrades to plain transcription.
+        client = self._parent_stt._create_client()
+        valence_client: ValenceWebSocketClient | None = client
+        try:
+            await client.connect()
+            await client.start_streaming()
+            logger.info("Connected to Valence AI emotion detection API")
+        except Exception as e:
+            logger.error(f"Failed to connect to Valence, continuing without emotions: {e}")
+            valence_client = None
 
         # Create underlying stream
         underlying_stream = self._underlying_stt.stream(
@@ -412,7 +401,7 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                     self._current_audio_position_ms += frame_duration_ms
 
                     # Stream to Valence API continuously (fire-and-forget)
-                    if valence_client and valence_connected:
+                    if valence_client:
                         task = asyncio.create_task(
                             valence_client.send_audio_chunk(
                                 audio_data=bytes(frame.data),
@@ -448,8 +437,9 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         finally:
             for task in _background_tasks:
                 task.cancel()
-            if valence_client and valence_connected:
+            if valence_client:
                 await valence_client.stop_streaming()
+                await valence_client.disconnect()
             await underlying_stream.aclose()
 
     async def _enrich_final_transcript(

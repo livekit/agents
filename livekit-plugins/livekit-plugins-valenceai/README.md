@@ -81,7 +81,7 @@ stt = valenceai.STT(
     model="4emotions",
 
     # Optional: Minimum confidence threshold (0.0-1.0)
-    # Emotions below this threshold won't be tagged
+    # Predictions below this threshold are tagged [Neutral]
     min_confidence=0.3,
 )
 ```
@@ -186,7 +186,7 @@ valenceai.STT(
 | `api_key` | `str \| None` | `None` | Valence API key (falls back to `VALENCE_API_KEY` env var) |
 | `server_url` | `str` | `"https://api.getvalenceai.com"` | Valence API server URL |
 | `model` | `"4emotions" \| "7emotions"` | `"4emotions"` | Emotion classification model |
-| `min_confidence` | `float` | `0.0` | Minimum confidence to include emotion tags |
+| `min_confidence` | `float` | `0.0` | Minimum confidence for a specific emotion tag; below it, `[Neutral]` is used |
 
 ### ValenceWebSocketClient Class
 
