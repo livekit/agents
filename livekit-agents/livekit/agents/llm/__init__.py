@@ -39,8 +39,10 @@ from .realtime import (
     RemoteItemAddedEvent,
 )
 from .realtime_fallback_adapter import (
+    FallbackRealtimeSession,
     RealtimeAvailabilityChangedEvent,
     RealtimeModelFallbackAdapter,
+    _FallbackRealtimeSession as _FallbackRealtimeSession,
 )
 from .tool_context import (
     DuplicateScope,
@@ -85,6 +87,7 @@ __all__ = [
     "FallbackAdapter",
     "AvailabilityChangedEvent",
     "RealtimeModelFallbackAdapter",
+    "FallbackRealtimeSession",
     "RealtimeAvailabilityChangedEvent",
     "ToolChoice",
     "Tool",
