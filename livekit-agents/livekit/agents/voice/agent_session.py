@@ -1248,11 +1248,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     reason != CloseReason.ERROR
                     and (audio_recognition := activity._audio_recognition) is not None
                 ):
-                    # wait for the user transcript to be committed
-                    await audio_recognition._commit_user_turn(
+                    # Best-effort: wait for the trailing user transcript to be
+                    # committed before teardown. This must never abort the rest of
+                    # the close, so isolate the flush's own failure or cancellation
+                    # (e.g. a racing commit_user_turn() cancels the in-flight flush
+                    # task) from the close path. asyncio.wait() still propagates
+                    # cancellation of the close task itself.
+                    commit_fut = audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
                     )
+                    await asyncio.wait([commit_fut])
+                    if not commit_fut.cancelled() and (exc := commit_fut.exception()):
+                        logger.warning(
+                            "error while committing the final user turn on close",
+                            exc_info=exc,
+                        )
 
                 await activity.aclose()
             self._activity = None

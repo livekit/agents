@@ -151,3 +151,61 @@ async def test_session_close_awaits_commit_before_activity_aclose() -> None:
         await transcription_sync.aclose()
 
     assert order == ["commit_call", "commit_resolved", "activity_aclose"]
+
+
+async def _assert_teardown_completes_despite_flush(
+    make_commit_fut: object,
+) -> None:
+    """Patch ``_commit_user_turn`` to return a doomed future and assert session
+    teardown still runs to completion (``activity.aclose()`` runs, ``close`` is
+    emitted, ``_started`` is cleared)."""
+    activity, audio_recognition = await _start_session_mid_utterance()
+    session = activity._session
+
+    close_events: list[object] = []
+    session.on("close", close_events.append)
+
+    activity_aclose_ran = False
+    orig_activity_aclose = activity.aclose
+
+    async def _spy_activity_aclose(**kwargs: object) -> None:
+        nonlocal activity_aclose_ran
+        activity_aclose_ran = True
+        await orig_activity_aclose(**kwargs)  # type: ignore[arg-type]
+
+    audio_recognition._commit_user_turn = make_commit_fut  # type: ignore[assignment]
+    activity.aclose = _spy_activity_aclose  # type: ignore[method-assign]
+
+    # aclose() must not raise even though the flush future is doomed.
+    await _aclose_session(session, activity)
+
+    assert activity_aclose_ran, "teardown was abandoned before activity.aclose()"
+    assert close_events, "session close event was never emitted"
+    assert session._started is False
+    assert session._activity is None
+
+
+@pytest.mark.asyncio
+async def test_session_close_survives_cancelled_flush_future() -> None:
+    """A flush future cancelled by a racing ``commit_user_turn()`` must not abort
+    session teardown (the mechanism flagged in Devin review of PR #6891)."""
+
+    def _cancelled_commit(**kwargs: object) -> asyncio.Future[str]:
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        fut.cancel()
+        return fut
+
+    await _assert_teardown_completes_despite_flush(_cancelled_commit)
+
+
+@pytest.mark.asyncio
+async def test_session_close_survives_failed_flush_future() -> None:
+    """A flush future that resolves with an exception must be swallowed on close
+    (logged) rather than aborting session teardown."""
+
+    def _failing_commit(**kwargs: object) -> asyncio.Future[str]:
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        fut.set_exception(RuntimeError("end-of-turn detection blew up during flush"))
+        return fut
+
+    await _assert_teardown_completes_despite_flush(_failing_commit)
