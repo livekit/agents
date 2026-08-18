@@ -35,6 +35,10 @@ FLOE_GATEWAY_URL = "https://credit-api.floelabs.xyz/v1"
 # the ``X-Floe-Provider-Key`` header); Floe meters spend against your budget.
 FLOE_BYOK_PROXY_URL = "https://credit-api.floelabs.xyz/v1/llm"
 
+# Usage tag stamped on every metric this plugin emits, so the reconciler can
+# price only Floe-routed usage and ignore other providers in a mixed session.
+FLOE_PROVIDER = "floe"
+
 
 class LLM(OpenAILLM):
     def __init__(
@@ -77,11 +81,12 @@ class LLM(OpenAILLM):
                 present, BYOK mode is used.
             base_url: Override the resolved Floe base URL — e.g. to point at your
                 own Floe instance, including a self-hosted deployment on a custom
-                domain. Honored in both keyless and BYOK modes; in BYOK mode the
-                ``X-Floe-Provider-Key`` header is sent to this base URL by design,
-                so it must be ``https`` (loopback ``http`` is allowed for local
-                dev) — the provider key is never sent over a cleartext connection.
-                This TLS check also covers a caller-supplied ``client``'s address.
+                domain. Honored in both keyless and BYOK modes. Because every
+                request carries the Floe API key (and any BYOK provider key), the
+                effective address must be ``https`` (loopback ``http`` is allowed
+                for local dev) — credentials are never sent over a cleartext
+                connection. This TLS check also covers a caller-supplied
+                ``client``'s address.
             temperature: Sampling temperature forwarded to the model.
             top_p: Nucleus sampling probability forwarded to the model.
             parallel_tool_calls: Whether the model may call tools in parallel.
@@ -102,14 +107,16 @@ class LLM(OpenAILLM):
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN
         if resolved_provider_key:
             resolved_base_url = base_url if is_given(base_url) else FLOE_BYOK_PROXY_URL
-            # The provider key rides every request, and a caller-supplied client
-            # overrides base_url in the parent — so validate the address the key
-            # will actually reach, not just the resolved base_url.
-            effective_url = str(client.base_url) if client is not None else resolved_base_url
-            _require_secure_byok_url(effective_url)
             extra_headers = {"X-Floe-Provider-Key": resolved_provider_key}
         else:
             resolved_base_url = base_url if is_given(base_url) else FLOE_GATEWAY_URL
+
+        # Credentials (the Floe key, and any BYOK provider key) ride every
+        # request; a caller-supplied client overrides base_url in the parent, so
+        # validate the address they will actually reach. Never send them over
+        # cleartext — this covers keyless and BYOK alike.
+        effective_url = str(client.base_url) if client is not None else resolved_base_url
+        _require_secure_url(effective_url)
 
         super().__init__(
             model=model,
@@ -125,12 +132,21 @@ class LLM(OpenAILLM):
             max_retries=max_retries,
         )
 
+    @property
+    def provider(self) -> str:
+        # Tag usage as Floe-routed regardless of host (works for self-hosted Floe
+        # on a custom domain); the parent's request formatting is unaffected — it
+        # uses _provider_fmt (kept "openai"), not this property.
+        return FLOE_PROVIDER
 
-def _require_secure_byok_url(url: str) -> None:
-    """BYOK forwards a provider secret as a header — refuse to send it over cleartext.
 
-    Allows https to any host (incl. self-hosted Floe on a custom domain); allows
-    http only for loopback (local dev). Fail closed on anything else.
+def _require_secure_url(url: str) -> None:
+    """Refuse to send a credential-bearing request over cleartext.
+
+    Every request carries a bearer credential (the Floe API key, plus any BYOK
+    ``X-Floe-Provider-Key``), so this guards both keyless and BYOK modes. Allows
+    https to any host (incl. self-hosted Floe on a custom domain); allows http
+    only for loopback (local dev). Fail closed on anything else.
     """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -139,8 +155,8 @@ def _require_secure_byok_url(url: str) -> None:
     if parsed.scheme == "http" and host in {"localhost", "127.0.0.1", "::1"}:
         return
     raise ValueError(
-        f"BYOK (X-Floe-Provider-Key) requires an https base_url; got {url!r}. "
-        "Refusing to send your provider key over a non-TLS connection."
+        f"Floe requires an https base_url; got {url!r}. Refusing to send your "
+        "Floe API key or provider key over a non-TLS connection."
     )
 
 

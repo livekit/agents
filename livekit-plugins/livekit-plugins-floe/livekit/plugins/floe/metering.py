@@ -22,6 +22,7 @@ from floe_guard import price_tokens, resolve_price
 from livekit.agents.metrics import LLMModelUsage
 
 from .log import logger
+from .services import FLOE_PROVIDER
 
 if TYPE_CHECKING:
     from livekit.agents import AgentSession, SessionUsageUpdatedEvent
@@ -84,8 +85,14 @@ class FloeUsageReconciler:
     The estimate is local and advisory. Floe's billed amount is authoritative;
     a divergence between the two is the signal worth acting on.
 
+    Only usage routed through this plugin's ``floe.LLM`` is counted (it is tagged
+    ``provider="floe"``). Models used via other providers/plugins, or realtime
+    models surfaced as LLM usage, are ignored — so the estimate isn't inflated by
+    spend Floe never metered and stays comparable to Floe's bill.
+
     Unlike a single-model meter, this reads the model id off each usage entry,
-    so a session that swaps or fans out across models is priced correctly.
+    so a session that swaps or fans out across Floe-routed models is priced
+    correctly.
     """
 
     def __init__(self) -> None:
@@ -123,6 +130,8 @@ class FloeUsageReconciler:
         for mu in usage.model_usage:
             if not isinstance(mu, LLMModelUsage):
                 continue
+            if mu.provider != FLOE_PROVIDER:
+                continue  # only price usage routed through this plugin's floe.LLM
             provider, model = _display_provider_model(mu)  # display only
             priced = resolve_price(mu.model)  # pricing uses the full id
             if priced is None:
