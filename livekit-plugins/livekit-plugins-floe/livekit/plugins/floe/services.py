@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import httpx
 import openai
@@ -77,7 +78,9 @@ class LLM(OpenAILLM):
             base_url: Override the resolved Floe base URL — e.g. to point at your
                 own Floe instance, including a self-hosted deployment on a custom
                 domain. Honored in both keyless and BYOK modes; in BYOK mode the
-                ``X-Floe-Provider-Key`` header is sent to this base URL by design.
+                ``X-Floe-Provider-Key`` header is sent to this base URL by design,
+                so it must be ``https`` (loopback ``http`` is allowed for local
+                dev) — the provider key is never sent over a cleartext connection.
             temperature: Sampling temperature forwarded to the model.
             top_p: Nucleus sampling probability forwarded to the model.
             parallel_tool_calls: Whether the model may call tools in parallel.
@@ -96,6 +99,7 @@ class LLM(OpenAILLM):
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN
         if resolved_provider_key:
             resolved_base_url = base_url if is_given(base_url) else FLOE_BYOK_PROXY_URL
+            _require_secure_byok_url(resolved_base_url)
             extra_headers = {"X-Floe-Provider-Key": resolved_provider_key}
         else:
             resolved_base_url = base_url if is_given(base_url) else FLOE_GATEWAY_URL
@@ -113,6 +117,24 @@ class LLM(OpenAILLM):
             timeout=timeout,
             max_retries=max_retries,
         )
+
+
+def _require_secure_byok_url(url: str) -> None:
+    """BYOK forwards a provider secret as a header — refuse to send it over cleartext.
+
+    Allows https to any host (incl. self-hosted Floe on a custom domain); allows
+    http only for loopback (local dev). Fail closed on anything else.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and host in {"localhost", "127.0.0.1", "::1"}:
+        return
+    raise ValueError(
+        f"BYOK (X-Floe-Provider-Key) requires an https base_url; got {url!r}. "
+        "Refusing to send your provider key over a non-TLS connection."
+    )
 
 
 def _get_api_key(key: NotGivenOr[str]) -> str:
