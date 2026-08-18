@@ -45,6 +45,7 @@ members = [
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
+    "livekit-plugins-floe",
     "livekit-plugins-gladia",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
@@ -1007,6 +1008,15 @@ version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
+]
+
+[[package]]
+name = "floe-guard"
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/c1/78c0b4f46b060315bafe4f7d456917a25acadece6afd5d8dc8e26ec7cbab/floe_guard-0.18.1.tar.gz", hash = "sha256:1ce9031688d45211d38f548fa53a62ff151cd1130bc21bc8bc727f96b0660278", size = 444746, upload-time = "2026-08-18T03:52:01.199Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/c6/6886277f9bc507cea7a5cf71a87132f78e306cba2610c598b28173da83dd/floe_guard-0.18.1-py3-none-any.whl", hash = "sha256:77cad3a30c66ee63b61c63d7f8948dc3299f43d72915db4eda27c58daf3a1bb4", size = 114889, upload-time = "2026-08-18T03:51:59.52Z" },
 ]
 
 [[package]]
@@ -2878,6 +2888,24 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
+]
+
+[[package]]
+name = "livekit-plugins-floe"
+source = { editable = "livekit-plugins/livekit-plugins-floe" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "floe-guard" },
+    { name = "livekit" },
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "floe-guard", specifier = ">=0.18" },
+    { name = "livekit" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
