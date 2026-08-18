@@ -813,7 +813,10 @@ class AudioRecognition:
         self._closing.set()
         try:
             if self._commit_user_turn_atask is not None:
-                await aio.cancel_and_wait(self._commit_user_turn_atask)
+                try:
+                    await self._commit_user_turn_atask
+                except asyncio.CancelledError:
+                    pass
 
             if self._stt_pipeline is not None:
                 await self._stt_pipeline.aclose()
@@ -831,7 +834,10 @@ class AudioRecognition:
                 await aio.cancel_and_wait(self._interruption_atask)
 
             if self._end_of_turn_task is not None:
-                await aio.cancel_and_wait(self._end_of_turn_task)
+                try:
+                    await self._end_of_turn_task
+                except asyncio.CancelledError:
+                    pass
 
             if self._turn_detector_stream is not None:
                 await self._turn_detector_stream.aclose()

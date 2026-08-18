@@ -155,6 +155,31 @@ class TestAudioRecognitionAclose:
         assert end_of_turn_task.done()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("task_attr", ["_commit_user_turn_atask", "_end_of_turn_task"])
+    async def test_aclose_waits_for_pending_turn_task(self, task_attr: str) -> None:
+        audio_recognition = self._create_audio_recognition()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def pending_task() -> None:
+            started.set()
+            await release.wait()
+
+        task = asyncio.create_task(pending_task())
+        await started.wait()
+        setattr(audio_recognition, task_attr, task)
+
+        close_task = asyncio.create_task(audio_recognition._aclose())
+        await asyncio.sleep(0)
+
+        assert not close_task.done()
+        assert not task.cancelled()
+
+        release.set()
+        await close_task
+        assert task.done()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("is_recording", "expected_end_count"), [(True, 1), (False, 0)])
     async def test_aclose_finalizes_user_turn_span(
         self, is_recording: bool, expected_end_count: int
