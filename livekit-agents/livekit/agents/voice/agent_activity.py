@@ -3269,7 +3269,7 @@ class AgentActivity(RecognitionHooks):
                 audio_input_token = await asyncio.shield(audio_input_ready_fut)
         except asyncio.CancelledError:
             if self._session._closing and self._new_turns_blocked:
-                self._commit_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(bounded_user_message)
             self._clear_realtime_input_if_owned(audio_input_ready_fut)
             raise
         except BaseException:
@@ -3298,7 +3298,7 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
             if self._session._closing:
-                self._commit_user_message_locally(user_message)
+                self._commit_bounded_user_message_locally(user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3357,7 +3357,7 @@ class AgentActivity(RecognitionHooks):
             )
         except asyncio.CancelledError:
             if self._session._closing and self._new_turns_blocked:
-                self._commit_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(bounded_user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             raise
@@ -3391,7 +3391,7 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
             if self._session._closing:
-                self._commit_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(bounded_user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3410,7 +3410,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": user_message.raw_text_content},
                 )
                 if self._session._closing:
-                    self._commit_user_message_locally(user_message)
+                    self._commit_bounded_user_message_locally(user_message)
                 return
 
         speech_handle: SpeechHandle | None = None
@@ -4567,6 +4567,13 @@ class AgentActivity(RecognitionHooks):
 
             self._commit_realtime_user_message(user_message)
         return True
+
+    def _commit_bounded_user_message_locally(self, user_message: llm.ChatMessage) -> None:
+        # Empty candidates are hook opportunities, not conversation items. This helper is called
+        # from several close/cancellation paths; the delegated commit is idempotent by message ID.
+        if not (user_message.raw_text_content or "").strip():
+            return
+        self._commit_user_message_locally(user_message)
 
     def _commit_user_message_locally(self, user_message: llm.ChatMessage) -> None:
         self._commit_realtime_user_message(user_message)
