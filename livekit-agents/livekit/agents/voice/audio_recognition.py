@@ -817,10 +817,10 @@ class AudioRecognition:
                     await self._commit_user_turn_atask
                 except asyncio.CancelledError:
                     pass
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "error while committing the final user turn on close",
-                        exc_info=True,
+                        "error while committing the final user turn on close: %s",
+                        type(exc).__name__,
                     )
 
             if self._stt_pipeline is not None:
@@ -843,10 +843,10 @@ class AudioRecognition:
                     await self._end_of_turn_task
                 except asyncio.CancelledError:
                     pass
-                except Exception:
+                except Exception as exc:
                     logger.warning(
-                        "error while completing the final user turn on close",
-                        exc_info=True,
+                        "error while completing the final user turn on close: %s",
+                        type(exc).__name__,
                     )
 
             if self._turn_detector_stream is not None:

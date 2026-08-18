@@ -186,9 +186,12 @@ class TestAudioRecognitionAclose:
         [
             (
                 "_commit_user_turn_atask",
-                "error while committing the final user turn on close",
+                "error while committing the final user turn on close: RuntimeError",
             ),
-            ("_end_of_turn_task", "error while completing the final user turn on close"),
+            (
+                "_end_of_turn_task",
+                "error while completing the final user turn on close: RuntimeError",
+            ),
         ],
     )
     async def test_aclose_logs_failed_turn_task(
@@ -207,10 +210,9 @@ class TestAudioRecognitionAclose:
         with caplog.at_level(logging.WARNING, logger="livekit.agents"):
             await audio_recognition._aclose()
 
-        records = [record for record in caplog.records if record.message == warning]
+        records = [record for record in caplog.records if record.getMessage() == warning]
         assert len(records) == 1
-        assert records[0].exc_info is not None
-        assert isinstance(records[0].exc_info[1], RuntimeError)
+        assert records[0].exc_info is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("is_recording", "expected_end_count"), [(True, 1), (False, 0)])
