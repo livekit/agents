@@ -81,10 +81,10 @@ class _Python310TaskSentinel:
     pass
 
 
-def _bounded_turn() -> _EndOfTurnInfo:
+def _bounded_turn(*, transcript: str = "already bounded before close") -> _EndOfTurnInfo:
     return _EndOfTurnInfo(
         skip_reply=False,
-        new_transcript="already bounded before close",
+        new_transcript=transcript,
         transcript_confidence=0.9,
         metrics=_EndOfTurnMetrics(
             started_speaking_at=1.0,
@@ -344,3 +344,37 @@ async def test_close_bounds_user_callback_and_retains_transcript_once(
     assert [message.raw_text_content for message in activity.agent.chat_ctx.messages()] == [
         "already bounded before close"
     ]
+
+
+async def test_close_does_not_commit_empty_bounded_realtime_audio_turn() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(llm=model)
+    agent = _BlockingTurnAgent(suppress_cancellation=False)
+    activity = AgentActivity(agent, session)
+    rt_session = FakeRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._scheduling_paused = False
+    audio_input_ready_fut = activity._seal_realtime_audio_input()
+
+    bounded_turn_task = asyncio.create_task(
+        activity._user_turn_completed_task(
+            None,
+            _bounded_turn(transcript=""),
+            audio_input_ready_fut,
+        )
+    )
+    await agent.hook_started.wait()
+
+    session._closing = True
+    activity._new_turns_blocked = True
+    agent.release_hook.set()
+    await bounded_turn_task
+
+    assert activity.agent.chat_ctx.messages() == []
+    assert rt_session.generate_reply_calls == 0
+    assert rt_session.audio_cleared
