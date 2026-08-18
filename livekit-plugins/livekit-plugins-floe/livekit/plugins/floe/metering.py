@@ -59,6 +59,19 @@ class FloeUsageReconciliation:
     unpriced_models: list[str] = field(default_factory=list)
 
 
+def _display_provider_model(mu: LLMModelUsage) -> tuple[str, str]:
+    """Report-friendly ``(provider, model)``.
+
+    Floe ids are ``'<provider>/<model>'``; split them for display. Falls back to
+    the runtime ``provider``/``model`` fields for a bare id. Display only —
+    pricing always uses the full ``mu.model`` id.
+    """
+    if "/" in mu.model:
+        provider, _, model = mu.model.partition("/")
+        return provider, model
+    return mu.provider, mu.model
+
+
 class FloeUsageReconciler:
     """Reconcile LiveKit-reported token usage against Floe pricing.
 
@@ -110,14 +123,15 @@ class FloeUsageReconciler:
         for mu in usage.model_usage:
             if not isinstance(mu, LLMModelUsage):
                 continue
-            priced = resolve_price(mu.model)
+            provider, model = _display_provider_model(mu)  # display only
+            priced = resolve_price(mu.model)  # pricing uses the full id
             if priced is None:
                 logger.warning("no Floe price for model %r; excluded from total", mu.model)
                 unpriced_models.append(mu.model)
                 per_model.append(
                     FloeModelCost(
-                        model=mu.model,
-                        provider=mu.provider,
+                        model=model,
+                        provider=provider,
                         input_tokens=mu.input_tokens,
                         output_tokens=mu.output_tokens,
                         estimated_usd=None,
@@ -129,8 +143,8 @@ class FloeUsageReconciler:
             total += usd
             per_model.append(
                 FloeModelCost(
-                    model=mu.model,
-                    provider=mu.provider,
+                    model=model,
+                    provider=provider,
                     input_tokens=mu.input_tokens,
                     output_tokens=mu.output_tokens,
                     estimated_usd=usd,

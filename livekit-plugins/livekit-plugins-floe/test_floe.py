@@ -14,8 +14,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from livekit.agents import Plugin
 from livekit.plugins import floe
+
+pytestmark = pytest.mark.unit
 
 
 def test_exports() -> None:

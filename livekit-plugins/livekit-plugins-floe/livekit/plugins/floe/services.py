@@ -74,8 +74,10 @@ class LLM(OpenAILLM):
             provider_key: Optional upstream provider key for BYOK mode. Falls
                 back to the ``FLOE_PROVIDER_KEY`` environment variable. When
                 present, BYOK mode is used.
-            base_url: Override the resolved Floe base URL. Honored in both
-                keyless and BYOK modes.
+            base_url: Override the resolved Floe base URL — e.g. to point at your
+                own Floe instance, including a self-hosted deployment on a custom
+                domain. Honored in both keyless and BYOK modes; in BYOK mode the
+                ``X-Floe-Provider-Key`` header is sent to this base URL by design.
             temperature: Sampling temperature forwarded to the model.
             top_p: Nucleus sampling probability forwarded to the model.
             parallel_tool_calls: Whether the model may call tools in parallel.
@@ -91,14 +93,10 @@ class LLM(OpenAILLM):
             provider_key if is_given(provider_key) else os.environ.get("FLOE_PROVIDER_KEY")
         )
 
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN
         if resolved_provider_key:
             resolved_base_url = base_url if is_given(base_url) else FLOE_BYOK_PROXY_URL
-            if client is None:
-                client = openai.AsyncClient(
-                    api_key=floe_key,
-                    base_url=resolved_base_url,
-                    default_headers={"X-Floe-Provider-Key": resolved_provider_key},
-                )
+            extra_headers = {"X-Floe-Provider-Key": resolved_provider_key}
         else:
             resolved_base_url = base_url if is_given(base_url) else FLOE_GATEWAY_URL
 
@@ -107,6 +105,7 @@ class LLM(OpenAILLM):
             api_key=floe_key,
             base_url=resolved_base_url,
             client=client,
+            extra_headers=extra_headers,
             temperature=temperature,
             top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
