@@ -101,6 +101,10 @@ class _ParticipantInputStream(Generic[T], ABC):
         Separate from `on_attached`/`on_detached`, which are the session's side of the
         `AudioInput` contract: this is for an owner that is not reading the stream right
         now, and would otherwise leave frames piling up in a channel nobody drains.
+
+        The owner must keep "not forwarding" and "not being read" the same thing. A stream
+        left registered with a reader that paces itself, `rtc.AudioMixer` in particular,
+        stalls that reader on every block once it stops delivering.
         """
         self._forwarding = forwarding
 
@@ -321,6 +325,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], _Roo
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
         on_stream_changed: Callable[[], None] | None = None,
+        flush_on_track_end: bool = True,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
@@ -340,6 +345,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], _Roo
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
         self._pre_connect_audio_handler = pre_connect_audio_handler
+        self._flush_on_track_end = flush_on_track_end
         self._apm: rtc.AudioProcessingModule | None = None
         if auto_gain_control:
             self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
@@ -414,10 +420,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], _Roo
 
         await super()._forward_task(old_task, stream, publication, participant)
 
-        # push a silent frame to flush the stt final result if any
-        await self._data_ch.send(
-            audio.silence_frame(_TURN_GAP, self._sample_rate, self._num_channels)
-        )
+        # push a silent frame to flush the stt final result if any. an owner combining
+        # several participants segments turns itself, and this frame would land in a buffer
+        # nobody is reading or in the pre-roll of somebody who is not speaking
+        if self._flush_on_track_end:
+            await self._data_ch.send(
+                audio.silence_frame(_TURN_GAP, self._sample_rate, self._num_channels)
+            )
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
@@ -484,6 +493,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         self._num_channels = num_channels
         self._frame_size_ms = frame_size_ms
         self._attached = True
+        self._closed = False
         self._streams: dict[str, _ParticipantAudioInputStream] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._data_ch = aio.Chan[rtc.AudioFrame]()
@@ -502,6 +512,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
             auto_gain_control=auto_gain_control,
             pre_connect_audio_handler=pre_connect_audio_handler,
             frame_size_ms=frame_size_ms,
+            flush_on_track_end=False,
         )
 
         # every child is handed the same instance, so the group closes it rather than
@@ -522,7 +533,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         identity = (
             participant.identity if isinstance(participant, rtc.RemoteParticipant) else participant
         )
-        if identity in self._streams:
+        if self._closed or identity in self._streams:
             return
 
         stream = self._new_stream(
@@ -562,6 +573,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
 
     @override
     async def aclose(self) -> None:
+        self._closed = True
         self._room.off("track_muted", self._on_track_mute_changed)
         self._room.off("track_unmuted", self._on_track_mute_changed)
 
@@ -626,10 +638,13 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
 
     @override
     async def aclose(self) -> None:
+        # children first: each keeps its own `track_subscribed` handler until it is closed,
+        # and closing the mixer under a live one turns a subscription landing mid-teardown
+        # into a RuntimeError raised inside the room's event dispatch
+        await super().aclose()
         await self._mixer.aclose()
         await aio.cancel_and_wait(self._forward_atask)
         self._mixing.clear()
-        await super().aclose()
 
     @override
     def _child_removed(self, identity: str, stream: _ParticipantAudioInputStream) -> None:
@@ -642,7 +657,7 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
         The mixer waits `stream_timeout_ms` on every registered stream for every block, so an
         idle one paces the whole mix below real time and warns on every block.
         """
-        if (stream := self._streams.get(identity)) is None:
+        if self._closed or (stream := self._streams.get(identity)) is None:
             return
 
         if not stream.streaming:
@@ -687,6 +702,10 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
 
     Overlapping speech is dropped rather than summed, which keeps the audio the STT sees
     clean at the cost of losing whatever the other participants said meanwhile.
+
+    A speaker holds the floor until the server drops them, so nobody cuts into the middle
+    of a turn. The cost is that somebody who goes quiet and comes back while another
+    participant holds the floor is not heard again until the next `active_speakers_changed`.
     """
 
     def __init__(self, room: rtc.Room, **kwargs: Any) -> None:

@@ -737,7 +737,12 @@ def _make_room_audio_input(room: _FakeRoom, cls):
 
 
 def _start_track(
-    stream, identity: str, value: int, sid: str | None = None, muted: bool = False
+    stream,
+    identity: str,
+    value: int,
+    sid: str | None = None,
+    muted: bool = False,
+    count: int = 200,
 ) -> None:
     """Publish a microphone track of a constant amplitude for this participant."""
     track, publication, participant = _make_track_available_args(
@@ -746,7 +751,7 @@ def _start_track(
     publication.muted = muted
     with patch(
         "livekit.rtc.AudioStream.from_track",
-        side_effect=lambda **kw: _ConstantAudioStream(value),
+        side_effect=lambda **kw: _ConstantAudioStream(value, count=count),
     ):
         stream._on_track_available(track, publication, participant)
 
@@ -1094,3 +1099,53 @@ async def test_mixed_audio_input_does_not_buffer_a_participant_muted_on_arrival(
         assert 100 in await _amplitudes(audio_input, 3)
     finally:
         await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_keeps_pre_roll_free_of_flush_silence() -> None:
+    """A group segments its own turns, so a child's end-of-track gap must not fill a pre-roll."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        audio_input.add_participant("bob")
+        _start_track(audio_input._streams["bob"], "bob", 200, count=4)  # ends while alice talks
+
+        _report_speakers(room, "alice")
+        await asyncio.sleep(1.0)
+
+        held = [int(np.frombuffer(f.data, dtype=np.int16)[0]) for f in audio_input._preroll["bob"]]
+        assert held and 0 not in held
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_closes_children_before_the_mixer() -> None:
+    """A child still holds a `track_subscribed` handler, and it registers with the mixer."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+    _publish(audio_input, "alice", 100)
+
+    closed: list[str] = []
+    child, mixer = audio_input._streams["alice"], audio_input._mixer
+    child_aclose, mixer_aclose = child.aclose, mixer.aclose
+
+    async def _closing_child(**kwargs):
+        closed.append("child")
+        await child_aclose(**kwargs)
+
+    async def _closing_mixer():
+        closed.append("mixer")
+        await mixer_aclose()
+
+    child.aclose, mixer.aclose = _closing_child, _closing_mixer
+    await audio_input.aclose()
+
+    assert closed == ["child", "mixer"], "the mixer must outlive the streams that register"
+
+    # and once closed, whatever the room still dispatches reaches nothing
+    audio_input._child_stream_changed("alice")
+    audio_input.add_participant("bob")
+    assert audio_input._streams == {}
