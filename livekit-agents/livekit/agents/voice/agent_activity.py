@@ -4569,6 +4569,15 @@ class AgentActivity(RecognitionHooks):
         return True
 
     def _commit_bounded_user_message_locally(self, user_message: llm.ChatMessage) -> None:
+        # Server-detected audio is already represented by the provider-owned conversation item.
+        # A concurrent external recognizer may finish during close, but it must not create a
+        # second user item for the same turn.
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self._realtime_input_mode == "audio"
+            and self._turn_policy.input_owner == "provider"
+        ):
+            return
         # Empty candidates are hook opportunities, not conversation items. This helper is called
         # from several close/cancellation paths; the delegated commit is idempotent by message ID.
         if not (user_message.raw_text_content or "").strip():
