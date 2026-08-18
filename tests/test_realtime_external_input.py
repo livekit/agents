@@ -2024,6 +2024,38 @@ def test_runtime_policy_update_preserves_turn_that_already_owns_audio() -> None:
     assert rt_session.provider_audio == [frame]
 
 
+def test_text_mode_rejects_clearing_only_explicit_boundary_atomically() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=True,
+            mutable_chat_context=True,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(streaming=False),
+        vad=None,
+        turn_handling=TurnHandlingOptions(
+            turn_detection="manual",
+            realtime_input_mode="text",
+        ),
+    )
+    activity = AgentActivity(_CustomSTTNodeAgent(instructions="test"), session)
+    session._activity = activity
+    original_policy = activity._turn_policy
+    original_metrics_source = activity._turn_detection_metrics_source
+
+    with pytest.raises(ValueError, match="requires explicit turn_detection"):
+        session.update_options(turn_detection=None)
+
+    assert session.turn_detection == "manual"
+    assert session._turn_detection_explicit is True
+    assert activity._turn_policy is original_policy
+    assert activity._turn_detection == "manual"
+    assert activity._turn_detection_metrics_source is original_metrics_source
+
+
 def test_removing_vad_reselects_streaming_stt_boundary_in_text_mode() -> None:
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(

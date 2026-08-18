@@ -47,6 +47,40 @@ class _ClosingRecognition:
         self.cancelled_bounded_turn = self._bounded_turn_task.cancelled()
 
 
+class _ClosingOnlyRecognition:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def _aclose(self) -> None:
+        self.closed = True
+
+
+class _BlockingTurnAgent(Agent):
+    def __init__(self, *, suppress_cancellation: bool) -> None:
+        super().__init__(instructions="test")
+        self._suppress_cancellation = suppress_cancellation
+        self.hook_started = asyncio.Event()
+        self.release_hook = asyncio.Event()
+        self.cancellation_seen = asyncio.Event()
+
+    async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
+        del turn_ctx, new_message
+        self.hook_started.set()
+        try:
+            await self.release_hook.wait()
+        except asyncio.CancelledError:
+            self.cancellation_seen.set()
+            if not self._suppress_cancellation:
+                raise
+            await self.release_hook.wait()
+
+
+class _Python310TaskSentinel:
+    """A task-shaped value without Task.cancelling(), which Python 3.10 lacks."""
+
+    pass
+
+
 def _bounded_turn() -> _EndOfTurnInfo:
     return _EndOfTurnInfo(
         skip_reply=False,
@@ -224,3 +258,84 @@ async def test_close_preserves_caller_cancellation() -> None:
     await utils.aio.cancel_and_wait(bounded_turn_task)
     rt_session.close_release.set()
     await rt_session.close_finished.wait()
+
+
+async def test_close_settles_inner_cancellation_without_task_cancelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = FakeRealtimeModel()
+    session = AgentSession(llm=model)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = FakeRealtimeSession(model)
+    activity._rt_session = rt_session
+    bounded_turn_task = asyncio.create_task(asyncio.Event().wait())
+    bounded_turn_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await bounded_turn_task
+    activity._user_turn_completed_atask = cast(asyncio.Task[None], bounded_turn_task)
+    recognition = _ClosingOnlyRecognition()
+    activity._audio_recognition = cast(Any, recognition)
+
+    monkeypatch.setattr(asyncio, "current_task", lambda: _Python310TaskSentinel())
+    async with activity._lock:
+        await activity._close_session()
+
+    assert recognition.closed
+    assert rt_session.closed
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("suppress_cancellation", [False, True])
+async def test_close_bounds_user_callback_and_retains_transcript_once(
+    suppress_cancellation: bool,
+) -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(llm=model, session_close_transcript_timeout=0.1)
+    agent = _BlockingTurnAgent(suppress_cancellation=suppress_cancellation)
+    activity = AgentActivity(agent, session)
+    rt_session = FakeRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._scheduling_paused = False
+    recognition = _ClosingOnlyRecognition()
+    activity._audio_recognition = cast(Any, recognition)
+    audio_input_ready_fut = activity._seal_realtime_audio_input()
+
+    bounded_turn_task = asyncio.create_task(
+        activity._user_turn_completed_task(
+            None,
+            _bounded_turn(),
+            audio_input_ready_fut,
+        )
+    )
+    activity._user_turn_completed_atask = bounded_turn_task
+    await agent.hook_started.wait()
+    session._closing = True
+
+    async def _close() -> None:
+        async with activity._lock:
+            await activity._close_session()
+
+    close_task = asyncio.create_task(_close())
+    try:
+        await asyncio.wait_for(close_task, timeout=1.0)
+    except BaseException:
+        agent.release_hook.set()
+        await asyncio.gather(close_task, bounded_turn_task, return_exceptions=True)
+        raise
+
+    assert agent.cancellation_seen.is_set()
+    assert recognition.closed
+    assert rt_session.closed
+
+    agent.release_hook.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await bounded_turn_task
+
+    assert [message.raw_text_content for message in activity.agent.chat_ctx.messages()] == [
+        "already bounded before close"
+    ]

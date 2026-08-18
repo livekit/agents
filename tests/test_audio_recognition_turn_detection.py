@@ -685,6 +685,68 @@ class TestTurnDispositionLifecycle:
         assert next_turn.skip_reply is False
         assert next_turn.reply_already_triggered is False
 
+    async def test_vad_empty_bounce_is_replaced_by_late_final(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = MagicMock()
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._endpointing.min_delay = 60.0
+        ar._hooks.on_end_of_turn.return_value = True
+        ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(
+            chat_ctx,
+            trigger="vad",
+            allow_empty_transcript=True,
+        )
+        empty_bounce = ar._end_of_turn_task
+        assert empty_bounce is not None
+        await asyncio.sleep(0)
+
+        ar._audio_transcript = "late finalized text"
+        ar._endpointing.min_delay = 0.0
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        replacement = ar._end_of_turn_task
+        assert replacement is not None
+        assert replacement is not empty_bounce
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await empty_bounce
+        await replacement
+
+        assert empty_bounce.cancelled()
+        ar._hooks.on_end_of_turn.assert_called_once()
+        assert ar._hooks.on_end_of_turn.call_args.args[0].new_transcript == "late finalized text"
+        ar._restart_stt_input.assert_not_called()
+
+    async def test_stt_empty_bounce_consumes_late_final_before_cleanup(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = MagicMock()
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._endpointing.min_delay = 60.0
+        ar._hooks.on_end_of_turn.return_value = True
+        ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+
+        ar._run_eou_detection(
+            _make_chat_ctx_stub(),
+            trigger="stt",
+            allow_empty_transcript=True,
+        )
+        bounce = ar._end_of_turn_task
+        assert bounce is not None
+        await asyncio.sleep(0)
+
+        ar._audio_transcript = "late finalized text"
+        ar._closing.set()
+        await bounce
+
+        ar._hooks.on_end_of_turn.assert_called_once()
+        assert ar._hooks.on_end_of_turn.call_args.args[0].new_transcript == "late finalized text"
+        assert ar._audio_transcript == ""
+        ar._restart_stt_input.assert_called_once_with()
+
     async def test_manual_turn_without_stt_does_not_leak_disposition(self) -> None:
         ar = _make_full_recognition_for_eou()
         ar._stt = None
