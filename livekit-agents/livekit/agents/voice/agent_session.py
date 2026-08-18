@@ -1252,6 +1252,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     audio_recognition._commit_user_turn(
                         audio_detached=True,
                         transcript_timeout=self._opts.session_close_transcript_timeout,
+                        session_close=True,
                     )
 
                 await activity.aclose()

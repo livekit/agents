@@ -7,7 +7,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan
@@ -249,9 +249,11 @@ class AudioRecognition:
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
+        self._session_close_commit_user_turn_atask: asyncio.Task[None] | None = None
         self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
+        self._session_close_end_of_turn_atask: asyncio.Task[None] | None = None
         self._endpointing: BaseEndpointing = endpointing
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
@@ -811,42 +813,96 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
+
+        async def _cleanup() -> None:
+            flush_error: BaseException | None = None
+
+            async def _finish_close_flush(task: asyncio.Task[None]) -> None:
+                nonlocal flush_error
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except BaseException as exc:
+                    if flush_error is None:
+                        flush_error = exc
+
+            try:
+                commit_user_turn_atask = self._commit_user_turn_atask
+                if commit_user_turn_atask is not None:
+                    session_close_commit_user_turn_atask = cast(
+                        asyncio.Task[None] | None,
+                        getattr(self, "_session_close_commit_user_turn_atask", None),
+                    )
+                    if commit_user_turn_atask is session_close_commit_user_turn_atask:
+                        await _finish_close_flush(commit_user_turn_atask)
+                    else:
+                        await aio.cancel_and_wait(commit_user_turn_atask)
+
+                if self._stt_pipeline is not None:
+                    await self._stt_pipeline.aclose()
+                    self._stt_pipeline = None
+
+                await aio.cancel_and_wait(*self._tasks)
+
+                if self._stt_consumer_atask is not None:
+                    await aio.cancel_and_wait(self._stt_consumer_atask)
+
+                if self._vad_atask is not None:
+                    await aio.cancel_and_wait(self._vad_atask)
+
+                if self._interruption_atask is not None:
+                    await aio.cancel_and_wait(self._interruption_atask)
+
+                end_of_turn_task = self._end_of_turn_task
+                if end_of_turn_task is not None:
+                    session_close_end_of_turn_atask = cast(
+                        asyncio.Task[None] | None,
+                        getattr(self, "_session_close_end_of_turn_atask", None),
+                    )
+                    if end_of_turn_task is session_close_end_of_turn_atask:
+                        await _finish_close_flush(end_of_turn_task)
+                    else:
+                        await aio.cancel_and_wait(end_of_turn_task)
+
+                if self._turn_detector_stream is not None:
+                    await self._turn_detector_stream.aclose()
+                    self._turn_detector_stream = None
+                self._turn_detector_prediction_fut = None
+
+                if self._backchannel_boundary_timer is not None:
+                    self._backchannel_boundary_timer.cancel()
+                    self._backchannel_boundary_timer = None
+                    self._backchannel_boundary_callback = None
+
+                if flush_error is not None:
+                    raise flush_error
+            finally:
+                self._cancel_transcription_timeout()
+                # EOU normally ends this span, but teardown cancels EOU before a
+                # pending speech segment necessarily produces a transcript.
+                self._end_user_turn_span()
+
+        cleanup_task = asyncio.create_task(_cleanup())
+        outer_cancelled = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                outer_cancelled = True
+            except BaseException:
+                break
+
         try:
-            if self._commit_user_turn_atask is not None:
-                await aio.cancel_and_wait(self._commit_user_turn_atask)
+            cleanup_task.result()
+        except BaseException as exc:
+            if outer_cancelled:
+                logger.error("audio recognition cleanup failed after cancellation", exc_info=exc)
+                raise asyncio.CancelledError from exc
+            raise
 
-            if self._stt_pipeline is not None:
-                await self._stt_pipeline.aclose()
-                self._stt_pipeline = None
-
-            await aio.cancel_and_wait(*self._tasks)
-
-            if self._stt_consumer_atask is not None:
-                await aio.cancel_and_wait(self._stt_consumer_atask)
-
-            if self._vad_atask is not None:
-                await aio.cancel_and_wait(self._vad_atask)
-
-            if self._interruption_atask is not None:
-                await aio.cancel_and_wait(self._interruption_atask)
-
-            if self._end_of_turn_task is not None:
-                await aio.cancel_and_wait(self._end_of_turn_task)
-
-            if self._turn_detector_stream is not None:
-                await self._turn_detector_stream.aclose()
-                self._turn_detector_stream = None
-            self._turn_detector_prediction_fut = None
-
-            if self._backchannel_boundary_timer is not None:
-                self._backchannel_boundary_timer.cancel()
-                self._backchannel_boundary_timer = None
-                self._backchannel_boundary_callback = None
-        finally:
-            self._cancel_transcription_timeout()
-            # EOU normally ends this span, but teardown cancels EOU before a
-            # pending speech segment necessarily produces a transcript.
-            self._end_user_turn_span()
+        if outer_cancelled:
+            raise asyncio.CancelledError
 
     def _update_stt(
         self,
@@ -1062,6 +1118,7 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        session_close: bool = False,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
@@ -1128,6 +1185,8 @@ class AudioRecognition:
                 skip_reply=skip_reply,
                 trigger="manual",
             )
+            if session_close:
+                self._session_close_end_of_turn_atask = self._end_of_turn_task
             self._user_turn_committed = True
             if not fut.done():
                 fut.set_result(transcript)
@@ -1145,6 +1204,9 @@ class AudioRecognition:
 
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
         self._commit_user_turn_atask.add_done_callback(_on_task_done)
+        if session_close:
+            self._session_close_commit_user_turn_atask = self._commit_user_turn_atask
+            fut.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         return fut
 
     @property
