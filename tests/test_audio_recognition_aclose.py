@@ -9,6 +9,7 @@ The fix wraps these awaits in try-except blocks to catch CancelledError.
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -178,6 +179,38 @@ class TestAudioRecognitionAclose:
         release.set()
         await close_task
         assert task.done()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("task_attr", "warning"),
+        [
+            (
+                "_commit_user_turn_atask",
+                "error while committing the final user turn on close",
+            ),
+            ("_end_of_turn_task", "error while completing the final user turn on close"),
+        ],
+    )
+    async def test_aclose_logs_failed_turn_task(
+        self,
+        task_attr: str,
+        warning: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        audio_recognition = self._create_audio_recognition()
+
+        async def failed_task() -> None:
+            raise RuntimeError("turn task failed")
+
+        setattr(audio_recognition, task_attr, asyncio.create_task(failed_task()))
+
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            await audio_recognition._aclose()
+
+        records = [record for record in caplog.records if record.message == warning]
+        assert len(records) == 1
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1], RuntimeError)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("is_recording", "expected_end_count"), [(True, 1), (False, 0)])
