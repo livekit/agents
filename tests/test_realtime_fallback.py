@@ -84,6 +84,16 @@ class _NamedRealtimeModel(FakeRealtimeModel):
         return self._provider_name
 
 
+class _FailFirstReplacementModel(FakeRealtimeModel):
+    """Fail the first replacement session, then recover if retried."""
+
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        session = super().session(turn_detection_disabled=turn_detection_disabled)
+        if len(self.created_sessions) == 2:
+            session.update_error = RuntimeError("first replacement cannot start")
+        return session
+
+
 class _SyncRealtimeSession(FakeRealtimeSession):
     def __init__(self, model: FakeRealtimeModel, *, sync_status: _UserMessageSyncStatus) -> None:
         super().__init__(model)
@@ -775,6 +785,26 @@ async def test_swap_cascades_past_a_model_that_cannot_start() -> None:
     assert session._active is backup2.active_session
     # only the recoverable hand-off was surfaced; nothing session-ending
     assert all(e.recoverable for e in errors)
+
+
+async def test_zero_cooldown_attempts_each_model_only_once_per_swap() -> None:
+    primary = _FailFirstReplacementModel()
+    failing_backup = FakeRealtimeModel()
+    final_backup = FakeRealtimeModel()
+    failing_backup.bring_up_error = RuntimeError("backup cannot start")
+    adapter = RealtimeModelFallbackAdapter(
+        [primary, failing_backup, final_backup],
+        cooldown=0,
+    )
+    session = adapter.session()
+
+    await session.restart(switch_model=True)
+
+    assert session._active_index == 2
+    assert session._active is final_backup.active_session
+    assert len(primary.created_sessions) == 2
+    assert len(failing_backup.created_sessions) == 1
+    assert len(final_backup.created_sessions) == 1
 
 
 async def test_swap_escalates_when_no_model_can_start() -> None:

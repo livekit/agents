@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, utils
+from livekit.agents import Agent, AgentSession, llm, utils
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
 
@@ -378,3 +378,39 @@ async def test_close_does_not_commit_empty_bounded_realtime_audio_turn() -> None
     assert activity.agent.chat_ctx.messages() == []
     assert rt_session.generate_reply_calls == 0
     assert rt_session.audio_cleared
+
+
+async def test_close_does_not_duplicate_provider_owned_realtime_audio_turn() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=False,
+            user_transcription=True,
+        )
+    )
+    session = AgentSession(llm=model)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = FakeRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._scheduling_paused = True
+    session._closing = True
+
+    provider_message = llm.ChatMessage(
+        role="user",
+        content=["provider-owned transcript"],
+    )
+    activity._commit_realtime_user_message(provider_message)
+
+    assert activity._turn_policy.input_owner == "provider"
+    assert activity._rt_turn_detection_enabled
+
+    await activity._user_turn_completed_task(
+        None,
+        _bounded_turn(transcript="provider-owned transcript"),
+    )
+
+    messages = activity.agent.chat_ctx.messages()
+    assert [message.id for message in messages] == [provider_message.id]
+    assert [message.raw_text_content for message in messages] == ["provider-owned transcript"]
+    assert rt_session.generate_reply_calls == 0
+    assert not rt_session.audio_cleared
