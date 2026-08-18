@@ -26,10 +26,11 @@ from livekit.agents import Plugin
 
 from .log import logger
 from .metering import FloeUsageReconciler
+from .receipt import enable_cost_receipts
 from .services import LLM
 from .version import __version__
 
-__all__ = ["LLM", "FloeUsageReconciler", "__version__"]
+__all__ = ["LLM", "FloeUsageReconciler", "enable_cost_receipts", "__version__"]
 
 
 class FloePlugin(Plugin):

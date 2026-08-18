@@ -101,6 +101,30 @@ if report.unpriced_models:
     print("unpriced (excluded from total):", report.unpriced_models)
 ```
 
+## Per-turn cost receipt
+
+For the "what did that call cost" moment, `enable_cost_receipts` logs a one-line
+receipt after every Floe-routed turn — zero config:
+
+```python
+from livekit.plugins import floe
+
+session = AgentSession(llm=floe.LLM(model="openai/gpt-4o"))
+floe.enable_cost_receipts(session)
+```
+
+Each turn prints a line like:
+
+```
+floe · gpt-4o · $0.0012 est · left $99.88
+```
+
+The cost half is always shown (priced locally from the bundled cost map — free,
+offline, no account). The `left $…` budget half appears when a `FLOE_API_KEY` is
+set, read best-effort from hosted Floe; a failed read never breaks the session
+(the cost still prints). A live-prod screenshot with a funded key is captured
+separately.
+
 ## Fallback: export Floe cost over OpenTelemetry
 
 If you'd rather ship Floe's numbers into your existing observability stack than

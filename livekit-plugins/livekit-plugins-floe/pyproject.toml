@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[openai]>=1.6.10",
-    "floe-guard>=0.18",
+    "floe-guard>=0.19",
     "aiohttp",
     "livekit",
 ]

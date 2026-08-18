@@ -25,7 +25,12 @@ pytestmark = pytest.mark.unit
 def test_exports() -> None:
     assert floe.LLM is not None
     assert floe.FloeUsageReconciler is not None
-    assert set(floe.__all__) == {"LLM", "FloeUsageReconciler", "__version__"}
+    assert set(floe.__all__) == {
+        "LLM",
+        "FloeUsageReconciler",
+        "enable_cost_receipts",
+        "__version__",
+    }
 
 
 def test_plugin_registered() -> None:
@@ -97,3 +102,41 @@ def test_reconciler_prices_only_floe_routed_usage() -> None:
     assert report.per_model[0].provider == "openai"  # display split from the id
     assert report.per_model[0].model == "gpt-4o"
     assert report.unpriced_models == []
+
+
+def test_enable_cost_receipts_logs_only_floe_turns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    import types
+
+    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
+
+    monkeypatch.delenv("FLOE_API_KEY", raising=False)  # keyless: no network budget read
+
+    class _StubSession:
+        def __init__(self) -> None:
+            self._handlers: dict[str, object] = {}
+
+        def on(self, name: str, fn: object) -> None:
+            self._handlers[name] = fn
+
+        def emit(self, name: str, ev: object) -> None:
+            self._handlers[name](ev)  # type: ignore[operator]
+
+    session = _StubSession()
+    floe.enable_cost_receipts(session)  # type: ignore[arg-type]
+
+    floe_use = LLMModelUsage(
+        provider="floe", model="openai/gpt-4o", input_tokens=1000, output_tokens=500
+    )
+    non_floe = LLMModelUsage(
+        provider="openai", model="gpt-4o", input_tokens=9999, output_tokens=9999
+    )
+    ev = types.SimpleNamespace(usage=AgentSessionUsage(model_usage=[floe_use, non_floe]))
+
+    with caplog.at_level(logging.INFO, logger="livekit.plugins.floe"):
+        session.emit("session_usage_updated", ev)
+
+    receipts = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
+    assert receipts == ["floe · gpt-4o · $0.0075 est"]  # non-floe turn ignored
