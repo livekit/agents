@@ -4569,13 +4569,13 @@ class AgentActivity(RecognitionHooks):
         return True
 
     def _commit_user_message_locally(self, user_message: llm.ChatMessage) -> None:
+        self._commit_realtime_user_message(user_message)
+
+    def _commit_realtime_user_message(self, user_message: llm.ChatMessage) -> None:
         is_new_message = self._agent._chat_ctx.get_by_id(user_message.id) is None
         self._agent._chat_ctx._upsert_item(user_message)
         if is_new_message:
             self._session._conversation_item_added(user_message)
-
-    def _commit_realtime_user_message(self, user_message: llm.ChatMessage) -> None:
-        self._commit_user_message_locally(user_message)
 
     def _interrupt_created_realtime_generation_if_owned(
         self,
