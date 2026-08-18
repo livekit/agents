@@ -64,7 +64,8 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
     """
     last_tokens: dict[str, tuple[int, int]] = {}
     remaining_usd: float | None = None
-    fetched_at: float = 0.0
+    fetched_at: float = float("-inf")  # -inf, not 0.0: monotonic() is boot-relative,
+    # so 0.0 would suppress the first lookup on a machine up < TTL seconds.
     bg_tasks: set[asyncio.Task[None]] = set()
 
     async def _refresh_budget() -> None:
