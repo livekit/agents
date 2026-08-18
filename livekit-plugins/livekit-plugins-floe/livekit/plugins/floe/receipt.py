@@ -33,7 +33,9 @@ if TYPE_CHECKING:
 _BUDGET_TTL = 30.0
 
 
-def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True) -> None:
+def enable_cost_receipts(
+    session: AgentSession[Any], *, api_key: str | None = None, show_budget: bool = True
+) -> None:
     """Log a one-line Floe cost receipt after every Floe-routed turn.
 
     Zero config: attach it to a session and each turn that ran through this
@@ -42,8 +44,10 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
         floe · gpt-4o · $0.0064 est · left $12.34
 
     Cost is always shown (priced locally from the bundled cost map — free,
-    offline, no account). The budget half (``left $…``) is added when a
-    ``FLOE_API_KEY`` is set.
+    offline, no account). The budget half (``left $…``) is added when a Floe key
+    is available. If you passed a key in code — ``floe.LLM(api_key=...)`` — pass
+    the **same** key here as ``api_key=`` so the balance is for the account being
+    billed; if your key is in the ``FLOE_API_KEY`` env var, omit it (zero config).
 
     The hosted budget read is a blocking network call, so it is **never** made
     from this synchronous handler — that would stall the agent's audio/speech
@@ -59,6 +63,9 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
 
     Args:
         session: The ``AgentSession`` to observe.
+        api_key: Floe key to read the hosted budget with. Defaults to the
+            ``FLOE_API_KEY`` env var; pass the key you gave ``floe.LLM`` in code so
+            the balance matches the billed account.
         show_budget: When ``True`` (default) and a Floe key is present, append the
             remaining hosted budget to each receipt.
     """
@@ -71,7 +78,7 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
     async def _refresh_budget() -> None:
         nonlocal remaining_usd
         try:
-            remaining_usd = await asyncio.to_thread(hosted_remaining_usd)
+            remaining_usd = await asyncio.to_thread(hosted_remaining_usd, api_key)
         except asyncio.CancelledError:
             raise  # let task cancellation propagate; never swallow it
         except Exception:  # noqa: BLE001 - a budget read must never break a call
@@ -83,7 +90,9 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
 
         # Refresh the hosted budget off-loop at most once per TTL — never block
         # this handler on the network. The receipt below uses the cached value.
-        if show_budget and hosted_enforcement_available():
+        # A key from either source enables it; the in-code api_key must not be
+        # gated out by the env-only availability check.
+        if show_budget and (api_key is not None or hosted_enforcement_available()):
             now = time.monotonic()
             if now - fetched_at >= _BUDGET_TTL:
                 fetched_at = now  # throttle regardless of outcome

@@ -125,6 +125,13 @@ set, read best-effort from hosted Floe; a failed read never breaks the session
 (the cost still prints). A live-prod screenshot with a funded key is captured
 separately.
 
+If you configured the LLM with an in-code key — `floe.LLM(api_key="floe_…")` —
+pass the same key so the balance is for the billed account:
+
+```python
+floe.enable_cost_receipts(session, api_key="floe_…")
+```
+
 ## Fallback: export Floe cost over OpenTelemetry
 
 If you'd rather ship Floe's numbers into your existing observability stack than

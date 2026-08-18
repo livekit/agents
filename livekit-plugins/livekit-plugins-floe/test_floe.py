@@ -172,7 +172,7 @@ async def test_receipt_budget_read_is_offloaded_not_blocking(
     monkeypatch.setenv("FLOE_API_KEY", "floe_test")
     calls = {"n": 0}
 
-    def fake_remaining() -> float:
+    def fake_remaining(api_key: object = None) -> float:
         calls["n"] += 1
         return 12.34
 
@@ -216,7 +216,7 @@ async def test_receipt_budget_failure_drops_budget(
 
     monkeypatch.setenv("FLOE_API_KEY", "floe_test")
 
-    def boom() -> float:
+    def boom(api_key: object = None) -> float:
         raise RuntimeError("network down")
 
     monkeypatch.setattr(receipt_mod, "hosted_remaining_usd", boom)
@@ -238,3 +238,38 @@ async def test_receipt_budget_failure_drops_budget(
         handler(_floe_event(1800, 900))  # type: ignore[operator]
     turn2 = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
     assert turn2 == ["floe · gpt-4o · $0.0060 est"]  # budget dropped on failure, cost still prints
+
+
+async def test_receipt_reads_budget_with_in_code_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from livekit.plugins.floe import receipt as receipt_mod
+
+    monkeypatch.delenv("FLOE_API_KEY", raising=False)  # only the in-code key is available
+    seen: dict[str, object] = {}
+
+    def spy(api_key: object = None, **kwargs: object) -> float:
+        seen["api_key"] = api_key
+        return 5.0
+
+    monkeypatch.setattr(receipt_mod, "hosted_remaining_usd", spy)
+
+    async def fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    handlers: dict[str, object] = {}
+
+    class _StubSession:
+        def on(self, name: str, fn: object) -> None:
+            handlers[name] = fn
+
+    floe.enable_cost_receipts(_StubSession(), api_key="floe_incode")  # type: ignore[arg-type]
+
+    handlers["session_usage_updated"](_floe_event(1000, 500))  # type: ignore[operator]
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if "api_key" in seen:
+            break
+    assert seen["api_key"] == "floe_incode"  # the in-code key was used, not the env
