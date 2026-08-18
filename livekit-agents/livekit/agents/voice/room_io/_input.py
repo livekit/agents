@@ -22,8 +22,13 @@ T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
 
 _TURN_GAP = 0.5
 """Silence pushed to the session to close a turn, so the STT flushes what it has."""
-_PREROLL = 2.0
-"""Audio held per participant before they are selected as the active speaker."""
+_PREROLL = 0.5
+"""Audio held per participant before they are selected as the active speaker.
+
+Sized against how late `active_speakers_changed` is rather than how much audio could be
+kept: it doubles as the overlap window, so everything held is replayed to the session on
+selection, including whatever the previous speaker was talking over.
+"""
 
 
 class _ParticipantInputStream(Generic[T], ABC):
