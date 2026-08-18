@@ -41,7 +41,6 @@ from ..utils import (
     aio,
     http_context,
     is_given,
-    shortuuid,
 )
 from ._utils import (
     create_access_token,
@@ -769,7 +768,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(model=model, conn_options=conn_options)
-        self._request_id = str(shortuuid("interruption_request_"))
         self._reconnect_event = asyncio.Event()
 
     def update_options(
