@@ -461,6 +461,9 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         frame_size_ms: int = 50,
     ) -> None:
         super().__init__(label="RoomIO")
+        if frame_size_ms <= 0:
+            raise ValueError("frame_size_ms must be greater than 0")
+
         self._room = room
         self._sample_rate = sample_rate
         self._num_channels = num_channels
@@ -547,7 +550,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         self._room.off("track_muted", self._on_track_mute_changed)
         self._room.off("track_unmuted", self._on_track_mute_changed)
 
-        for stream in self._streams.values():
+        for stream in list(self._streams.values()):
             await self._close_stream(stream)
         self._streams.clear()
 
@@ -629,6 +632,7 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
         if not stream.streaming:
             self._stop_mixing(identity, stream)
         elif identity not in self._mixing:
+            stream.on_attached()
             stream._drain()  # start from live audio, not from what piled up while unregistered
             self._mixer.add_stream(stream)
             self._mixing.add(identity)
@@ -639,6 +643,9 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
 
         self._mixer.remove_stream(stream)
         self._mixing.discard(identity)
+        # the mixer is this child's only reader, so it has to stop producing rather than
+        # buffer into a channel nobody drains, whatever a muted track keeps delivering
+        stream.on_detached()
 
         if not self._mixing:
             # nothing left to mix: the session needs silence to flush the pending transcript,
@@ -705,8 +712,10 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
         # until one arrives, and a speaker keeps the floor until the server drops them, so a
         # louder participant never cuts into the middle of a turn. if sparse updates turn out
         # to lose turns in practice, the fallback is to pick the loudest pre-roll by RMS
-        # the server sends the loudest first; identities we don't listen to are not candidates
-        self._reported = [p.identity for p in speakers if p.identity in self._streams]
+        # the server sends the loudest first. kept unfiltered: a participant added after this
+        # update takes the floor as soon as their stream is live, rather than staying unheard
+        # until the server happens to send another one
+        self._reported = [p.identity for p in speakers]
 
         if self._speaking is not None and self._speaking not in self._reported:
             self._release()

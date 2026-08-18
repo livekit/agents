@@ -109,7 +109,9 @@ class RoomIO:
                 # concurrent with anyone: replaying it into a stream that is combined with
                 # other participants either paces it behind the rest of the mix or lands it
                 # in the pre-roll of somebody who is not speaking yet
-                logger.warning(
+                # info, not a warning: pre_connect_audio is on by default, so every mix/pick
+                # session would log it without anyone having asked for it
+                logger.info(
                     "pre-connect audio is only supported with participants='linked', ignoring",
                     extra={"participants": input_audio_options.participants},
                 )

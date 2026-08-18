@@ -1031,3 +1031,41 @@ async def test_active_speaker_audio_input_republishing_keeps_the_floor() -> None
         assert set(await _amplitudes(audio_input, 5)) == {100}, "no gap, no handover to bob"
     finally:
         await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_does_not_buffer_an_unmixed_participant() -> None:
+    """The mixer is a child's only reader, so a child it dropped must stop producing."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+        assert 300 in await _amplitudes(audio_input, 2)
+
+        # a muted track that keeps delivering is exactly the case that used to pile up
+        _mute_track(room, audio_input, "alice", True)
+        assert audio_input._mixing == {"bob"}
+
+        await asyncio.sleep(1.0)  # 20 frames' worth of audio nobody is reading
+        assert audio_input._streams["alice"]._data_ch.qsize() == 0
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_selects_a_participant_reported_before_joining() -> None:
+    """Someone already talking when the agent arrives must not wait for the next update."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _report_speakers(room, "alice")  # dispatched before the stream exists
+        _publish(audio_input, "alice", 100)
+
+        await asyncio.sleep(0)
+        assert audio_input._speaking == "alice"
+        assert 100 in await _amplitudes(audio_input, 3)
+    finally:
+        await audio_input.aclose()
