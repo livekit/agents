@@ -736,12 +736,14 @@ def _make_room_audio_input(room: _FakeRoom, cls):
     )
 
 
-def _start_track(stream, identity: str, value: int, sid: str | None = None) -> None:
+def _start_track(
+    stream, identity: str, value: int, sid: str | None = None, muted: bool = False
+) -> None:
     """Publish a microphone track of a constant amplitude for this participant."""
     track, publication, participant = _make_track_available_args(
         identity, sid=sid or f"TR_{identity}"
     )
-    publication.muted = False
+    publication.muted = muted
     with patch(
         "livekit.rtc.AudioStream.from_track",
         side_effect=lambda **kw: _ConstantAudioStream(value),
@@ -759,8 +761,10 @@ def _mute_track(room: _FakeRoom, audio_input, identity: str, muted: bool) -> Non
     """Mute or unmute a participant's published track and deliver the room event."""
     audio_input._streams[identity]._publication.muted = muted
     event = "track_muted" if muted else "track_unmuted"
+    publication = MagicMock()
+    publication.source = rtc.TrackSource.SOURCE_MICROPHONE
     for callback in list(room._events[event]):
-        callback(SimpleNamespace(identity=identity), MagicMock())
+        callback(SimpleNamespace(identity=identity), publication)
 
 
 def _report_speakers(room: _FakeRoom, *identities: str) -> None:
@@ -1066,6 +1070,27 @@ async def test_active_speaker_audio_input_selects_a_participant_reported_before_
 
         await asyncio.sleep(0)
         assert audio_input._speaking == "alice"
+        assert 100 in await _amplitudes(audio_input, 3)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_does_not_buffer_a_participant_muted_on_arrival() -> None:
+    """A track subscribed while already muted never joins the mix, so it must not produce."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        audio_input.add_participant("alice")
+        _start_track(audio_input._streams["alice"], "alice", 100, muted=True)
+        assert audio_input._mixing == set()
+
+        await asyncio.sleep(1.0)  # 20 frames' worth of audio nobody is reading
+        assert audio_input._streams["alice"]._data_ch.qsize() == 0
+
+        _mute_track(room, audio_input, "alice", False)
+        assert audio_input._mixing == {"alice"}
         assert 100 in await _amplitudes(audio_input, 3)
     finally:
         await audio_input.aclose()

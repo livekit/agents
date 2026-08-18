@@ -54,6 +54,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._streaming = False
         self._participant_identity: str | None = None
         self._attached = True
+        self._forwarding = True
 
         self._forward_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -88,6 +89,15 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._streaming = streaming
         if self._on_stream_changed:
             self._on_stream_changed()
+
+    def _set_forwarding(self, forwarding: bool) -> None:
+        """Whether frames read off the track are worth forwarding at all.
+
+        Separate from `on_attached`/`on_detached`, which are the session's side of the
+        `AudioInput` contract: this is for an owner that is not reading the stream right
+        now, and would otherwise leave frames piling up in a channel nobody drains.
+        """
+        self._forwarding = forwarding
 
     def _drain(self) -> None:
         """Drop whatever is buffered but not consumed yet."""
@@ -179,8 +189,8 @@ class _ParticipantInputStream(Generic[T], ABC):
         }
         logger.debug("start reading stream", extra=extra)
         async for event in stream:
-            if not self._attached:
-                # drop frames if the stream is detached
+            if not self._attached or not self._forwarding:
+                # drop frames if the stream is detached or nobody is reading it
                 continue
             frame = cast(T, event.frame)
             self._process_frame(frame)
@@ -589,7 +599,8 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
     def _on_track_mute_changed(
         self, participant: rtc.Participant, publication: rtc.TrackPublication
     ) -> None:
-        self._child_stream_changed(participant.identity)
+        if publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            self._child_stream_changed(participant.identity)
 
 
 class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
@@ -630,9 +641,13 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
             return
 
         if not stream.streaming:
+            # the mixer is this child's only reader, so an unmixed child has to stop
+            # producing, whether it is leaving the mix or was never in it (a track
+            # subscribed while already muted never reaches _stop_mixing)
+            stream._set_forwarding(False)
             self._stop_mixing(identity, stream)
         elif identity not in self._mixing:
-            stream.on_attached()
+            stream._set_forwarding(True)
             stream._drain()  # start from live audio, not from what piled up while unregistered
             self._mixer.add_stream(stream)
             self._mixing.add(identity)
@@ -643,9 +658,6 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
 
         self._mixer.remove_stream(stream)
         self._mixing.discard(identity)
-        # the mixer is this child's only reader, so it has to stop producing rather than
-        # buffer into a channel nobody drains, whatever a muted track keeps delivering
-        stream.on_detached()
 
         if not self._mixing:
             # nothing left to mix: the session needs silence to flush the pending transcript,
