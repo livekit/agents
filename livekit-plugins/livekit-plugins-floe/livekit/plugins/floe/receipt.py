@@ -71,6 +71,8 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
         nonlocal remaining_usd
         try:
             remaining_usd = await asyncio.to_thread(hosted_remaining_usd)
+        except asyncio.CancelledError:
+            raise  # let task cancellation propagate; never swallow it
         except Exception:  # noqa: BLE001 - a budget read must never break a call
             remaining_usd = None  # drop a stale value on failure
             logger.debug("floe: budget read failed; showing cost without budget", exc_info=True)
