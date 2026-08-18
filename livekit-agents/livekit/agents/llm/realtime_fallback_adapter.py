@@ -253,7 +253,12 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             ),
         )
 
-    def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
+    def _next_available_index(
+        self,
+        *,
+        exclude_current: bool = False,
+        excluded_indices: set[int] | None = None,
+    ) -> int | None:
         # re-enable models whose cooldown expired, then pick the first available (primary preferred)
         now = time.time()
         for i, deadline in enumerate(self._cooldown_deadline):
@@ -262,6 +267,8 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
 
         for i in range(len(self._adapter._models)):
             if exclude_current and i == self._active_index:
+                continue
+            if excluded_indices is not None and i in excluded_indices:
                 continue
             if self._available[i]:
                 return i
@@ -282,7 +289,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
 
         # mark the dead model unavailable for a cooldown, then find a fallback
         self._set_available(self._active_index, False)
-        target = self._next_available_index()
+        target = self._next_available_index(exclude_current=True)
         if target is None:
             # exhausted: escalate so AgentSession can close
             self.emit("error", error)
@@ -376,12 +383,14 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
                     await retiring_child.aclose()
 
                 error: Exception | None = None
+                attempted_indices = {target_index}
                 candidate, error = await _bring_up(target_index)
                 candidate_index = target_index if candidate is not None else None
                 while candidate is None:
-                    next_index = self._next_available_index()
+                    next_index = self._next_available_index(excluded_indices=attempted_indices)
                     if next_index is None:
                         break
+                    attempted_indices.add(next_index)
                     candidate, error = await _bring_up(next_index)
                     candidate_index = next_index if candidate is not None else None
 
