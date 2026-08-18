@@ -39,6 +39,7 @@ from livekit.plugins import (
     hume,
     inworld,
     lmnt,
+    maya,
     mistralai,
     neuphonic,
     resemble,
@@ -161,6 +162,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.bland.ai:443",
         },
         id="bland",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": maya.TTS(),
+            "proxy-upstream": "tts.mayaresearch.ai:443",
+        },
+        id="maya",
     ),
     pytest.param(
         lambda: {
