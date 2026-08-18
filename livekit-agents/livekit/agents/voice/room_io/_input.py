@@ -470,6 +470,11 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         self._tasks: set[asyncio.Task[Any]] = set()
         self._data_ch = aio.Chan[rtc.AudioFrame]()
 
+        # a muted track is not unpublished and its stream doesn't end, it just stops
+        # delivering, so nothing else tells a group its child went quiet
+        self._room.on("track_muted", self._on_track_mute_changed)
+        self._room.on("track_unmuted", self._on_track_mute_changed)
+
         self._new_stream = functools.partial(
             _ParticipantAudioInputStream,
             room,
@@ -539,6 +544,9 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
 
     @override
     async def aclose(self) -> None:
+        self._room.off("track_muted", self._on_track_mute_changed)
+        self._room.off("track_unmuted", self._on_track_mute_changed)
+
         for stream in self._streams.values():
             await self._close_stream(stream)
         self._streams.clear()
@@ -575,7 +583,12 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         pass
 
     def _child_stream_changed(self, identity: str) -> None:
-        """A participant's track was subscribed, replaced or lost."""
+        """A participant's track was subscribed, replaced, muted or lost."""
+
+    def _on_track_mute_changed(
+        self, participant: rtc.Participant, publication: rtc.TrackPublication
+    ) -> None:
+        self._child_stream_changed(participant.identity)
         pass
 
 
@@ -583,13 +596,6 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
     """Sums every participant's microphone, so overlapping speech is preserved."""
 
     def __init__(self, room: rtc.Room, **kwargs: Any) -> None:
-        # the mixer paces every registered stream at real time, so the pre-connect buffer
-        # would not be caught up on: it would leave that participant seconds behind the rest
-        # of the mix for the whole session
-        if kwargs.get("pre_connect_audio_handler") is not None:
-            logger.warning("pre-connect audio is not supported when mixing participants")
-            kwargs["pre_connect_audio_handler"] = None
-
         super().__init__(room, **kwargs)
         self._mixing: set[str] = set()
         self._mixer = rtc.AudioMixer(
@@ -602,16 +608,8 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
         )
         self._forward_atask = asyncio.create_task(self._forward_mixed())
 
-        # a muted track is not unpublished and its stream doesn't end, it just stops
-        # delivering: without these the mixer would keep waiting on it every block
-        self._room.on("track_muted", self._on_track_mute_changed)
-        self._room.on("track_unmuted", self._on_track_mute_changed)
-
     @override
     async def aclose(self) -> None:
-        self._room.off("track_muted", self._on_track_mute_changed)
-        self._room.off("track_unmuted", self._on_track_mute_changed)
-
         await self._mixer.aclose()
         await aio.cancel_and_wait(self._forward_atask)
         self._mixing.clear()
@@ -656,11 +654,6 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
     def _close_turn(self) -> None:
         if not self._mixing:
             self._send(audio.silence_frame(_TURN_GAP, self._sample_rate, self._num_channels))
-
-    def _on_track_mute_changed(
-        self, participant: rtc.Participant, publication: rtc.TrackPublication
-    ) -> None:
-        self._child_stream_changed(participant.identity)
 
     @log_exceptions(logger=logger)
     async def _forward_mixed(self) -> None:
@@ -723,9 +716,24 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
 
         self._select_reported()
 
+    @override
+    def _child_stream_changed(self, identity: str) -> None:
+        stream = self._streams.get(identity)
+        if self._speaking == identity and (stream is None or not stream.streaming):
+            # a muted speaker the server still reports would otherwise hold the floor
+            # while delivering nothing, and nobody else could be selected
+            self._release()
+        self._select_reported()
+
     def _select_reported(self) -> None:
-        if self._speaking is None and self._reported:
-            self._select(self._reported[0])
+        if self._speaking is not None:
+            return
+
+        for identity in self._reported:
+            stream = self._streams.get(identity)
+            if stream is not None and stream.streaming:
+                self._select(identity)
+                return
 
     def _select(self, identity: str) -> None:
         self._speaking = identity

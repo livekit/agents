@@ -104,11 +104,21 @@ class RoomIO:
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
-            self._pre_connect_audio_handler = PreConnectAudioHandler(
-                room=self._room,
-                timeout=input_audio_options.pre_connect_audio_timeout,
-            )
-            self._pre_connect_audio_handler.register()
+            if input_audio_options.participants != "linked":
+                # the buffer is audio from before the participant joined, so it is not
+                # concurrent with anyone: replaying it into a stream that is combined with
+                # other participants either paces it behind the rest of the mix or lands it
+                # in the pre-roll of somebody who is not speaking yet
+                logger.warning(
+                    "pre-connect audio is only supported with participants='linked', ignoring",
+                    extra={"participants": input_audio_options.participants},
+                )
+            else:
+                self._pre_connect_audio_handler = PreConnectAudioHandler(
+                    room=self._room,
+                    timeout=input_audio_options.pre_connect_audio_timeout,
+                )
+                self._pre_connect_audio_handler.register()
 
         input_video_options = self._options.get_video_input_options()
         if input_video_options:

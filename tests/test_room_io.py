@@ -24,7 +24,11 @@ from livekit.agents.voice.room_io._output import (
     _ParticipantTranscriptionOutput,
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
-from livekit.agents.voice.room_io.types import NoiseCancellationParams, RoomOptions
+from livekit.agents.voice.room_io.types import (
+    AudioInputOptions,
+    NoiseCancellationParams,
+    RoomOptions,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -60,6 +64,12 @@ class _FakeRoom:
 
     def unregister_text_stream_handler(self, topic: str) -> None:
         self._events.pop(f"text:{topic}", None)
+
+    def register_byte_stream_handler(self, topic: str, callback: object) -> None:
+        self.on(f"bytes:{topic}", callback)
+
+    def unregister_byte_stream_handler(self, topic: str) -> None:
+        self._events.pop(f"bytes:{topic}", None)
 
 
 class _MockAudioStream:
@@ -745,6 +755,14 @@ def _publish(audio_input, identity: str, value: int) -> None:
     _start_track(audio_input._streams[identity], identity, value)
 
 
+def _mute_track(room: _FakeRoom, audio_input, identity: str, muted: bool) -> None:
+    """Mute or unmute a participant's published track and deliver the room event."""
+    audio_input._streams[identity]._publication.muted = muted
+    event = "track_muted" if muted else "track_unmuted"
+    for callback in list(room._events[event]):
+        callback(SimpleNamespace(identity=identity), MagicMock())
+
+
 def _report_speakers(room: _FakeRoom, *identities: str) -> None:
     """Deliver an `active_speakers_changed` update, loudest first."""
     for callback in list(room._events["active_speakers_changed"]):
@@ -852,7 +870,13 @@ def _remote_participant(
 
 
 def _make_room_io(room: _FakeRoom, **options) -> RoomIO:
-    agent_session = SimpleNamespace(_on_room_io_participant_linked=MagicMock())
+    agent_session = SimpleNamespace(
+        _on_room_io_participant_linked=MagicMock(),
+        on=MagicMock(),
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
     return RoomIO(agent_session, room, options=RoomOptions(**options))
 
 
@@ -946,3 +970,42 @@ async def test_active_speaker_audio_input_reselects_when_the_speaker_leaves() ->
         assert 200 in await _amplitudes(audio_input, 10)
     finally:
         await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_releases_a_muted_speaker() -> None:
+    """A muted speaker the server still reports must not hold the floor."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert audio_input._speaking == "alice"
+
+        _mute_track(room, audio_input, "alice", True)
+        assert audio_input._speaking == "bob"
+        assert 200 in await _amplitudes(audio_input, 10)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_roomio_skips_pre_connect_audio_for_group_inputs() -> None:
+    """The buffer predates the participant, so it has nowhere to go in a combined stream."""
+    room = _FakeRoom()
+
+    outputs_off = {"audio_output": False, "text_output": False, "text_input": False}
+    linked = _make_room_io(room, audio_input=AudioInputOptions(), **outputs_off)
+    mixed = _make_room_io(room, audio_input=AudioInputOptions(participants="mix"), **outputs_off)
+    for room_io in (linked, mixed):
+        await room_io.start()
+
+    try:
+        assert linked._pre_connect_audio_handler is not None
+        assert mixed._pre_connect_audio_handler is None
+    finally:
+        for room_io in (linked, mixed):
+            await room_io.aclose()
