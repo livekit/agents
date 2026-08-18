@@ -1596,7 +1596,17 @@ class AgentActivity(RecognitionHooks):
             except Exception:
                 pass  # already logged by @log_exceptions
 
-            await self._pause_scheduling_task()
+            shutdown_callback_tasks = (
+                [
+                    task
+                    for task in self._speech_tasks
+                    if not task.done()
+                    and task.get_name() == "AgentActivity._user_turn_completed_task"
+                ]
+                if self._session._closing
+                else None
+            )
+            await self._pause_scheduling_task(blocked_tasks=shutdown_callback_tasks)
 
             # detach after speech tasks are done but before _close_session
             if new_activity is not None:
@@ -1710,6 +1720,9 @@ class AgentActivity(RecognitionHooks):
         # Freeze turn admission before either recognition or provider teardown can race a
         # bounded callback. Existing bounded text may still settle into local history.
         self._new_turns_blocked = True
+        close_deadline = asyncio.get_running_loop().time() + max(
+            0.0, self._session.options.session_close_transcript_timeout
+        )
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -1771,31 +1784,64 @@ class AgentActivity(RecognitionHooks):
             )
 
         current_task = asyncio.current_task()
+        cancellation_requested: set[asyncio.Task[None]] = set()
+
+        def _observe_bounded_turn(task: asyncio.Task[None]) -> None:
+            try:
+                task.result()
+            except (asyncio.CancelledError, Exception):
+                # The bounded task logs its own failure. Retrieving the result prevents a late
+                # callback completion from surfacing as an unhandled task exception.
+                pass
 
         async def _settle_bounded_turn(task: asyncio.Task[None] | None) -> None:
             if task is None or task is current_task:
                 return
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                # An inner cancellation is already reflected by the bounded turn. Cancellation
-                # of this teardown task itself must remain observable to its caller.
-                if current_task is not None and current_task.cancelling():
-                    raise
-            except Exception:
-                # _user_turn_completed_task logs its own failure. Teardown must still close the
-                # provider, recognition pipeline, and paused speech state.
-                pass
+            if task.done():
+                _observe_bounded_turn(task)
+                return
 
-        bounded_turn_task = self._user_turn_completed_atask
-        await _settle_bounded_turn(bounded_turn_task)
+            remaining = max(0.0, close_deadline - asyncio.get_running_loop().time())
+            done, _ = await asyncio.wait({task}, timeout=remaining)
+            if task in done:
+                _observe_bounded_turn(task)
+                return
+            if task.done():
+                _observe_bounded_turn(task)
+                return
+
+            if task not in cancellation_requested:
+                cancellation_requested.add(task)
+                logger.warning(
+                    "timed out waiting for on_user_turn_completed during shutdown; "
+                    "continuing cleanup",
+                    extra={"timeout": self._session.options.session_close_transcript_timeout},
+                )
+                task.cancel()
+                task.add_done_callback(_observe_bounded_turn)
+
+        bounded_turn_tasks = {
+            task
+            for task in self._speech_tasks
+            if task.get_name() == "AgentActivity._user_turn_completed_task"
+        }
+        if self._user_turn_completed_atask is not None:
+            bounded_turn_tasks.add(self._user_turn_completed_atask)
+        for bounded_turn_task in bounded_turn_tasks:
+            await _settle_bounded_turn(bounded_turn_task)
 
         if rt_close_task is not None:
             await rt_close_task
 
-        latest_bounded_turn_task = self._user_turn_completed_atask
-        if latest_bounded_turn_task is not bounded_turn_task:
-            await _settle_bounded_turn(latest_bounded_turn_task)
+        latest_bounded_turn_tasks = {
+            task
+            for task in self._speech_tasks
+            if task.get_name() == "AgentActivity._user_turn_completed_task"
+        }
+        if self._user_turn_completed_atask is not None:
+            latest_bounded_turn_tasks.add(self._user_turn_completed_atask)
+        for bounded_turn_task in latest_bounded_turn_tasks - bounded_turn_tasks:
+            await _settle_bounded_turn(bounded_turn_task)
 
         if self._audio_recognition is not None:
             await self._audio_recognition._aclose()
@@ -3202,17 +3248,29 @@ class AgentActivity(RecognitionHooks):
         info: _EndOfTurnInfo,
         audio_input_ready_fut: asyncio.Future[_RealtimeTurnTransaction] | None = None,
     ) -> None:
+        user_message = llm.ChatMessage(
+            role="user",
+            content=[info.new_transcript],
+            transcript_confidence=info.transcript_confidence,
+        )
+        bounded_user_message = user_message
+        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
+        user_message.metrics = metrics_report
+
         audio_input_token: _RealtimeTurnTransaction | None = None
         try:
             if old_task is not None:
-                # We never cancel user code as this is very confusing.
-                # So we wait for the old execution of on_user_turn_completed to finish.
-                # In practice this is OK because most speeches will be interrupted if a new turn
-                # is detected. So the previous execution should complete quickly.
-                await old_task
+                # A newer turn waits for user code from the preceding turn, but owns its own
+                # cancellation. Shutdown can therefore settle both callbacks independently.
+                await asyncio.shield(old_task)
 
             if audio_input_ready_fut is not None:
                 audio_input_token = await asyncio.shield(audio_input_ready_fut)
+        except asyncio.CancelledError:
+            if self._session._closing and self._new_turns_blocked:
+                self._commit_user_message_locally(bounded_user_message)
+            self._clear_realtime_input_if_owned(audio_input_ready_fut)
+            raise
         except BaseException:
             self._clear_realtime_input_if_owned(audio_input_ready_fut)
             raise
@@ -3230,16 +3288,6 @@ class AgentActivity(RecognitionHooks):
 
         # Empty realtime text turns first give user code a chance to supply deliberate model
         # input. Until then, they must not interrupt a valid response or background speech.
-        user_message = llm.ChatMessage(
-            role="user",
-            content=[info.new_transcript],
-            transcript_confidence=info.transcript_confidence,
-        )
-
-        metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
-
-        if user_message is not None:
-            user_message.metrics = metrics_report
 
         # A turn that was already bounded before close/handoff remains locally observable, but
         # the shutdown boundary must not submit input or begin new provider work.
@@ -3249,8 +3297,7 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
             if self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+                self._commit_user_message_locally(user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3270,8 +3317,7 @@ class AgentActivity(RecognitionHooks):
                     # A skipped finalized transcript remains observable in local conversation
                     # history even when the explicit text-input mode owns no provider audio.
                     if info.new_transcript != "":
-                        self._agent._chat_ctx.items.append(user_message)
-                        self._session._conversation_item_added(user_message)
+                        self._commit_user_message_locally(user_message)
                     return
                 if info.reply_already_triggered:
                     # Manual audio commit already started exactly one provider generation. Keep
@@ -3282,8 +3328,7 @@ class AgentActivity(RecognitionHooks):
                         and not self.llm.capabilities.user_transcription
                         and info.new_transcript != ""
                     ):
-                        self._agent._chat_ctx.items.append(user_message)
-                        self._session._conversation_item_added(user_message)
+                        self._commit_user_message_locally(user_message)
                     return
                 if self._realtime_input_mode == "audio":
                     if audio_input_token is not self._rt_audio_input_token:
@@ -3291,8 +3336,7 @@ class AgentActivity(RecognitionHooks):
 
         if info.skip_reply:
             if info.new_transcript != "":
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+                self._commit_user_message_locally(user_message)
             return
 
         if not defer_speech_interruption and not await self._interrupt_current_speech_for_user_turn(
@@ -3310,6 +3354,12 @@ class AgentActivity(RecognitionHooks):
             await self._agent.on_user_turn_completed(
                 temp_mutable_chat_ctx, new_message=user_message
             )
+        except asyncio.CancelledError:
+            if self._session._closing and self._new_turns_blocked:
+                self._commit_user_message_locally(bounded_user_message)
+            if self._rt_session is not None and self._realtime_input_mode == "audio":
+                self._clear_realtime_input_if_owned(audio_input_token)
+            raise
         except StopResponse:
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
@@ -3339,9 +3389,8 @@ class AgentActivity(RecognitionHooks):
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"user_input": info.new_transcript},
             )
-            if user_message and self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+            if self._session._closing:
+                self._commit_user_message_locally(bounded_user_message)
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3360,8 +3409,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": user_message.raw_text_content},
                 )
                 if self._session._closing:
-                    self._agent._chat_ctx.items.append(user_message)
-                    self._session._conversation_item_added(user_message)
+                    self._commit_user_message_locally(user_message)
                 return
 
         speech_handle: SpeechHandle | None = None
@@ -4519,11 +4567,14 @@ class AgentActivity(RecognitionHooks):
             self._commit_realtime_user_message(user_message)
         return True
 
-    def _commit_realtime_user_message(self, user_message: llm.ChatMessage) -> None:
+    def _commit_user_message_locally(self, user_message: llm.ChatMessage) -> None:
         is_new_message = self._agent._chat_ctx.get_by_id(user_message.id) is None
         self._agent._chat_ctx._upsert_item(user_message)
         if is_new_message:
             self._session._conversation_item_added(user_message)
+
+    def _commit_realtime_user_message(self, user_message: llm.ChatMessage) -> None:
+        self._commit_user_message_locally(user_message)
 
     def _interrupt_created_realtime_generation_if_owned(
         self,

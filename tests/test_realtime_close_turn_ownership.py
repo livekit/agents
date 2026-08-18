@@ -305,16 +305,21 @@ async def test_close_bounds_user_callback_and_retains_transcript_once(
     activity._audio_recognition = cast(Any, recognition)
     audio_input_ready_fut = activity._seal_realtime_audio_input()
 
-    bounded_turn_task = asyncio.create_task(
+    activity._scheduling_atask = asyncio.create_task(
+        activity._scheduling_task(), name="AgentActivity._scheduling_task"
+    )
+    bounded_turn_task = activity._create_speech_task(
         activity._user_turn_completed_task(
             None,
             _bounded_turn(),
             audio_input_ready_fut,
-        )
+        ),
+        name="AgentActivity._user_turn_completed_task",
     )
     activity._user_turn_completed_atask = bounded_turn_task
     await agent.hook_started.wait()
     session._closing = True
+    await asyncio.wait_for(activity.drain(), timeout=1.0)
 
     async def _close() -> None:
         async with activity._lock:
