@@ -726,9 +726,11 @@ def _make_room_audio_input(room: _FakeRoom, cls):
     )
 
 
-def _start_track(stream, identity: str, value: int) -> None:
+def _start_track(stream, identity: str, value: int, sid: str | None = None) -> None:
     """Publish a microphone track of a constant amplitude for this participant."""
-    track, publication, participant = _make_track_available_args(identity, sid=f"TR_{identity}")
+    track, publication, participant = _make_track_available_args(
+        identity, sid=sid or f"TR_{identity}"
+    )
     publication.muted = False
     with patch(
         "livekit.rtc.AudioStream.from_track",
@@ -741,6 +743,12 @@ def _publish(audio_input, identity: str, value: int) -> None:
     """Add a participant to a group input and start their microphone."""
     audio_input.add_participant(identity)
     _start_track(audio_input._streams[identity], identity, value)
+
+
+def _report_speakers(room: _FakeRoom, *identities: str) -> None:
+    """Deliver an `active_speakers_changed` update, loudest first."""
+    for callback in list(room._events["active_speakers_changed"]):
+        callback([SimpleNamespace(identity=identity) for identity in identities])
 
 
 async def _amplitudes(audio_input, count: int) -> list[int]:
@@ -794,19 +802,15 @@ async def test_active_speaker_audio_input_forwards_one_participant_at_a_time() -
     room = _FakeRoom()
     audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
 
-    def _speaking(*identities: str) -> None:
-        for callback in list(room._events["active_speakers_changed"]):
-            callback([SimpleNamespace(identity=identity) for identity in identities])
-
     try:
         _publish(audio_input, "alice", 100)
         _publish(audio_input, "bob", 200)
 
         # a second of alice speaking, which is also a second of bob held as pre-roll
-        _speaking("alice")
+        _report_speakers(room, "alice")
         assert set(await _amplitudes(audio_input, 20)) == {100}
 
-        _speaking("bob")
+        _report_speakers(room, "bob")
         started = asyncio.get_running_loop().time()
         heard = await _amplitudes(audio_input, 15)
         gap = heard.index(0)  # the turn boundary, so the stt doesn't merge both speakers
@@ -906,3 +910,39 @@ async def test_roomio_routes_every_participant_to_the_audio_input() -> None:
 
     room_io._on_participant_disconnected(bob)
     assert audio_input.removed == ["bob"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_republishing_does_not_close_the_turn() -> None:
+    """Swapping a track empties the mix for an instant, which is not the end of a turn."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        assert 100 in await _amplitudes(audio_input, 2)
+
+        _start_track(audio_input._streams["alice"], "alice", 100, sid="TR_alice_2")
+        assert audio_input._mixing == {"alice"}
+        assert 0 not in await _amplitudes(audio_input, 5), "no silence gap on a republish"
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_reselects_when_the_speaker_leaves() -> None:
+    """The floor goes to whoever else the server reported, not to nobody."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert set(await _amplitudes(audio_input, 3)) == {100}
+
+        audio_input.remove_participant("alice")
+        assert 200 in await _amplitudes(audio_input, 10)
+    finally:
+        await audio_input.aclose()

@@ -145,13 +145,15 @@ class _ParticipantInputStream(Generic[T], ABC):
                     continue
                 self._on_track_available(publication.track, publication, participant)
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, close_processor: bool = True) -> None:
         if self._stream:
             await self._stream.aclose()
             self._stream = None
         self._publication = None
         if self._processor:
-            self._processor._close()
+            # a processor shared between streams is closed by whoever owns it, once
+            if close_processor or self._processor_owned:
+                self._processor._close()
             self._processor = None
         if self._forward_atask:
             await aio.cancel_and_wait(self._forward_atask)
@@ -184,8 +186,11 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._process_frame(frame)
             await self._data_ch.send(frame)
 
-        # a track can stop delivering without being unpublished, e.g. the publisher closing it
-        self._set_streaming(False)
+        # a track can stop delivering without being unpublished, e.g. the publisher closing it.
+        # guarded so a task winding down after a track swap cannot clear the flag its
+        # replacement just set, whatever order the two get scheduled in
+        if self._publication is publication:
+            self._set_streaming(False)
         logger.debug("stream closed", extra=extra)
 
     def _process_frame(self, frame: T) -> None:
@@ -476,7 +481,12 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
             frame_size_ms=frame_size_ms,
         )
 
-        if isinstance(noise_cancellation, rtc.FrameProcessor):
+        # every child is handed the same instance, so the group closes it rather than
+        # letting each of them close it in turn
+        self._shared_processor = (
+            noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
+        )
+        if self._shared_processor is not None:
             logger.warning(
                 "a single noise cancellation processor is shared by every participant, which "
                 "interleaves speakers through one stateful filter. pass a callable returning "
@@ -506,7 +516,7 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
             return
 
         self._child_removed(identity, stream)
-        task = asyncio.create_task(stream.aclose())
+        task = asyncio.create_task(self._close_stream(stream))
         task.add_done_callback(self._tasks.discard)
         self._tasks.add(task)
 
@@ -530,12 +540,19 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
     @override
     async def aclose(self) -> None:
         for stream in self._streams.values():
-            await stream.aclose()
+            await self._close_stream(stream)
         self._streams.clear()
+
+        if self._shared_processor is not None:
+            self._shared_processor._close()
+            self._shared_processor = None
 
         self._data_ch.close()
         await aio.cancel_and_wait(*self._tasks)
         self._tasks.clear()
+
+    async def _close_stream(self, stream: _ParticipantAudioInputStream) -> None:
+        await stream.aclose(close_processor=self._shared_processor is None)
 
     def _send(self, frame: rtc.AudioFrame) -> None:
         """Hand a frame to the session, dropping it while the input is detached.
@@ -566,6 +583,13 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
     """Sums every participant's microphone, so overlapping speech is preserved."""
 
     def __init__(self, room: rtc.Room, **kwargs: Any) -> None:
+        # the mixer paces every registered stream at real time, so the pre-connect buffer
+        # would not be caught up on: it would leave that participant seconds behind the rest
+        # of the mix for the whole session
+        if kwargs.get("pre_connect_audio_handler") is not None:
+            logger.warning("pre-connect audio is not supported when mixing participants")
+            kwargs["pre_connect_audio_handler"] = None
+
         super().__init__(room, **kwargs)
         self._mixing: set[str] = set()
         self._mixer = rtc.AudioMixer(
@@ -622,9 +646,15 @@ class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
         self._mixing.discard(identity)
 
         if not self._mixing:
-            # nothing left to mix: the session needs silence to flush the pending transcript.
+            # nothing left to mix: the session needs silence to flush the pending transcript,
+            # but only once the room has settled. a track being replaced empties the mix for
+            # the rest of the tick and re-registers, and that is not the end of a turn.
             # while others are still talking the mix carries on and injecting it would punch
             # a hole in their audio
+            asyncio.get_running_loop().call_soon(self._close_turn)
+
+    def _close_turn(self) -> None:
+        if not self._mixing:
             self._send(audio.silence_frame(_TURN_GAP, self._sample_rate, self._num_channels))
 
     def _on_track_mute_changed(
@@ -653,6 +683,7 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
         # first syllables. it doubles as the overlap window, so keep it short
         self._preroll: dict[str, deque[rtc.AudioFrame]] = {}
         self._preroll_len = max(1, int(_PREROLL / (self._frame_size_ms / 1000)))
+        self._reported: list[str] = []  # last speakers the server reported, loudest first
         self._room.on("active_speakers_changed", self._on_active_speakers_changed)
 
     @override
@@ -671,21 +702,30 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
     @override
     def _child_removed(self, identity: str, stream: _ParticipantAudioInputStream) -> None:
         self._preroll.pop(identity, None)
+        if identity in self._reported:
+            self._reported.remove(identity)
         if self._speaking == identity:
+            # whoever else the server last reported keeps the floor: waiting for the next
+            # update would drop their turn
             self._release()
+            self._select_reported()
 
     def _on_active_speakers_changed(self, speakers: list[rtc.Participant]) -> None:
-        # ponytail: selection is driven entirely by the server's speaker updates, so nothing is
-        # forwarded if they never arrive. fall back to picking the loudest pre-roll by RMS if
-        # that ever shows up in practice
+        # selection is driven entirely by the server's speaker updates: nothing is forwarded
+        # until one arrives, and a speaker keeps the floor until the server drops them, so a
+        # louder participant never cuts into the middle of a turn. if sparse updates turn out
+        # to lose turns in practice, the fallback is to pick the loudest pre-roll by RMS
         # the server sends the loudest first; identities we don't listen to are not candidates
-        speaking = [p.identity for p in speakers if p.identity in self._streams]
+        self._reported = [p.identity for p in speakers if p.identity in self._streams]
 
-        if self._speaking is not None and self._speaking not in speaking:
+        if self._speaking is not None and self._speaking not in self._reported:
             self._release()
 
-        if self._speaking is None and speaking:
-            self._select(speaking[0])
+        self._select_reported()
+
+    def _select_reported(self) -> None:
+        if self._speaking is None and self._reported:
+            self._select(self._reported[0])
 
     def _select(self, identity: str) -> None:
         self._speaking = identity
