@@ -35,6 +35,16 @@ class _BlockingCloseRealtimeSession(FakeRealtimeSession):
             self.close_finished.set()
 
 
+class _FailingCloseRealtimeSession(_BlockingCloseRealtimeSession):
+    async def aclose(self) -> None:
+        self.close_entered.set()
+        await self.close_release.wait()
+        try:
+            raise RuntimeError("provider close failed")
+        finally:
+            self.close_finished.set()
+
+
 class _ClosingRecognition:
     def __init__(self, bounded_turn_task: asyncio.Task[None]) -> None:
         self._bounded_turn_task = bounded_turn_task
@@ -258,6 +268,42 @@ async def test_close_preserves_caller_cancellation() -> None:
     await utils.aio.cancel_and_wait(bounded_turn_task)
     rt_session.close_release.set()
     await rt_session.close_finished.wait()
+
+
+async def test_cancelled_close_observes_background_provider_failure() -> None:
+    model = FakeRealtimeModel()
+    session = AgentSession(llm=model)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _FailingCloseRealtimeSession(model)
+    activity._rt_session = rt_session
+    bounded_turn_task = asyncio.create_task(asyncio.Event().wait())
+    activity._user_turn_completed_atask = cast(asyncio.Task[None], bounded_turn_task)
+    activity._audio_recognition = cast(Any, _ClosingRecognition(bounded_turn_task))
+
+    async def _close() -> None:
+        async with activity._lock:
+            await activity._close_session()
+
+    close_task = asyncio.create_task(_close())
+    await rt_session.close_entered.wait()
+    provider_close_task = next(
+        task
+        for task in asyncio.all_tasks()
+        if task.get_name() == "AgentActivity.close_realtime_session"
+    )
+
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    await utils.aio.cancel_and_wait(bounded_turn_task)
+    rt_session.close_release.set()
+    await rt_session.close_finished.wait()
+    await asyncio.sleep(0)
+
+    was_observed = not provider_close_task._log_traceback  # type: ignore[attr-defined]
+    provider_close_task.exception()
+    assert was_observed
 
 
 async def test_close_settles_inner_cancellation_without_task_cancelling(

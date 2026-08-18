@@ -2159,7 +2159,7 @@ async def test_server_detected_manual_commit_never_seals_or_clears_provider_audi
     assert generated == ([] if skip_reply else [{"input_modality": "audio"}])
 
 
-async def test_clear_user_turn_does_not_clear_provider_owned_audio() -> None:
+async def test_clear_user_turn_clears_provider_owned_audio() -> None:
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(
             turn_detection=True,
@@ -2192,8 +2192,31 @@ async def test_clear_user_turn_does_not_clear_provider_owned_audio() -> None:
     activity.clear_user_turn()
 
     assert recognition_clears == 1
-    assert rt_session.clear_audio_calls == 0
-    assert rt_session.provider_audio == [frame]
+    assert rt_session.clear_audio_calls == 1
+    assert rt_session.provider_audio == []
+
+
+async def test_server_detected_audio_still_notifies_provider_activity() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=True,
+            can_disable_turn_detection=False,
+        )
+    )
+    session = AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling=TurnHandlingOptions(realtime_input_mode="audio"),
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    rt_session = _BufferedRealtimeSession(model)
+    activity._rt_session = rt_session
+    activity._started = True
+
+    activity._start_realtime_user_activity()
+
+    assert rt_session.user_activity_start_calls == 1
+    assert not activity._rt_user_activity_started
 
 
 async def test_blocked_delayed_eou_does_not_clear_provider_owned_audio() -> None:

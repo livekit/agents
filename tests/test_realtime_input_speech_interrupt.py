@@ -80,3 +80,16 @@ def test_input_speech_started_interrupts_interruptible_speech() -> None:
 
     assert handle.interrupted is True
     activity._rt_session.interrupt.assert_called_once()
+
+
+def test_per_speech_interrupt_override_survives_disabled_session_default() -> None:
+    activity = _activity(server_turn_detection=False, allow_interruptions=False)
+    handle = SpeechHandle.create(allow_interruptions=True)
+    activity._current_speech = handle
+    activity._rt_session = MagicMock()
+
+    activity._interrupt_by_audio_activity()
+
+    assert handle.interrupted is True
+    activity._rt_session.start_user_activity.assert_called_once()
+    activity._rt_session.interrupt.assert_called_once()

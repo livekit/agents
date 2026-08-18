@@ -612,6 +612,33 @@ async def test_non_recoverable_error_forwarded_as_recoverable_while_fallback_rem
     assert errors[0].recoverable is True
 
 
+async def test_background_swap_failure_emits_terminal_error() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    errors: list = []
+    session.on("error", lambda e: errors.append(e))
+
+    class _BrokenAgent:
+        @property
+        def chat_ctx(self) -> ChatContext:
+            raise RuntimeError("failed to snapshot chat context")
+
+    agent_session = _StubAgentSession(agent_state="listening")
+    agent_session.current_agent = cast(_StubAgent, _BrokenAgent())
+    session._agent_session = agent_session
+
+    primary.active_session.emit_error(recoverable=False)
+    assert session._swap_task is not None
+    with pytest.raises(RuntimeError, match="failed to snapshot chat context"):
+        await session._swap_task
+    await asyncio.sleep(0)
+
+    assert [error.recoverable for error in errors] == [True, False]
+    assert isinstance(errors[-1].error, RuntimeError)
+
+
 async def test_recoverable_error_is_forwarded_unchanged_without_swap() -> None:
     primary = FakeRealtimeModel()
     backup = FakeRealtimeModel()
