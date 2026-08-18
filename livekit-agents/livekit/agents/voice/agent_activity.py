@@ -219,6 +219,7 @@ class _TurnPolicyDiagnostic:
 @dataclass(frozen=True)
 class _ResolvedRealtimeTurnPolicy:
     input_mode: RealtimeInputMode
+    configured_turn_detection: TurnDetectionMode | None
     turn_detection: TurnDetectionMode | None
     turn_detection_explicit: bool
     server_turn_detection_enabled: bool
@@ -438,6 +439,7 @@ def _resolve_realtime_turn_policy(
     )
     return _ResolvedRealtimeTurnPolicy(
         input_mode=input_mode,
+        configured_turn_detection=configured_turn_detection,
         turn_detection=resolved_detection,
         turn_detection_explicit=turn_detection_explicit,
         server_turn_detection_enabled=server_detection,
@@ -644,6 +646,8 @@ class AgentActivity(RecognitionHooks):
             resolved_stt=self.stt,
             resolved_vad=self.vad,
             resolved_turn_detection=self._turn_policy.turn_detection,
+            resolved_turn_detection_explicit=self._turn_policy.turn_detection_explicit,
+            configured_turn_detection=self._turn_policy.configured_turn_detection,
         )
         if not self.llm.capabilities.mutable_chat_context:
             raise ValueError(
@@ -661,6 +665,8 @@ class AgentActivity(RecognitionHooks):
         resolved_stt: stt.STT | None,
         resolved_vad: vad.VAD | None,
         resolved_turn_detection: TurnDetectionMode | None,
+        resolved_turn_detection_explicit: bool,
+        configured_turn_detection: TurnDetectionMode | None,
     ) -> None:
         if resolved_stt is None:
             raise ValueError("realtime_input_mode='text' requires an external STT")
@@ -673,18 +679,9 @@ class AgentActivity(RecognitionHooks):
                 "stt.StreamAdapter-wrapped STT, or override Agent.stt_node and explicitly "
                 "configure turn_detection"
             )
-        configured_turn_detection = (
-            self._agent.turn_detection
-            if is_given(self._agent.turn_detection)
-            else self._session.turn_detection
-        )
-        turn_detection_explicit = (
-            is_given(self._agent.turn_detection) or self._session._turn_detection_explicit
-        )
-        compatible_explicit_detection = turn_detection_explicit and configured_turn_detection in (
-            None,
-            "manual",
-            "stt",
+        compatible_explicit_detection = (
+            resolved_turn_detection_explicit
+            and configured_turn_detection in (None, "manual", "stt")
         )
         if resolved_turn_detection != "stt" and not compatible_explicit_detection:
             raise ValueError(
@@ -1017,6 +1014,8 @@ class AgentActivity(RecognitionHooks):
                     resolved_stt=self.stt,
                     resolved_vad=self.vad,
                     resolved_turn_detection=policy.turn_detection,
+                    resolved_turn_detection_explicit=policy.turn_detection_explicit,
+                    configured_turn_detection=policy.configured_turn_detection,
                 )
             if self._audio_recognition is not None:
                 self._audio_recognition._check_vad_silence_requirement(
@@ -1081,6 +1080,8 @@ class AgentActivity(RecognitionHooks):
                     resolved_stt=prospective_stt,
                     resolved_vad=prospective_vad,
                     resolved_turn_detection=policy.turn_detection,
+                    resolved_turn_detection_explicit=policy.turn_detection_explicit,
+                    configured_turn_detection=policy.configured_turn_detection,
                 )
 
         # Validate the complete prospective policy before mutating any model or listener.
