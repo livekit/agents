@@ -1779,10 +1779,20 @@ class AgentActivity(RecognitionHooks):
         # gate above lets an already-bounded recognition task retain its text without starting
         # provider work. Recognition teardown happens only after that task has settled.
         rt_close_task: asyncio.Task[None] | None = None
+
+        def _observe_realtime_close(task: asyncio.Task[None]) -> None:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("failed to close realtime session")
+
         if self._rt_session is not None:
             rt_close_task = asyncio.create_task(
                 self._rt_session.aclose(), name="AgentActivity.close_realtime_session"
             )
+            rt_close_task.add_done_callback(_observe_realtime_close)
 
         current_task = asyncio.current_task()
         cancellation_requested: set[asyncio.Task[None]] = set()

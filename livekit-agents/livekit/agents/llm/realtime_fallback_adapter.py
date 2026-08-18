@@ -281,6 +281,22 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
             "thinking",
         )
 
+    def _observe_automatic_swap(self, task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as error:
+            self.emit(
+                "error",
+                RealtimeModelError(
+                    timestamp=time.time(),
+                    label=self._adapter.label,
+                    error=error,
+                    recoverable=False,
+                ),
+            )
+
     def _on_child_error(self, error: RealtimeModelError) -> None:
         if error.recoverable:
             # surface it and let the plugin's own reconnect handle it
@@ -300,6 +316,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         if self._swap_task is None or self._swap_task.done():
             # capture the speaking state now; the dead generation may flip it before the swap runs
             self._swap_task = asyncio.create_task(self._swap(target, self._is_agent_speaking()))
+            self._swap_task.add_done_callback(self._observe_automatic_swap)
 
     async def restart(self, *, switch_model: bool) -> None:
         """Restart the underlying session, optionally on the next available model."""
