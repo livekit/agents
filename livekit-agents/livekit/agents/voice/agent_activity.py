@@ -614,7 +614,7 @@ class AgentActivity(RecognitionHooks):
 
         # this allows taking over audio interruption temporarily until interruption is detected
         self._interruption_by_audio_activity_enabled = (
-            self._turn_policy.interruption_owner == "framework"
+            self._turn_policy.input_owner == "framework"
             and self._turn_detection not in ("manual", "realtime_llm")
         )
         self._default_interruption_by_audio_activity_enabled = (
@@ -758,7 +758,7 @@ class AgentActivity(RecognitionHooks):
                 else None
             )
         self._default_interruption_by_audio_activity_enabled = (
-            policy.interruption_owner == "framework"
+            policy.input_owner == "framework"
             and policy.turn_detection not in ("manual", "realtime_llm")
         )
         if (
@@ -2210,10 +2210,16 @@ class AgentActivity(RecognitionHooks):
         if (
             self._rt_session is None
             or self._realtime_input_mode != "audio"
-            or self._realtime_turn.policy.input_owner != "framework"
             or self._new_turns_blocked
         ):
             return
+
+        if self._realtime_turn.policy.input_owner == "provider":
+            # Activity notification is a public provider hook, not an ownership transfer.
+            # Provider-owned turns stay outside framework seal/defer/advance state.
+            self._rt_session.start_user_activity()
+            return
+
         if self._realtime_turn.turn_complete:
             self._get_deferred_realtime_audio_input().provider_activity_started = True
             return
@@ -2385,11 +2391,14 @@ class AgentActivity(RecognitionHooks):
         if self._audio_recognition:
             self._audio_recognition._clear_user_turn()
 
-        if (
-            self._rt_session is not None
-            and self._realtime_input_mode == "audio"
-            and self._turn_policy.input_owner == "framework"
-        ):
+        if self._rt_session is None or self._realtime_input_mode != "audio":
+            return
+
+        if self._realtime_turn.policy.input_owner == "provider":
+            # Explicit caller intent is delegated to the current input owner without entering
+            # framework transaction, deferred-input, or advancement machinery.
+            self._rt_session.clear_audio()
+        else:
             self._discard_latest_realtime_audio_input()
 
     def commit_user_turn(
