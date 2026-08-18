@@ -451,15 +451,27 @@ class SynthesizeStream(tts.SynthesizeStream):
             except Exception:
                 logger.exception("an error occurred while streaming input to google TTS")
 
-        input_gen = input_generator()
+        # grpc.aio consumes the request generator from its own task and finalizes it once the RPC
+        # completes or is cancelled; closing it from here would race with that task ("aclose():
+        # asynchronous generator is already running") when the RPC ends while the LLM is still
+        # producing text.
         try:
-            stream = await self._tts._ensure_client().streaming_synthesize(
-                input_gen, timeout=self._conn_options.timeout
-            )
+            # no RPC deadline: the call stays open for as long as the LLM keeps producing text,
+            # the connect timeout only bounds the wait for the first audio chunk
+            stream = await self._tts._ensure_client().streaming_synthesize(input_generator())
             output_emitter.start_segment(segment_id=utils.shortuuid())
 
-            async for resp in stream:
+            resp_iter = aiter(stream)
+            try:
+                resp = await asyncio.wait_for(
+                    anext(resp_iter, None), timeout=self._conn_options.timeout
+                )
+            except asyncio.TimeoutError:
+                raise APITimeoutError() from None
+
+            while resp is not None:
                 output_emitter.push(resp.audio_content)
+                resp = await anext(resp_iter, None)
 
             output_emitter.end_segment()
 
@@ -467,8 +479,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
-        finally:
-            await input_gen.aclose()
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
