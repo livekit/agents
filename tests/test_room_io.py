@@ -986,6 +986,7 @@ async def test_active_speaker_audio_input_releases_a_muted_speaker() -> None:
         assert audio_input._speaking == "alice"
 
         _mute_track(room, audio_input, "alice", True)
+        await asyncio.sleep(0)  # the floor settles on the next tick
         assert audio_input._speaking == "bob"
         assert 200 in await _amplitudes(audio_input, 10)
     finally:
@@ -1009,3 +1010,24 @@ async def test_roomio_skips_pre_connect_audio_for_group_inputs() -> None:
     finally:
         for room_io in (linked, mixed):
             await room_io.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_republishing_keeps_the_floor() -> None:
+    """Swapping a track is not the speaker stopping, they keep talking through it."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert set(await _amplitudes(audio_input, 3)) == {100}
+
+        _start_track(audio_input._streams["alice"], "alice", 100, sid="TR_alice_2")
+        await asyncio.sleep(0)
+        assert audio_input._speaking == "alice"
+        assert set(await _amplitudes(audio_input, 5)) == {100}, "no gap, no handover to bob"
+    finally:
+        await audio_input.aclose()

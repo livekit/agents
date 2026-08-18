@@ -139,7 +139,9 @@ class RoomOptions:
     participant: the agent still listens to every accepted one."""
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
-    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED. Only the linked participant is
+    watched, so with `AudioInputOptions.participants` set to "mix" or "pick" the session
+    still closes when they leave, even if the agent is listening to others who stayed."""
     delete_room_on_close: bool = False
     """Delete the room when the AgentSession is closed, default to False"""
 
@@ -278,7 +280,9 @@ class RoomInputOptions:
     """The pre-connect audio will be ignored if it doesn't arrive within this time."""
     close_on_disconnect: bool = True
     """Close the AgentSession if the linked participant disconnects with reasons in
-    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
+    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED. Only the linked participant is
+    watched, so with `AudioInputOptions.participants` set to "mix" or "pick" the session
+    still closes when they leave, even if the agent is listening to others who stayed."""
     delete_room_on_close: bool = False
     """Delete the room when the AgentSession is closed, default to False"""
 

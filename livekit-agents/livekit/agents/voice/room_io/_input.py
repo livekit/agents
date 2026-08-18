@@ -576,11 +576,9 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
 
     def _child_added(self, identity: str, stream: _ParticipantAudioInputStream) -> None:
         """A participant's stream was created, before it subscribes to anything."""
-        pass
 
     def _child_removed(self, identity: str, stream: _ParticipantAudioInputStream) -> None:
         """A participant's stream is about to be closed."""
-        pass
 
     def _child_stream_changed(self, identity: str) -> None:
         """A participant's track was subscribed, replaced, muted or lost."""
@@ -589,7 +587,6 @@ class _ParticipantAudioInputGroup(_RoomAudioInput, ABC):
         self, participant: rtc.Participant, publication: rtc.TrackPublication
     ) -> None:
         self._child_stream_changed(participant.identity)
-        pass
 
 
 class _MixedParticipantAudioInput(_ParticipantAudioInputGroup):
@@ -718,6 +715,11 @@ class _ActiveSpeakerAudioInput(_ParticipantAudioInputGroup):
 
     @override
     def _child_stream_changed(self, identity: str) -> None:
+        # a replaced track closes the old stream and opens its replacement in the same tick.
+        # that is not the speaker stopping, so let the room settle before handing the floor on
+        asyncio.get_running_loop().call_soon(self._update_floor, identity)
+
+    def _update_floor(self, identity: str) -> None:
         stream = self._streams.get(identity)
         if self._speaking == identity and (stream is None or not stream.streaming):
             # a muted speaker the server still reports would otherwise hold the floor
