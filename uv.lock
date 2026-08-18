@@ -1012,11 +1012,11 @@ wheels = [
 
 [[package]]
 name = "floe-guard"
-version = "0.18.1"
+version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/c1/78c0b4f46b060315bafe4f7d456917a25acadece6afd5d8dc8e26ec7cbab/floe_guard-0.18.1.tar.gz", hash = "sha256:1ce9031688d45211d38f548fa53a62ff151cd1130bc21bc8bc727f96b0660278", size = 444746, upload-time = "2026-08-18T03:52:01.199Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/89/29512f65a99dc51e39cb4bf44cf6d16021533b7056329ecbdb0c436afa21/floe_guard-0.19.0.tar.gz", hash = "sha256:45cf9a50927f3f46ed2f59f3c0d53cede4c765a8e437976106e7f933288f9213", size = 446997, upload-time = "2026-08-18T20:42:12.932Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/c6/6886277f9bc507cea7a5cf71a87132f78e306cba2610c598b28173da83dd/floe_guard-0.18.1-py3-none-any.whl", hash = "sha256:77cad3a30c66ee63b61c63d7f8948dc3299f43d72915db4eda27c58daf3a1bb4", size = 114889, upload-time = "2026-08-18T03:51:59.52Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/f2/235aff568a94eff5fdb19356d9cb5db7525217221ed29b254b99b386add8/floe_guard-0.19.0-py3-none-any.whl", hash = "sha256:1253beba25636d0dd3e793af963fd5273b8ec37c012aca5809e31be61c4ca46f", size = 116692, upload-time = "2026-08-18T20:42:11.245Z" },
 ]
 
 [[package]]
@@ -2907,7 +2907,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
-    { name = "floe-guard", specifier = ">=0.18" },
+    { name = "floe-guard", specifier = ">=0.19" },
     { name = "livekit" },
     { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
