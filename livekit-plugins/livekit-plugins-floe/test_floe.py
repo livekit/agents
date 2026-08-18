@@ -140,3 +140,101 @@ def test_enable_cost_receipts_logs_only_floe_turns(
 
     receipts = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
     assert receipts == ["floe · gpt-4o · $0.0075 est"]  # non-floe turn ignored
+
+
+def _floe_event(cum_in: int, cum_out: int) -> object:
+    import types
+
+    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
+
+    usage = LLMModelUsage(
+        provider="floe", model="openai/gpt-4o", input_tokens=cum_in, output_tokens=cum_out
+    )
+    return types.SimpleNamespace(usage=AgentSessionUsage(model_usage=[usage]))
+
+
+def _capture_handler(session_holder: dict[str, object]) -> None:
+    class _StubSession:
+        def on(self, name: str, fn: object) -> None:
+            session_holder[name] = fn
+
+    floe.enable_cost_receipts(_StubSession())  # type: ignore[arg-type]
+
+
+async def test_receipt_budget_read_is_offloaded_not_blocking(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import asyncio
+    import logging
+
+    from livekit.plugins.floe import receipt as receipt_mod
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    calls = {"n": 0}
+
+    def fake_remaining() -> float:
+        calls["n"] += 1
+        return 12.34
+
+    monkeypatch.setattr(receipt_mod, "hosted_remaining_usd", fake_remaining)
+
+    async def fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return fn(*args, **kwargs)  # run inline so the refresh completes deterministically
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    handlers: dict[str, object] = {}
+    _capture_handler(handlers)
+    handler = handlers["session_usage_updated"]
+
+    with caplog.at_level(logging.INFO, logger="livekit.plugins.floe"):
+        handler(_floe_event(1000, 500))  # type: ignore[operator]
+        # the blocking read must NOT have run synchronously on the handler thread
+        assert calls["n"] == 0
+        turn1 = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
+        assert turn1 == ["floe · gpt-4o · $0.0075 est"]  # budget not yet cached
+
+        for _ in range(10):  # let the scheduled background refresh run
+            await asyncio.sleep(0)
+            if calls["n"]:
+                break
+        assert calls["n"] == 1  # fetched exactly once, off the handler thread
+
+        caplog.clear()
+        handler(_floe_event(1800, 900))  # type: ignore[operator]
+    turn2 = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
+    assert turn2 == ["floe · gpt-4o · $0.0060 est · left $12.34"]  # cached budget applied
+
+
+async def test_receipt_budget_failure_drops_budget(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import asyncio
+    import logging
+
+    from livekit.plugins.floe import receipt as receipt_mod
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+
+    def boom() -> float:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(receipt_mod, "hosted_remaining_usd", boom)
+
+    async def fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    handlers: dict[str, object] = {}
+    _capture_handler(handlers)
+    handler = handlers["session_usage_updated"]
+
+    with caplog.at_level(logging.INFO, logger="livekit.plugins.floe"):
+        handler(_floe_event(1000, 500))  # type: ignore[operator]  # schedules a refresh that fails
+        for _ in range(10):
+            await asyncio.sleep(0)
+        caplog.clear()
+        handler(_floe_event(1800, 900))  # type: ignore[operator]
+    turn2 = [r.getMessage() for r in caplog.records if r.getMessage().startswith("floe · ")]
+    assert turn2 == ["floe · gpt-4o · $0.0060 est"]  # budget dropped on failure, cost still prints

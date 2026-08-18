@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +29,9 @@ from .services import FLOE_PROVIDER
 if TYPE_CHECKING:
     from livekit.agents import AgentSession, SessionUsageUpdatedEvent
 
+# How long a fetched hosted-budget value is reused before a background refresh.
+_BUDGET_TTL = 30.0
+
 
 def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True) -> None:
     """Log a one-line Floe cost receipt after every Floe-routed turn.
@@ -38,8 +43,15 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
 
     Cost is always shown (priced locally from the bundled cost map — free,
     offline, no account). The budget half (``left $…``) is added when a
-    ``FLOE_API_KEY`` is set, read best-effort from hosted Floe; a failed read
-    never breaks the session (the cost line still prints, without the budget).
+    ``FLOE_API_KEY`` is set.
+
+    The hosted budget read is a blocking network call, so it is **never** made
+    from this synchronous handler — that would stall the agent's audio/speech
+    loop. Instead it runs off-loop (``asyncio.to_thread``), throttled to once per
+    ``_BUDGET_TTL`` seconds; each receipt uses the last cached value (a one-turn
+    refresh lag is fine). A failed read drops the budget (the cost still prints,
+    without ``left $…``). If no event loop is running, the budget is skipped
+    entirely and cost is still shown.
 
     Only ``provider="floe"`` usage is counted, so other providers or plugins in a
     mixed session don't produce phantom receipts. ``session_usage_updated`` is
@@ -52,18 +64,33 @@ def enable_cost_receipts(session: AgentSession[Any], *, show_budget: bool = True
     """
     last_tokens: dict[str, tuple[int, int]] = {}
     remaining_usd: float | None = None
+    fetched_at: float = 0.0
+    bg_tasks: set[asyncio.Task[None]] = set()
+
+    async def _refresh_budget() -> None:
+        nonlocal remaining_usd
+        try:
+            remaining_usd = await asyncio.to_thread(hosted_remaining_usd)
+        except Exception:  # noqa: BLE001 - a budget read must never break a call
+            remaining_usd = None  # drop a stale value on failure
+            logger.debug("floe: budget read failed; showing cost without budget", exc_info=True)
 
     def _on_usage_updated(ev: SessionUsageUpdatedEvent) -> None:
-        nonlocal remaining_usd
+        nonlocal fetched_at
 
-        # Budget is hosted (needs a key); cost is local (never). Refresh the
-        # budget best-effort each turn and keep the last good value on failure —
-        # a budget read must never break the session.
+        # Refresh the hosted budget off-loop at most once per TTL — never block
+        # this handler on the network. The receipt below uses the cached value.
         if show_budget and hosted_enforcement_available():
-            try:
-                remaining_usd = hosted_remaining_usd()
-            except Exception:  # noqa: BLE001 - a budget read must never break a call
-                logger.debug("floe: budget read failed; showing cost without budget", exc_info=True)
+            now = time.monotonic()
+            if now - fetched_at >= _BUDGET_TTL:
+                fetched_at = now  # throttle regardless of outcome
+                try:
+                    task = asyncio.get_running_loop().create_task(_refresh_budget())
+                except RuntimeError:
+                    pass  # no running loop — skip the budget, never raise
+                else:
+                    bg_tasks.add(task)
+                    task.add_done_callback(bg_tasks.discard)
 
         for mu in ev.usage.model_usage:
             if not isinstance(mu, LLMModelUsage):
