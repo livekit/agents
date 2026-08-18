@@ -352,6 +352,12 @@ async def test_sync_during_interrupting_swap_replays_on_replacement_without_watc
 
     assert result.status is _UserMessageSyncStatus.UNKNOWN
     assert primary.active_session.generate_reply_calls == 0
+
+    async def _wait_for_replacement_generation() -> None:
+        while backup.active_session.generate_reply_calls == 0:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_wait_for_replacement_generation(), timeout=0.25)
     assert backup.active_session.generate_reply_calls == 1
     assert [item.id for item in backup.active_session.chat_ctx.items].count(message.id) == 1
 
@@ -388,7 +394,7 @@ async def test_retiring_child_rejection_becomes_unknown_after_swap_starts() -> N
         await asyncio.gather(sync_task, swap_task, return_exceptions=True)
 
     assert result.status is _UserMessageSyncStatus.UNKNOWN
-    assert isinstance(result.error, RuntimeError)
+    assert isinstance(result.error, RealtimeError)
 
 
 async def test_cancelling_cross_swap_generation_does_not_cancel_shared_swap() -> None:
@@ -440,6 +446,7 @@ async def test_cross_swap_generation_fails_if_no_replacement_can_start() -> None
     chat_ctx = ChatContext.empty()
     message = chat_ctx.add_message(role="user", content="replacement must exist")
     sync_advanced = asyncio.Event()
+    primary.bring_up_error = RuntimeError("primary also unavailable")
     agent_session = _DependentInterruptAgentSession(
         sync_advanced=sync_advanced,
         chat_ctx=chat_ctx,
@@ -468,7 +475,7 @@ async def test_cross_swap_generation_fails_if_no_replacement_can_start() -> None
         await asyncio.gather(turn_task, swap_task, return_exceptions=True)
 
     assert result.status is _UserMessageSyncStatus.UNKNOWN
-    with pytest.raises(RealtimeError, match="cannot start replacement"):
+    with pytest.raises(RealtimeError, match="failed to replace realtime session"):
         await generation_fut
 
 

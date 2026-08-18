@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -18,6 +18,7 @@ from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
     RealtimeCapabilities,
+    RealtimeError,
     RealtimeModel,
     RealtimeModelError,
     RealtimeSession,
@@ -35,6 +36,23 @@ if TYPE_CHECKING:
 class RealtimeAvailabilityChangedEvent:
     realtime_model: RealtimeModel
     available: bool
+
+
+_SwapPhase = Literal["idle", "interrupting", "replacing"]
+
+
+@dataclass(frozen=True)
+class _SwapOutcome:
+    child_epoch: int
+    replayed_item_ids: frozenset[str]
+    error: RealtimeError | None = None
+
+
+@dataclass(frozen=True)
+class _PendingCrossSwapGeneration:
+    completion: asyncio.Future[_SwapOutcome] | None
+    chat_ctx: ChatContext
+    message_id: str
 
 
 # pipeline-shaping caps that must match across models (set at activity start, can't change mid-call)
@@ -192,12 +210,16 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._cooldown_deadline = [0.0] * len(adapter._models)
 
         self._swap_task: asyncio.Task[None] | None = None
-        self._swap_lock = asyncio.Lock()
+        self._swap_serialization_lock = asyncio.Lock()
+        self._swap_state_lock = asyncio.Lock()
+        self._swap_phase: _SwapPhase = "idle"
+        self._swap_completion: asyncio.Future[_SwapOutcome] | None = None
+        self._child_epoch = 0
+        self._pending_cross_swap_generations: dict[
+            asyncio.Task[Any], _PendingCrossSwapGeneration
+        ] = {}
         # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
         self._agent_session: AgentSession | None = None
-
-        # audio during a swap is dropped; replaying it would lag the model behind realtime
-        self._swapping = False
 
         self._active_index = 0
         self._active = adapter._models[0].session(
@@ -283,100 +305,146 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         await self._swap(target, self._is_agent_speaking())
 
     async def _swap(self, target_index: int, was_speaking: bool) -> None:
-        """Replace the active child with a fresh session on ``target_index``.
+        """Replace the active child without holding state locks across external awaits."""
+        async with self._swap_serialization_lock:
+            completion = asyncio.get_running_loop().create_future()
+            async with self._swap_state_lock:
+                retiring_child = self._active
+                self._swap_phase = "interrupting"
+                self._swap_completion = completion
 
-        If the agent was speaking, its reply is interrupted first (committing the heard content to
-        the agent chat context) and re-issued on the new session afterwards.
-        """
-        async with self._swap_lock:
-            # interrupt through the AgentSession so playout/state stay coordinated and the heard
-            # content is committed (best-effort: the provider may already be dead)
-            if self._agent_session is not None:
-                try:
-                    await self._agent_session.interrupt(force=True)
-                except Exception:
-                    logger.debug("failed to interrupt the agent before swap", exc_info=True)
+            candidate: RealtimeSession | None = None
+            candidate_index: int | None = None
+            try:
+                # Interrupt outside the state lock. The retiring child stays current until the
+                # interrupt has committed the heard content and a replacement is ready.
+                if self._agent_session is not None:
+                    try:
+                        await self._agent_session.interrupt(force=True)
+                    except Exception:
+                        logger.debug("failed to interrupt the agent before swap", exc_info=True)
 
-            # replay the agent chat context (what the user heard); fall back to the child's when unbound
-            if self._agent_session is not None:
-                chat_ctx = self._agent_session.current_agent.chat_ctx
-            else:
-                chat_ctx = self._active.chat_ctx
-            if self._provider_replay_excluded_item_ids:
-                chat_ctx = chat_ctx.copy()
-                replay_item_ids = {item.id for item in chat_ctx.items}
-                self._provider_replay_excluded_item_ids.intersection_update(replay_item_ids)
-                chat_ctx.items = [
-                    item
-                    for item in chat_ctx.items
-                    if item.id not in self._provider_replay_excluded_item_ids
-                ]
+                async with self._swap_state_lock:
+                    self._swap_phase = "replacing"
 
-            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
-            # return the error so the caller can try the next model
-            async def _bring_up(index: int) -> Exception | None:
-                try:
-                    self._active = self._adapter._models[index].session(
+                # Text sync that intersected interruption has returned UNKNOWN by now, so its
+                # locally committed message is part of the replay snapshot.
+                if self._agent_session is not None:
+                    chat_ctx = self._agent_session.current_agent.chat_ctx
+                else:
+                    chat_ctx = retiring_child.chat_ctx
+                if self._provider_replay_excluded_item_ids:
+                    chat_ctx = chat_ctx.copy()
+                    replay_item_ids = {item.id for item in chat_ctx.items}
+                    self._provider_replay_excluded_item_ids.intersection_update(replay_item_ids)
+                    chat_ctx.items = [
+                        item
+                        for item in chat_ctx.items
+                        if item.id not in self._provider_replay_excluded_item_ids
+                    ]
+                replayed_item_ids = frozenset(item.id for item in chat_ctx.items)
+
+                async def _bring_up(
+                    index: int,
+                ) -> tuple[RealtimeSession | None, Exception | None]:
+                    child = self._adapter._models[index].session(
                         turn_detection_disabled=self._turn_detection_disabled
                     )
-                    self._active_index = index
-                    self._bind(self._active)
-                    await self._active._update_session(
-                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
-                    )
-                    if is_given(self._tool_choice):
-                        self._active.update_options(tool_choice=self._tool_choice)
-                    self._adapter._active_instance = self._adapter._models[index]
-                    return None
-                except Exception as e:
-                    logger.exception("failed to start realtime model on swap, trying next")
-                    self._unbind(self._active)
-                    with contextlib.suppress(Exception):
-                        await self._active.aclose()
-                    self._set_available(index, False)
-                    return e
+                    try:
+                        await child._update_session(
+                            instructions=self._instructions,
+                            chat_ctx=chat_ctx,
+                            tools=self._tools,
+                        )
+                        if is_given(self._tool_choice):
+                            child.update_options(tool_choice=self._tool_choice)
+                        self._bind(child)
+                        return child, None
+                    except asyncio.CancelledError:
+                        with contextlib.suppress(Exception):
+                            await child.aclose()
+                        raise
+                    except Exception as error:
+                        logger.exception("failed to start realtime model on swap, trying next")
+                        with contextlib.suppress(Exception):
+                            await child.aclose()
+                        self._set_available(index, False)
+                        return None, error
 
-            self._swapping = True
-            try:
-                # close the old child; best-effort since the provider may already be dead
-                self._unbind(self._active)
+                self._unbind(retiring_child)
                 with contextlib.suppress(Exception):
-                    await self._active.aclose()
+                    await retiring_child.aclose()
 
-                # cascade to further models if one fails to start
-                error = await _bring_up(target_index)
-                while error is not None:
-                    nxt = self._next_available_index()
-                    if nxt is None:
+                error: Exception | None = None
+                candidate, error = await _bring_up(target_index)
+                candidate_index = target_index if candidate is not None else None
+                while candidate is None:
+                    next_index = self._next_available_index()
+                    if next_index is None:
                         break
-                    error = await _bring_up(nxt)
-            finally:
-                self._swapping = False
+                    candidate, error = await _bring_up(next_index)
+                    candidate_index = next_index if candidate is not None else None
 
-            if error is not None:
-                # every model failed to start; escalate so AgentSession can close instead of
-                # continuing on a broken session
-                self.emit(
-                    "error",
-                    RealtimeModelError(
-                        timestamp=time.time(),
-                        label=self._adapter.label,
-                        error=error,
-                        recoverable=False,
-                    ),
-                )
-                return
+                if candidate is None or candidate_index is None:
+                    sync_error = RealtimeError(f"failed to replace realtime session: {error}")
+                    async with self._swap_state_lock:
+                        outcome = _SwapOutcome(
+                            child_epoch=self._child_epoch,
+                            replayed_item_ids=frozenset(),
+                            error=sync_error,
+                        )
+                        self._swap_phase = "idle"
+                        self._swap_completion = None
+                        completion.set_result(outcome)
+                    self.emit(
+                        "error",
+                        RealtimeModelError(
+                            timestamp=time.time(),
+                            label=self._adapter.label,
+                            error=error or sync_error,
+                            recoverable=False,
+                        ),
+                    )
+                    return
 
-            # a swap is a reconnect from the caller's perspective
-            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
+                async with self._swap_state_lock:
+                    self._active = candidate
+                    self._active_index = candidate_index
+                    self._child_epoch += 1
+                    outcome = _SwapOutcome(
+                        child_epoch=self._child_epoch,
+                        replayed_item_ids=replayed_item_ids,
+                    )
+                    self._swap_phase = "idle"
+                    self._swap_completion = None
+                    completion.set_result(outcome)
+                self._adapter._active_instance = self._adapter._models[candidate_index]
 
-            # re-issue the interrupted reply on the new session
-            if (
-                was_speaking
-                and self._adapter._regenerate_on_swap
-                and self._agent_session is not None
-            ):
-                self._agent_session.generate_reply()
+                self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
+                if (
+                    was_speaking
+                    and self._adapter._regenerate_on_swap
+                    and self._agent_session is not None
+                ):
+                    self._agent_session.generate_reply()
+            except BaseException as error:
+                if candidate is not None and candidate is not self._active:
+                    self._unbind(candidate)
+                    with contextlib.suppress(Exception):
+                        await candidate.aclose()
+                sync_error = RealtimeError(f"realtime session swap did not complete: {error}")
+                async with self._swap_state_lock:
+                    self._swap_phase = "idle"
+                    self._swap_completion = None
+                    if not completion.done():
+                        completion.set_result(
+                            _SwapOutcome(
+                                child_epoch=self._child_epoch,
+                                replayed_item_ids=frozenset(),
+                                error=sync_error,
+                            )
+                        )
+                raise
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
@@ -396,7 +464,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         await self._active.update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        if self._swapping:
+        if self._swap_phase != "idle":
             # dropped; the swap replays the agent chat context afterwards
             return
         await self._active.update_chat_ctx(chat_ctx)
@@ -409,11 +477,115 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
     async def _sync_user_message(
         self, chat_ctx: ChatContext, message_id: str
     ) -> _UserMessageSyncResult:
-        async with self._swap_lock:
-            result = await self._active._sync_user_message(chat_ctx, message_id)
+        while True:
+            async with self._swap_state_lock:
+                phase = self._swap_phase
+                completion = self._swap_completion
+                child = self._active
+                child_epoch = self._child_epoch
+
+            if phase == "interrupting":
+                self._remember_cross_swap_generation(completion, chat_ctx, message_id)
+                return _UserMessageSyncResult(
+                    _UserMessageSyncStatus.UNKNOWN,
+                    RealtimeError("user-message synchronization intersected a session swap"),
+                )
+            if phase == "replacing":
+                assert completion is not None
+                outcome = await asyncio.shield(completion)
+                if outcome.error is not None:
+                    return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, outcome.error)
+                continue
+
+            result = await child._sync_user_message(chat_ctx, message_id)
+            async with self._swap_state_lock:
+                child_still_current = (
+                    self._swap_phase == "idle"
+                    and self._active is child
+                    and self._child_epoch == child_epoch
+                )
+                completion = self._swap_completion
+
+            if not child_still_current:
+                self._remember_cross_swap_generation(completion, chat_ctx, message_id)
+                return _UserMessageSyncResult(
+                    _UserMessageSyncStatus.UNKNOWN,
+                    RealtimeError("user-message synchronization completed on a retired session"),
+                )
             if result.status is not _UserMessageSyncStatus.REJECTED:
                 self._provider_replay_excluded_item_ids.discard(message_id)
             return result
+
+    def _remember_cross_swap_generation(
+        self,
+        completion: asyncio.Future[_SwapOutcome] | None,
+        chat_ctx: ChatContext,
+        message_id: str,
+    ) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            return
+        self._pending_cross_swap_generations[task] = _PendingCrossSwapGeneration(
+            completion=completion,
+            chat_ctx=chat_ctx,
+            message_id=message_id,
+        )
+        task.add_done_callback(lambda done: self._pending_cross_swap_generations.pop(done, None))
+
+    async def _generate_reply_after_swap(
+        self,
+        pending: _PendingCrossSwapGeneration,
+        *,
+        instructions: NotGivenOr[str],
+        tool_choice: NotGivenOr[ToolChoice],
+        tools: NotGivenOr[list[Tool]],
+    ) -> GenerationCreatedEvent:
+        completion = pending.completion
+        last_outcome: _SwapOutcome | None = None
+        while True:
+            if completion is not None:
+                last_outcome = await asyncio.shield(completion)
+                completion = None
+                if last_outcome.error is not None:
+                    raise last_outcome.error
+
+            async with self._swap_state_lock:
+                if self._swap_phase != "idle":
+                    completion = self._swap_completion
+                    last_outcome = None
+                    continue
+                child = self._active
+                child_epoch = self._child_epoch
+
+            message_was_replayed = (
+                last_outcome is not None
+                and last_outcome.child_epoch == child_epoch
+                and pending.message_id in last_outcome.replayed_item_ids
+            )
+            if not message_was_replayed:
+                result = await child._sync_user_message(pending.chat_ctx, pending.message_id)
+                async with self._swap_state_lock:
+                    child_still_current = (
+                        self._swap_phase == "idle"
+                        and self._active is child
+                        and self._child_epoch == child_epoch
+                    )
+                    if not child_still_current:
+                        completion = self._swap_completion
+                        last_outcome = None
+                        continue
+                if result.status is _UserMessageSyncStatus.REJECTED:
+                    raise result.error or RealtimeError(
+                        "replacement realtime session rejected the finalized user turn"
+                    )
+                self._provider_replay_excluded_item_ids.discard(pending.message_id)
+
+            generation_fut = child.generate_reply(
+                instructions=instructions,
+                tool_choice=tool_choice,
+                tools=tools,
+            )
+            return await generation_fut
 
     async def update_tools(self, tools: list[Tool]) -> None:
         self._tools = tools
@@ -424,13 +596,13 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._active.update_options(tool_choice=tool_choice)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._swapping:
+        if self._swap_phase != "idle":
             # drop during swap; replaying would lag the model
             return
         self._active.push_audio(frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        if self._swapping:
+        if self._swap_phase != "idle":
             return
         self._active.push_video(frame)
 
@@ -441,6 +613,21 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:  # synchronous provider setup has no running loop
+            task = None
+        pending = self._pending_cross_swap_generations.pop(task, None) if task is not None else None
+        if pending is not None:
+            return asyncio.create_task(
+                self._generate_reply_after_swap(
+                    pending,
+                    instructions=instructions,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                ),
+                name="FallbackRealtimeSession.generate_reply_after_swap",
+            )
         return self._active.generate_reply(
             instructions=instructions, tool_choice=tool_choice, tools=tools
         )
