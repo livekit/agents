@@ -81,14 +81,17 @@ class LLM(OpenAILLM):
                 ``X-Floe-Provider-Key`` header is sent to this base URL by design,
                 so it must be ``https`` (loopback ``http`` is allowed for local
                 dev) — the provider key is never sent over a cleartext connection.
+                This TLS check also covers a caller-supplied ``client``'s address.
             temperature: Sampling temperature forwarded to the model.
             top_p: Nucleus sampling probability forwarded to the model.
             parallel_tool_calls: Whether the model may call tools in parallel.
             tool_choice: Tool selection strategy.
             timeout: Per-request HTTP timeout.
             max_retries: Maximum number of request retries.
-            client: A pre-configured ``openai.AsyncClient``. When provided it is
-                used as-is and the resolved base URL/header are not applied.
+            client: A pre-configured ``openai.AsyncClient``. Its address replaces
+                the resolved Floe base URL; the BYOK ``X-Floe-Provider-Key``
+                header still applies, so in BYOK mode the client's address is
+                TLS-checked the same way (https, loopback excepted).
         """
         floe_key = _get_api_key(api_key)
 
@@ -99,7 +102,11 @@ class LLM(OpenAILLM):
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN
         if resolved_provider_key:
             resolved_base_url = base_url if is_given(base_url) else FLOE_BYOK_PROXY_URL
-            _require_secure_byok_url(resolved_base_url)
+            # The provider key rides every request, and a caller-supplied client
+            # overrides base_url in the parent — so validate the address the key
+            # will actually reach, not just the resolved base_url.
+            effective_url = str(client.base_url) if client is not None else resolved_base_url
+            _require_secure_byok_url(effective_url)
             extra_headers = {"X-Floe-Provider-Key": resolved_provider_key}
         else:
             resolved_base_url = base_url if is_given(base_url) else FLOE_GATEWAY_URL

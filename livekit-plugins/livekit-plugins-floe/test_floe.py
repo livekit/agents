@@ -52,3 +52,20 @@ def test_keyless_unaffected_by_byok_guard(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("FLOE_API_KEY", "floe_test")
     monkeypatch.delenv("FLOE_PROVIDER_KEY", raising=False)
     floe.LLM(base_url="http://localhost:8080/v1")
+
+
+def test_byok_rejects_plaintext_custom_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.setenv("FLOE_PROVIDER_KEY", "sk-test")
+    import openai
+
+    with pytest.raises(ValueError):
+        floe.LLM(client=openai.AsyncClient(api_key="x", base_url="http://evil.example.com/v1"))
+
+
+def test_byok_allows_https_custom_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.setenv("FLOE_PROVIDER_KEY", "sk-test")
+    import openai
+
+    floe.LLM(client=openai.AsyncClient(api_key="x", base_url="https://my-floe.example.com/v1"))
