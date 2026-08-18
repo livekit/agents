@@ -3180,7 +3180,8 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
-        # avoid interruption if the new_transcript is too short
+        # Minimum-word retention only applies when STT produced text to retain. An authoritative
+        # empty timeout must settle buffered realtime audio instead of leaving it open.
         if (
             self.stt is not None
             and self._turn_detection != "manual"
@@ -3188,7 +3189,7 @@ class AgentActivity(RecognitionHooks):
             and self._current_speech.allow_interruptions
             and not self._current_speech.interrupted
             and self._session.options.interruption["min_words"] > 0
-            and not (self._realtime_input_mode == "text" and not info.new_transcript.strip())
+            and bool(info.new_transcript.strip())
             and len(split_words(info.new_transcript, split_character=True))
             < self._session.options.interruption["min_words"]
         ):
