@@ -62,7 +62,7 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3"]
+SarvamSTTModels = Literal["saaras:v3"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 # Valid mode values (single source of truth)
@@ -70,10 +70,7 @@ ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "c
 
 
 class SpeechToTextLanguage(str, Enum):
-    """Languages supported for STT.
-
-    saarika:v2.5 supports only a subset; saaras:v3 supports all.
-    """
+    """Languages supported for STT."""
 
     UNKNOWN = "unknown"
     HI_IN = "hi-IN"
@@ -87,7 +84,6 @@ class SpeechToTextLanguage(str, Enum):
     TE_IN = "te-IN"
     EN_IN = "en-IN"
     GU_IN = "gu-IN"
-    # saaras:v3-only languages (saarika:v2.5 raises error if requested)
     ASSAMESE = "as-IN"
     URDU = "ur-IN"
     NEPALI = "ne-IN"
@@ -103,20 +99,6 @@ class SpeechToTextLanguage(str, Enum):
 
 
 SAARAS_V3_LANGUAGES = {lang.value for lang in SpeechToTextLanguage}
-SAARIKA_V25_LANGUAGES: set[str] = {
-    SpeechToTextLanguage.UNKNOWN.value,
-    SpeechToTextLanguage.HI_IN.value,
-    SpeechToTextLanguage.BN_IN.value,
-    SpeechToTextLanguage.KN_IN.value,
-    SpeechToTextLanguage.ML_IN.value,
-    SpeechToTextLanguage.MR_IN.value,
-    SpeechToTextLanguage.OD_IN.value,
-    SpeechToTextLanguage.PA_IN.value,
-    SpeechToTextLanguage.TA_IN.value,
-    SpeechToTextLanguage.TE_IN.value,
-    SpeechToTextLanguage.EN_IN.value,
-    SpeechToTextLanguage.GU_IN.value,
-}
 
 
 @dataclass(frozen=True)
@@ -147,28 +129,6 @@ class ModelConfig:
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "saarika:v2.5": ModelConfig(
-        supports_prompt=False,
-        supports_mode=False,
-        supports_language=True,
-        supports_vad_params=False,
-        default_language="unknown",
-        default_mode=None,
-        use_translate_endpoint=False,
-        use_translate_method=False,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
-    ),
-    "saaras:v2.5": ModelConfig(
-        supports_prompt=True,
-        supports_mode=False,
-        supports_language=False,
-        supports_vad_params=False,
-        default_language=None,
-        default_mode=None,
-        use_translate_endpoint=True,
-        use_translate_method=True,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
-    ),
     "saaras:v3": ModelConfig(
         supports_prompt=False,
         supports_mode=True,
@@ -294,7 +254,7 @@ class SarvamSTTOptions:
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     api_key: str
-    model: SarvamSTTModels | str = "saarika:v2.5"
+    model: SarvamSTTModels | str = "saaras:v3"
     mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
@@ -489,7 +449,7 @@ class STT(stt.STT):
         self,
         *,
         language: str = "en-IN",
-        model: SarvamSTTModels | str = "saarika:v2.5",
+        model: SarvamSTTModels | str = "saaras:v3",
         mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
@@ -656,9 +616,7 @@ class STT(stt.STT):
         form_data = aiohttp.FormData()
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
 
-        # Add model and language_code to the form data if specified
-        # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
-        # Model is also optional, defaults to saarika:v2.5
+        # Add model and language_code to the form data
         if opts_language:
             form_data.add_field("language_code", opts_language)
         if opts_model:
