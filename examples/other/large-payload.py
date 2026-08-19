@@ -79,7 +79,7 @@ class PayloadReceiver:
             payload = await read_large_payload_stream(
                 reader,
                 max_bytes=MAX_PAYLOAD_BYTES,
-                expected_size=int(expected_size) if expected_size else None,
+                expected_size=int(expected_size) if expected_size is not None else None,
                 expected_sha256=attributes.get(ATTR_PAYLOAD_SHA256),
             )
             logger.info(
