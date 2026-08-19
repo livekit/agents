@@ -88,6 +88,11 @@ def _is_mist_model(model: TTSModels | str) -> bool:
     return "mist" in model
 
 
+def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
+    if is_given(model) and model == "arcana":
+        logger.warning('Rime Arcana is no longer supported. Use model="coda" instead.')
+
+
 def _timeout_for_model(model: TTSModels | str) -> int:
     if model == "coda":
         return CODA_MODEL_TIMEOUT
@@ -187,6 +192,7 @@ class TTS(tts.TTS):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
+        _warn_if_arcana(model)
         if is_given(model):
             resolved_model = model
             model_is_explicit = True
@@ -348,6 +354,7 @@ class TTS(tts.TTS):
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        _warn_if_arcana(model)
         effective_model = model if is_given(model) else self._opts.model
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
