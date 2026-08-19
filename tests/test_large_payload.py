@@ -400,3 +400,39 @@ def test_parse_large_payload_descriptor_rejects_missing_required_fields() -> Non
 
     with pytest.raises(LargePayloadError, match="'id'"):
         parse_large_payload_descriptor(payload)
+
+
+def test_parse_large_payload_descriptor_rejects_missing_stream_location() -> None:
+    payload = json.dumps(
+        {
+            "type": DESCRIPTOR_TYPE,
+            "version": 1,
+            "id": "payload-5",
+            "transfer": "byte_stream",
+            "topic": "generic",
+            "size": 1,
+            "sha256": "digest",
+            "content_type": "application/octet-stream",
+        }
+    )
+
+    with pytest.raises(LargePayloadError, match="stream_topic"):
+        parse_large_payload_descriptor(payload)
+
+
+def test_parse_large_payload_descriptor_rejects_missing_inline_data() -> None:
+    payload = json.dumps(
+        {
+            "type": DESCRIPTOR_TYPE,
+            "version": 1,
+            "id": "payload-6",
+            "transfer": "inline",
+            "topic": "generic",
+            "size": 1,
+            "sha256": "digest",
+            "content_type": "application/octet-stream",
+        }
+    )
+
+    with pytest.raises(LargePayloadError, match="'data'"):
+        parse_large_payload_descriptor(payload)

@@ -134,6 +134,19 @@ class LargePayloadDescriptor:
             else None
         )
 
+        stream_topic = _optional_str(descriptor, "stream_topic")
+        stream_name = _optional_str(descriptor, "stream_name")
+        data = _optional_str(descriptor, "data")
+        if transfer == "byte_stream" and (not stream_topic or not stream_name):
+            raise LargePayloadError(
+                "large payload descriptor must include 'stream_topic' and 'stream_name' "
+                "for byte_stream transfer"
+            )
+        if transfer == "inline" and data is None:
+            raise LargePayloadError(
+                "large payload descriptor must include 'data' for inline transfer"
+            )
+
         return cls(
             payload_id=payload_id,
             topic=topic,
@@ -141,9 +154,9 @@ class LargePayloadDescriptor:
             size=size,
             sha256=sha256,
             content_type=content_type,
-            stream_topic=_optional_str(descriptor, "stream_topic"),
-            stream_name=_optional_str(descriptor, "stream_name"),
-            data=_optional_str(descriptor, "data"),
+            stream_topic=stream_topic,
+            stream_name=stream_name,
+            data=data,
             attributes=attributes,
         )
 
