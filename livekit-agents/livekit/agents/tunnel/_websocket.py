@@ -30,11 +30,11 @@ from ._base import CHUNK, ByteStream, Tunnel
 if TYPE_CHECKING:
     from aiohttp import web
 
-    # the edge half runs on a server websocket, the worker half on a client one
+    # the controller half runs on a server websocket, the worker half on a client one
     _WebSocket = aiohttp.ClientWebSocketResponse | web.WebSocketResponse
 
 TUNNEL_PATH = "/agent-http-tunnel"
-"""Where the edge accepts a wire."""
+"""Where the controller accepts a wire."""
 
 _TOKEN_TTL = datetime.timedelta(hours=6)
 """Life of a wire's token. Minted per dial, so a redial always carries a fresh one."""
@@ -95,7 +95,7 @@ class Mux:
 
     @property
     def open_streams(self) -> int:
-        """Streams alive on this wire, which is what the edge balances on."""
+        """Streams alive on this wire, which is what the controller balances on."""
         return len(self._inbox)
 
     async def start(self) -> None:
@@ -398,7 +398,7 @@ class WebSocketTunnel(Tunnel):
         self._session = aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(limit=0, limit_per_host=0)
         )
-        # an unreachable edge is the caller's problem, not a retry
+        # an unreachable controller is the caller's problem, not a retry
         muxes = await asyncio.gather(*(self._dial() for _ in range(self._wire_target)))
         for mux in muxes:
             wire = _Wire(mux=mux)
@@ -487,7 +487,7 @@ class WebSocketTunnel(Tunnel):
 
 
 def _tunnel_url(ws_url: str) -> str:
-    """Where the edge accepts a wire, from the url the worker was given."""
+    """Where the controller accepts a wire, from the url the worker was given."""
     if ws_url.startswith(("http://", "https://")):
         ws_url = ws_url.replace("http", "ws", 1)
     return ws_url.rstrip("/") + TUNNEL_PATH
