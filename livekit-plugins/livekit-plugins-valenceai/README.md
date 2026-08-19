@@ -140,28 +140,31 @@ client = ValenceWebSocketClient(
 )
 
 await client.connect()
+await client.start_streaming()
 
-# Process audio
-emotions = await client.process_audio(audio_samples, sample_rate=48000)
+# Stream audio frames as they arrive
+await client.send_audio_chunk(audio_data, sample_rate=48000, samples_per_channel=960)
+
+# Predictions arrive asynchronously (~every 5s of audio); read without blocking
+emotions = await client.get_latest_emotion()
 print(f"Detected: {emotions['dominant']} ({emotions['confidence']:.1%})")
 
+await client.stop_streaming()
 await client.disconnect()
 ```
 
 ## How It Works
 
-1. **Audio Buffering**: Audio frames are buffered as they arrive from the user
-2. **Parallel Processing**: Audio is forwarded to the underlying STT while being buffered
-3. **Emotion Detection**: When a final transcript arrives, buffered audio is sent to Valence AI
-4. **Enrichment**: The transcript is enriched with the detected emotion tag
-5. **Delivery**: The emotion-tagged transcript is forwarded to your LLM
+1. **Continuous Streaming**: Each audio frame is forwarded to the underlying STT and, in parallel, streamed to Valence AI through an ordered sender
+2. **Asynchronous Predictions**: Valence emits an emotion prediction roughly every 5 seconds of audio; predictions are stored locally with audio-position timestamps
+3. **Enrichment**: When the underlying STT emits a final transcript, each sentence is tagged with the stored prediction closest to its audio time range — an instant local lookup, never a blocking network call
+4. **Delivery**: The emotion-tagged transcript is forwarded to your LLM
 
 ```
-User Audio → [Buffer] → Underlying STT → Transcript
-                ↓
-           Valence AI → Emotion
-                ↓
-        [Emotion] + Transcript → LLM
+User Audio ─┬─→ Underlying STT ──→ Final Transcript ─┐
+            │                                        ├─→ [Emotion] Transcript → LLM
+            └─→ Valence AI ──→ Timestamped ──────────┘
+                               Predictions
 ```
 
 ## API Reference
@@ -202,7 +205,10 @@ valenceai.ValenceWebSocketClient(
 
 - `connect()` - Connect to Valence WebSocket server (with retry logic)
 - `disconnect()` - Disconnect from the server
-- `process_audio(audio_samples, sample_rate, timeout)` - Send audio and get emotion prediction
+- `start_streaming()` / `stop_streaming()` - Begin/end a streaming session
+- `send_audio_chunk(audio_data, sample_rate, samples_per_channel)` - Stream one audio frame
+- `get_latest_emotion()` - Most recent prediction, non-blocking
+- `get_emotion_for_timerange(start_ms, end_ms)` - Prediction closest to an audio time range, non-blocking
 - `is_connected` - Property indicating connection status
 - `latest_emotion` - Property with the most recent emotion prediction
 
@@ -212,8 +218,13 @@ The plugin handles errors gracefully:
 
 - **No API key**: Raises `ValueError` at initialization — set `VALENCE_API_KEY` env var or pass `api_key` directly
 - **Connection failure**: Retries with exponential backoff (max 3 attempts)
-- **Timeout**: Uses last known emotion, logs warning
+- **No prediction yet**: Falls back to `[Neutral]` until the first prediction arrives
 - **Processing error**: Logs error, returns plain transcription
+
+Note: emotion enrichment applies to streaming recognition (`stream()`), which is
+what `AgentSession` uses. Batch `recognize()` returns the underlying STT's
+transcription unchanged, since the Valence API needs ~5s of accumulated audio
+per prediction.
 
 ## Learn More
 

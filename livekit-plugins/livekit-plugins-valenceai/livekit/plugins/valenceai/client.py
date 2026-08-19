@@ -41,13 +41,10 @@ class ValenceWebSocketClient:
     This client maintains a persistent WebSocket connection to the Valence API
     and continuously streams audio for real-time emotion detection.
 
-    Supports two modes:
-    - **Continuous streaming** (preferred): Call `start_streaming()`, then
-      `send_audio_chunk()` for each frame. Predictions arrive asynchronously
-      and are stored with timestamps. Use `get_latest_emotion()` or
-      `get_emotion_for_timerange()` to retrieve predictions without blocking.
-    - **Batch** (legacy): Call `process_audio()` with a full audio buffer
-      and wait for the prediction synchronously.
+    Usage: call `start_streaming()`, then `send_audio_chunk()` for each frame.
+    Predictions arrive asynchronously and are stored with timestamps. Use
+    `get_latest_emotion()` or `get_emotion_for_timerange()` to retrieve
+    predictions without blocking.
 
     Args:
         api_key: Your Valence AI API key.
@@ -71,8 +68,6 @@ class ValenceWebSocketClient:
             "confidence": 0.0,
             "all_emotions": {},
         }
-        # Legacy batch mode support
-        self._prediction_event: asyncio.Event | None = None
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 3
 
@@ -159,10 +154,6 @@ class ValenceWebSocketClient:
                     f"emotion={emotion_entry['dominant']} "
                     f"confidence={emotion_entry['confidence']:.1%}"
                 )
-
-            # Wake up legacy batch waiters
-            if self._prediction_event:
-                self._prediction_event.set()
 
         @self._sio.on("error")  # type: ignore[untyped-decorator]
         async def on_error(error: dict) -> None:
@@ -329,76 +320,3 @@ class ValenceWebSocketClient:
                 "all_emotions": closest["all_emotions"],
                 "timestamp_ms": closest["timestamp_ms"],
             }
-
-    # ── Legacy batch mode ────────────────────────────────────────────────
-
-    async def process_audio(
-        self,
-        audio_samples: np.ndarray,
-        sample_rate: int = 48000,
-        timeout: float = 7.0,
-    ) -> dict:
-        """Send audio samples to Valence API and wait for a prediction.
-
-        This is the legacy batch method. Prefer continuous streaming mode
-        (start_streaming / send_audio_chunk / get_latest_emotion) for
-        real-time use cases.
-
-        Args:
-            audio_samples: numpy array of int16 PCM audio samples.
-            sample_rate: Sample rate of the audio (default 48000 for LiveKit).
-            timeout: Max seconds to wait for prediction response.
-
-        Returns:
-            dict: Emotion prediction containing 'dominant', 'confidence',
-                  and 'all_emotions' keys.
-        """
-        if not self._sio.connected:
-            logger.warning("Not connected to Valence API, skipping audio processing")
-            return self._latest_emotion
-
-        try:
-            # Ensure audio is int16
-            if audio_samples.dtype != np.int16:
-                if audio_samples.dtype in [np.float32, np.float64]:
-                    audio_samples = (audio_samples * 32767).astype(np.int16)
-                else:
-                    audio_samples = audio_samples.astype(np.int16)
-
-            # Convert to base64
-            audio_bytes = audio_samples.tobytes()
-            base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-
-            # Calculate audio duration for logging
-            duration_ms = (len(audio_samples) / sample_rate) * 1000
-
-            # Send to Valence API
-            message = {
-                "service": "emotion",
-                "action": "prediction",
-                "model": self._model,
-                "sample_rate": sample_rate,
-                "payload": base64_audio,
-            }
-
-            # Create event to wait for prediction
-            self._prediction_event = asyncio.Event()
-
-            logger.debug(f"Sending audio: {len(audio_samples)} samples ({duration_ms:.0f}ms)")
-            await self._sio.emit("message", json.dumps(message))
-
-            # Wait for prediction response with timeout
-            try:
-                await asyncio.wait_for(self._prediction_event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"Prediction timeout after {timeout}s, "
-                    f"using last known emotion: {self._latest_emotion['dominant']}"
-                )
-            finally:
-                self._prediction_event = None
-
-        except Exception as e:
-            logger.error(f"Audio processing error: {e}", exc_info=True)
-
-        return self._latest_emotion

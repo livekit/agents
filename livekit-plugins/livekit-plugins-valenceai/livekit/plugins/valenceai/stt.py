@@ -44,8 +44,6 @@ import re
 import time
 from typing import Literal
 
-import numpy as np
-
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, stt
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
@@ -111,7 +109,7 @@ class STT(stt.STT):
     def _create_client(self) -> ValenceWebSocketClient:
         """Create a new Valence client.
 
-        Each stream (and each batch recognize call) owns its own client so that
+        Each stream owns its own client so that
         concurrent streams never share connection state: one Valence connection
         maps to one server-side audio session, and the per-session emotion
         history and audio clock must not be reset by another stream starting.
@@ -162,9 +160,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        """Recognize speech from an audio buffer with emotion awareness.
+        """Recognize speech from an audio buffer.
 
-        Uses the legacy batch process_audio() method with a 7s timeout.
+        Batch recognition delegates to the underlying STT without emotion
+        enrichment: the Valence API only produces a prediction after ~5s of
+        accumulated audio, so per-utterance batch requests would either stall
+        the response or time out. Emotion tags are added on the streaming
+        path (see stream()).
 
         Args:
             buffer: Audio buffer to recognize.
@@ -172,115 +174,11 @@ class STT(stt.STT):
             conn_options: API connection options.
 
         Returns:
-            SpeechEvent: Recognition result with emotion-enriched text.
+            SpeechEvent: Recognition result from the underlying STT.
         """
-        # Get transcription from underlying STT
-        result = await self._underlying_stt.recognize(
+        return await self._underlying_stt.recognize(
             buffer, language=language, conn_options=conn_options
         )
-
-        # This path owns a short-lived client; if Valence is unavailable the
-        # plain transcription is returned unchanged.
-        valence_client = self._create_client()
-        try:
-            await valence_client.connect()
-        except Exception as e:
-            logger.error(f"Failed to connect to Valence: {e}")
-            return result
-
-        try:
-            # Combine frames if buffer is a list of AudioFrames
-            combined = rtc.combine_audio_frames(buffer) if isinstance(buffer, list) else buffer
-            samples = np.frombuffer(combined.data, dtype=np.int16)
-
-            # Enrich the transcription with emotions per sentence
-            if result.alternatives:
-                new_alternatives = []
-                for alt in result.alternatives:
-                    enriched_text = await self._enrich_text_with_emotions(
-                        valence_client, alt.text, samples, combined.sample_rate
-                    )
-                    new_alternatives.append(
-                        stt.SpeechData(
-                            language=alt.language,
-                            text=enriched_text,
-                            start_time=alt.start_time,
-                            end_time=alt.end_time,
-                            confidence=alt.confidence,
-                            speaker_id=alt.speaker_id,
-                            is_primary_speaker=alt.is_primary_speaker,
-                        )
-                    )
-                result = stt.SpeechEvent(
-                    type=result.type,
-                    request_id=result.request_id,
-                    alternatives=new_alternatives,
-                    recognition_usage=result.recognition_usage,
-                )
-
-        except Exception as e:
-            logger.error(f"Error detecting emotion: {e}")
-        finally:
-            await valence_client.disconnect()
-
-        return result
-
-    async def _enrich_text_with_emotions(
-        self,
-        valence_client: ValenceWebSocketClient,
-        text: str,
-        samples: np.ndarray,
-        sample_rate: int,
-    ) -> str:
-        """Enrich text with per-sentence emotion tags (legacy batch path)."""
-        if not text.strip():
-            return text
-
-        sentences = split_into_sentences(text)
-        if not sentences:
-            return text
-
-        # If only one sentence, detect emotion for the whole audio
-        if len(sentences) == 1:
-            emotions = await valence_client.process_audio(samples, sample_rate)
-            emotion = emotions.get("dominant", "neutral")
-            confidence = emotions.get("confidence", 0.0)
-            if confidence >= self._min_confidence:
-                return f"[{emotion.capitalize()}] {sentences[0]}"
-            return f"[Neutral] {sentences[0]}"
-
-        # Multiple sentences - divide audio proportionally by character count
-        total_chars = sum(len(s) for s in sentences)
-        total_samples = len(samples)
-
-        enriched_parts = []
-        sample_offset = 0
-
-        for sentence in sentences:
-            char_ratio = len(sentence) / total_chars
-            segment_samples = int(total_samples * char_ratio)
-
-            segment_end = min(sample_offset + segment_samples, total_samples)
-            audio_segment = samples[sample_offset:segment_end]
-            sample_offset = segment_end
-
-            if len(audio_segment) >= 1600:  # Minimum ~33ms at 48kHz
-                try:
-                    emotions = await valence_client.process_audio(audio_segment, sample_rate)
-                    emotion = emotions.get("dominant", "neutral")
-                    confidence = emotions.get("confidence", 0.0)
-
-                    if confidence >= self._min_confidence:
-                        enriched_parts.append(f"[{emotion.capitalize()}] {sentence}")
-                    else:
-                        enriched_parts.append(f"[Neutral] {sentence}")
-                except Exception as e:
-                    logger.error(f"Error detecting emotion for sentence: {e}")
-                    enriched_parts.append(f"[Neutral] {sentence}")
-            else:
-                enriched_parts.append(f"[Neutral] {sentence}")
-
-        return " ".join(enriched_parts)
 
     async def aclose(self) -> None:
         """Close the STT and cleanup resources."""
