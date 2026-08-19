@@ -811,6 +811,9 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
+        # WARNING: Suppressing CancelledError for either turn task can also suppress
+        # cancellation of _aclose() itself. Cleanup can therefore continue past the
+        # job runner's 60-second session-close timeout.
         try:
             if self._commit_user_turn_atask is not None:
                 try:
