@@ -1,18 +1,39 @@
 import asyncio
 import time
+from collections.abc import Iterator
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, llm, utils
+from livekit.agents.telemetry import set_tracer_provider, tracer
 from livekit.agents.voice.events import ConversationItemAddedEvent
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
-async def test_realtime_response_id_is_available_on_assistant_message() -> None:
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
+
+
+async def test_realtime_request_ids_are_available_on_message_and_span(
+    span_exporter: InMemorySpanExporter,
+) -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     conversation_events: list[ConversationItemAddedEvent] = []
 
@@ -51,6 +72,7 @@ async def test_realtime_response_id_is_available_on_assistant_message() -> None:
                 function_stream=function_ch,
                 user_initiated=True,
                 response_id="provider-response-id",
+                provider_request_ids=["provider-connection-id", "client-connection-id"],
             )
         )
         await speech_handle
@@ -61,7 +83,18 @@ async def test_realtime_response_id_is_available_on_assistant_message() -> None:
         if event.item.type == "message" and event.item.role == "assistant"
     ]
     assert len(assistant_messages) == 1
-    assert assistant_messages[0].metrics["provider_request_ids"] == ["provider-response-id"]
+    expected_request_ids = [
+        "provider-response-id",
+        "provider-connection-id",
+        "client-connection-id",
+    ]
+    assert assistant_messages[0].metrics["provider_request_ids"] == expected_request_ids
+
+    agent_turn_spans = [
+        span for span in span_exporter.get_finished_spans() if span.name == "agent_turn"
+    ]
+    assert len(agent_turn_spans) == 1
+    assert agent_turn_spans[0].attributes["lk.provider_request_ids"] == tuple(expected_request_ids)
 
 
 async def _transcribed_user_messages(

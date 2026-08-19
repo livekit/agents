@@ -3830,6 +3830,14 @@ class AgentActivity(RecognitionHooks):
                 trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.llm.model,
             }
         )
+        provider_request_ids: list[str] = []
+        if generation_ev.response_id:
+            provider_request_ids.append(generation_ev.response_id)
+        for request_id in generation_ev.provider_request_ids:
+            if request_id and request_id not in provider_request_ids:
+                provider_request_ids.append(request_id)
+        if provider_request_ids:
+            current_span.set_attribute(trace_types.ATTR_PROVIDER_REQUEST_IDS, provider_request_ids)
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = current_span
 
@@ -4068,8 +4076,8 @@ class AgentActivity(RecognitionHooks):
         ) -> llm.ChatMessage:
             assistant_metrics: llm.MetricsReport = {}
 
-            if generation_ev.response_id:
-                assistant_metrics["provider_request_ids"] = [generation_ev.response_id]
+            if provider_request_ids:
+                assistant_metrics["provider_request_ids"] = provider_request_ids
 
             if stopped_speaking_at and started_speaking_at:
                 assistant_metrics["started_speaking_at"] = started_speaking_at

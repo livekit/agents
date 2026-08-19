@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import time
+import uuid
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -862,6 +863,9 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
+    _openai_request_id: str | None = None
+    _openai_client_request_id: str | None = None
+
     def __init__(
         self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
     ) -> None:
@@ -879,6 +883,8 @@ class RealtimeSession(
         self._instructions: str | None = None
         # set on aclose; trailing server events are ignored while it's set
         self._closing = False
+        self._openai_request_id = None
+        self._openai_client_request_id = None
         self._main_atask = asyncio.create_task(self._main_task(), name="RealtimeSession._main_task")
         self.send_event(self._create_session_update_event())
 
@@ -925,6 +931,23 @@ class RealtimeSession(
         # value cannot, because a late transcript would consume the next turn's value.
         self._input_speech_started_at: dict[str, float] = {}
 
+    def _connection_request_ids(self) -> list[str]:
+        return [
+            request_id
+            for request_id in (self._openai_request_id, self._openai_client_request_id)
+            if request_id
+        ]
+
+    def _connection_log_fields(self) -> dict[str, str | list[str]]:
+        fields: dict[str, str | list[str]] = {
+            "provider_request_ids": self._connection_request_ids()
+        }
+        if self._openai_request_id:
+            fields["request_id"] = self._openai_request_id
+        if self._openai_client_request_id:
+            fields["client_request_id"] = self._openai_client_request_id
+        return fields
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         num_retries: int = 0
@@ -933,7 +956,10 @@ class RealtimeSession(
         async def _reconnect() -> None:
             logger.debug(
                 f"reconnecting to {self._realtime_model._provider_label}",
-                extra={"max_session_duration": self._opts.max_session_duration},
+                extra={
+                    "max_session_duration": self._opts.max_session_duration,
+                    **self._connection_log_fields(),
+                },
             )
 
             events: list[RealtimeClientEvent | dict[str, Any]] = []
@@ -990,7 +1016,10 @@ class RealtimeSession(
             self._discarded_event_ids.clear()
             self._close_current_generation("session reconnection")
 
-            logger.debug(f"reconnected to {self._realtime_model._provider_label}")
+            logger.debug(
+                f"reconnected to {self._realtime_model._provider_label}",
+                extra=self._connection_log_fields(),
+            )
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
         reconnecting = False
@@ -1019,7 +1048,11 @@ class RealtimeSession(
                         logger.warning(
                             f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
                             exc_info=e,
-                            extra={"attempt": num_retries, "max_retries": max_retries},
+                            extra={
+                                "attempt": num_retries,
+                                "max_retries": max_retries,
+                                **self._connection_log_fields(),
+                            },
                         )
                         await asyncio.sleep(retry_interval)
                     num_retries += 1
@@ -1042,6 +1075,8 @@ class RealtimeSession(
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"User-Agent": "LiveKit Agents"}
+        self._openai_request_id = None
+        self._openai_client_request_id = None
         if self._opts.is_azure:
             if self._opts.entra_token:
                 headers["Authorization"] = f"Bearer {self._opts.entra_token}"
@@ -1050,6 +1085,8 @@ class RealtimeSession(
                 headers["api-key"] = self._opts.api_key
         else:
             headers["Authorization"] = f"Bearer {self._opts.api_key}"
+            self._openai_client_request_id = str(uuid.uuid4())
+            headers["X-Client-Request-Id"] = self._openai_client_request_id
 
         url = process_base_url(
             self._opts.base_url,
@@ -1068,9 +1105,15 @@ class RealtimeSession(
                 self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
                 self._opts.conn_options.timeout,
             )
+            # aiohttp does not expose WebSocket upgrade headers publicly.
+            response = getattr(ws, "_response", None)
+            if response is not None:
+                self._openai_request_id = response.headers.get("x-request-id")
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
         except aiohttp.ClientError as e:
+            if isinstance(e, aiohttp.ClientResponseError) and e.headers:
+                self._openai_request_id = e.headers.get("x-request-id")
             raise APIConnectionError(
                 f"{self._realtime_model._provider_label} client connection error"
             ) from e
@@ -1860,6 +1903,7 @@ class RealtimeSession(
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
             response_id=event.response.id,
+            provider_request_ids=self._connection_request_ids(),
         )
 
         if client_event_id and (fut := self._response_created_futures.pop(client_event_id, None)):
@@ -2298,7 +2342,7 @@ class RealtimeSession(
         provider_label = self._realtime_model._provider_label
         logger.error(
             f"{provider_label} returned an error: {event.error}",
-            extra={"error": event.error},
+            extra={"error": event.error, **self._connection_log_fields()},
         )
         recoverable = not _is_fatal_error(event.error)
         error = APIError(
@@ -2324,5 +2368,6 @@ class RealtimeSession(
                 label=self._realtime_model._label,
                 error=error,
                 recoverable=recoverable,
+                provider_request_ids=self._connection_request_ids(),
             ),
         )

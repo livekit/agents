@@ -4,7 +4,9 @@ import asyncio
 import logging
 from types import SimpleNamespace
 from typing import cast
+from uuid import UUID
 
+import aiohttp
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
 from openai.types.realtime import (
@@ -15,7 +17,7 @@ from openai.types.realtime import (
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
-from livekit.agents._exceptions import APIError
+from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime.realtime_model import (
@@ -25,6 +27,72 @@ from livekit.plugins.openai.realtime.realtime_model import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+async def test_websocket_connection_exposes_openai_request_ids() -> None:
+    captured_headers: dict[str, str] = {}
+    ws = SimpleNamespace(_response=SimpleNamespace(headers={"x-request-id": "req_server"}))
+
+    class _HTTPSession:
+        async def ws_connect(self, *, url: str, headers: dict[str, str]) -> object:
+            captured_headers.update(headers)
+            return ws
+
+    model = RealtimeModel(api_key="fake")
+    model._http_session = cast("aiohttp.ClientSession", _HTTPSession())
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = model
+    session._opts = model._opts
+    session._report_connection_acquired = lambda _: None  # type: ignore[method-assign]
+    session._openai_request_id = None
+    session._openai_client_request_id = None
+
+    assert await session._create_ws_conn() is ws
+
+    client_request_id = captured_headers["X-Client-Request-Id"]
+    assert str(UUID(client_request_id)) == client_request_id
+    assert session._connection_request_ids() == ["req_server", client_request_id]
+
+
+async def test_failed_websocket_handshake_exposes_openai_request_ids() -> None:
+    captured_headers: dict[str, str] = {}
+
+    class _HTTPSession:
+        async def ws_connect(self, *, url: str, headers: dict[str, str]) -> object:
+            captured_headers.update(headers)
+            raise aiohttp.WSServerHandshakeError(
+                None,
+                (),
+                status=500,
+                headers={"x-request-id": "req_failed"},
+            )
+
+    model = RealtimeModel(api_key="fake")
+    model._http_session = cast("aiohttp.ClientSession", _HTTPSession())
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = model
+    session._opts = model._opts
+
+    with pytest.raises(APIConnectionError):
+        await session._create_ws_conn()
+
+    assert session._connection_request_ids() == [
+        "req_failed",
+        captured_headers["X-Client-Request-Id"],
+    ]
+
+
+def test_realtime_error_exposes_openai_request_ids() -> None:
+    captured: list[llm.RealtimeModelError] = []
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = SimpleNamespace(_label="openai")  # type: ignore[assignment]
+    session._openai_request_id = "req_server"
+    session._openai_client_request_id = "req_client"
+    session.emit = lambda _, event: captured.append(event)  # type: ignore[method-assign]
+
+    RealtimeSession._emit_error(session, RuntimeError("disconnected"), recoverable=True)
+
+    assert captured[0].provider_request_ids == ["req_server", "req_client"]
 
 
 def test_update_options_only_propagates_given_turn_detection() -> None:
@@ -171,6 +239,7 @@ def _handle_error_session(
             _opts=SimpleNamespace(turn_detection=turn_detection),
             _chat_ctx_event_futures={},
             _response_created_futures={},
+            _connection_log_fields=lambda: {},
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -336,6 +405,8 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     session._item_create_future = {}
     session._chat_ctx_event_futures = {}
     session._response_created_futures = {}
+    session._openai_request_id = None
+    session._openai_client_request_id = None
     sent: list[ConversationItemCreateEvent] = []
     session.send_event = sent.append  # type: ignore[method-assign,assignment]
     errors: list[llm.RealtimeModelError] = []
