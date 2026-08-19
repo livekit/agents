@@ -39,6 +39,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import re
 import time
@@ -105,6 +106,11 @@ class STT(stt.STT):
         self._server_url = server_url
         self._model = model
         self._min_confidence = min_confidence
+
+        # The underlying provider emits its own recognize metrics for every
+        # attempt; skip the wrapper's duplicate emission (same approach as
+        # stt.FallbackAdapter).
+        self._recognize_metrics_needed = False
 
     def _create_client(self) -> ValenceWebSocketClient:
         """Create a new Valence client.
@@ -176,8 +182,13 @@ class STT(stt.STT):
         Returns:
             SpeechEvent: Recognition result from the underlying STT.
         """
+        # The base class already retries _recognize_impl per conn_options, so
+        # give the underlying provider a single attempt per call — otherwise
+        # the retry loops nest and multiply (e.g. 4 x 4 = 16 attempts).
         return await self._underlying_stt.recognize(
-            buffer, language=language, conn_options=conn_options
+            buffer,
+            language=language,
+            conn_options=dataclasses.replace(conn_options, max_retry=0),
         )
 
     async def aclose(self) -> None:
