@@ -3600,7 +3600,10 @@ class AgentActivity(RecognitionHooks):
         return instructions
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
-        """Resolve the session's expressive setting. Returns None if disabled.
+        """Resolve the effective expressive setting. Returns None if disabled.
+
+        The agent's ``expressive`` overrides the session's when set, matching how the
+        agent's ``llm``/``tts`` override the session models.
 
         Expressive mode requires two things:
         - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
@@ -3617,7 +3620,11 @@ class AgentActivity(RecognitionHooks):
         if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
             return None
 
-        expr = self._session._expressive
+        expr = (
+            self._agent.expressive
+            if is_given(self._agent.expressive)
+            else self._session._expressive
+        )
         if not expr and not isinstance(expr, dict):
             return None
         # speech_steering renders per-provider delivery guidelines on top of the

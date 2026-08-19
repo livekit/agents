@@ -15,6 +15,7 @@ from typing import (
     Literal,
     Protocol,
     TypeVar,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -208,7 +209,8 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``.
+    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
+    or ``Agent(expressive=...)`` (the agent value overrides the session's).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:
@@ -473,6 +475,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 transcript. Pass an :class:`ExpressiveOptions` dict to steer or override
                 the injected instructions. Requires ``livekit.agents.inference.TTS`` with
                 a model that declares a markup dialect; it stays off otherwise.
+                An ``expressive`` set on the active :class:`Agent` overrides this value.
                 Default ``False``.
             ivr_detection (bool): Whether to detect if the agent is interacting with an IVR system.
                 Default ``False``.
@@ -1338,6 +1341,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -1351,9 +1355,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 when the user has finished speaking. ``None`` reverts to automatic selection.
             keyterms (NotGivenOr[list[str]], optional): Replace the user-defined keyterms applied
                 to the STT. Auto-detected keyterms are left untouched.
+            expressive (NotGivenOr[bool | ExpressiveOptions], optional): Turn expressive TTS
+                delivery on/off or change its options mid-session. Takes effect on the
+                next reply. An ``expressive`` set on the active :class:`Agent` overrides the
+                session value. When a turn runs with expressive off, markup left in past
+                assistant messages is stripped from the chat history so the LLM doesn't
+                imitate tags nothing downstream converts.
             min_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
             max_endpointing_delay: Deprecated, use ``endpointing_opts`` instead.
         """
+        if is_given(expressive):
+            # mypy can't narrow NotGiven out of the TypedDict union here
+            self._expressive = cast("bool | ExpressiveOptions", expressive)
         if is_given(keyterms):
             self._keyterm_detector.set_static_keyterms(keyterms)
         if is_given(min_endpointing_delay) or is_given(max_endpointing_delay):
