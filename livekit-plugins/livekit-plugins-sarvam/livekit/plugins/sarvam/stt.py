@@ -62,7 +62,7 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3"]
+SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3", "saaras:v4"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 # Valid mode values (single source of truth)
@@ -72,7 +72,7 @@ ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "c
 class SpeechToTextLanguage(str, Enum):
     """Languages supported for STT.
 
-    saarika:v2.5 supports only a subset; saaras:v3 supports all.
+    saarika:v2.5 supports only a subset; saaras:v3 and saaras:v4 support all.
     """
 
     UNKNOWN = "unknown"
@@ -87,7 +87,7 @@ class SpeechToTextLanguage(str, Enum):
     TE_IN = "te-IN"
     EN_IN = "en-IN"
     GU_IN = "gu-IN"
-    # saaras:v3-only languages (saarika:v2.5 raises error if requested)
+    # saaras:v3/v4-only languages (saarika:v2.5 raises error if requested)
     ASSAMESE = "as-IN"
     URDU = "ur-IN"
     NEPALI = "ne-IN"
@@ -170,6 +170,17 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         allowed_languages=SAARIKA_V25_LANGUAGES,
     ),
     "saaras:v3": ModelConfig(
+        supports_prompt=False,
+        supports_mode=True,
+        supports_language=True,
+        supports_vad_params=True,
+        default_language="en-IN",
+        default_mode="transcribe",
+        use_translate_endpoint=False,
+        use_translate_method=False,
+        allowed_languages=SAARAS_V3_LANGUAGES,
+    ),
+    "saaras:v4": ModelConfig(
         supports_prompt=False,
         supports_mode=True,
         supports_language=True,
@@ -286,7 +297,7 @@ class SarvamSTTOptions:
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
@@ -294,7 +305,7 @@ class SarvamSTTOptions:
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     api_key: str
-    model: SarvamSTTModels | str = "saarika:v2.5"
+    model: SarvamSTTModels | str = "saaras:v4"
     mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
@@ -478,7 +489,7 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
@@ -489,7 +500,7 @@ class STT(stt.STT):
         self,
         *,
         language: str = "en-IN",
-        model: SarvamSTTModels | str = "saarika:v2.5",
+        model: SarvamSTTModels | str = "saaras:v4",
         mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
@@ -658,7 +669,7 @@ class STT(stt.STT):
 
         # Add model and language_code to the form data if specified
         # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
-        # Model is also optional, defaults to saarika:v2.5
+        # Model is also optional, defaults to saaras:v4
         if opts_language:
             form_data.add_field("language_code", opts_language)
         if opts_model:
