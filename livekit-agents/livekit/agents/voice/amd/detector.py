@@ -554,7 +554,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     "category": result.category.value,
                     "speech_duration": result.speech_duration,
                     "reason": result.reason,
-                    "transcript": result.transcript,
+                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
                     "delay": result.delay,
                 },
             )

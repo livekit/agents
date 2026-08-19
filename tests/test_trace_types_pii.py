@@ -24,7 +24,7 @@ pytestmark = pytest.mark.unit
 # case-insensitive ("lk.chatpii" doesn't match, "lk.PII.x" does).
 PII_SEGMENT_RE = re.compile(r"(^|\.)pii(\.|$)", re.IGNORECASE)
 
-SENSITIVE_LOG_FIELDS = frozenset(
+SENSITIVE_FIELDS = frozenset(
     {
         "arguments",
         "chat_ctx",
@@ -164,7 +164,7 @@ def test_safe_keys_match_declared_keys() -> None:
     )
 
 
-def test_sensitive_literal_log_fields_carry_pii_segment() -> None:
+def test_sensitive_literal_telemetry_fields_carry_pii_segment() -> None:
     repo_root = Path(__file__).parent.parent
     source_roots = [repo_root / "livekit-agents", repo_root / "livekit-plugins"]
     untagged: list[str] = []
@@ -173,25 +173,42 @@ def test_sensitive_literal_log_fields_carry_pii_segment() -> None:
         for path in source_root.rglob("*.py"):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
-                if not (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr
-                    in {"debug", "info", "warning", "error", "exception", "critical", "log"}
-                ):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                     continue
+
+                keyword_name: str | None = None
+                if node.func.attr in {
+                    "debug",
+                    "info",
+                    "warning",
+                    "error",
+                    "exception",
+                    "critical",
+                    "log",
+                }:
+                    keyword_name = "extra"
+                elif (
+                    node.func.attr == "add"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "tagger"
+                ):
+                    keyword_name = "metadata"
+
+                if keyword_name is None:
+                    continue
+
                 for keyword in node.keywords:
-                    if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                    if keyword.arg != keyword_name or not isinstance(keyword.value, ast.Dict):
                         continue
                     for key in keyword.value.keys:
                         if not (
                             isinstance(key, ast.Constant)
                             and isinstance(key.value, str)
-                            and key.value.rsplit(".", 1)[-1] in SENSITIVE_LOG_FIELDS
+                            and key.value.rsplit(".", 1)[-1] in SENSITIVE_FIELDS
                             and not PII_SEGMENT_RE.search(key.value)
                         ):
                             continue
                         relative_path = path.relative_to(repo_root)
                         untagged.append(f"{relative_path}:{node.lineno}: {key.value}")
 
-    assert not untagged, f"content-bearing log fields missing pii segment: {untagged}"
+    assert not untagged, f"content-bearing telemetry fields missing pii segment: {untagged}"
