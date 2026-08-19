@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import socket
 from collections.abc import Generator
 from typing import TYPE_CHECKING
@@ -15,10 +16,14 @@ from starlette.responses import Response
 
 from livekit.protocol import agent, agent_worker
 
+from .log import logger
 from .version import __version__
 
 if TYPE_CHECKING:
     from .worker import AgentServer
+
+_URL_SAFE = re.compile(r"[A-Za-z0-9._~-]+")
+"""What may name an endpoint, so no path or query can hide inside one."""
 
 
 def agent_health(server: AgentServer) -> str | None:
@@ -40,6 +45,25 @@ def _claimed(app: FastAPI, method: str, path: str) -> bool:
         getattr(route, "path", None) == path and method in (getattr(route, "methods", None) or ())
         for route in app.routes
     )
+
+
+def _proxied_endpoints(app: FastAPI) -> list[str]:
+    """The first path segment of every route, which is what names it to the cloud.
+
+    A route at ``/`` names nothing and stays local, and so does one whose first segment is
+    a parameter.
+    """
+    endpoints: list[str] = []
+    for route in app.routes:
+        path: str = getattr(route, "path", "")
+        first = path.lstrip("/").split("/", 1)[0]
+        if not first or first in endpoints:
+            continue
+        if not _URL_SAFE.fullmatch(first):
+            logger.warning(f"route {path!r} cannot be reached through the cloud")
+            continue
+        endpoints.append(first)
+    return endpoints
 
 
 def _register_builtin_routes(server: AgentServer) -> None:
