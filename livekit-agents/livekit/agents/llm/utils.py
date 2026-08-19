@@ -618,9 +618,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "raw_arguments": json_arguments[:500],
-                "repaired": cleaned,
-                "error": str(strict_err),
+                "lk.pii.raw_arguments": json_arguments[:500],
+                "lk.pii.repaired": cleaned,
+                "lk.pii.error": str(strict_err),
             },
         )
         args_dict = cleaned

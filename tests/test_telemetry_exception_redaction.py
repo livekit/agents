@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,7 +12,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents.telemetry import trace_types, utils as telemetry_utils
-from livekit.agents.telemetry.traces import _DynamicTracer
+from livekit.agents.telemetry.traces import _DynamicTracer, _TraceLevelLoggingHandler
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
@@ -126,3 +128,68 @@ def test_dynamic_tracer_omits_automatic_exception_details_when_redacted(
             "secret transcript"
         )
         assert span.status.status_code == trace.StatusCode.ERROR
+
+
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_dynamic_tracer_use_span_omits_automatic_exception_details_when_redacted(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    dynamic_tracer = _DynamicTracer("test-use-span-exception-redaction")
+    dynamic_tracer.set_provider(provider)
+    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+
+    span = dynamic_tracer.start_span("test-span")
+    with pytest.raises(RuntimeError, match="secret transcript"):
+        with dynamic_tracer.use_span(span):
+            raise RuntimeError("secret transcript")
+    span.end()
+
+    (finished_span,) = exporter.get_finished_spans()
+    exception_events = [event for event in finished_span.events if event.name == "exception"]
+    if redaction_enabled:
+        assert exception_events == []
+        assert finished_span.status.status_code == trace.StatusCode.UNSET
+        assert finished_span.status.description is None
+    else:
+        assert len(exception_events) == 1
+        assert exception_events[0].attributes is not None
+        assert exception_events[0].attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
+            "secret transcript"
+        )
+        assert finished_span.status.status_code == trace.StatusCode.ERROR
+
+
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_logging_handler_omits_automatic_exception_details_when_redacted(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    try:
+        raise RuntimeError("secret transcript")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="livekit.agents.test",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="operation failed",
+        args=(),
+        exc_info=exc_info,
+    )
+    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    assert translated.attributes is not None
+    assert translated.attributes[trace_types.ATTR_EXCEPTION_TYPE] == "RuntimeError"
+    if redaction_enabled:
+        assert translated.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
+            telemetry_utils.REDACTED_EXCEPTION_MESSAGE
+        )
+        assert trace_types.ATTR_EXCEPTION_TRACE not in translated.attributes
+    else:
+        assert translated.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
+        assert "secret transcript" in translated.attributes[trace_types.ATTR_EXCEPTION_TRACE]

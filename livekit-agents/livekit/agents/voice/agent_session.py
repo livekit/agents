@@ -1421,7 +1421,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # attach to the session span if called outside of the AgentSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
-            use_span = trace.use_span(self._session_span, end_on_exit=False)
+            use_span = tracer.use_span(self._session_span, end_on_exit=False)
 
         with use_span:
             handle = activity.say(
@@ -1484,7 +1484,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # attach to the session span if called outside of the AgentSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
-            use_span = trace.use_span(self._session_span, end_on_exit=False)
+            use_span = tracer.use_span(self._session_span, end_on_exit=False)
 
         with use_span:
             handle = activity._generate_reply(

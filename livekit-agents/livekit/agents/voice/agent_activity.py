@@ -809,7 +809,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 self._agent._activity = self
 
-                with trace.use_span(start_span, end_on_exit=False):
+                with tracer.use_span(start_span, end_on_exit=False):
                     if isinstance(self.llm, llm.LLM):
                         self.llm.prewarm()
 

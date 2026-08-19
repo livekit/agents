@@ -98,6 +98,17 @@ class _DynamicTracer(Tracer):
         return self._tracer.start_span(*args, **kwargs)
 
     @_agnosticcontextmanager
+    def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
+        with trace_api.use_span(*args, **kwargs) as span:
+            yield span
+
+    @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
         if telemetry_utils._redaction_enabled():
             kwargs = {
@@ -235,6 +246,15 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
+        if telemetry_utils._redaction_enabled() and log_record.attributes:
+            attributes = dict(log_record.attributes)
+            if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
+                attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
+                    telemetry_utils.REDACTED_EXCEPTION_MESSAGE
+                )
+            attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
+            log_record.attributes = attributes
+
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
         if record.levelno == TRACE_LEVEL:

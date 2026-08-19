@@ -86,6 +86,6 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         from .traces import tracer
 
         # create a dedicated child span for orphaned metrics
-        with trace.use_span(span):
+        with tracer.use_span(span):
             with tracer.start_span("realtime_metrics") as child:
                 child.set_attributes(attrs)

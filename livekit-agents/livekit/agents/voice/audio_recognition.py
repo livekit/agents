@@ -1079,7 +1079,7 @@ class AudioRecognition:
                             "final transcript not received after timeout",
                             extra={
                                 "transcript_timeout": transcript_timeout,
-                                "interim_transcript": self._audio_interim_transcript,
+                                "lk.pii.interim_transcript": self._audio_interim_transcript,
                             },
                         )
 
@@ -1321,7 +1321,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
             # STT EOT changes user state from speaking to listening without updating VAD internal states
@@ -1363,7 +1363,7 @@ class AudioRecognition:
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
+            with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
@@ -1382,7 +1382,7 @@ class AudioRecognition:
 
             self._cancel_transcription_timeout()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+            with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
@@ -1421,7 +1421,7 @@ class AudioRecognition:
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             vad_speech_started = self._vad_speech_started
-            with trace.use_span(self._ensure_user_turn_span()):
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
             self._vad_speech_started = False
@@ -1524,7 +1524,7 @@ class AudioRecognition:
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
                     with (
-                        trace.use_span(user_turn_span),
+                        tracer.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         from_cache = False
@@ -1860,7 +1860,7 @@ class AudioRecognition:
 
             # reset the speaking state to prevent stuck user speaking state during handoff
             if self._speaking:
-                with trace.use_span(self._ensure_user_turn_span()):
+                with tracer.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
                 self._vad_speech_started = False

@@ -10,7 +10,9 @@ content, tool payloads, or other user data).
 
 from __future__ import annotations
 
+import ast
 import re
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,18 @@ pytestmark = pytest.mark.unit
 # Mirrors the collector's matcher: a whole dot-delimited "pii" segment,
 # case-insensitive ("lk.chatpii" doesn't match, "lk.PII.x" does).
 PII_SEGMENT_RE = re.compile(r"(^|\.)pii(\.|$)", re.IGNORECASE)
+
+SENSITIVE_LOG_FIELDS = frozenset(
+    {
+        "arguments",
+        "chat_ctx",
+        "interim_transcript",
+        "progress_message",
+        "raw_arguments",
+        "repaired",
+        "transcript",
+    }
+)
 
 # Keys that carry no conversational content, tool payloads, or other user data.
 # A new constant must go either here or (if it can carry such data) adopt a
@@ -148,3 +162,36 @@ def test_safe_keys_match_declared_keys() -> None:
         f"SAFE_KEYS entries no longer declared in trace_types.py: {stale}. "
         "Remove them so the safe list stays an exact inventory."
     )
+
+
+def test_sensitive_literal_log_fields_carry_pii_segment() -> None:
+    repo_root = Path(__file__).parent.parent
+    source_roots = [repo_root / "livekit-agents", repo_root / "livekit-plugins"]
+    untagged: list[str] = []
+
+    for source_root in source_roots:
+        for path in source_root.rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr
+                    in {"debug", "info", "warning", "error", "exception", "critical", "log"}
+                ):
+                    continue
+                for keyword in node.keywords:
+                    if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+                        continue
+                    for key in keyword.value.keys:
+                        if not (
+                            isinstance(key, ast.Constant)
+                            and isinstance(key.value, str)
+                            and key.value.rsplit(".", 1)[-1] in SENSITIVE_LOG_FIELDS
+                            and not PII_SEGMENT_RE.search(key.value)
+                        ):
+                            continue
+                        relative_path = path.relative_to(repo_root)
+                        untagged.append(f"{relative_path}:{node.lineno}: {key.value}")
+
+    assert not untagged, f"content-bearing log fields missing pii segment: {untagged}"
