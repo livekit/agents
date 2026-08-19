@@ -629,7 +629,6 @@ class SessionHost:
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
-            if fco is not None
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -697,6 +696,7 @@ class SessionHost:
             overlap_started_at = Timestamp()
             overlap_started_at.FromNanoseconds(int(event.overlap_started_at * 1e9))
 
+        # TODO(AGT-3180): Forward agent_ended when the remote-session protocol supports it.
         pb = agent_pb.AgentSessionEvent.OverlappingSpeech(
             is_interruption=event.is_interruption,
             detection_delay=event.detection_delay,

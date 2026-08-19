@@ -2273,16 +2273,20 @@ class RealtimeSession(
             logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
-        # a rejected item event gets no deleted/added reply, so fail its future rather than
-        # leave update_chat_ctx to stall inside the speech that awaits it
-        if (event_id := event.error.event_id) and (
-            fut := self._chat_ctx_event_futures.pop(event_id, None)
-        ):
-            if not fut.done():
-                fut.set_exception(llm.RealtimeError(event.error.message))
-            # a terminal one still has to end the session, whatever it came in reply to
-            if not _is_fatal_error(event.error):
-                return
+        if event_id := event.error.event_id:
+            # a rejected item event gets no deleted/added reply, so fail its future rather than
+            # leave update_chat_ctx to stall inside the speech that awaits it
+            if fut := self._chat_ctx_event_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message))
+                # a terminal one still has to end the session, whatever it came in reply to
+                if not _is_fatal_error(event.error):
+                    return
+            # a rejected response.create gets no response.created; fail its future now
+            # instead of orphaning it until the 10s timeout (still emitted/raised below)
+            elif fut := self._response_created_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message, code=event.error.code))
 
         if event.error.message.startswith("Cancellation failed"):
             return

@@ -97,6 +97,7 @@ SAFE_KEYS = frozenset(
         "gen_ai.usage.input_text_tokens",
         "gen_ai.usage.input_audio_tokens",
         "gen_ai.usage.input_cached_tokens",
+        "gen_ai.usage.cache_read.input_tokens",
         "gen_ai.usage.output_text_tokens",
         "gen_ai.usage.output_audio_tokens",
         "gen_ai.system.message",

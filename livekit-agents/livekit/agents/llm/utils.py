@@ -897,7 +897,7 @@ def _is_valid_function_output(value: Any) -> bool:
 @dataclass
 class FunctionCallResult:
     fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput | None
+    fnc_call_out: FunctionCallOutput
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
@@ -933,9 +933,16 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="",
+                is_error=False,
+                reply_required=False,
+            ),
             raw_output=output,
             raw_exception=exception,
         )
@@ -960,7 +967,12 @@ def make_function_call_output(
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="the tool returned an invalid output",
+                is_error=True,
+            ),
             raw_output=output,
             raw_exception=None,
         )

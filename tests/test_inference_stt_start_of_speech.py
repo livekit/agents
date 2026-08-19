@@ -12,6 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import livekit.agents.inference.stt as inference_stt
+from livekit.agents import APIConnectOptions
+from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.stt import SpeechStream as InferenceSpeechStream
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.utils.aio.channel import Chan, ChanEmpty
@@ -112,3 +115,49 @@ def test_onset_resets_after_the_turn_ends() -> None:
 
     stream._process_start_of_speech()
     assert SpeechEventType.START_OF_SPEECH in _drain(stream)
+
+
+async def test_connection_session_id_becomes_fallback_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeWebSocket:
+        async def send_str(self, data: str) -> None:
+            pass
+
+    class _FakeHTTPSession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+        async def ws_connect(self, url: str, *, headers: dict[str, str]) -> _FakeWebSocket:
+            self.headers = headers
+            return _FakeWebSocket()
+
+    stream = InferenceSpeechStream.__new__(InferenceSpeechStream)
+    stream._stt = SimpleNamespace(_session_keyterms=[])
+    stream._opts = SimpleNamespace(
+        sample_rate=16000,
+        encoding="pcm_s16le",
+        extra_kwargs={},
+        model="auto",
+        language=None,
+        fallback=None,
+        conn_options=None,
+        base_url="https://example.livekit.cloud/v1",
+        api_key="key",
+        api_secret="secret",
+    )
+    stream._conn_options = APIConnectOptions(timeout=1.0, max_retry=0)
+    stream._request_id = "stt_request_fallback"
+    http_session = _FakeHTTPSession()
+
+    monkeypatch.setattr(
+        inference_stt,
+        "get_inference_headers",
+        lambda: {HEADER_SESSION_ID: "inference_connection"},
+    )
+    monkeypatch.setattr(inference_stt, "create_access_token", lambda *_args: "token")
+
+    await stream._connect_ws(http_session)  # type: ignore[arg-type]
+
+    assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
+    assert stream._request_id == "inference_connection"
