@@ -183,7 +183,7 @@ class Agent:
         assert activity._audio_recognition is not None
         return activity._audio_recognition
 
-    async def update_instructions(self, instructions: str) -> None:
+    async def update_instructions(self, instructions: str | Instructions) -> None:
         """
         Updates the agent's instructions.
 
@@ -191,8 +191,9 @@ class Agent:
         the instructions for the ongoing realtime session.
 
         Args:
-            instructions (str):
-                The new instructions to set for the agent.
+            instructions (str | Instructions):
+                The new instructions to set for the agent. Modality-specific
+                ``Instructions`` resolve the same way they do at construction.
 
         Raises:
             llm.RealtimeError: If updating the realtime session instructions fails.
