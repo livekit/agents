@@ -426,6 +426,65 @@ async def test_close_does_not_commit_empty_bounded_realtime_audio_turn() -> None
     assert rt_session.audio_cleared
 
 
+@pytest.mark.parametrize("gate_before_verdict", [False, True])
+@pytest.mark.parametrize("provider_transcription_order", ["absent", "after", "before"])
+async def test_close_does_not_duplicate_framework_owned_provider_transcription(
+    gate_before_verdict: bool,
+    provider_transcription_order: str,
+) -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            turn_detection=False,
+            can_disable_turn_detection=False,
+            user_transcription=True,
+        )
+    )
+    session = AgentSession(llm=model)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    activity._rt_session = FakeRealtimeSession(model)
+    activity._scheduling_paused = False
+
+    assert activity._turn_policy.input_owner == "framework"
+
+    def _emit_provider_transcription() -> None:
+        activity._on_input_audio_transcription_completed(
+            llm.InputTranscriptionCompleted(
+                item_id="provider-turn",
+                transcript="same committed turn",
+                is_final=True,
+            )
+        )
+
+    if provider_transcription_order == "before":
+        _emit_provider_transcription()
+
+    info = _bounded_turn(transcript="same committed turn")
+    info.reply_already_triggered = True
+    if gate_before_verdict:
+        session._closing = True
+        activity._new_turns_blocked = True
+
+    assert activity.on_end_of_turn(info)
+    bounded_turn_task = activity._user_turn_completed_atask
+
+    if not gate_before_verdict:
+        session._closing = True
+        activity._new_turns_blocked = True
+        assert bounded_turn_task is not None
+        await bounded_turn_task
+    else:
+        assert bounded_turn_task is None
+
+    if provider_transcription_order == "after":
+        _emit_provider_transcription()
+
+    messages = activity.agent.chat_ctx.messages()
+    assert len(messages) == 1
+    assert [message.raw_text_content for message in messages] == ["same committed turn"]
+    if provider_transcription_order == "before":
+        assert [message.id for message in messages] == ["provider-turn"]
+
+
 async def test_close_does_not_duplicate_provider_owned_realtime_audio_turn() -> None:
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(
