@@ -23,6 +23,7 @@ from livekit.agents import (
     MetricsCollectedEvent,
     ModelSettings,
     NotGivenOr,
+    RunContext,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -394,6 +395,46 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="lookup_order", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_tts(1.0, input="Just a moment.")
+    actions.add_llm(content="Order 42 is on the way.", input="order 42 shipped")
+    actions.add_tts(1.0)
+
+    class SlowToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def lookup_order(self, context: RunContext) -> str:
+            async with context.with_filler("Just a moment.", delay=0.5):
+                await asyncio.sleep(8.0)
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SlowToolAgent(), drain_delay=10), timeout=SESSION_TIMEOUT
+    )
+
+    # both the reply and the filler end while the tool is still running, so each
+    # must hand back "thinking", not "listening" (which arms the user-away timer)
+    speaking_ends = [ev.new_state for ev in agent_state_events if ev.old_state == "speaking"]
+    assert speaking_ends == ["thinking", "thinking", "listening"]
+    assert all(ev.new_state != "away" for ev in user_state_events)
 
 
 @pytest.mark.parametrize(
