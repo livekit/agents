@@ -380,7 +380,25 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
 
         frame_count = 0
 
-        _background_tasks: set[asyncio.Task[None]] = set()
+        # Frames for Valence go through a single ordered sender task: one
+        # writer per socket guarantees chunks arrive in order, and a bounded
+        # queue caps memory. Emotion detection is best-effort, so when the
+        # queue is full we drop the frame rather than backpressure the STT
+        # pipeline.
+        send_queue: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue(maxsize=100)
+
+        async def valence_sender() -> None:
+            """Send queued frames to Valence sequentially, preserving order."""
+            assert valence_client is not None
+            while True:
+                queued = await send_queue.get()
+                if queued is None:
+                    break
+                await valence_client.send_audio_chunk(
+                    audio_data=bytes(queued.data),
+                    sample_rate=queued.sample_rate,
+                    samples_per_channel=queued.samples_per_channel,
+                )
 
         async def forward_audio() -> None:
             """Forward audio frames to underlying STT and stream to Valence."""
@@ -400,17 +418,12 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                     frame_duration_ms = (frame.samples_per_channel / frame.sample_rate) * 1000
                     self._current_audio_position_ms += frame_duration_ms
 
-                    # Stream to Valence API continuously (fire-and-forget)
+                    # Hand the frame to the ordered Valence sender
                     if valence_client:
-                        task = asyncio.create_task(
-                            valence_client.send_audio_chunk(
-                                audio_data=bytes(frame.data),
-                                sample_rate=frame.sample_rate,
-                                samples_per_channel=frame.samples_per_channel,
-                            )
-                        )
-                        _background_tasks.add(task)
-                        task.add_done_callback(_background_tasks.discard)
+                        try:
+                            send_queue.put_nowait(frame)
+                        except asyncio.QueueFull:
+                            logger.warning("Valence send queue full, dropping frame")
 
             logger.debug(f"Input ended. Total frames: {frame_count}")
             underlying_stream.end_input()
@@ -428,15 +441,22 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                 else:
                     self._event_ch.send_nowait(event)
 
-        # Run both tasks concurrently
+        # Run the workers concurrently
         forward_task = asyncio.create_task(forward_audio())
         receive_task = asyncio.create_task(receive_events())
+        sender_task = asyncio.create_task(valence_sender()) if valence_client else None
 
         try:
             await asyncio.gather(forward_task, receive_task)
         finally:
-            for task in _background_tasks:
+            # gather propagates the first exception without cancelling the
+            # sibling, which would otherwise keep consuming audio frames
+            tasks = [forward_task, receive_task]
+            if sender_task:
+                tasks.append(sender_task)
+            for task in tasks:
                 task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if valence_client:
                 await valence_client.stop_streaming()
                 await valence_client.disconnect()
