@@ -7,6 +7,9 @@ from typing import Any
 
 import pytest
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -193,3 +196,45 @@ def test_logging_handler_omits_automatic_exception_details_when_redacted(
     else:
         assert translated.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
         assert "secret transcript" in translated.attributes[trace_types.ATTR_EXCEPTION_TRACE]
+
+
+def test_redacted_exception_log_can_be_otlp_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify redacted exception logs remain encodable by OTLP."""
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    handler = _TraceLevelLoggingHandler(logger_provider=provider)
+
+    try:
+        raise RuntimeError("secret transcript")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="livekit.agents.test",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="operation failed",
+        args=(),
+        exc_info=exc_info,
+    )
+    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: True)
+
+    try:
+        handler.emit(record)
+        (exported_log,) = exporter.get_finished_logs()
+        encoded_request = encode_logs([exported_log])
+    finally:
+        provider.shutdown()
+
+    (encoded_log,) = encoded_request.resource_logs[0].scope_logs[0].log_records
+    encoded_attributes = {
+        attribute.key: attribute.value.string_value for attribute in encoded_log.attributes
+    }
+    assert encoded_attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
+        telemetry_utils.REDACTED_EXCEPTION_MESSAGE
+    )
+    assert trace_types.ATTR_EXCEPTION_TRACE not in encoded_attributes
+    assert encoded_log.dropped_attributes_count == 0
+    assert "secret transcript" not in str(encoded_log)
