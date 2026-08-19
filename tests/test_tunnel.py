@@ -26,7 +26,7 @@ from livekit.protocol.agent_proxy import (
     AgentHttpReset,
 )
 
-from .tunnel_edge import LocalEdge
+from .tunnel_controller import LocalController
 
 pytestmark = pytest.mark.unit
 
@@ -86,25 +86,27 @@ def _make_app() -> AgentServer:
 
 
 @asynccontextmanager
-async def _proxied(wires: int = WIRES) -> AsyncIterator[tuple[str, WebSocketTunnel, LocalEdge]]:
-    """Bring up app, edge and tunnel; yield the public url and both halves."""
+async def _proxied(
+    wires: int = WIRES,
+) -> AsyncIterator[tuple[str, WebSocketTunnel, LocalController]]:
+    """Bring up app, controller and tunnel; yield the public url and both halves."""
     server = _make_app()
     runner = _HttpRunner(server.http, host="127.0.0.1", port=0)
     await runner.start()
 
-    edge = LocalEdge(api_key=API_KEY, api_secret=API_SECRET)
-    await edge.start()
+    controller = LocalController(api_key=API_KEY, api_secret=API_SECRET)
+    await controller.start()
     tunnel = WebSocketTunnel(
-        ws_url=edge.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=wires
+        ws_url=controller.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=wires
     )
     await tunnel.start(target_port=runner.port, endpoints=_proxied_endpoints(server.http))
-    await edge.wait_ready()
+    await controller.wait_ready()
 
     try:
-        yield edge.base_url, tunnel, edge
+        yield controller.base_url, tunnel, controller
     finally:
         await tunnel.aclose()
-        await edge.aclose()
+        await controller.aclose()
         await runner.aclose()
 
 
@@ -124,8 +126,8 @@ async def _drain_sse(base: str) -> int:
             return len([ln async for ln in resp.content if ln.strip()])
 
 
-def _wire_streams(edge: LocalEdge) -> list[int]:
-    return [mux.open_streams for muxes in edge._workers.values() for mux in muxes]
+def _wire_streams(controller: LocalController) -> list[int]:
+    return [mux.open_streams for muxes in controller._workers.values() for mux in muxes]
 
 
 # --------------------------------------------------------------------- through the tunnel
@@ -180,7 +182,7 @@ async def test_websocket_round_trips() -> None:
 
 
 async def test_concurrent_requests() -> None:
-    async with _proxied() as (base, _, edge):
+    async with _proxied() as (base, _, controller):
 
         async def one() -> int:
             # own connection per request, so each becomes its own proxied stream
@@ -193,7 +195,7 @@ async def test_concurrent_requests() -> None:
         statuses = await asyncio.gather(*(one() for _ in range(32)))
         assert statuses == [200] * 32
         # its own connection each, so each had to become its own stream
-        assert edge.streams_opened >= 32
+        assert controller.streams_opened >= 32
 
 
 async def test_websocket_survives_other_traffic() -> None:
@@ -219,34 +221,34 @@ async def test_websocket_survives_other_traffic() -> None:
 
 async def test_streams_spread_over_the_wires() -> None:
     """Holding several wires only pays off if streams land on different ones."""
-    async with _proxied() as (base, tunnel, edge):
+    async with _proxied() as (base, tunnel, controller):
         assert tunnel.wire_count == WIRES
-        assert await _settles(lambda: edge.wire_count == WIRES)
+        assert await _settles(lambda: controller.wire_count == WIRES)
 
         streams = [asyncio.create_task(_drain_sse(base)) for _ in range(4)]
-        spread = await _settles(lambda: sorted(_wire_streams(edge)) == [2, 2])
+        spread = await _settles(lambda: sorted(_wire_streams(controller)) == [2, 2])
         assert await asyncio.gather(*streams) == [5] * 4
-        assert spread, f"four equal streams landed as {_wire_streams(edge)}"
+        assert spread, f"four equal streams landed as {_wire_streams(controller)}"
 
 
 async def test_teardown_in_any_order_finishes() -> None:
-    """A byte carrier has no half-close, so closing the edge first must not park forever."""
+    """A byte carrier has no half-close, so closing the controller first must not park forever."""
     server = _make_app()
     runner = _HttpRunner(server.http, host="127.0.0.1", port=0)
     await runner.start()
-    edge = LocalEdge(api_key=API_KEY, api_secret=API_SECRET)
-    await edge.start()
+    controller = LocalController(api_key=API_KEY, api_secret=API_SECRET)
+    await controller.start()
     tunnel = WebSocketTunnel(
-        ws_url=edge.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=WIRES
+        ws_url=controller.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=WIRES
     )
     await tunnel.start(target_port=runner.port, endpoints=_proxied_endpoints(server.http))
-    await edge.wait_ready()
+    await controller.wait_ready()
 
-    async with aiohttp.ClientSession() as sess, sess.get(f"{edge.base_url}/ping") as resp:
+    async with aiohttp.ClientSession() as sess, sess.get(f"{controller.base_url}/ping") as resp:
         assert resp.status == 200
 
     # deliberately the reverse of the order the fixture uses
-    await asyncio.wait_for(edge.aclose(), timeout=5)
+    await asyncio.wait_for(controller.aclose(), timeout=5)
     await asyncio.wait_for(tunnel.aclose(), timeout=5)
     await runner.aclose()
 
@@ -256,16 +258,16 @@ async def test_client_is_released_when_the_wire_dies() -> None:
     server = _make_app()
     runner = _HttpRunner(server.http, host="127.0.0.1", port=0)
     await runner.start()
-    edge = LocalEdge(api_key=API_KEY, api_secret=API_SECRET)
-    await edge.start()
+    controller = LocalController(api_key=API_KEY, api_secret=API_SECRET)
+    await controller.start()
     tunnel = WebSocketTunnel(
-        ws_url=edge.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=WIRES
+        ws_url=controller.ws_url, api_key=API_KEY, api_secret=API_SECRET, wires=WIRES
     )
     await tunnel.start(target_port=runner.port, endpoints=_proxied_endpoints(server.http))
-    await edge.wait_ready()
+    await controller.wait_ready()
 
     try:
-        slow = asyncio.create_task(_drain_sse(edge.base_url))
+        slow = asyncio.create_task(_drain_sse(controller.base_url))
         await asyncio.sleep(0.2)
         await tunnel.aclose()  # the worker vanishes mid-response
 
@@ -276,7 +278,7 @@ async def test_client_is_released_when_the_wire_dies() -> None:
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await slow
     finally:
-        await edge.aclose()
+        await controller.aclose()
         await runner.aclose()
 
 
@@ -286,7 +288,7 @@ async def test_a_reader_that_stops_does_not_stop_the_wire() -> None:
         url = urlparse(base)
         # a client that asks for a large body and then reads none of it
         _reader, writer = await asyncio.open_connection(url.hostname, url.port)
-        writer.write(b"GET /bytes/8388608 HTTP/1.1\r\nHost: edge\r\n\r\n")
+        writer.write(b"GET /bytes/8388608 HTTP/1.1\r\nHost: controller\r\n\r\n")
         await writer.drain()
         await asyncio.sleep(0.5)  # long enough to fill its window
 
@@ -304,7 +306,7 @@ async def test_a_reader_that_stops_does_not_stop_the_wire() -> None:
 
 
 def test_endpoints_are_the_first_segment_of_each_route() -> None:
-    """What the edge matches on, so a route that cannot name one must not be advertised."""
+    """What the controller matches on, so a route that cannot name one must not be advertised."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/")
@@ -328,8 +330,8 @@ def test_endpoints_are_the_first_segment_of_each_route() -> None:
 
 async def test_the_wire_announces_its_endpoints_before_any_request() -> None:
     """Whatever the router declares, FastAPI's own documentation routes included."""
-    async with _proxied() as (_base, tunnel, edge):
-        assert edge.endpoints_of(tunnel.worker_id) == {
+    async with _proxied() as (_base, tunnel, controller):
+        assert controller.endpoints_of(tunnel.worker_id) == {
             "ping",
             "upload",
             "bytes",
@@ -342,12 +344,12 @@ async def test_the_wire_announces_its_endpoints_before_any_request() -> None:
 
 
 async def test_an_unannounced_endpoint_is_refused() -> None:
-    """The edge answers for an unclaimed endpoint rather than leasing a wire."""
-    async with _proxied() as (base, _, edge), aiohttp.ClientSession() as sess:
-        opened = edge.streams_opened
+    """The controller answers for an unclaimed endpoint rather than leasing a wire."""
+    async with _proxied() as (base, _, controller), aiohttp.ClientSession() as sess:
+        opened = controller.streams_opened
         async with sess.get(f"{base}/nope/at/all") as resp:
             assert resp.status == 503
-        assert edge.streams_opened == opened, "a wire was leased for an unknown endpoint"
+        assert controller.streams_opened == opened, "a wire was leased for an unknown endpoint"
 
 
 # ------------------------------------------------------------------------------- the mux

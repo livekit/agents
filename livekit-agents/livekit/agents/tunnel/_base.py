@@ -11,18 +11,18 @@ CHUNK = 64 * 1024
 
 
 class ByteStream(abc.ABC):
-    """One HTTP connection as a byte pipe. The edge opens it, the worker answers on it."""
+    """One HTTP connection as a byte pipe. The cloud opens it, the worker answers on it."""
 
     @abc.abstractmethod
     async def read(self) -> bytes:
-        """The next bytes from the edge, or empty once it has sent everything.
+        """The next bytes from the controller, or empty once it has sent everything.
 
         Empty ends the reading half only: the worker's reply may still be going out.
         """
 
     @abc.abstractmethod
     async def write(self, data: bytes) -> None:
-        """Send bytes to the edge, waiting while the carrier has no room for them."""
+        """Send bytes to the controller, waiting while the carrier has no room for them."""
 
     @abc.abstractmethod
     async def aclose(self) -> None:
@@ -38,15 +38,15 @@ class ByteStream(abc.ABC):
 
 
 class Tunnel(abc.ABC):
-    """Worker side: the connection to the edge, and the streams the edge opens on it.
+    """Worker side: the connection to the cloud, and the streams it opens on that.
 
     A subclass writes three methods and nothing else: dial, hand over the streams the
-    edge opens, hang up. Serving one is the same whatever carries it, so this class does
-    that — a task per stream, piping it to the local HTTP server::
+    controller opens, hang up. Serving one is the same whatever carries it, so this class
+    does that — a task per stream, piping it to the local HTTP server::
 
         class MyTunnel(Tunnel):
             async def _connect(self) -> None:
-                self._conn = await dial(self.endpoints)  # raises if the edge refuses
+                self._conn = await dial(self.endpoints)  # raises if the cloud refuses
 
             async def _accept(self) -> AsyncIterator[ByteStream]:
                 while stream := await self._conn.next_stream():
@@ -69,9 +69,9 @@ class Tunnel(abc.ABC):
 
     @property
     def endpoints(self) -> list[str]:
-        """First path segments the local server answers under, as announced to the edge.
+        """First path segments the local server answers under, as announced to the cloud.
 
-        The edge routes on one segment and sends nothing outside them.
+        The controller routes on one segment and sends nothing outside them.
         """
         return self._endpoints
 
@@ -91,9 +91,9 @@ class Tunnel(abc.ABC):
 
     @abc.abstractmethod
     async def _connect(self) -> None:
-        """Dial the edge and announce ``endpoints``.
+        """Dial the cloud controller and announce ``endpoints``.
 
-        Returns once traffic can arrive, and raises if it cannot: an edge that will not
+        Returns once traffic can arrive, and raises if it cannot: a controller that will not
         take this worker is the caller's problem, not something to retry behind its back.
 
         This is the first thing to run on the loop that serves, so anything bound to one
@@ -102,7 +102,7 @@ class Tunnel(abc.ABC):
 
     @abc.abstractmethod
     def _accept(self) -> AsyncIterator[ByteStream]:
-        """Yield every stream the edge opens, until ``_disconnect`` ends the connection.
+        """Yield every stream the controller opens, until ``_disconnect`` ends the connection.
 
         Each one is served as its own task, so this may yield again while earlier streams
         are still running.

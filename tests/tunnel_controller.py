@@ -1,4 +1,4 @@
-"""A local stand-in for the cloud edge, so a test can drive a tunnel without one.
+"""A local stand-in for the cloud controller, so a test can drive a tunnel without one.
 
 It mirrors ``cloud/pkg/agent/httpproxy``, but parses no HTTP: it reads the request line
 far enough to find the endpoint and hands the bytes over unread, so a test exercises the
@@ -19,7 +19,7 @@ from livekit.agents.tunnel._websocket import _MAX_MESSAGE, TUNNEL_PATH, Mux, Str
 from livekit.protocol.agent_proxy import AgentHttpFrame
 
 
-class LocalEdge:
+class LocalController:
     """Accepts a worker's wires on one port, and clients on another."""
 
     def __init__(self, *, api_key: str, api_secret: str) -> None:
@@ -168,7 +168,7 @@ class LocalEdge:
         try:
             stream = await self.open_stream(_endpoint_of(head))
         except Exception as exc:  # noqa: BLE001
-            logger.debug(f"local edge refused a request: {exc}")
+            logger.debug(f"local controller refused a request: {exc}")
             writer.write(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
             with contextlib.suppress(Exception):
                 await writer.drain()
