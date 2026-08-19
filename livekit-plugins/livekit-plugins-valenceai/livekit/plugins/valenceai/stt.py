@@ -267,10 +267,13 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
 
         # Frames for Valence go through a single ordered sender task: one
         # writer per socket guarantees chunks arrive in order, and a bounded
-        # queue caps memory. Emotion detection is best-effort, so when the
+        # queue caps memory (250 frames ≈ 5s at 20ms frames, covering the
+        # connection window). Emotion detection is best-effort, so when the
         # queue is full we drop the frame rather than backpressure the STT
-        # pipeline.
-        send_queue: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue(maxsize=100)
+        # pipeline. Each frame is queued with the stream's audio-clock
+        # position so prediction timestamps stay aligned with transcript
+        # time ranges even when frames are dropped.
+        send_queue: asyncio.Queue[tuple[rtc.AudioFrame, float] | None] = asyncio.Queue(maxsize=250)
 
         async def valence_sender() -> None:
             """Connect to Valence, then send queued frames in order.
@@ -293,10 +296,12 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                 queued = await send_queue.get()
                 if queued is None:
                     break
+                queued_frame, position_ms = queued
                 await valence_client.send_audio_chunk(
-                    audio_data=bytes(queued.data),
-                    sample_rate=queued.sample_rate,
-                    samples_per_channel=queued.samples_per_channel,
+                    audio_data=bytes(queued_frame.data),
+                    sample_rate=queued_frame.sample_rate,
+                    samples_per_channel=queued_frame.samples_per_channel,
+                    position_ms=position_ms,
                 )
 
         # Everything after client creation runs under one try/finally so the
@@ -328,10 +333,11 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                         frame_duration_ms = (frame.samples_per_channel / frame.sample_rate) * 1000
                         self._current_audio_position_ms += frame_duration_ms
 
-                        # Hand the frame to the ordered Valence sender
+                        # Hand the frame to the ordered Valence sender, stamped
+                        # with the stream's audio-clock position
                         if valence_active:
                             try:
-                                send_queue.put_nowait(frame)
+                                send_queue.put_nowait((frame, self._current_audio_position_ms))
                             except asyncio.QueueFull:
                                 logger.warning("Valence send queue full, dropping frame")
 

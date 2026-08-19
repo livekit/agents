@@ -224,6 +224,7 @@ class ValenceWebSocketClient:
         audio_data: bytes,
         sample_rate: int,
         samples_per_channel: int,
+        position_ms: float | None = None,
     ) -> None:
         """Send a single audio chunk to Valence API without waiting for a response.
 
@@ -234,6 +235,12 @@ class ValenceWebSocketClient:
             audio_data: Raw PCM audio bytes (int16).
             sample_rate: Sample rate of the audio.
             samples_per_channel: Number of samples per channel in this chunk.
+            position_ms: The caller's audio-clock position at the end of this
+                chunk. When provided, it becomes the timestamp of subsequent
+                predictions, keeping them aligned with the caller's clock even
+                if some frames never reached this client (e.g. dropped while
+                the connection was still being established). When omitted, the
+                clock advances by this chunk's duration.
         """
         if not self._sio.connected or not self._streaming:
             return
@@ -242,8 +249,11 @@ class ValenceWebSocketClient:
             samples = np.frombuffer(audio_data, dtype=np.int16)
             base64_audio = base64.b64encode(samples.tobytes()).decode("utf-8")
 
-            frame_duration_ms = (samples_per_channel / sample_rate) * 1000
-            self._total_audio_sent_ms += frame_duration_ms
+            if position_ms is not None:
+                self._total_audio_sent_ms = position_ms
+            else:
+                frame_duration_ms = (samples_per_channel / sample_rate) * 1000
+                self._total_audio_sent_ms += frame_duration_ms
             self._chunks_sent += 1
 
             message = {
