@@ -260,21 +260,8 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         # server-side audio session, so concurrent streams must never share
         # a connection or its emotion history. If Valence is unavailable the
         # stream degrades to plain transcription.
-        client = self._parent_stt._create_client()
-        valence_client: ValenceWebSocketClient | None = client
-        try:
-            await client.connect()
-            await client.start_streaming()
-            logger.info("Connected to Valence AI emotion detection API")
-        except Exception as e:
-            logger.error(f"Failed to connect to Valence, continuing without emotions: {e}")
-            valence_client = None
-
-        # Create underlying stream
-        underlying_stream = self._underlying_stt.stream(
-            language=self._language,
-            conn_options=self._conn_options,
-        )
+        valence_client = self._parent_stt._create_client()
+        valence_active = True
 
         frame_count = 0
 
@@ -286,8 +273,22 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
         send_queue: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue(maxsize=100)
 
         async def valence_sender() -> None:
-            """Send queued frames to Valence sequentially, preserving order."""
-            assert valence_client is not None
+            """Connect to Valence, then send queued frames in order.
+
+            Connecting here — instead of before the underlying stream starts —
+            keeps transcription independent of the emotion service: a slow or
+            failed Valence connection never delays speech recognition. Frames
+            arriving meanwhile buffer in the bounded queue.
+            """
+            nonlocal valence_active
+            try:
+                await valence_client.connect()
+                await valence_client.start_streaming()
+                logger.info("Connected to Valence AI emotion detection API")
+            except Exception as e:
+                logger.error(f"Failed to connect to Valence, continuing without emotions: {e}")
+                valence_active = False
+                return
             while True:
                 queued = await send_queue.get()
                 if queued is None:
@@ -298,67 +299,80 @@ class EmotionAwareRecognizeStream(stt.RecognizeStream):
                     samples_per_channel=queued.samples_per_channel,
                 )
 
-        async def forward_audio() -> None:
-            """Forward audio frames to underlying STT and stream to Valence."""
-            nonlocal frame_count
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
-                    logger.debug(f"Flush received after {frame_count} frames")
-                    underlying_stream.flush()
-                else:
-                    frame: rtc.AudioFrame = item
-                    frame_count += 1
-
-                    # Forward to underlying STT immediately
-                    underlying_stream.push_frame(frame)
-
-                    # Track audio position
-                    frame_duration_ms = (frame.samples_per_channel / frame.sample_rate) * 1000
-                    self._current_audio_position_ms += frame_duration_ms
-
-                    # Hand the frame to the ordered Valence sender
-                    if valence_client:
-                        try:
-                            send_queue.put_nowait(frame)
-                        except asyncio.QueueFull:
-                            logger.warning("Valence send queue full, dropping frame")
-
-            logger.debug(f"Input ended. Total frames: {frame_count}")
-            underlying_stream.end_input()
-
-        async def receive_events() -> None:
-            """Receive events from underlying stream and enrich with emotions."""
-            async for event in underlying_stream:
-                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                    # Enrich with the latest available emotion (non-blocking)
-                    enriched_event = await self._enrich_final_transcript(event, valence_client)
-                    self._event_ch.send_nowait(enriched_event)
-                    self._last_final_transcript_ms = self._current_audio_position_ms
-                elif event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-                    self._event_ch.send_nowait(event)
-                else:
-                    self._event_ch.send_nowait(event)
-
-        # Run the workers concurrently
-        forward_task = asyncio.create_task(forward_audio())
-        receive_task = asyncio.create_task(receive_events())
-        sender_task = asyncio.create_task(valence_sender()) if valence_client else None
-
+        # Everything after client creation runs under one try/finally so the
+        # Valence connection can never outlive the stream, no matter where
+        # setup fails or is cancelled.
+        underlying_stream: stt.RecognizeStream | None = None
         try:
-            await asyncio.gather(forward_task, receive_task)
+            stream = self._underlying_stt.stream(
+                language=self._language,
+                conn_options=self._conn_options,
+            )
+            underlying_stream = stream
+
+            async def forward_audio() -> None:
+                """Forward audio frames to underlying STT and stream to Valence."""
+                nonlocal frame_count
+                async for item in self._input_ch:
+                    if isinstance(item, self._FlushSentinel):
+                        logger.debug(f"Flush received after {frame_count} frames")
+                        stream.flush()
+                    else:
+                        frame: rtc.AudioFrame = item
+                        frame_count += 1
+
+                        # Forward to underlying STT immediately
+                        stream.push_frame(frame)
+
+                        # Track audio position
+                        frame_duration_ms = (frame.samples_per_channel / frame.sample_rate) * 1000
+                        self._current_audio_position_ms += frame_duration_ms
+
+                        # Hand the frame to the ordered Valence sender
+                        if valence_active:
+                            try:
+                                send_queue.put_nowait(frame)
+                            except asyncio.QueueFull:
+                                logger.warning("Valence send queue full, dropping frame")
+
+                logger.debug(f"Input ended. Total frames: {frame_count}")
+                stream.end_input()
+
+            async def receive_events() -> None:
+                """Receive events from underlying stream and enrich with emotions."""
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        # Enrich with the latest available emotion (non-blocking);
+                        # skip enrichment while Valence is not connected
+                        enriched_event = await self._enrich_final_transcript(
+                            event,
+                            valence_client if valence_client.is_connected else None,
+                        )
+                        self._event_ch.send_nowait(enriched_event)
+                        self._last_final_transcript_ms = self._current_audio_position_ms
+                    else:
+                        self._event_ch.send_nowait(event)
+
+            # Run the workers concurrently
+            forward_task = asyncio.create_task(forward_audio())
+            receive_task = asyncio.create_task(receive_events())
+            sender_task = asyncio.create_task(valence_sender())
+
+            try:
+                await asyncio.gather(forward_task, receive_task)
+            finally:
+                # gather propagates the first exception without cancelling the
+                # siblings, which would otherwise keep consuming audio frames
+                for task in (forward_task, receive_task, sender_task):
+                    task.cancel()
+                await asyncio.gather(
+                    forward_task, receive_task, sender_task, return_exceptions=True
+                )
         finally:
-            # gather propagates the first exception without cancelling the
-            # sibling, which would otherwise keep consuming audio frames
-            tasks = [forward_task, receive_task]
-            if sender_task:
-                tasks.append(sender_task)
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            if valence_client:
-                await valence_client.stop_streaming()
-                await valence_client.disconnect()
-            await underlying_stream.aclose()
+            await valence_client.stop_streaming()
+            await valence_client.disconnect()
+            if underlying_stream is not None:
+                await underlying_stream.aclose()
 
     async def _enrich_final_transcript(
         self,
