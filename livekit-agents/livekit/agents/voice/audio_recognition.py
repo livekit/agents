@@ -811,19 +811,17 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
-        # WARNING: Suppressing CancelledError for either turn task can also suppress
-        # cancellation of _aclose() itself. Cleanup can therefore continue past the
-        # job runner's 60-second session-close timeout.
         try:
             if self._commit_user_turn_atask is not None:
-                try:
-                    await self._commit_user_turn_atask
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
+                # A cancelled child becomes a result, but cancellation of _aclose still
+                # propagates and cancels the child.
+                result = (
+                    await asyncio.gather(self._commit_user_turn_atask, return_exceptions=True)
+                )[0]
+                if isinstance(result, Exception):
                     logger.warning(
                         "error while committing the final user turn on close: %s",
-                        type(exc).__name__,
+                        type(result).__name__,
                     )
 
             if self._stt_pipeline is not None:
@@ -842,14 +840,11 @@ class AudioRecognition:
                 await aio.cancel_and_wait(self._interruption_atask)
 
             if self._end_of_turn_task is not None:
-                try:
-                    await self._end_of_turn_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
+                result = (await asyncio.gather(self._end_of_turn_task, return_exceptions=True))[0]
+                if isinstance(result, Exception):
                     logger.warning(
                         "error while completing the final user turn on close: %s",
-                        type(exc).__name__,
+                        type(result).__name__,
                     )
 
             if self._turn_detector_stream is not None:
