@@ -521,6 +521,8 @@ class AgentActivity(RecognitionHooks):
         self._lock = asyncio.Lock()
         self._realtime_chat_ctx_lock = asyncio.Lock()
         self._pending_realtime_user_message_ids: set[str] = set()
+        self._provider_transcription_item_ids: set[str] = set()
+        self._bounded_close_user_message_ids: set[str] = set()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -2763,6 +2765,9 @@ class AgentActivity(RecognitionHooks):
                 # generating, which would otherwise stamp the turn after the reply it prompted
                 msg.created_at = ev.turn_started_at
                 msg.metrics = {"started_speaking_at": ev.turn_started_at}
+            if self._discard_matching_bounded_close_user_message(msg):
+                return
+            self._provider_transcription_item_ids.add(msg.id)
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
 
@@ -3167,15 +3172,16 @@ class AgentActivity(RecognitionHooks):
             )
 
             if self._session._closing:
-                # add user input to chat context
                 user_message = llm.ChatMessage(
                     role="user",
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
                 )
                 user_message.metrics = self._init_metrics_from_end_of_turn(info)
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+                self._commit_bounded_user_message_locally(
+                    user_message,
+                    provider_reply_already_triggered=info.reply_already_triggered,
+                )
 
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
@@ -3289,7 +3295,10 @@ class AgentActivity(RecognitionHooks):
                 audio_input_token = await asyncio.shield(audio_input_ready_fut)
         except asyncio.CancelledError:
             if self._session._closing and self._new_turns_blocked:
-                self._commit_bounded_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(
+                    bounded_user_message,
+                    provider_reply_already_triggered=info.reply_already_triggered,
+                )
             self._clear_realtime_input_if_owned(audio_input_ready_fut)
             raise
         except BaseException:
@@ -3318,7 +3327,10 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
             if self._session._closing:
-                self._commit_bounded_user_message_locally(user_message)
+                self._commit_bounded_user_message_locally(
+                    user_message,
+                    provider_reply_already_triggered=info.reply_already_triggered,
+                )
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3377,7 +3389,10 @@ class AgentActivity(RecognitionHooks):
             )
         except asyncio.CancelledError:
             if self._session._closing and self._new_turns_blocked:
-                self._commit_bounded_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(
+                    bounded_user_message,
+                    provider_reply_already_triggered=info.reply_already_triggered,
+                )
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             raise
@@ -3411,7 +3426,10 @@ class AgentActivity(RecognitionHooks):
                 extra={"user_input": info.new_transcript},
             )
             if self._session._closing:
-                self._commit_bounded_user_message_locally(bounded_user_message)
+                self._commit_bounded_user_message_locally(
+                    bounded_user_message,
+                    provider_reply_already_triggered=info.reply_already_triggered,
+                )
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
             return
@@ -3430,7 +3448,10 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": user_message.raw_text_content},
                 )
                 if self._session._closing:
-                    self._commit_bounded_user_message_locally(user_message)
+                    self._commit_bounded_user_message_locally(
+                        user_message,
+                        provider_reply_already_triggered=info.reply_already_triggered,
+                    )
                 return
 
         speech_handle: SpeechHandle | None = None
@@ -4595,7 +4616,59 @@ class AgentActivity(RecognitionHooks):
             self._commit_realtime_user_message(user_message)
         return True
 
-    def _commit_bounded_user_message_locally(self, user_message: llm.ChatMessage) -> None:
+    def _provider_transcription_matches_bounded_message(
+        self,
+        provider_message: llm.ChatMessage,
+        bounded_message: llm.ChatMessage,
+    ) -> bool:
+        if not _transcripts_equivalent(
+            bounded_message.raw_text_content or "", provider_message.raw_text_content
+        ):
+            return False
+
+        bounded_started_at: float | None = None
+        if bounded_message.metrics is not None:
+            value = bounded_message.metrics.get("started_speaking_at")
+            if isinstance(value, (int, float)):
+                bounded_started_at = float(value)
+
+        provider_started_at: float | None = None
+        if provider_message.metrics is not None:
+            value = provider_message.metrics.get("started_speaking_at")
+            if isinstance(value, (int, float)):
+                provider_started_at = float(value)
+        return (
+            bounded_started_at is None
+            or (provider_started_at or provider_message.created_at) >= bounded_started_at
+        )
+
+    def _has_matching_provider_transcription(self, bounded_message: llm.ChatMessage) -> bool:
+        for item_id in self._provider_transcription_item_ids:
+            item = self._agent._chat_ctx.get_by_id(item_id)
+            if isinstance(
+                item, llm.ChatMessage
+            ) and self._provider_transcription_matches_bounded_message(item, bounded_message):
+                return True
+        return False
+
+    def _discard_matching_bounded_close_user_message(
+        self, provider_message: llm.ChatMessage
+    ) -> bool:
+        for item_id in tuple(self._bounded_close_user_message_ids):
+            item = self._agent._chat_ctx.get_by_id(item_id)
+            if isinstance(
+                item, llm.ChatMessage
+            ) and self._provider_transcription_matches_bounded_message(provider_message, item):
+                self._bounded_close_user_message_ids.discard(item_id)
+                return True
+        return False
+
+    def _commit_bounded_user_message_locally(
+        self,
+        user_message: llm.ChatMessage,
+        *,
+        provider_reply_already_triggered: bool = False,
+    ) -> None:
         # Server-detected audio is already represented by the provider-owned conversation item.
         # A concurrent external recognizer may finish during close, but it must not create a
         # second user item for the same turn.
@@ -4605,10 +4678,26 @@ class AgentActivity(RecognitionHooks):
             and self._turn_policy.input_owner == "provider"
         ):
             return
+
         # Empty candidates are hook opportunities, not conversation items. This helper is called
         # from several close/cancellation paths; the delegated commit is idempotent by message ID.
         if not (user_message.raw_text_content or "").strip():
             return
+
+        if (
+            self._session._closing
+            and provider_reply_already_triggered
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self._realtime_input_mode == "audio"
+            and self.llm.capabilities.user_transcription
+        ):
+            # A manual provider commit and the external STT final can finish in either order.
+            # Whichever copy lands first represents this bounded turn; the later equivalent
+            # transcript is discarded without suppressing a close-only external fallback.
+            if self._has_matching_provider_transcription(user_message):
+                return
+            self._bounded_close_user_message_ids.add(user_message.id)
+
         self._commit_user_message_locally(user_message)
 
     def _commit_user_message_locally(self, user_message: llm.ChatMessage) -> None:
