@@ -1941,9 +1941,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     _set_participant_attributes(
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
-                # self._agent_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._agent_speaking_span is not None:
-            # self._agent_speaking_span.set_attribute(trace_types.ATTR_END_TIME, time.time())
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
 
@@ -2000,10 +1998,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._user_speaking_span, self._room_io.linked_participant
                 )
 
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_START_TIME, time.time())
         elif self._user_speaking_span is not None:
-            # end_time = last_speaking_time or time.time()
-            # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
             self._user_speaking_span.end(end_time=last_speaking_time_ns)
             self._user_speaking_span = None
 
