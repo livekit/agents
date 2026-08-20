@@ -30,7 +30,12 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_SESSION_ID,
+    create_access_token,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
@@ -1073,6 +1078,7 @@ class SpeechStream(stt.SpeechStream):
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
+        session_id = headers.get(HEADER_SESSION_ID)
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
@@ -1082,6 +1088,8 @@ class SpeechStream(stt.SpeechStream):
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
+            if session_id is not None:
+                self._request_id = session_id
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:

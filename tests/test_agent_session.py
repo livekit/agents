@@ -331,11 +331,32 @@ async def test_tool_call() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    agent_speech_end_states: list[str] = []
+    on_end_of_agent_speech = AudioRecognition._on_end_of_agent_speech
+
+    def _record_agent_speech_end(
+        recognition: AudioRecognition,
+        *,
+        ignore_user_transcript_until: float,
+    ) -> None:
+        agent_speech_end_states.append(session.agent_state)
+        on_end_of_agent_speech(
+            recognition,
+            ignore_user_transcript_until=ignore_user_transcript_until,
+        )
+
+    with patch.object(
+        AudioRecognition,
+        "_on_end_of_agent_speech",
+        _record_agent_speech_end,
+    ):
+        t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
     check_timestamp(playback_finished_events[1].playback_position, 3.0, speed_factor=speed)
+    assert agent_speech_end_states[0] == "thinking"
+    assert all(state == "listening" for state in agent_speech_end_states[1:])
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
@@ -2441,6 +2462,55 @@ async def test_agent_turn_detection_override_resolves_endpointing_per_activity()
         vad_activity = AgentActivity(Agent(instructions="test", turn_detection="vad"), session)
         assert vad_activity.endpointing_opts["min_delay"] == 0.5
         assert vad_activity.endpointing_opts["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize(
+    ("session_min_delay", "agent_min_delay", "reply_held"),
+    [
+        pytest.param(0.2, 1.0, True, id="agent-holds-longer"),
+        pytest.param(1.0, 0.2, False, id="agent-releases-earlier"),
+    ],
+)
+async def test_reply_holdoff_uses_agent_endpointing_delay(
+    session_min_delay: float, agent_min_delay: float, reply_held: bool
+) -> None:
+    """VAD silence uses the active agent's delay for pending reply hold-off."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    session = AgentSession(
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling={
+            "turn_detection": "vad",
+            "endpointing": {"min_delay": session_min_delay},
+        },
+    )
+    try:
+        activity = AgentActivity(
+            Agent(
+                instructions="test",
+                turn_handling={"endpointing": {"min_delay": agent_min_delay}},
+            ),
+            session,
+        )
+        assert activity.endpointing_opts["min_delay"] == agent_min_delay
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=0.0,
+                speech_duration=0.0,
+                silence_duration=0.25,
+                speaking=True,
+                raw_accumulated_silence=0.25,
+            )
+        )
+
+        assert activity._user_silence_event.is_set() == (not reply_held)
     finally:
         await session.aclose()
 
