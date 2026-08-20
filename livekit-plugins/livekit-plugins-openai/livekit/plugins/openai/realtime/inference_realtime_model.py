@@ -5,8 +5,9 @@ import base64
 import contextlib
 import os
 import uuid
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 import aiohttp
 
@@ -46,9 +47,17 @@ from .realtime_model import (
 )
 
 InferenceClass = Literal["priority", "standard", "low"]
+_T = TypeVar("_T")
 
 # At 24 kHz mono PCM16 this retains about 44 seconds, well beyond a normal spoken turn.
 DEFAULT_MAX_UNCOMMITTED_AUDIO_BYTES = 2 * 1024 * 1024
+_FAILOVER_PROTOCOL_HEADER = "X-LiveKit-Realtime-Failover-Protocol"
+_FAILOVER_PROTOCOL_VERSION = 1
+_MAX_REPLAY_TIMEOUT_MS = 30_000
+_REPLAY_DEADLINE_SAFETY_FRACTION = 0.1
+_MAX_REPLAY_DEADLINE_SAFETY_SECONDS = 1.0
+_INTERRUPT_TIMEOUT_FRACTION = 0.2
+_MAX_INTERRUPT_TIMEOUT_SECONDS = 2.0
 _REPLAY_AUDIO_EVENT_ID_PREFIX = "livekit_replay_audio_"
 
 
@@ -177,13 +186,15 @@ class InferenceRealtimeSession(RealtimeSession):
         self._gateway_failover_lock = asyncio.Lock()
         self._deferred_chat_ctx: llm.ChatContext | None = None
         self._deferred_chat_ctx_tasks: set[asyncio.Task[None]] = set()
-        self._deferred_sync_closing = False
+        self._pending_interrupt_futures: set[asyncio.Future[None]] = set()
+        self._failover_support_closing = False
         super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
         headers = get_inference_headers(inference_class=opts.inference_class)
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
+        headers[_FAILOVER_PROTOCOL_HEADER] = str(_FAILOVER_PROTOCOL_VERSION)
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
         return process_base_url(self._opts.base_url, self._opts.model), headers
@@ -296,20 +307,65 @@ class InferenceRealtimeSession(RealtimeSession):
             )
 
     def _sync_deferred_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        if self._deferred_sync_closing:
+        if self._failover_support_closing:
             return
         task = asyncio.create_task(self._run_deferred_chat_ctx_sync(chat_ctx))
         self._deferred_chat_ctx_tasks.add(task)
         task.add_done_callback(self._deferred_chat_ctx_tasks.discard)
 
+    def _track_pending_interrupt(self, future: asyncio.Future[None]) -> None:
+        self._pending_interrupt_futures.add(future)
+
+        def _done(completed: asyncio.Future[None]) -> None:
+            self._pending_interrupt_futures.discard(completed)
+            if not completed.cancelled():
+                completed.exception()
+
+        future.add_done_callback(_done)
+
+    async def _interrupt_agent_for_failover(self, timeout: float) -> None:
+        if self._agent_session is None or self._failover_support_closing:
+            return
+
+        try:
+            future = asyncio.ensure_future(self._agent_session.interrupt(force=True))
+        except Exception:
+            return
+        self._track_pending_interrupt(future)
+        done, _ = await asyncio.wait((future,), timeout=timeout)
+        if future in done:
+            with contextlib.suppress(Exception):
+                future.result()
+            return
+
+        self._emit_error(
+            llm.RealtimeError(
+                f"timed out interrupting the agent after {timeout:.3f}s; "
+                "continuing gateway failover replay"
+            ),
+            recoverable=True,
+        )
+
+    @staticmethod
+    async def _await_before_deadline(awaitable: Awaitable[_T], deadline: float) -> _T:
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        return await asyncio.wait_for(awaitable, timeout=remaining)
+
     async def aclose(self) -> None:
-        self._deferred_sync_closing = True
+        # Set before taking snapshots; no new deferred work may register after
+        # this point without an intervening await.
+        self._failover_support_closing = True
         deferred_tasks = tuple(self._deferred_chat_ctx_tasks)
+        pending_interrupts = tuple(self._pending_interrupt_futures)
         for task in deferred_tasks:
             task.cancel()
+        for future in pending_interrupts:
+            future.cancel()
         await super().aclose()
         if deferred_tasks:
             await asyncio.gather(*deferred_tasks, return_exceptions=True)
+        if pending_interrupts:
+            await asyncio.gather(*pending_interrupts, return_exceptions=True)
 
     async def _handle_extra_server_event(
         self, event: dict[str, Any], ws_conn: aiohttp.ClientWebSocketResponse
@@ -321,27 +377,65 @@ class InferenceRealtimeSession(RealtimeSession):
         if event_type != "livekit.session.failover":
             return False
 
-        await self._handle_gateway_failover(ws_conn)
+        version = event.get("protocol_version")
+        if type(version) is not int or version != _FAILOVER_PROTOCOL_VERSION:
+            raise APIConnectionError(
+                f"unsupported realtime failover protocol version: {version!r}",
+                retryable=False,
+            )
+
+        replay_timeout_ms = event.get("replay_timeout_ms")
+        if (
+            type(replay_timeout_ms) is not int
+            or replay_timeout_ms <= 0
+            or replay_timeout_ms > _MAX_REPLAY_TIMEOUT_MS
+        ):
+            raise APIConnectionError(
+                f"invalid realtime failover replay_timeout_ms: {replay_timeout_ms!r}",
+                retryable=False,
+            )
+
+        await self._handle_gateway_failover(ws_conn, replay_timeout_ms=replay_timeout_ms)
         return True
 
-    async def _handle_gateway_failover(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+    async def _handle_gateway_failover(
+        self,
+        ws_conn: aiohttp.ClientWebSocketResponse,
+        *,
+        replay_timeout_ms: int,
+    ) -> None:
         async with self._gateway_failover_lock:
             self._gateway_failover_in_progress = True
             self._live_forwarding_allowed.clear()
+            replay_timeout = replay_timeout_ms / 1000
+            safety_margin = min(
+                _MAX_REPLAY_DEADLINE_SAFETY_SECONDS,
+                replay_timeout * _REPLAY_DEADLINE_SAFETY_FRACTION,
+            )
+            operation_timeout = replay_timeout - safety_margin
+            deadline = asyncio.get_running_loop().time() + operation_timeout
+            interrupt_timeout = min(
+                _MAX_INTERRUPT_TIMEOUT_SECONDS,
+                operation_timeout * _INTERRUPT_TIMEOUT_FRACTION,
+            )
             should_regenerate = self.has_active_generation or (
                 self._agent_session is not None
                 and self._agent_session.agent_state in ("speaking", "thinking")
             )
+            old_remote_chat_ctx: llm.remote_chat_context.RemoteChatContext | None = None
+            replay_chat_ctx: llm.ChatContext | None = None
+            send_lock_acquired = False
 
             try:
-                async with self._ws_send_lock:
+                try:
+                    await self._await_before_deadline(self._ws_send_lock.acquire(), deadline)
+                    send_lock_acquired = True
                     # Clearing _live_forwarding_allowed before taking this lock
                     # prevents new sends. Any append already inside send_str()
                     # finishes first and records itself, so this snapshot cannot
                     # omit bytes the failed provider actually observed.
-                    if self._agent_session is not None:
-                        with contextlib.suppress(Exception):
-                            await self._agent_session.interrupt(force=True)
+                    remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+                    await self._interrupt_agent_for_failover(min(interrupt_timeout, remaining))
 
                     chat_ctx = self._deferred_chat_ctx
                     self._deferred_chat_ctx = None
@@ -351,6 +445,7 @@ class InferenceRealtimeSession(RealtimeSession):
                             if self._agent_session is not None
                             else self.chat_ctx.copy()
                         )
+                    replay_chat_ctx = chat_ctx
                     replay_audio = tuple(self._uncommitted_audio)
 
                     for fut in self._response_created_futures.values():
@@ -364,31 +459,52 @@ class InferenceRealtimeSession(RealtimeSession):
                     self._discarded_event_ids.clear()
                     self._close_current_generation("gateway failover")
 
-                    events, old_chat_ctx = self._prepare_connection_replay(
+                    events, old_remote_chat_ctx = self._prepare_connection_replay(
                         include_session_state=False,
                         chat_ctx=chat_ctx,
                     )
 
-                    try:
-                        for replay_event in events:
-                            await self._send_ws_event(ws_conn, replay_event)
-                        for chunk in replay_audio:
-                            await self._send_ws_event(
+                    for replay_event in events:
+                        await self._await_before_deadline(
+                            self._send_ws_event(ws_conn, replay_event), deadline
+                        )
+                    for chunk in replay_audio:
+                        await self._await_before_deadline(
+                            self._send_ws_event(
                                 ws_conn,
                                 {
                                     "type": "input_audio_buffer.append",
                                     "event_id": _REPLAY_AUDIO_EVENT_ID_PREFIX + uuid.uuid4().hex,
                                     "audio": base64.b64encode(chunk).decode("utf-8"),
                                 },
-                            )
-                        await self._send_ws_event(
-                            ws_conn, {"type": "livekit.session.replay_completed"}
+                            ),
+                            deadline,
                         )
-                    except Exception as e:
-                        self._remote_chat_ctx = old_chat_ctx
-                        raise APIConnectionError(
-                            "failed to replay realtime session after gateway failover"
-                        ) from e
+                    await self._await_before_deadline(
+                        self._send_ws_event(ws_conn, {"type": "livekit.session.replay_completed"}),
+                        deadline,
+                    )
+                except asyncio.TimeoutError as e:
+                    if old_remote_chat_ctx is not None:
+                        self._remote_chat_ctx = old_remote_chat_ctx
+                    if self._deferred_chat_ctx is None and replay_chat_ctx is not None:
+                        self._deferred_chat_ctx = replay_chat_ctx
+                    raise APIConnectionError(
+                        "timed out replaying realtime session after gateway failover"
+                    ) from e
+                except Exception as e:
+                    if old_remote_chat_ctx is not None:
+                        self._remote_chat_ctx = old_remote_chat_ctx
+                    if self._deferred_chat_ctx is None and replay_chat_ctx is not None:
+                        self._deferred_chat_ctx = replay_chat_ctx
+                    if isinstance(e, APIConnectionError):
+                        raise
+                    raise APIConnectionError(
+                        "failed to replay realtime session after gateway failover"
+                    ) from e
+                finally:
+                    if send_lock_acquired:
+                        self._ws_send_lock.release()
             finally:
                 self._gateway_failover_in_progress = False
                 self._live_forwarding_allowed.set()
