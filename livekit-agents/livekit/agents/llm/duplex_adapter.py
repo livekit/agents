@@ -346,10 +346,11 @@ class _DuplexRealtimeSession(RealtimeSession):
             return
 
         if self._burst is not None:
-            # untagged audio under an open turn or gate is this burst's unlabelled tail
-            if voiced or self._open_turns:
-                self._feed(self._burst, f)
-            else:
+            # an open burst owns the stream until it closes, quiet stretches included: dropping
+            # them would starve playback and leave the pause nowhere on the recording's clock
+            sound = voiced or bool(self._open_turns)
+            self._feed(self._burst, f, sound=sound)
+            if not sound:
                 self._sound_stopped = True
                 self._maybe_close()
             return
@@ -357,9 +358,10 @@ class _DuplexRealtimeSession(RealtimeSession):
         if voiced:
             self._feed(self._open_burst(), f)
 
-    def _feed(self, burst: _Burst, f: DuplexAudioFrame) -> None:
-        self._sound_stopped = False
-        self._cancel_close()
+    def _feed(self, burst: _Burst, f: DuplexAudioFrame, *, sound: bool = True) -> None:
+        if sound:
+            self._sound_stopped = False
+            self._cancel_close()
         burst.track_audio(f.start_ms, f.frame.duration, voiced=self._gate.voiced)
         if not burst.modalities.done():
             burst.modalities.set_result(["audio", "text"])

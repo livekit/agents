@@ -320,8 +320,39 @@ async def test_tail_after_turn_ended_stays_in_the_same_generation(duplex) -> Non
     await _settle()
 
     assert len(generations) == 1
-    # 3 tagged + 2 tail + the four quiet frames that fall inside the 500 ms hangover
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[0] == 9
+    # 3 tagged + 2 tail + the five quiet frames the burst keeps until the gate closes it
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[0] == 10
+
+
+@pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
+async def test_a_pause_inside_an_open_burst_is_forwarded(duplex) -> None:
+    """A burst carries its own quiet stretches, so what it forwards plays back in real time.
+
+    Dropping them starves the sink instead: the pause is still heard, but nothing records where
+    it was, and the recorder collects it in front of the speech rather than inside it.
+    """
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)  # let the gate learn the model's floor
+    fake.push(0.3, count=3, turn_id="turn_a")
+    await _settle()
+    fake.emit(
+        "transcript_delta",
+        llm.DuplexTranscriptDelta(text="Half a", turn_id="turn_a", start_ms=2000, end_ms=2100),
+    )
+    fake.push(0.001, count=10)  # a pause the gate closes on, and the burst outlives
+    await _settle()
+    assert session._burst is not None  # the transcript is short of the audio
+
+    fake.push(0.3, count=3, turn_id="turn_a")
+    await _settle()
+    fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
+    fake.push(0.001, count=5)
+    await _settle()
+
+    assert len(generations) == 1
+    assert session._burst is None
+    # every frame since the burst opened, the pause included: 3 + 10 + 3 + 5
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[0] == 21
 
 
 async def test_turn_ended_while_audio_is_still_flowing_does_not_cut_it_short(duplex) -> None:
@@ -360,7 +391,7 @@ async def test_turn_ended_releases_a_burst_whose_transcript_never_caught_up(dupl
     fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
     await _settle()
     assert session._burst is None
-    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (7, "Half a")
+    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (8, "Half a")
 
 
 @pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
@@ -369,7 +400,7 @@ async def test_a_transcript_that_catches_up_closes_the_burst_at_once(duplex) -> 
     fake, session, generations = duplex
     fake.push(0.001, count=20)
     fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)  # the gate closes on the fifth, so the fourth ends the audio
+    fake.push(0.001, count=5)  # the gate closes on the fifth, which the burst still carries
     await _settle()
     assert session._close_handle is not None
 
@@ -382,7 +413,7 @@ async def test_a_transcript_that_catches_up_closes_the_burst_at_once(duplex) -> 
     await _settle()
 
     assert session._burst is None
-    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (7, "All done.")
+    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (8, "All done.")
 
 
 async def test_turn_started_adopts_a_burst_already_open(duplex) -> None:
@@ -562,8 +593,8 @@ async def test_a_turn_that_stops_being_transcribed_is_released_by_the_liveness_b
     assert len(generations) == 1
     assert session._close_handle is not None
 
-    # 3 tagged frames plus the four quiet frames inside the gate's hangover
-    assert await asyncio.wait_for(_read(generations[0]), timeout=2) == (7, "")
+    # 3 tagged frames plus the five quiet ones the burst carries until the gate closes it
+    assert await asyncio.wait_for(_read(generations[0]), timeout=2) == (8, "")
     assert session._burst is None
 
 
