@@ -390,6 +390,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
+        self._last_partial_text = ""
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -538,6 +539,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._last_partial_text = ""
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
                     await ws.send_str(
@@ -676,7 +678,9 @@ class SpeechStream(stt.SpeechStream):
         if message_type == "partial_transcript":
             logger.debug("Received message type partial_transcript: %s", data)
 
-            if text:
+            if text and text != self._last_partial_text:
+                self._last_partial_text = text
+
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
                     self._event_ch.send_nowait(
@@ -697,6 +701,8 @@ class SpeechStream(stt.SpeechStream):
         ):
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
+            self._last_partial_text = ""
+
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
