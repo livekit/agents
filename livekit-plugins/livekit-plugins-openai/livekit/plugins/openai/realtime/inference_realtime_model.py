@@ -53,7 +53,10 @@ class _InferenceOptions:
 
 
 class InferenceRealtimeModel(RealtimeModel):
-    """OpenAI-compatible realtime model authenticated through LiveKit Inference."""
+    """OpenAI-compatible realtime model authenticated through LiveKit Inference.
+
+    The gateway may reject transcription models that are not priced for LiveKit Inference.
+    """
 
     def __init__(
         self,
@@ -158,3 +161,7 @@ class InferenceRealtimeSession(RealtimeSession):
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
         return process_base_url(self._opts.base_url, self._opts.model), headers
+
+    def _is_fatal_error(self, error: object | None) -> bool:
+        code = getattr(error, "code", None) or getattr(error, "type", None)
+        return code == "unsupported_transcription_model" or super()._is_fatal_error(error)
