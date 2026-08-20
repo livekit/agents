@@ -154,6 +154,10 @@ class GandrTTS(tts.TTS):
             self._prewarm_soon()
 
     @property
+    def model(self) -> str:
+        return self._opts.voice
+
+    @property
     def provider(self) -> str:
         return "Gandr"
 
