@@ -9,8 +9,9 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import pytest
+from openai.types.realtime import AudioTranscription
 
-from livekit.agents import APIConnectionError, llm
+from livekit.agents import APIConnectionError, APIError, llm
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.openai.realtime import (
     InferenceRealtimeModel,
@@ -696,4 +697,176 @@ async def test_shared_reconnect_replays_state_for_direct_providers(provider: str
     ]
     assert second_ws.sent[1]["item"]["id"] == f"{provider}-committed"
 
+    await session.aclose()
+
+
+def _server_error(event_id: str, code: str) -> dict[str, Any]:
+    return {
+        "type": "error",
+        "event_id": f"server-error-{event_id}",
+        "error": {
+            "type": "invalid_request_error",
+            "code": code,
+            "message": code.replace("_", " "),
+            "event_id": event_id,
+        },
+    }
+
+
+@pytest.mark.parametrize("dynamic_update", [False, True], ids=["initial", "dynamic-update"])
+async def test_unsupported_transcription_model_is_terminal_without_reconnect(
+    dynamic_update: bool,
+) -> None:
+    http_session = _FakeHTTPSession()
+    transcription = AudioTranscription(model="unpriced-transcription-model")
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        base_url="https://inference.example/v1",
+        api_key="key",
+        api_secret="secret",
+        input_audio_transcription=None if dynamic_update else transcription,
+        http_session=http_session,  # type: ignore[arg-type]
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0, timeout=1),
+    )
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+
+    await _wait_for(lambda: len(http_session.connections) == 1)
+    ws = http_session.connections[0][2]
+    await _wait_for(lambda: len(ws.sent) == 1)
+    if dynamic_update:
+        model.update_options(input_audio_transcription=transcription)
+        await _wait_for(lambda: len(ws.sent) == 2)
+
+    rejected_event = ws.sent[-1]
+    assert rejected_event["type"] == "session.update"
+    assert rejected_event["session"]["audio"]["input"]["transcription"]["model"] == (
+        "unpriced-transcription-model"
+    )
+    ws.push_server_event(
+        _server_error(rejected_event["event_id"], "unsupported_transcription_model")
+    )
+
+    await _wait_for(session._main_atask.done)
+    with pytest.raises(APIError) as exc_info:
+        await session._main_atask
+
+    assert exc_info.value.retryable is False
+    assert len(http_session.connections) == 1
+    assert len(errors) == 1
+    assert errors[0].recoverable is False
+    assert isinstance(errors[0].error, APIError)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure", "xai"])
+async def test_direct_provider_invalid_request_stays_recoverable(provider: str) -> None:
+    http_session = _FakeHTTPSession()
+    conn_options = APIConnectOptions(max_retry=1, retry_interval=0, timeout=1)
+    if provider == "openai":
+        model = RealtimeModel(
+            api_key="key",
+            base_url="https://openai.example/v1",
+            http_session=http_session,  # type: ignore[arg-type]
+            conn_options=conn_options,
+        )
+    elif provider == "azure":
+        model = RealtimeModel(
+            api_key="key",
+            azure_deployment="deployment",
+            api_version="2025-04-01-preview",
+            base_url="https://azure.example/openai",
+            http_session=http_session,  # type: ignore[arg-type]
+            conn_options=conn_options,
+        )
+    else:
+        from livekit.plugins.xai.realtime import RealtimeModel as XAIRealtimeModel
+
+        model = XAIRealtimeModel(
+            api_key="key",
+            base_url="https://xai.example/v1",
+            http_session=http_session,  # type: ignore[arg-type]
+            conn_options=conn_options,
+        )
+
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    await _wait_for(lambda: len(http_session.connections) == 1)
+    ws = http_session.connections[0][2]
+    await _wait_for(lambda: len(ws.sent) == 1)
+
+    ws.push_server_event(_server_error(ws.sent[0]["event_id"], "invalid_request"))
+    await _wait_for(lambda: len(errors) == 1)
+    await session.update_instructions("The socket remains usable.")
+    await _wait_for(lambda: len(ws.sent) == 2)
+
+    assert errors[0].recoverable is True
+    assert not session._main_atask.done()
+    assert len(http_session.connections) == 1
+    await session.aclose()
+
+
+async def test_rejected_image_is_not_committed_or_replayed() -> None:
+    http_session = _FakeHTTPSession()
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        base_url="https://inference.example/v1",
+        api_key="key",
+        api_secret="secret",
+        http_session=http_session,  # type: ignore[arg-type]
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=1),
+    )
+    session = model.session()
+    reconnected = asyncio.Event()
+    session.on("session_reconnected", lambda _: reconnected.set())
+
+    await _wait_for(lambda: len(http_session.connections) == 1)
+    first_ws = http_session.connections[0][2]
+    await _wait_for(lambda: len(first_ws.sent) == 1)
+
+    image_ctx = llm.ChatContext.empty()
+    image_ctx.add_message(
+        id="rejected-image",
+        role="user",
+        content=[llm.ImageContent(image="data:image/png;base64,aW1hZ2U=")],
+    )
+    image_update = asyncio.create_task(session.update_chat_ctx(image_ctx))
+    await _wait_for(lambda: len(first_ws.sent) == 2)
+    image_event = first_ws.sent[-1]
+    assert image_event["item"]["content"][0]["type"] == "input_image"
+
+    first_ws.push_server_event(_server_error(image_event["event_id"], "unsupported_image_input"))
+    await asyncio.wait_for(image_update, timeout=0.5)
+
+    assert session.chat_ctx.get_by_id("rejected-image") is None
+    assert len(http_session.connections) == 1
+    assert not session._main_atask.done()
+
+    text_ctx = llm.ChatContext.empty()
+    text_ctx.add_message(id="valid-text", role="user", content="hello")
+    text_update = asyncio.create_task(session.update_chat_ctx(text_ctx))
+    await _wait_for(lambda: len(first_ws.sent) == 3)
+    text_event = first_ws.sent[-1]
+    first_ws.push_server_event(
+        {
+            "type": "conversation.item.added",
+            "event_id": "valid-text-added",
+            "previous_item_id": None,
+            "item": text_event["item"],
+        }
+    )
+    await asyncio.wait_for(text_update, timeout=0.5)
+
+    assert session.chat_ctx.get_by_id("rejected-image") is None
+    assert session.chat_ctx.get_by_id("valid-text") is not None
+    assert len(http_session.connections) == 1
+
+    first_ws.disconnect()
+    await _wait_for(lambda: len(http_session.connections) == 2)
+    await asyncio.wait_for(reconnected.wait(), timeout=2)
+    replayed_events = http_session.connections[1][2].sent
+
+    assert all(event.get("item", {}).get("id") != "rejected-image" for event in replayed_events)
+    assert any(event.get("item", {}).get("id") == "valid-text" for event in replayed_events)
     await session.aclose()
