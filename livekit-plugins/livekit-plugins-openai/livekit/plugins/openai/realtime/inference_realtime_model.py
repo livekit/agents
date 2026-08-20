@@ -51,6 +51,7 @@ _T = TypeVar("_T")
 
 # At 24 kHz mono PCM16 this retains about 44 seconds, well beyond a normal spoken turn.
 DEFAULT_MAX_UNCOMMITTED_AUDIO_BYTES = 2 * 1024 * 1024
+_MAX_REPLAY_TRAILING_SILENCE_BYTES = 48_000  # one second of 24 kHz mono PCM16
 _FAILOVER_PROTOCOL_HEADER = "X-LiveKit-Realtime-Failover-Protocol"
 _FAILOVER_PROTOCOL_VERSION = 1
 _MAX_REPLAY_TIMEOUT_MS = 30_000
@@ -73,8 +74,8 @@ class _InferenceOptions:
 class InferenceRealtimeModel(RealtimeModel):
     """OpenAI-compatible realtime model authenticated through LiveKit Inference.
 
-    ``max_uncommitted_audio_bytes`` bounds failover memory. Exceeding it makes the
-    session non-recoverable rather than replaying a truncated user turn.
+    ``max_uncommitted_audio_bytes`` bounds failover memory. Exceeding it disables
+    active-turn replay until the provider commits or clears the audio buffer.
     """
 
     def __init__(
@@ -180,6 +181,9 @@ class InferenceRealtimeSession(RealtimeSession):
         self._uncommitted_audio: list[bytes] = []
         self._uncommitted_audio_bytes = 0
         self._audio_buffer_overflowed = False
+        self._replay_trailing_silence_bytes = 0
+        self._active_user_turn_uncommitted = False
+        self._user_turn_commit_count = 0
         self._gateway_failover_in_progress = False
         self._live_forwarding_allowed = asyncio.Event()
         self._live_forwarding_allowed.set()
@@ -231,30 +235,52 @@ class InferenceRealtimeSession(RealtimeSession):
         the normal sender would send them a second time after the gate reopened.
         """
         if not self._audio_buffer_overflowed:
+            if not any(data):
+                remaining_silence = (
+                    _MAX_REPLAY_TRAILING_SILENCE_BYTES - self._replay_trailing_silence_bytes
+                )
+                if remaining_silence <= 0:
+                    return
+                data = data[:remaining_silence]
+                self._replay_trailing_silence_bytes += len(data)
+            else:
+                self._replay_trailing_silence_bytes = 0
+
             next_size = self._uncommitted_audio_bytes + len(data)
             if next_size <= self._inference_model._inference_opts.max_uncommitted_audio_bytes:
                 self._uncommitted_audio.append(data)
                 self._uncommitted_audio_bytes = next_size
             else:
-                # A truncated turn is unsafe to replay. Fail the session instead of retaining a
-                # suffix or allowing the replacement provider to answer incomplete speech.
+                # A truncated turn is unsafe to replay, but losing failover
+                # fidelity must not terminate an otherwise healthy live call.
                 self._uncommitted_audio.clear()
                 self._uncommitted_audio_bytes = 0
                 self._audio_buffer_overflowed = True
                 self._emit_error(
                     llm.RealtimeError(
-                        "uncommitted input audio exceeded max_uncommitted_audio_bytes"
+                        "active-turn failover replay disabled until the next audio commit: "
+                        "max_uncommitted_audio_bytes exceeded"
                     ),
-                    recoverable=False,
+                    recoverable=True,
                 )
 
     def _clear_uncommitted_audio(self) -> None:
         self._uncommitted_audio.clear()
         self._uncommitted_audio_bytes = 0
         self._audio_buffer_overflowed = False
+        self._replay_trailing_silence_bytes = 0
+        self._active_user_turn_uncommitted = False
+
+    def start_user_activity(self) -> None:
+        super().start_user_activity()
+        self._mark_user_activity()
+
+    def _mark_user_activity(self) -> None:
+        self._active_user_turn_uncommitted = True
 
     def commit_audio(self) -> None:
         super().commit_audio()
+        self._user_turn_commit_count += 1
         self._clear_uncommitted_audio()
 
     def clear_audio(self) -> None:
@@ -371,6 +397,9 @@ class InferenceRealtimeSession(RealtimeSession):
         self, event: dict[str, Any], ws_conn: aiohttp.ClientWebSocketResponse
     ) -> bool:
         event_type = event.get("type")
+        if event_type == "input_audio_buffer.speech_started":
+            self._mark_user_activity()
+            return False
         if event_type == "input_audio_buffer.committed":
             self._clear_uncommitted_audio()
             return False
@@ -395,7 +424,18 @@ class InferenceRealtimeSession(RealtimeSession):
                 retryable=False,
             )
 
-        await self._handle_gateway_failover(ws_conn, replay_timeout_ms=replay_timeout_ms)
+        context_lost = event.get("context_lost")
+        if type(context_lost) is not bool:
+            raise APIConnectionError(
+                f"invalid realtime failover context_lost: {context_lost!r}",
+                retryable=False,
+            )
+
+        await self._handle_gateway_failover(
+            ws_conn,
+            replay_timeout_ms=replay_timeout_ms,
+            context_lost=context_lost,
+        )
         return True
 
     async def _handle_gateway_failover(
@@ -403,10 +443,9 @@ class InferenceRealtimeSession(RealtimeSession):
         ws_conn: aiohttp.ClientWebSocketResponse,
         *,
         replay_timeout_ms: int,
+        context_lost: bool = True,
     ) -> None:
         async with self._gateway_failover_lock:
-            self._gateway_failover_in_progress = True
-            self._live_forwarding_allowed.clear()
             replay_timeout = replay_timeout_ms / 1000
             safety_margin = min(
                 _MAX_REPLAY_DEADLINE_SAFETY_SECONDS,
@@ -414,6 +453,34 @@ class InferenceRealtimeSession(RealtimeSession):
             )
             operation_timeout = replay_timeout - safety_margin
             deadline = asyncio.get_running_loop().time() + operation_timeout
+
+            if not context_lost:
+                send_lock_acquired = False
+                try:
+                    await self._await_before_deadline(self._ws_send_lock.acquire(), deadline)
+                    send_lock_acquired = True
+                    await self._await_before_deadline(
+                        self._send_ws_event(ws_conn, {"type": "livekit.session.replay_completed"}),
+                        deadline,
+                    )
+                except asyncio.TimeoutError as e:
+                    raise APIConnectionError(
+                        "timed out acknowledging context-preserving realtime failover"
+                    ) from e
+                except Exception as e:
+                    if isinstance(e, APIConnectionError):
+                        raise
+                    raise APIConnectionError(
+                        "failed to acknowledge context-preserving realtime failover"
+                    ) from e
+                finally:
+                    if send_lock_acquired:
+                        self._ws_send_lock.release()
+                return
+
+            self._gateway_failover_in_progress = True
+            self._live_forwarding_allowed.clear()
+            user_turn_commit_count = self._user_turn_commit_count
             interrupt_timeout = min(
                 _MAX_INTERRUPT_TIMEOUT_SECONDS,
                 operation_timeout * _INTERRUPT_TIMEOUT_FRACTION,
@@ -430,6 +497,7 @@ class InferenceRealtimeSession(RealtimeSession):
                 try:
                     await self._await_before_deadline(self._ws_send_lock.acquire(), deadline)
                     send_lock_acquired = True
+
                     # Clearing _live_forwarding_allowed before taking this lock
                     # prevents new sends. Any append already inside send_str()
                     # finishes first and records itself, so this snapshot cannot
@@ -513,5 +581,10 @@ class InferenceRealtimeSession(RealtimeSession):
                 if deferred_after_replay is not None:
                     self._sync_deferred_chat_ctx(deferred_after_replay)
 
-            if should_regenerate and self._agent_session is not None:
+            if (
+                should_regenerate
+                and not self._active_user_turn_uncommitted
+                and self._user_turn_commit_count == user_turn_commit_count
+                and self._agent_session is not None
+            ):
                 self._agent_session.generate_reply()
