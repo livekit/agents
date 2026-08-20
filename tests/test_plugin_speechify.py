@@ -179,3 +179,26 @@ def test_marks_to_timed_uses_start_end_time() -> None:
     assert timed[0] == "a"
     assert timed[0].start_time == pytest.approx(0.5)
     assert timed[0].end_time == pytest.approx(0.6)
+
+
+def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", "livekit.plugins.speechify"):
+        # curated simba-3.2 voices (id suffix "_32") warn on other models
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-english")
+        assert any("dominic_32" in r.message for r in caplog.records)
+
+        caplog.clear()
+        # NOT_GIVEN defaults the server to simba-3.0 -> still a mismatch
+        sfy_tts._warn_voice_model_compat("dominic_32", NOT_GIVEN)
+        assert any("dominic_32" in r.message for r in caplog.records)
+
+        caplog.clear()
+        # the supported pairing is silent
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.2")
+        assert not caplog.records
+
+        caplog.clear()
+        # non "_32" voices never warn regardless of model
+        sfy_tts._warn_voice_model_compat("henry", "simba-english")
+        sfy_tts._warn_voice_model_compat("henry", "simba-3.2")
+        assert not caplog.records

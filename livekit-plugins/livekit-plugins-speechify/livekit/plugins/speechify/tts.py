@@ -128,7 +128,9 @@ class TTS(tts.TTS):
         Args:
             voice_id: Id of the voice to synthesize with. The voice must support
                 the chosen ``model`` (see the ``/v1/voices`` endpoint). Defaults
-                to ``dominic_32``.
+                to ``dominic_32``. Voices whose id carries a ``_32`` suffix are
+                part of the curated simba-3.2 roster; a warning is logged when
+                they are paired with any other model.
             model: Synthesis model. One of ``simba-english``,
                 ``simba-multilingual``, ``simba-3.0`` or ``simba-3.2``. Defaults
                 to ``simba-3.2``.
@@ -189,6 +191,7 @@ class TTS(tts.TTS):
         )
 
         _check_deprecated_args(kwargs)
+        _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     @property
     def model(self) -> str:
@@ -226,6 +229,7 @@ class TTS(tts.TTS):
             self._opts.loudness_normalization = loudness_normalization
         if is_given(text_normalization):
             self._opts.text_normalization = text_normalization
+        _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     def synthesize(
         self,
@@ -291,6 +295,22 @@ def _supports_streaming_marks(model: NotGivenOr[TTSModels]) -> bool:
     if not is_given(model):
         return True
     return model in ("simba-3.0", "simba-3.2")
+
+
+def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> None:
+    # simba-3.2 serves a curated stock roster whose ids carry a "_32" suffix
+    # (e.g. "dominic_32"). Such voices are tuned for simba-3.2; pairing them
+    # with another model is likely to be rejected or sub-optimal.
+    if is_given(model) and model == "simba-3.2":
+        return
+    if not voice_id.endswith("_32"):
+        return
+    effective = model if is_given(model) else "simba-3.0 (server default)"
+    logger.warning(
+        f"voice {voice_id!r} is part of the curated simba-3.2 roster but the "
+        f"configured model is {effective!r}; this pairing may be unsupported. "
+        "Set model='simba-3.2' when using a '*_32' voice."
+    )
 
 
 def _marks_to_timed(chunks: Iterable[object], offset: float) -> list[TimedString]:
