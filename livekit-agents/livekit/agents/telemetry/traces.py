@@ -278,6 +278,50 @@ def set_tracer_provider(
     tracer.set_provider(tracer_provider)
 
 
+class _FrameworkTelemetry:
+    """Tracks the OTel objects ``_setup_cloud_tracer`` created, so ``_shutdown_telemetry``
+    only tears down what the framework owns.
+
+    ``_shutdown_telemetry`` runs once per job (``JobContext._on_cleanup``), but worker
+    processes are reused across jobs, and a provider configured by the integrator —
+    once at process start, e.g. the Langfuse setup in our tracing docs, or Logfire /
+    dd-trace — has process lifetime. Shutting that provider down ends *their* export
+    for every later job in the process.
+
+    Ownership therefore decides the teardown:
+      * providers the framework created are shut down in full, as before;
+      * for a provider the framework adopted, only the processors the framework added
+        to it are shut down. That still flushes LiveKit Cloud's batch exporter at job
+        end, while leaving the integrator's own pipeline running.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._providers: list[Any] = []
+        self._processors: list[Any] = []
+
+    def add_provider(self, provider: Any) -> None:
+        """Record a provider the framework constructed (shut down in full)."""
+        with self._lock:
+            self._providers.append(provider)
+
+    def add_processor(self, processor: Any) -> None:
+        """Record a processor the framework attached to a provider it does not own."""
+        with self._lock:
+            self._processors.append(processor)
+
+    def take(self) -> list[Any]:
+        """Return everything tracked and reset, so the next job starts from clean state."""
+        with self._lock:
+            targets = [*self._providers, *self._processors]
+            self._providers = []
+            self._processors = []
+            return targets
+
+
+_framework_telemetry = _FrameworkTelemetry()
+
+
 def _setup_cloud_tracer(
     *,
     room_id: str,
@@ -344,12 +388,15 @@ def _setup_cloud_tracer(
         # below shows how the ProxyTracerProvider is returned when none have been setup
         # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
         tracer_provider: trace_api.TracerProvider
+        owns_tracer_provider = False
         if isinstance(
             tracer._tracer_provider,
             (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
         ):
             tracer_provider = trace_sdk.TracerProvider(resource=resource)
             set_tracer_provider(tracer_provider)
+            owns_tracer_provider = True
+            _framework_telemetry.add_provider(tracer_provider)
         else:
             # attach the processor to the existing tracer provider
             tracer_provider = tracer._tracer_provider
@@ -364,14 +411,21 @@ def _setup_cloud_tracer(
 
         if isinstance(tracer_provider, trace_sdk.TracerProvider):
             tracer_provider.add_span_processor(_MetadataSpanProcessor(session_metadata))
-            tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+            span_processor = BatchSpanProcessor(span_exporter)
+            tracer_provider.add_span_processor(span_processor)
+            if not owns_tracer_provider:
+                # the provider outlives the job; shut down just our exporter.
+                _framework_telemetry.add_processor(span_processor)
 
     # Always set up the logger provider — it's needed for session reports,
     # evaluations, and chat history, not just Python log export.
     logger_provider = get_logger_provider()
+    owns_logger_provider = False
     if not isinstance(logger_provider, LoggerProvider):
         logger_provider = LoggerProvider()
         set_logger_provider(logger_provider)
+        owns_logger_provider = True
+        _framework_telemetry.add_provider(logger_provider)
 
     if enable_logs:
         log_exporter = OTLPLogExporter(
@@ -380,7 +434,11 @@ def _setup_cloud_tracer(
             session=session,
         )
         logger_provider.add_log_record_processor(_MetadataLogProcessor(session_metadata))
-        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+        log_processor = BatchLogRecordProcessor(log_exporter)
+        logger_provider.add_log_record_processor(log_processor)
+        if not owns_logger_provider:
+            # the provider outlives the job; shut down just our exporter.
+            _framework_telemetry.add_processor(log_processor)
 
         handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
@@ -406,6 +464,7 @@ def _setup_cloud_tracer(
         reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
         meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
         metrics_api.set_meter_provider(meter_provider)
+        _framework_telemetry.add_provider(meter_provider)
 
 
 def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
@@ -731,39 +790,39 @@ def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
     Any unfinished work stays on existing daemon threads and is discarded at
     process exit.
 
+    Only what ``_setup_cloud_tracer`` created is torn down — see
+    ``_FrameworkTelemetry``. A provider supplied by the integrator is left
+    running, because this function is called per job on a worker process that is
+    reused across jobs.
+
     Upstream context:
     - https://github.com/open-telemetry/opentelemetry-python/issues/4623
       (TracerProvider.shutdown() has no configurable timeout — still open)
     """
-    # Detach the OTLP LoggingHandler from the root logger — belt to the
-    # suspenders of the parallel shutdown below.
+    # Detach our OTLP LoggingHandler from the root logger — belt to the
+    # suspenders of the parallel shutdown below. Matched on the framework's own
+    # subclass: the integrator may have their own OTel LoggingHandler installed.
     root = logging.getLogger()
     for h in list(root.handlers):
-        if isinstance(h, LoggingHandler):
+        if isinstance(h, _TraceLevelLoggingHandler):
             root.removeHandler(h)
 
-    providers: list[Any] = []
-    if isinstance(lp := get_logger_provider(), LoggerProvider):
-        providers.append(lp)
-    if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
-        providers.append(tp)
-    if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
-        providers.append(mp)
+    targets = _framework_telemetry.take()
 
-    def _shutdown_one(provider: Any) -> None:
+    def _shutdown_one(target: Any) -> None:
         try:
-            provider.shutdown()
+            target.shutdown()
         except Exception:
             logger.exception("failed to shut down telemetry provider")
 
     threads = [
         threading.Thread(
             target=_shutdown_one,
-            args=(p,),
-            name=f"livekit-telemetry-shutdown-{type(p).__name__}",
+            args=(t,),
+            name=f"livekit-telemetry-shutdown-{type(t).__name__}",
             daemon=True,
         )
-        for p in providers
+        for t in targets
     ]
     for t in threads:
         t.start()
