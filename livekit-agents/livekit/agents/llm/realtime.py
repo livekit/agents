@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,9 +17,6 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
-
-if TYPE_CHECKING:
-    from ..voice.agent_session import AgentSession
 
 
 @dataclass
@@ -203,9 +200,6 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model
-        # AgentActivity binds this while the session is active. Realtime sessions that recover
-        # internally use it to coordinate interruption and reply regeneration.
-        self._agent_session: AgentSession | None = None
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
