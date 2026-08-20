@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -161,6 +161,19 @@ class InferenceRealtimeSession(RealtimeSession):
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
         return process_base_url(self._opts.base_url, self._opts.model), headers
+
+    def _create_session_update_event(self) -> dict[str, Any]:
+        event = super()._create_session_update_event()
+        dumped = (
+            event
+            if isinstance(event, dict)
+            else event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+        )
+        session = dumped.get("session")
+        if isinstance(session, dict):
+            # The query carries the LiveKit catalog id; it is not a provider model id.
+            session.pop("model", None)
+        return dumped
 
     def _is_fatal_error(self, error: object | None) -> bool:
         code = getattr(error, "code", None) or getattr(error, "type", None)

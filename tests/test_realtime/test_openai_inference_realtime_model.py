@@ -169,6 +169,7 @@ async def test_initial_event_is_ga_session_update(
     dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
     assert dumped["type"] == "session.update"
     assert dumped["session"]["type"] == "realtime"
+    assert "model" not in dumped["session"]
     assert dumped["type"] != "session.create"
     await session.aclose()
 
