@@ -23,12 +23,17 @@ pytestmark = pytest.mark.unit
 _REPLAY_TIMEOUT_MS = 15_000
 
 
-def _failover_event(*, protocol_version: object = 1, replay_timeout_ms: object = 15_000) -> dict:
+def _failover_event(
+    *,
+    protocol_version: object = 1,
+    replay_timeout_ms: object = 15_000,
+    context_lost: object = True,
+) -> dict:
     return {
         "type": "livekit.session.failover",
         "protocol_version": protocol_version,
         "replay_timeout_ms": replay_timeout_ms,
-        "context_lost": True,
+        "context_lost": context_lost,
     }
 
 
@@ -209,6 +214,71 @@ async def test_gateway_failover_rejects_invalid_replay_timeout_budget(
         )
 
     assert exc_info.value.retryable is False
+    await session.aclose()
+
+
+async def test_context_preserving_failover_only_acknowledges_the_handoff(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+    session._record_sent_input_audio(b"active-user-turn")
+    ws = _FakeWebSocket()
+
+    handled = await session._handle_extra_server_event(  # type: ignore[arg-type]
+        _failover_event(context_lost=False), ws
+    )
+
+    assert handled is True
+    assert ws.sent == [{"type": "livekit.session.replay_completed"}]
+    assert session._uncommitted_audio == [b"active-user-turn"]
+    await session.aclose()
+
+
+async def test_context_preserving_handoff_does_not_drop_interrupt_or_truncate(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+    session._msg_ch.recv_nowait()  # initial session.update
+    pending: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures["response"] = pending
+    ws = _BlockingFirstSendWebSocket()
+
+    handoff_task = asyncio.create_task(
+        session._handle_extra_server_event(  # type: ignore[arg-type]
+            _failover_event(context_lost=False), ws
+        )
+    )
+    await ws.first_send_started.wait()
+    session.interrupt()
+    session.truncate(message_id="assistant-item", modalities=["audio"], audio_end_ms=250)
+    ws.release_first_send.set()
+    assert await handoff_task is True
+
+    queued = [session._msg_ch.recv_nowait(), session._msg_ch.recv_nowait()]
+    event_types = [
+        event.model_dump(exclude_unset=True)["type"]
+        if hasattr(event, "model_dump")
+        else event["type"]
+        for event in queued
+    ]
+    assert event_types == ["response.cancel", "conversation.item.truncate"]
+    session._response_created_futures.clear()
+    pending.cancel()
+    await session.aclose()
+
+
+async def test_gateway_failover_requires_boolean_context_lost(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+
+    with pytest.raises(APIConnectionError, match="invalid.*context_lost"):
+        await session._handle_extra_server_event(  # type: ignore[arg-type]
+            _failover_event(context_lost="yes"), _FakeWebSocket()
+        )
     await session.aclose()
 
 
@@ -443,13 +513,34 @@ async def test_audio_buffer_is_bounded_and_never_replays_a_truncated_turn(
     assert session._uncommitted_audio == []
     assert session._audio_buffer_overflowed is True
     assert len(errors) == 1
-    assert errors[0].recoverable is False
+    assert errors[0].recoverable is True
+    assert "replay disabled" in str(errors[0].error)
 
     ws = _FakeWebSocket()
     await session._handle_gateway_failover(  # type: ignore[arg-type]
         ws, replay_timeout_ms=_REPLAY_TIMEOUT_MS
     )
     assert [event["type"] for event in ws.sent] == ["livekit.session.replay_completed"]
+    await session.aclose()
+
+
+async def test_long_substituted_silence_does_not_overflow_or_end_the_call(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+
+    # Sixty seconds of 24 kHz mono PCM16 in 100 ms frames. AgentActivity
+    # substitutes exactly this zero audio while the caller is not forwarded.
+    for _ in range(600):
+        session._record_sent_input_audio(bytes(4_800))
+
+    assert session._audio_buffer_overflowed is False
+    assert session._uncommitted_audio_bytes == 48_000
+    assert session._active_user_turn_uncommitted is False
+    assert errors == []
     await session.aclose()
 
 
@@ -566,6 +657,9 @@ async def test_failover_interrupts_and_regenerates_active_agent_reply(
     session = model.session()
     agent_session = _AgentSession(session)
     session._agent_session = agent_session  # type: ignore[assignment]
+    # Ordinary nonzero microphone noise is replayable audio, but only the
+    # provider's speech_started event establishes response ownership.
+    session._record_sent_input_audio(b"\x01\x00" * 20)
     pending: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
     session._response_created_futures["response"] = pending
 
@@ -578,6 +672,100 @@ async def test_failover_interrupts_and_regenerates_active_agent_reply(
     assert agent_session.generate_reply_calls == 1
     assert isinstance(pending.exception(), llm.RealtimeError)
     assert any(event["type"] == "conversation.item.create" for event in ws.sent)
+    assert any(event["type"] == "input_audio_buffer.append" for event in ws.sent)
+    await session.aclose()
+
+
+@pytest.mark.parametrize("activity_source", ["server_vad", "manual"])
+async def test_failover_does_not_regenerate_while_replaying_an_active_user_turn(
+    paused_realtime_main: None, activity_source: str
+) -> None:
+    class _AgentSession:
+        agent_state = "speaking"
+
+        def __init__(self) -> None:
+            self.current_agent = SimpleNamespace(chat_ctx=llm.ChatContext.empty())
+            self.generate_reply_calls = 0
+
+        async def interrupt(self, *, force: bool) -> None:
+            assert force is True
+
+        def generate_reply(self) -> None:
+            self.generate_reply_calls += 1
+
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+    agent_session = _AgentSession()
+    session._agent_session = agent_session  # type: ignore[assignment]
+    ws = _FakeWebSocket()
+    if activity_source == "server_vad":
+        handled = await session._handle_extra_server_event(  # type: ignore[arg-type]
+            {"type": "input_audio_buffer.speech_started"}, ws
+        )
+        assert handled is False
+    else:
+        session.start_user_activity()
+    session._record_sent_input_audio(b"caller speech")
+    pending: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures["response"] = pending
+
+    await session._handle_gateway_failover(  # type: ignore[arg-type]
+        ws, replay_timeout_ms=_REPLAY_TIMEOUT_MS
+    )
+
+    assert any(event["type"] == "input_audio_buffer.append" for event in ws.sent)
+    assert agent_session.generate_reply_calls == 0
+    assert isinstance(pending.exception(), llm.RealtimeError)
+    await session.aclose()
+
+
+@pytest.mark.parametrize(
+    ("activity_outcome", "expected_regenerations"),
+    [("active", 0), ("committed", 0), ("cleared", 1)],
+)
+async def test_user_activity_outcome_during_replay_controls_reply_regeneration(
+    paused_realtime_main: None,
+    activity_outcome: str,
+    expected_regenerations: int,
+) -> None:
+    class _AgentSession:
+        agent_state = "speaking"
+
+        def __init__(self) -> None:
+            self.current_agent = SimpleNamespace(chat_ctx=llm.ChatContext.empty())
+            self.generate_reply_calls = 0
+
+        async def interrupt(self, *, force: bool) -> None:
+            assert force is True
+
+        def generate_reply(self) -> None:
+            self.generate_reply_calls += 1
+
+    model = InferenceRealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+    session = model.session()
+    agent_session = _AgentSession()
+    session._agent_session = agent_session  # type: ignore[assignment]
+    session._record_sent_input_audio(b"background noise")
+    pending: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures["response"] = pending
+    ws = _BlockingFirstSendWebSocket()
+
+    failover_task = asyncio.create_task(
+        session._handle_gateway_failover(  # type: ignore[arg-type]
+            ws, replay_timeout_ms=_REPLAY_TIMEOUT_MS
+        )
+    )
+    await ws.first_send_started.wait()
+    session.start_user_activity()
+    if activity_outcome == "committed":
+        session.commit_audio()
+    elif activity_outcome == "cleared":
+        session.clear_audio()
+    ws.release_first_send.set()
+    await failover_task
+
+    assert agent_session.generate_reply_calls == expected_regenerations
+    assert isinstance(pending.exception(), llm.RealtimeError)
     await session.aclose()
 
 
