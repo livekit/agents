@@ -55,12 +55,30 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from . import trace_types
+from . import trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
     from ..observability import Tagger
+    from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
+
+
+_SESSION_OPTION_KEY_ALIASES = {
+    "keyterms": "lk.pii.keyterms",
+}
+
+
+def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
+    def _serialize(value: dict[str, Any]) -> dict[str, Any]:
+        return {
+            _SESSION_OPTION_KEY_ALIASES.get(key, key): (
+                _serialize(nested_value) if isinstance(nested_value, dict) else nested_value
+            )
+            for key, nested_value in value.items()
+        }
+
+    return _serialize(vars(options))
 
 
 class _DynamicTracer(Tracer):
@@ -80,7 +98,24 @@ class _DynamicTracer(Tracer):
         return self._tracer.start_span(*args, **kwargs)
 
     @_agnosticcontextmanager
+    def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
+        with trace_api.use_span(*args, **kwargs) as span:
+            yield span
+
+    @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
         with self._tracer.start_as_current_span(*args, **kwargs) as span:
             yield span
 
@@ -211,6 +246,15 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
+        if telemetry_utils._redaction_enabled() and log_record.attributes:
+            attributes = dict(log_record.attributes)
+            if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
+                attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
+                    telemetry_utils.REDACTED_EXCEPTION_MESSAGE
+                )
+            attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
+            log_record.attributes = attributes
+
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
         if record.levelno == TRACE_LEVEL:
@@ -575,7 +619,7 @@ async def _upload_session_report(
             body="session report",
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
-                "session.options": vars(report.options),
+                "session.options": _serialize_session_options(report.options),
                 "session.report_timestamp": report.timestamp,
                 "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
