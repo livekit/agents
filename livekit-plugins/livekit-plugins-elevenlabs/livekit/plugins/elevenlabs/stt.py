@@ -70,7 +70,7 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
 
 
 def _wire_language(language: str) -> str:
-    """Normalize a secondary language to the code the realtime API accepts.
+    """Normalize a language to the code the realtime API accepts.
 
     It takes ISO-639-1 or ISO-639-3 and rejects the whole session on anything else, including
     the region-tagged tags `LanguageCode` happily produces ("ru-RU"), so the region comes off.
@@ -669,7 +669,7 @@ class SpeechStream(stt.SpeechStream):
                 params.append(f"min_silence_duration_ms={min_silence_duration_ms}")
 
         if self._language:
-            params.append(f"language_code={self._language}")
+            params.append(f"language_code={quote(_wire_language(self._language))}")
 
         if is_given(self._opts.secondary_languages):
             params.extend(

@@ -15,7 +15,7 @@ from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -290,6 +290,17 @@ def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
 
     assert stream._opts.keyterms == ["nginx"]
     assert stream._reconnect_event.is_set()
+
+
+async def test_connect_ws_normalizes_the_primary_language() -> None:
+    # LanguageCode keeps the region ("en-US") but the realtime API rejects it, so the primary
+    # language goes on the wire through the same normalization the secondary ones get
+    stream = _new_stream(language=LanguageCode("en_US"), secondary_languages=["ru-RU"])
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("language_code") == ["en"]
+    assert URL(url).query.getall("secondary_languages") == ["ru"]
 
 
 async def test_connect_ws_includes_secondary_languages() -> None:
