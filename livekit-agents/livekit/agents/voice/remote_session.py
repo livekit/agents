@@ -322,6 +322,8 @@ _TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
+    # TODO: @chenghao-mou The remote-session protocol does not yet represent screening.
+    AMDCategory.MACHINE_SCREENING: agent_pb.AmdCategory.AMD_UNKNOWN,
     AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
     AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,

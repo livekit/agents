@@ -3426,14 +3426,10 @@ name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs"] },
-    { name = "speechify-api" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "speechify-api", specifier = ">=3.0.1" },
-]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-speechmatics"
