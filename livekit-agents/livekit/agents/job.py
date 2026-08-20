@@ -235,6 +235,7 @@ class JobContext:
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
+        self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
 
     def _on_setup(self) -> None:
@@ -797,11 +798,16 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
+        redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
+            raise ValueError("audio upload requires transcript upload when redaction is enabled")
+
         if self._recording_initialized:
             self._stop_log_buffering()
             return
 
         self._recording_initialized = True
+        self._redaction_enabled = redaction_enabled
 
         needs_cloud = (
             options.get("traces", True)

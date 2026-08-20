@@ -433,7 +433,7 @@ class LLMStream(llm.LLMStream):
                     extra={
                         "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
-                        "chat_ctx": chat_ctx,
+                        "lk.pii.chat_ctx": chat_ctx,
                     },
                 )
             if not self._tools:
