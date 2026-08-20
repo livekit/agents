@@ -875,6 +875,7 @@ class RealtimeSession(
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
+        self._ws_send_lock = asyncio.Lock()
 
         self._instructions: str | None = None
         # set on aclose; trailing server events are ignored while it's set
@@ -925,6 +926,67 @@ class RealtimeSession(
         # value cannot, because a late transcript would consume the next turn's value.
         self._input_speech_started_at: dict[str, float] = {}
 
+    def _prepare_connection_replay(
+        self,
+        *,
+        include_session_state: bool,
+        chat_ctx: llm.ChatContext | None = None,
+    ) -> tuple[
+        list[RealtimeClientEvent | dict[str, Any]], llm.remote_chat_context.RemoteChatContext
+    ]:
+        events: list[RealtimeClientEvent | dict[str, Any]] = []
+
+        if include_session_state:
+            events.append(self._create_session_update_event())
+            tools = self._tools.flatten()
+            if tools:
+                events.append(self._create_tools_update_event(tools))
+
+        # The turn state goes first, since what it settles belongs in the mirror replayed below.
+        self._reset_input_turn_state()
+        if chat_ctx is None:
+            chat_ctx = self.chat_ctx
+        chat_ctx = chat_ctx.copy(
+            exclude_function_call=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_handoff=True,
+            exclude_config_update=True,
+        )
+        old_chat_ctx = self._remote_chat_ctx
+        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+        events.extend(self._create_update_chat_ctx_events(chat_ctx))
+        return events, old_chat_ctx
+
+    async def _send_ws_event(
+        self,
+        ws_conn: aiohttp.ClientWebSocketResponse,
+        event: RealtimeClientEvent | dict[str, Any],
+    ) -> None:
+        if isinstance(event, BaseModel):
+            event = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+
+        if self._opts.is_azure and self._opts.api_version:
+            _normalize_azure_client_event(event)
+
+        self.emit("openai_client_event_queued", event)
+        await ws_conn.send_str(json.dumps(event))
+
+        if lk_oai_debug and event["type"] != "input_audio_buffer.append":
+            logger.debug(f">>> {event}")
+
+    async def _wait_before_live_send(self) -> None:
+        """Wait until a queued live event may be forwarded."""
+
+    async def _handle_extra_server_event(
+        self, event: dict[str, Any], ws_conn: aiohttp.ClientWebSocketResponse
+    ) -> bool:
+        """Handle a provider-specific server event.
+
+        Returns True when the event was fully handled and should skip the standard parser.
+        """
+        return False
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         num_retries: int = 0
@@ -936,43 +998,12 @@ class RealtimeSession(
                 extra={"max_session_duration": self._opts.max_session_duration},
             )
 
-            events: list[RealtimeClientEvent | dict[str, Any]] = []
-
-            # options and instructions
-            events.append(self._create_session_update_event())
-
-            # tools
-            tools = self._tools.flatten()
-            if tools:
-                events.append(self._create_tools_update_event(tools))
-
-            # chat context. the turn state goes first, since what it settles belongs in the
-            # mirror that is replayed below
-            self._reset_input_turn_state()
-            chat_ctx = self.chat_ctx.copy(
-                exclude_function_call=True,
-                exclude_instructions=True,
-                exclude_empty_message=True,
-                exclude_handoff=True,
-                exclude_config_update=True,
-            )
-            old_chat_ctx = self._remote_chat_ctx
-            self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            events.extend(self._create_update_chat_ctx_events(chat_ctx))
+            events, old_chat_ctx = self._prepare_connection_replay(include_session_state=True)
 
             try:
-                for ev in events:
-                    # certain events could already be in dict format
-                    if isinstance(ev, BaseModel):
-                        ev = ev.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=False
-                        )
-
-                    if self._opts.is_azure and self._opts.api_version:
-                        _normalize_azure_client_event(ev)
-
-                    self.emit("openai_client_event_queued", ev)
-                    await ws_conn.send_str(json.dumps(ev))
+                async with self._ws_send_lock:
+                    for ev in events:
+                        await self._send_ws_event(ws_conn, ev)
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
@@ -1041,23 +1072,7 @@ class RealtimeSession(
             self._response_created_futures.clear()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {"User-Agent": "LiveKit Agents"}
-        if self._opts.is_azure:
-            if self._opts.entra_token:
-                headers["Authorization"] = f"Bearer {self._opts.entra_token}"
-
-            if self._opts.api_key:
-                headers["api-key"] = self._opts.api_key
-        else:
-            headers["Authorization"] = f"Bearer {self._opts.api_key}"
-
-        url = process_base_url(
-            self._opts.base_url,
-            self._opts.model,
-            is_azure=self._opts.is_azure,
-            api_version=self._opts.api_version,
-            azure_deployment=self._opts.azure_deployment,
-        )
+        url, headers = self._create_ws_url_and_headers()
 
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
@@ -1079,6 +1094,26 @@ class RealtimeSession(
                 message=f"{self._realtime_model._provider_label} connection timed out",
             ) from e
 
+    def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
+        headers = {"User-Agent": "LiveKit Agents"}
+        if self._opts.is_azure:
+            if self._opts.entra_token:
+                headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+
+            if self._opts.api_key:
+                headers["api-key"] = self._opts.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self._opts.api_key}"
+
+        url = process_base_url(
+            self._opts.base_url,
+            self._opts.model,
+            is_azure=self._opts.is_azure,
+            api_version=self._opts.api_version,
+            azure_deployment=self._opts.azure_deployment,
+        )
+        return url, headers
+
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
 
@@ -1087,21 +1122,9 @@ class RealtimeSession(
             nonlocal closing
             async for msg in self._msg_ch:
                 try:
-                    if isinstance(msg, BaseModel):
-                        msg = msg.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=False
-                        )
-
-                    # Azure uses "text" for assistant content parts, while
-                    # the new API uses "output_text" for assistant content.
-                    if self._opts.is_azure and self._opts.api_version:
-                        _normalize_azure_client_event(msg)
-
-                    self.emit("openai_client_event_queued", msg)
-                    await ws_conn.send_str(json.dumps(msg))
-
-                    if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
-                        logger.debug(f">>> {msg}")
+                    await self._wait_before_live_send()
+                    async with self._ws_send_lock:
+                        await self._send_ws_event(ws_conn, msg)
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1146,6 +1169,8 @@ class RealtimeSession(
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
                 self.emit("openai_server_event_received", event)
+                if await self._handle_extra_server_event(event, ws_conn):
+                    continue
 
                 try:
                     if lk_oai_debug:
@@ -1624,13 +1649,19 @@ class RealtimeSession(
         for f in self._resample_audio(frame):
             data = f.data.tobytes()
             for nf in self._bstream.write(data):
-                self.send_event(
-                    InputAudioBufferAppendEvent(
-                        type="input_audio_buffer.append",
-                        audio=base64.b64encode(nf.data).decode("utf-8"),
-                    )
+                self._queue_input_audio(
+                    data=nf.data.tobytes(),
+                    duration=nf.duration,
                 )
-                self._pushed_duration_s += nf.duration
+
+    def _queue_input_audio(self, *, data: bytes, duration: float) -> None:
+        self.send_event(
+            InputAudioBufferAppendEvent(
+                type="input_audio_buffer.append",
+                audio=base64.b64encode(data).decode("utf-8"),
+            )
+        )
+        self._pushed_duration_s += duration
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         message = llm.ChatMessage(
