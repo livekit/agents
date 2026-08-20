@@ -45,6 +45,7 @@ members = [
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
+    "livekit-plugins-floe",
     "livekit-plugins-gladia",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
@@ -1007,6 +1008,15 @@ version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
+]
+
+[[package]]
+name = "floe-guard"
+version = "0.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/89/29512f65a99dc51e39cb4bf44cf6d16021533b7056329ecbdb0c436afa21/floe_guard-0.19.0.tar.gz", hash = "sha256:45cf9a50927f3f46ed2f59f3c0d53cede4c765a8e437976106e7f933288f9213", size = 446997, upload-time = "2026-08-18T20:42:12.932Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/f2/235aff568a94eff5fdb19356d9cb5db7525217221ed29b254b99b386add8/floe_guard-0.19.0-py3-none-any.whl", hash = "sha256:1253beba25636d0dd3e793af963fd5273b8ec37c012aca5809e31be61c4ca46f", size = 116692, upload-time = "2026-08-18T20:42:11.245Z" },
 ]
 
 [[package]]
@@ -2016,6 +2026,9 @@ fireworksai = [
 fishaudio = [
     { name = "livekit-plugins-fishaudio" },
 ]
+floe = [
+    { name = "livekit-plugins-floe" },
+]
 gladia = [
     { name = "livekit-plugins-gladia" },
 ]
@@ -2199,6 +2212,7 @@ requires-dist = [
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
     { name = "livekit-plugins-fishaudio", marker = "extra == 'fishaudio'", editable = "livekit-plugins/livekit-plugins-fishaudio" },
+    { name = "livekit-plugins-floe", marker = "extra == 'floe'", editable = "livekit-plugins/livekit-plugins-floe" },
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-gnani", marker = "extra == 'gnani'", editable = "livekit-plugins/livekit-plugins-gnani" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
@@ -2267,7 +2281,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "floe", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2878,6 +2892,24 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.0" },
+]
+
+[[package]]
+name = "livekit-plugins-floe"
+source = { editable = "livekit-plugins/livekit-plugins-floe" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "floe-guard" },
+    { name = "livekit" },
+    { name = "livekit-agents", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
+    { name = "floe-guard", specifier = ">=0.19" },
+    { name = "livekit" },
+    { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
 
 [[package]]
