@@ -423,8 +423,8 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["flush_signal"] = str(opts.flush_signal).lower()
     if _model_supports_mode(opts.model):
         params["mode"] = opts.mode
-    # input_audio_codec is deprecated (see STT.__init__/stream()) and is no longer sent —
-    # Sarvam's API ignores it server-side and negotiates the codec automatically.
+    if opts.input_audio_codec:
+        params["input_audio_codec"] = opts.input_audio_codec
 
     if _model_supports_vad_params(opts.model):
         if opts.positive_speech_threshold is not None:
@@ -538,12 +538,6 @@ class STT(stt.STT):
             raise ValueError(
                 "Sarvam API key is required. "
                 "Provide it directly or set SARVAM_API_KEY environment variable."
-            )
-
-        if input_audio_codec:
-            logger.warning(
-                "input_audio_codec is deprecated and no longer used; Sarvam's API now "
-                "negotiates the audio codec automatically."
             )
 
         self._opts = SarvamSTTOptions(
@@ -817,11 +811,6 @@ class STT(stt.STT):
         opts_input_codec = (
             input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
-        if is_given(input_audio_codec):
-            logger.warning(
-                "input_audio_codec is deprecated and no longer used; Sarvam's API now "
-                "negotiates the audio codec automatically."
-            )
         opts_positive_speech = (
             positive_speech_threshold
             if is_given(positive_speech_threshold)
@@ -959,9 +948,7 @@ class SpeechStream(stt.SpeechStream):
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
         self._message_task: asyncio.Task | None = None
-        # input_audio_codec is deprecated and never forwarded (see STT.__init__/stream());
-        # always report the actual wire format we send.
-        self._audio_encoding = "audio/wav"
+        self._audio_encoding = self._opts.input_audio_codec or "audio/wav"
         self._chunk_size = max(
             int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
             1,
