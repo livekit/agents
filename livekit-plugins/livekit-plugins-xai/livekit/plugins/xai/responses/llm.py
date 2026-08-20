@@ -1,6 +1,5 @@
 import os
 
-import httpx
 from openai.types import Reasoning
 
 from livekit.agents.llm import ToolChoice
@@ -8,7 +7,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from livekit.plugins import openai
 
 from ..tools import XAITool
@@ -30,7 +29,7 @@ class LLM(openai.responses.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         reasoning: NotGivenOr[Reasoning] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -39,6 +38,8 @@ class LLM(openai.responses.LLM):
             raise ValueError(
                 "XAI API key is required, either as argument or set XAI_API_KEY environmental variable"  # noqa: E501
             )
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         super().__init__(
             model=model,
             base_url=base_url if is_given(base_url) else XAI_BASE_URL,

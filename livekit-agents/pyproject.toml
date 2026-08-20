@@ -49,7 +49,10 @@ dependencies = [
     "opentelemetry-sdk>=1.39.0,<1.45",
     "opentelemetry-exporter-otlp>=1.39.0,<1.45",
     "prometheus-client>=0.22",
-    "openai>=2,<3",
+    # Keep legacy HTTPX for compatibility with user inputs and upstream SDKs until 2.0.
+    "httpx>=0.27,<1",
+    "httpx2>=2.7,<3",
+    "openai>=3,<4",
     "aiofiles>=24",
     "json-repair==0.60.1",
     "pyyaml>=6.0.3",
@@ -61,7 +64,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.24.0, <2"]
+mcp = ["mcp>=2,<3"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
 anam = ["livekit-plugins-anam>=1.6.10"]

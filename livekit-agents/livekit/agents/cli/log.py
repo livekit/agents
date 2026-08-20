@@ -16,6 +16,8 @@ from ..plugin import Plugin
 NOISY_LOGGERS = [
     "httpx",
     "httpcore",
+    "httpx2",
+    "httpcore2",
     "openai",
     "watchfiles",
     "anthropic",

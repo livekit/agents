@@ -18,14 +18,13 @@ import os
 import platform
 from typing import Any
 
-import httpx
 import openai
 from openai.types import ReasoningEffort
 
 from livekit.agents import __version__ as livekit_version
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from livekit.plugins.openai.llm import LLM as OpenAILLM
 
 from .models import SarvamLLMModels
@@ -72,7 +71,7 @@ class LLM(OpenAILLM):
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ) -> None:
         """
         Create a new instance of Sarvam LLM.
@@ -104,6 +103,8 @@ class LLM(OpenAILLM):
             merged_body["presence_penalty"] = presence_penalty
         filtered_body = _filter_extra_body(merged_body)
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         super().__init__(
             model=validated_model,
             api_key=sarvam_api_key,

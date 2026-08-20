@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 
 import spitch
 from livekit.agents import (
@@ -15,6 +15,7 @@ from livekit.agents import (
     LanguageCode,
     tts,
 )
+from livekit.agents.utils import httpx_compat
 from spitch import AsyncSpitch
 
 SAMPLE_RATE = 24_000
@@ -80,7 +81,9 @@ class ChunkedStream(tts.ChunkedStream):
             language=self._opts.language.language,
             voice=self._opts.voice,  # type: ignore
             format="mp3",
-            timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
+            timeout=httpx_compat.to_legacy_timeout(
+                httpx2.Timeout(30, connect=self._conn_options.timeout)
+            ),
         )
 
         request_id = str(uuid.uuid4().hex)[:12]

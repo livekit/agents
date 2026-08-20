@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-import httpx
+import httpx2
 import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm
@@ -16,14 +16,14 @@ CHAT_MODEL = "gpt-oss-120b"
 TOOL_MODEL = "gpt-oss-120b"
 
 
-class HeaderCapturingTransport(httpx.AsyncBaseTransport):
+class HeaderCapturingTransport(httpx2.AsyncBaseTransport):
     """Wraps a real transport, capturing outgoing request headers for assertion."""
 
     def __init__(self) -> None:
-        self._inner = httpx.AsyncHTTPTransport()
-        self.captured_requests: list[httpx.Request] = []
+        self._inner = httpx2.AsyncHTTPTransport()
+        self.captured_requests: list[httpx2.Request] = []
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         self.captured_requests.append(request)
         return await self._inner.handle_async_request(request)
 
@@ -78,7 +78,7 @@ def _cerebras_llm_with_transport(
     *, use_gzip: bool, use_msgpack: bool
 ) -> tuple[LLM, HeaderCapturingTransport]:
     transport = HeaderCapturingTransport()
-    http_client = httpx.AsyncClient(transport=transport)
+    http_client = httpx2.AsyncClient(transport=transport)
     client = _CerebrasClient(
         use_gzip=use_gzip,
         use_msgpack=use_msgpack,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import httpx2
 import pytest
 
 from livekit.agents import APIConnectOptions, llm
@@ -38,7 +39,7 @@ class TestHttpxTimeoutDefaults:
         assert connect <= 10.0, f"connect timeout {connect}s is unexpectedly long"
 
     def test_default_timeout_is_split(self) -> None:
-        """Default must be an httpx.Timeout object, not a flat scalar."""
+        """The Anthropic SDK boundary must receive its legacy timeout object."""
         llm = _make_llm()
         t = llm._client._client.timeout
         assert isinstance(t, httpx.Timeout)
@@ -47,12 +48,20 @@ class TestHttpxTimeoutDefaults:
 
 class TestHttpxTimeoutCustom:
     def test_custom_timeout_honored(self) -> None:
-        """A caller-supplied httpx.Timeout is passed through to the httpx client."""
-        custom = httpx.Timeout(3.0, read=120.0)
+        """A caller-supplied HTTPX2 timeout reaches the Anthropic SDK client."""
+        custom = httpx2.Timeout(3.0, read=120.0)
         llm = _make_llm(timeout=custom)
         t = llm._client._client.timeout
         assert t.read == 120.0
         assert t.connect == 3.0
+
+    def test_legacy_timeout_warns_and_remains_supported(self) -> None:
+        custom = httpx.Timeout(3.0, read=120.0)
+
+        with pytest.warns(DeprecationWarning, match="LiveKit Agents 2.0"):
+            llm = _make_llm(timeout=custom)
+
+        assert llm._client._client.timeout.read == 120.0
 
     def test_none_timeout_uses_default(self) -> None:
         """Passing timeout=None must fall back to the built-in default."""
@@ -68,7 +77,7 @@ class TestHttpxTimeoutCustom:
             http_client=httpx.AsyncClient(timeout=httpx.Timeout(1.0)),
         )
         # timeout= argument should have no effect here
-        llm = _make_llm(client=tight_client, timeout=httpx.Timeout(5.0, read=999.0))
+        llm = _make_llm(client=tight_client, timeout=httpx2.Timeout(5.0, read=999.0))
         assert llm._client._client.timeout.read == 1.0
 
 

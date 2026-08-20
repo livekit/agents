@@ -4,7 +4,7 @@ import gzip
 import inspect
 from typing import Any
 
-import httpx
+import httpx2
 import msgpack
 import pytest
 
@@ -25,14 +25,14 @@ data: [DONE]
 """
 
 
-class _MockChatCompletionsTransport(httpx.AsyncBaseTransport):
+class _MockChatCompletionsTransport(httpx2.AsyncBaseTransport):
     def __init__(self) -> None:
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         await request.aread()
         self.requests.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_STREAM_RESPONSE,
@@ -40,14 +40,14 @@ class _MockChatCompletionsTransport(httpx.AsyncBaseTransport):
         )
 
 
-async def _capture_chat_request(max_completion_tokens: int | None = None) -> httpx.Request:
+async def _capture_chat_request(max_completion_tokens: int | None = None) -> httpx2.Request:
     transport = _MockChatCompletionsTransport()
     client = _CerebrasClient(
         use_gzip=True,
         use_msgpack=True,
         api_key="test-key",
         base_url="https://api.cerebras.ai/v1",
-        http_client=httpx.AsyncClient(transport=transport),
+        http_client=httpx2.AsyncClient(transport=transport),
     )
     if max_completion_tokens is None:
         model = LLM(model="gpt-oss-120b", api_key="test-key", client=client)
@@ -76,7 +76,7 @@ async def _capture_chat_request(max_completion_tokens: int | None = None) -> htt
     return transport.requests[0]
 
 
-def _request_payload(request: httpx.Request) -> dict[str, Any]:
+def _request_payload(request: httpx2.Request) -> dict[str, Any]:
     body = gzip.decompress(request.content)
     payload = msgpack.unpackb(body, raw=False)
     assert isinstance(payload, dict)

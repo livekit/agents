@@ -19,8 +19,6 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-import httpx
-
 import openai
 from livekit.agents import llm
 from livekit.agents.inference.llm import LLMStream as _LLMStream
@@ -35,7 +33,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
@@ -55,7 +53,7 @@ from .models import (
     XAIChatModels,
     _supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider
+from .utils import AsyncAzureADTokenProvider, create_http_client
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -103,7 +101,7 @@ class LLM(llm.LLM):
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
@@ -122,6 +120,8 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
             if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
@@ -162,17 +162,7 @@ class LLM(llm.LLM):
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
             max_retries=max_retries if is_given(max_retries) else 0,
-            http_client=httpx.AsyncClient(
-                timeout=timeout
-                if timeout
-                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=50,
-                    max_keepalive_connections=50,
-                    keepalive_expiry=120,
-                ),
-            ),
+            http_client=create_http_client(timeout),
         )
 
     async def _prewarm_impl(self) -> None:
@@ -212,7 +202,7 @@ class LLM(llm.LLM):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
@@ -228,6 +218,8 @@ class LLM(llm.LLM):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -239,9 +231,7 @@ class LLM(llm.LLM):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            http_client=create_http_client(timeout),
         )  # type: ignore
 
         llm = LLM(
@@ -459,7 +449,7 @@ class LLM(llm.LLM):
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ) -> LLM:
         """
         Create a new instance of OpenRouter LLM.
@@ -473,6 +463,9 @@ class LLM(llm.LLM):
             raise ValueError(
                 "OpenRouter API key is required, either as argument or set OPENROUTER_API_KEY environment variable"
             )
+
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
 
         # Set up analytics headers for OpenRouter
         default_headers: dict[str, str] = {}

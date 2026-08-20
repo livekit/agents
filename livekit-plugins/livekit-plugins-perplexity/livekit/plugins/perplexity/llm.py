@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 
-import httpx
 import openai
 
 from livekit.agents.llm import ToolChoice
@@ -24,7 +23,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from livekit.plugins.openai import LLM as OpenAILLM
 
 from .models import PerplexityChatModels
@@ -47,7 +46,7 @@ class LLM(OpenAILLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ):
         """
         Create a new instance of Perplexity LLM.
@@ -62,6 +61,8 @@ class LLM(OpenAILLM):
                 "PERPLEXITY_API_KEY environmental variable"
             )
 
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
         super().__init__(
             model=model,
             api_key=api_key,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
+import httpx2
 import openai as openai_sdk
 import pytest
 
 from livekit.agents import llm
-from livekit.plugins import openai
+from livekit.plugins import groq, openai
 
 pytestmark = pytest.mark.unit
 
@@ -25,15 +28,36 @@ data: [DONE]
 """
 
 
-class _NullUsageTransport(httpx.AsyncBaseTransport):
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+class _NullUsageTransport(httpx2.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         await request.aread()
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_STREAM_WITH_NULL_USAGE,
             request=request,
         )
+
+
+async def test_openai_llm_uses_httpx2_and_warns_for_legacy_timeout() -> None:
+    with pytest.warns(DeprecationWarning, match="LiveKit Agents 2.0") as warnings:
+        model = openai.LLM(api_key="test-key", timeout=httpx.Timeout(5))
+
+    try:
+        assert isinstance(model._client._client, httpx2.AsyncClient)
+        assert Path(warnings[0].filename).resolve() == Path(__file__).resolve()
+    finally:
+        await model.aclose()
+
+
+async def test_openai_wrapper_warning_points_to_application() -> None:
+    with pytest.warns(DeprecationWarning, match="LiveKit Agents 2.0") as warnings:
+        model = groq.LLM(api_key="test-key", timeout=httpx.Timeout(5))
+
+    try:
+        assert Path(warnings[0].filename).resolve() == Path(__file__).resolve()
+    finally:
+        await model.aclose()
 
 
 async def test_null_usage_fields_do_not_crash_stream() -> None:
@@ -42,7 +66,7 @@ async def test_null_usage_fields_do_not_crash_stream() -> None:
     # APIConnectionError and terminate the session). Missing counts default to 0.
     client = openai_sdk.AsyncClient(
         api_key="test-key",
-        http_client=httpx.AsyncClient(transport=_NullUsageTransport()),
+        http_client=httpx2.AsyncClient(transport=_NullUsageTransport()),
     )
     model = openai.LLM(model="m", client=client)
 

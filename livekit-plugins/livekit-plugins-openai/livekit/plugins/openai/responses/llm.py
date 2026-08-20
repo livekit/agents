@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
-import httpx
+import httpx2
 from yarl import URL
 
 import openai
@@ -25,7 +25,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import httpx_compat, is_given
 from openai.types import Reasoning
 from openai.types.responses import (
     ResponseCompletedEvent,
@@ -45,6 +45,7 @@ from openai.types.shared_params import ResponsesModel
 from ..log import logger
 from ..models import _supports_reasoning_effort
 from ..tools import OpenAITool
+from ..utils import create_http_client
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
 Verbosity = Literal["low", "medium", "high"]
@@ -225,7 +226,7 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
+        timeout: httpx_compat.HTTPXTimeout | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
@@ -234,6 +235,8 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
         """
         super().__init__()
+        httpx_compat.warn_on_legacy_timeout(timeout)
+        timeout = httpx_compat.to_httpx2_timeout(timeout)
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
             if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
@@ -288,17 +291,7 @@ class LLM(llm.LLM):
                 api_key=api_key if is_given(api_key) else None,
                 base_url=base_url if is_given(base_url) else None,
                 max_retries=0,
-                http_client=httpx.AsyncClient(
-                    timeout=timeout
-                    if timeout
-                    else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                    follow_redirects=True,
-                    limits=httpx.Limits(
-                        max_connections=50,
-                        max_keepalive_connections=50,
-                        keepalive_expiry=120,
-                    ),
-                ),
+                http_client=create_http_client(timeout),
             )
 
     async def aclose(self) -> None:
@@ -506,7 +499,7 @@ class LLMStream(llm.LLMStream):
                         tools=tool_schemas,
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
-                        timeout=httpx.Timeout(self._conn_options.timeout),
+                        timeout=httpx2.Timeout(self._conn_options.timeout),
                         **self._extra_kwargs,
                     ),
                 )
