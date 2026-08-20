@@ -37,7 +37,7 @@ from google.protobuf.json_format import MessageToDict
 from livekit import api, rtc
 from livekit.protocol import agent, models
 
-from . import ipc, telemetry, utils
+from . import http_tunnel, ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .http import _HttpRunner, _register_builtin_routes
 from .inference_runner import _InferenceRunner
@@ -393,6 +393,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._http = FastAPI()
         self._http.state.agent_server = self
 
+        # agent HTTP endpoints data plane: the websocket is the only way to
+        # execute a user route; the local listener serves health/worker-info only
+        self._endpoint_options: dict[str, http_tunnel.EndpointOptions] = {}
+        self._instance_id = utils.shortuuid("AEI_")
+        self._tunnel: http_tunnel.TunnelClient | None = None
+        self._health_http: FastAPI | None = None
+        # status updates may interleave across reconnects; the server keeps the
+        # newest by seq
+        self._status_seq = 0
+
         self._lock = asyncio.Lock()
 
     @property
@@ -403,10 +413,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             async def token() -> dict:
                 return {"ok": True}
 
-        ``GET /worker`` is reserved; ``GET /`` serves a default health check that a route
-        of your own replaces.
+        ``/`` and ``/worker`` are reserved for the local health listener and
+        are never served through the tunnel.
+
+        Routes are served through the LiveKit server at
+        ``/agents/{deployment}/{path}``; no local listener exposes them.
         """
         return self._http
+
+    def configure_endpoint(self, path: str, *, public: bool = False) -> None:
+        """Set routing policy for one ``server.http`` route.
+
+        public routes are reachable without a project token.
+        """
+        self._endpoint_options[path] = http_tunnel.EndpointOptions(public=public)
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:
@@ -663,9 +683,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # simulations run ephemeral workers side by side; a health
             # endpoint on a fixed port would make concurrent runs collide
             if not self._simulation:
-                _register_builtin_routes(self)
+                # the local listener serves health + worker-info ONLY; user
+                # routes are reachable exclusively through the tunnel
+                self._health_http = FastAPI()
+                _register_builtin_routes(self, app=self._health_http)
                 self._http_server = _HttpRunner(
-                    self._http,
+                    self._health_http,
                     host=self._host,
                     port=ServerEnvOption.getvalue(self._port, devmode),
                 )
@@ -1132,6 +1155,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 req.register.agent_name = self._agent_name
                 req.register.deployment = self._deployment
                 req.register.version = __version__
+                manifest = http_tunnel.build_manifest(self._http, self._endpoint_options)
+                if manifest:
+                    req.register.endpoints.extend(manifest)
+                    req.register.instance_id = self._instance_id
+                    req.register.endpoint_protocol = 1
                 await ws.send_bytes(req.SerializeToString())
 
                 # wait for the register response before running this connection
@@ -1145,10 +1173,41 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._handle_register(msg.register)
                 self._connecting = False
 
-                # report all active jobs to the server after registration
-                await self._report_active_jobs()
+                try:
+                    if manifest and not msg.register.HasField("endpoint_settings"):
+                        logger.warning(
+                            "server did not negotiate agent HTTP endpoints; declared routes will not be served"
+                        )
+                    if (
+                        msg.register.HasField("endpoint_settings")
+                        and msg.register.endpoint_settings.protocol != 1
+                    ):
+                        raise RuntimeError(
+                            "unsupported agent HTTP endpoints protocol: "
+                            f"{msg.register.endpoint_settings.protocol}"
+                        )
+                    if msg.register.HasField("endpoint_settings"):
+                        tunnel = http_tunnel.TunnelClient(
+                            http_session=self._http_session,
+                            agent_url=agent_url,
+                            auth_headers=headers,
+                            worker_id=msg.register.worker_id,
+                            instance_id=self._instance_id,
+                            settings=msg.register.endpoint_settings,
+                            app=self._http,
+                            http_proxy=self._http_proxy,
+                        )
+                        await tunnel.start()
+                        self._tunnel = tunnel
 
-                await self._run_ws(ws)
+                    # report all active jobs to the server after registration
+                    await self._report_active_jobs()
+
+                    await self._run_ws(ws)
+                finally:
+                    if self._tunnel is not None:
+                        await self._tunnel.aclose()
+                        self._tunnel = None
             except Exception as e:
                 if self._closed:
                     break
@@ -1488,9 +1547,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def _update_worker_status(self) -> None:
         job_cnt = len(self.active_jobs)
+        self._status_seq += 1
 
         if self._draining:
-            update = agent.UpdateWorkerStatus(status=agent.WorkerStatus.WS_FULL, job_count=job_cnt)
+            update = agent.UpdateWorkerStatus(
+                status=agent.WorkerStatus.WS_FULL,
+                job_count=job_cnt,
+                draining=True,
+                seq=self._status_seq,
+            )
             msg = agent.WorkerMessage(update_worker=update)
             await self._queue_msg(msg)
             return
@@ -1504,7 +1569,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             agent.WorkerStatus.WS_AVAILABLE if currently_available else agent.WorkerStatus.WS_FULL
         )
 
-        update = agent.UpdateWorkerStatus(load=self._worker_load, status=status, job_count=job_cnt)
+        update = agent.UpdateWorkerStatus(
+            load=self._worker_load, status=status, job_count=job_cnt, seq=self._status_seq
+        )
 
         # only log if status has changed
         if self._previous_status != status and not self._draining:

@@ -42,12 +42,12 @@ def _claimed(app: FastAPI, method: str, path: str) -> bool:
     )
 
 
-def _register_builtin_routes(server: AgentServer) -> None:
-    """Add the health and worker info routes to ``server.http``.
-
-    Called after the user's decorators, so a health check of theirs keeps ``GET /``.
-    """
-    app = server.http
+def _register_builtin_routes(server: AgentServer, app: FastAPI | None = None) -> None:
+    """Add the health and worker info routes to ``app`` (the local health
+    listener; user routes on ``server.http`` are served through the tunnel and
+    never bound locally)."""
+    if app is None:
+        app = server.http
 
     async def health() -> Response:
         reason = agent_health(server)

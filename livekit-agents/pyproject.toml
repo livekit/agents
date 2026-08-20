@@ -39,6 +39,8 @@ dependencies = [
     "aiohttp~=3.10",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    # the tunnel bridges HTTP exchanges into the ASGI app in-process
+    "h11>=0.14",
     # uvicorn refuses websocket upgrades unless an implementation is installed
     "websockets>=13",
     "typing-extensions>=4.12",
