@@ -302,6 +302,14 @@ class MetricsReport(TypedDict, total=False):
     provider-side logs.
     """
 
+    speech_id: str
+    """ID of the `SpeechHandle` that produced this turn.
+
+    Assistant `ChatMessage` only. Matches the `lk.speech_id` span attribute and the
+    `speech_id` on `metrics_collected` events, so a stored message can be correlated with
+    its trace or with the per-component metrics of the same turn.
+    """
+
     llm_metadata: MetricsMetadata
     tts_metadata: MetricsMetadata
     stt_metadata: MetricsMetadata
