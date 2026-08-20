@@ -1818,11 +1818,11 @@ class AgentActivity(RecognitionHooks):
                 and not eou_task.done()
             ):
                 user_active = True
-                await eou_task
+                await asyncio.shield(eou_task)
 
-            if self._user_turn_completed_atask and not self._user_turn_completed_atask.done():
+            if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
                 user_active = True
-                await self._user_turn_completed_atask
+                await asyncio.shield(user_turn_task)
 
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if self._closed or self._session._closing:
@@ -2430,7 +2430,9 @@ class AgentActivity(RecognitionHooks):
             # So we wait for the old execution of on_user_turn_completed to finish.
             # In practice this is OK because most speeches will be interrupted if a new turn
             # is detected. So the previous execution should complete quickly.
-            await old_task
+            await asyncio.wait({old_task})
+            if not old_task.cancelled():
+                old_task.result()
 
         self._preemptive_generation_count = 0
 
