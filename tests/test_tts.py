@@ -45,6 +45,7 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
+    volcengine,
 )
 
 from .fake_tts import FakeTTS
@@ -148,6 +149,13 @@ async def assert_valid_synthesized_audio(
 
 
 SYNTHESIZE_TTS = [
+    pytest.param(
+        lambda: {
+            "tts": volcengine.TTS(),
+            "proxy-upstream": "openspeech.bytedance.com:443",
+        },
+        id="volcengine",
+    ),
     pytest.param(
         lambda: {
             "tts": cartesia.TTS(),
@@ -483,6 +491,13 @@ async def test_tts_synthesize_retry_after_partial_audio():
 
 
 STREAM_TTS = [
+    pytest.param(
+        lambda: {
+            "tts": volcengine.TTS(),
+            "proxy-upstream": "openspeech.bytedance.com:443",
+        },
+        id="volcengine",
+    ),
     pytest.param(
         lambda: {
             "tts": cartesia.TTS(),

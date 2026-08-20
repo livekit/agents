@@ -25,6 +25,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
 ]
+
 dependencies = [
     "certifi>=2025.6.15",
     "livekit==1.1.14",
@@ -64,6 +65,7 @@ dependencies = [
 mcp = ["mcp>=1.24.0, <2"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
+
 anam = ["livekit-plugins-anam>=1.6.10"]
 anthropic = ["livekit-plugins-anthropic>=1.6.10"]
 assemblyai = ["livekit-plugins-assemblyai>=1.6.10"]
@@ -129,6 +131,10 @@ trugen = ["livekit-plugins-trugen>=1.6.10"]
 turn-detector = ["livekit-plugins-turn-detector>=1.6.10"]
 ultravox = ["livekit-plugins-ultravox>=1.6.10"]
 upliftai = ["livekit-plugins-upliftai>=1.6.10"]
+
+# 你的分支新增的插件，保留下来，并跟随当前插件版本
+volcengine = ["livekit-plugins-volcengine>=1.6.10"]
+
 gradium = ["livekit-plugins-gradium>=1.6.10"]
 xai = ["livekit-plugins-xai>=1.6.10"]
 phonic = ["livekit-plugins-phonic>=1.6.10"]
@@ -146,7 +152,6 @@ path = "livekit/agents/version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]
 include = ["livekit/agents/resources/*", "livekit/agents/debug/index.html"]
-
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
