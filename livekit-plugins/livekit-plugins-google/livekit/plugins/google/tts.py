@@ -491,4 +491,7 @@ def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
     elif encoding == texttospeech.AudioEncoding.OGG_OPUS:
         return "audio/opus"
     else:
-        raise RuntimeError(f"encoding {encoding} isn't supported")
+        raise RuntimeError(
+            f"encoding {encoding} isn't supported, supported encodings: "
+            "PCM, LINEAR16, MP3, OGG_OPUS"
+        )

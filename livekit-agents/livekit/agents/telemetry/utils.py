@@ -6,13 +6,41 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
+from ..types import NOT_GIVEN, NotGivenOr
 from . import trace_types
 
 if TYPE_CHECKING:
     from ..metrics import RealtimeModelMetrics
 
 
-def record_exception(span: trace.Span, exception: Exception) -> None:
+REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
+
+
+def _redaction_enabled() -> bool:
+    from ..job import get_job_context
+
+    job_ctx = get_job_context(required=False)
+    if job_ctx is None:
+        return False
+    return job_ctx._redaction_enabled
+
+
+def record_exception(
+    span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
+) -> None:
+    if redacted is NOT_GIVEN:
+        redacted = _redaction_enabled()
+
+    if redacted:
+        attrs = {
+            trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
+            trace_types.ATTR_EXCEPTION_MESSAGE: REDACTED_EXCEPTION_MESSAGE,
+        }
+        span.add_event("exception", attrs)
+        span.set_status(trace.Status(trace.StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE))
+        span.set_attributes(attrs)
+        return
+
     span.record_exception(exception)
     span.set_status(trace.Status(trace.StatusCode.ERROR, str(exception)))
     # set the exception in span attributes in case the exception event is not rendered
@@ -58,6 +86,6 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         from .traces import tracer
 
         # create a dedicated child span for orphaned metrics
-        with trace.use_span(span):
+        with tracer.use_span(span):
             with tracer.start_span("realtime_metrics") as child:
                 child.set_attributes(attrs)

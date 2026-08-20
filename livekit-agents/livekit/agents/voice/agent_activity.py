@@ -1237,7 +1237,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 self._agent._activity = self
 
-                with trace.use_span(start_span, end_on_exit=False):
+                with tracer.use_span(start_span, end_on_exit=False):
                     if isinstance(self.llm, llm.LLM):
                         self.llm.prewarm()
 
@@ -2593,11 +2593,11 @@ class AgentActivity(RecognitionHooks):
                 and not eou_task.done()
             ):
                 user_active = True
-                await eou_task
+                await asyncio.shield(eou_task)
 
-            if self._user_turn_completed_atask and not self._user_turn_completed_atask.done():
+            if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
                 user_active = True
-                await self._user_turn_completed_atask
+                await asyncio.shield(user_turn_task)
 
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if self._closed or self._session._closing:
@@ -3168,7 +3168,7 @@ class AgentActivity(RecognitionHooks):
                 self._discard_latest_realtime_audio_input()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
 
             if self._session._closing:
@@ -3255,7 +3255,7 @@ class AgentActivity(RecognitionHooks):
         if not current_speech.allow_interruptions:
             logger.warning(
                 "skipping reply to user input, current speech generation cannot be interrupted",
-                extra={"user_input": user_input},
+                extra={"lk.pii.user_input": user_input},
             )
             if self._rt_session is not None and self._realtime_input_mode == "audio":
                 self._clear_realtime_input_if_owned(audio_input_token)
@@ -3287,9 +3287,10 @@ class AgentActivity(RecognitionHooks):
         audio_input_token: _RealtimeTurnTransaction | None = None
         try:
             if old_task is not None:
-                # A newer turn waits for user code from the preceding turn, but owns its own
-                # cancellation. Shutdown can therefore settle both callbacks independently.
-                await asyncio.shield(old_task)
+                # Wait without propagating cancellation between predecessor and successor.
+                await asyncio.wait({old_task})
+                if not old_task.cancelled():
+                    old_task.result()
 
             if audio_input_ready_fut is not None:
                 audio_input_token = await asyncio.shield(audio_input_ready_fut)
@@ -3324,7 +3325,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if self._session._closing:
                 self._commit_bounded_user_message_locally(
@@ -3423,7 +3424,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if self._session._closing:
                 self._commit_bounded_user_message_locally(
@@ -3445,7 +3446,7 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_paused or self._new_turns_blocked:
                 logger.warning(
                     "skipping reply to user input, speech scheduling is paused",
-                    extra={"user_input": user_message.raw_text_content},
+                    extra={"lk.pii.user_input": user_message.raw_text_content},
                 )
                 if self._session._closing:
                     self._commit_bounded_user_message_locally(
