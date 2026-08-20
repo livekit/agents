@@ -284,6 +284,17 @@ def _text_frame(context_id: str, text: str, *, cont: bool) -> str:
     return json.dumps({"type": "text", "context_id": context_id, "text": text, "continue": cont})
 
 
+def _is_for(data: dict, context_id: str) -> bool:
+    """Whether a frame belongs to this turn.
+
+    Pooled connections outlive a turn, so a turn abandoned before its
+    terminator can leave frames behind for whoever borrows the socket next.
+    Frames carrying no context (``pong``) are for the connection itself.
+    """
+    frame_context = data.get("context_id")
+    return frame_context is None or frame_context == context_id
+
+
 async def _cancel_turn(ws: aiohttp.ClientWebSocketResponse, context_id: str) -> None:
     """Drop a turn that is still generating, so a pooled connection is not left
     streaming a turn nobody is listening to.
@@ -315,38 +326,24 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type="audio/pcm",
         )
 
+        # Maya treats blank text as no text and opens no context for it, so a
+        # frame here would close something that never existed.
+        if not self._input_text.strip():
+            output_emitter.flush()
+            return
+
+        turn_closed = False
+
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 await ws.send_str(_text_frame(context_id, self._input_text, cont=False))
 
-                while True:
-                    msg = await ws.receive(timeout=self._conn_options.timeout)
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Maya connection closed unexpectedly",
-                            request_id=context_id,
-                            status_code=ws.close_code or -1,
-                            body=f"{msg.data=} {msg.extra=}",
-                        )
-
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning("unexpected Maya message type %s", msg.type)
-                        continue
-
-                    data = json.loads(msg.data)
-                    kind = data.get("type")
-                    if kind == "audio":
-                        output_emitter.push(base64.b64decode(data["audio"]))
-                    elif kind in ("end", "cancelled"):
-                        break
-                    elif kind == "error":
-                        raise APIError(f"Maya returned error: {data.get('error')}")
-                    else:
-                        logger.warning("unexpected Maya message %s", data)
+                try:
+                    await self._read_turn(ws, context_id, output_emitter)
+                    turn_closed = True
+                finally:
+                    if not turn_closed:
+                        await _cancel_turn(ws, context_id)
 
                 output_emitter.flush()
         except asyncio.TimeoutError:
@@ -355,6 +352,44 @@ class ChunkedStream(tts.ChunkedStream):
             raise
         except Exception as e:
             raise APIConnectionError() from e
+
+    async def _read_turn(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        context_id: str,
+        output_emitter: tts.AudioEmitter,
+    ) -> None:
+        while True:
+            msg = await ws.receive(timeout=self._conn_options.timeout)
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                raise APIStatusError(
+                    "Maya connection closed unexpectedly",
+                    request_id=context_id,
+                    status_code=ws.close_code or -1,
+                    body=f"{msg.data=} {msg.extra=}",
+                )
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                logger.warning("unexpected Maya message type %s", msg.type)
+                continue
+
+            data = json.loads(msg.data)
+            if not _is_for(data, context_id):
+                continue
+
+            kind = data.get("type")
+            if kind == "audio":
+                output_emitter.push(base64.b64decode(data["audio"]))
+            elif kind in ("end", "cancelled"):
+                return
+            elif kind == "error":
+                raise APIError(f"Maya returned error: {data.get('error')}")
+            else:
+                logger.warning("unexpected Maya message %s", data)
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -378,6 +413,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=context_id)
         turn_closed = False
+        sentences_sent = 0
+        input_sent_event = asyncio.Event()
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
         if self._tts._stream_pacer:
@@ -390,11 +427,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Sentences go out as the LLM produces them, without waiting for the
             # previous one's audio; the empty `continue: false` frame is what
             # closes the turn and makes Maya emit its single `end`.
+            nonlocal sentences_sent
             async for ev in sent_tokenizer_stream:
                 self._mark_started()
-                await ws.send_str(_text_frame(context_id, ev.token, cont=True))
+                # The tokenizer strips its tokens, so without the space the last
+                # word of one sentence runs into the first word of the next.
+                await ws.send_str(_text_frame(context_id, ev.token + " ", cont=True))
+                sentences_sent += 1
+                input_sent_event.set()
 
-            await ws.send_str(_text_frame(context_id, "", cont=False))
+            # A context only exists once it has been given text, so closing one
+            # that was never opened is rejected rather than answered.
+            if sentences_sent:
+                await ws.send_str(_text_frame(context_id, "", cont=False))
+            input_sent_event.set()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
@@ -407,6 +453,15 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal turn_closed
+            # Maya cannot answer before a sentence has gone out, so starting the
+            # receive timeout any earlier would measure how long the LLM took to
+            # write one rather than how long Maya took to speak it.
+            await input_sent_event.wait()
+            if not sentences_sent:
+                turn_closed = True  # nothing opened, so there is nothing to cancel
+                output_emitter.end_input()
+                return
+
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
@@ -426,6 +481,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
+                if not _is_for(data, context_id):
+                    continue
+
                 kind = data.get("type")
                 if kind == "audio":
                     output_emitter.push(base64.b64decode(data["audio"]))
@@ -454,6 +512,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
                     if not turn_closed:

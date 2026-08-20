@@ -39,11 +39,13 @@ class _MayaServer:
         error_on_text: str | None = None,
         samples_per_text: int = 480,
         never_ends: bool = False,
+        stray_context: bool = False,
     ) -> None:
         self.reject_start = reject_start
         self.error_on_text = error_on_text
         self.samples_per_text = samples_per_text
         self.never_ends = never_ends
+        self.stray_context = stray_context
 
         self.start_frames: list[dict[str, Any]] = []
         self.text_frames: list[dict[str, Any]] = []
@@ -128,8 +130,19 @@ class _MayaServer:
                     )
                     continue
 
-                if text:
+                if text.strip():  # Maya treats blank text as no text
                     open_turns.add(ctx)
+                    if self.stray_context:
+                        # left over from a turn abandoned on this connection
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "type": "audio",
+                                    "context_id": "an-abandoned-turn",
+                                    "audio": base64.b64encode(_pcm(9600)).decode(),
+                                }
+                            )
+                        )
                     await ws.send_str(
                         json.dumps(
                             {
@@ -393,3 +406,98 @@ def test_base_url_argument_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MAYA_BASE_URL", "http://from-env:1")
     tts = maya.TTS(api_key="k", base_url="http://explicit:2")
     assert tts._opts.get_ws_url() == "ws://explicit:2/v1/tts/stream"
+
+
+async def test_sentences_are_separated_by_a_space() -> None:
+    # The tokenizer strips its tokens, so without a separator the server sees
+    # "...forest.He walked..." and can merge words across the boundary.
+    async with _MayaServer() as server:
+        tts = server.tts()
+        await _stream(tts, _THREE_SENTENCES)
+        await tts.aclose()
+
+    spoken = [f["text"] for f in server.text_frames if f.get("text")]
+    assert spoken, "no sentences were sent"
+    assert all(text.endswith(" ") for text in spoken)
+
+
+async def test_an_empty_turn_completes_without_erroring() -> None:
+    # Maya only opens a context once it is given text, so a turn that produced
+    # no sentences must not try to close one.
+    async with _MayaServer() as server:
+        tts = server.tts()
+        stream = tts.stream()
+        stream.end_input()
+        assert await _collect(stream) == b""
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.text_frames == []
+    assert server.cancels == []
+
+
+async def test_a_slow_first_sentence_does_not_time_out() -> None:
+    # The receive timeout has to start when a sentence goes out, not when the
+    # turn opens, or a slow LLM is reported as a Maya timeout.
+    async with _MayaServer() as server:
+        tts = server.tts()
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+
+        async def _push_late() -> None:
+            await asyncio.sleep(2.0)  # longer than the connect timeout
+            stream.push_text(_THREE_SENTENCES[0] + " ")
+            stream.end_input()
+
+        pusher = asyncio.create_task(_push_late())
+        audio = await _collect(stream)
+        await pusher
+        await stream.aclose()
+        await tts.aclose()
+
+    assert audio.startswith(_pcm(480))
+
+
+@pytest.mark.parametrize("text", ["", "   ", "\n\t "])
+async def test_synthesizing_blank_text_sends_nothing(text: str) -> None:
+    # Maya opens no context for blank text, so closing one would be rejected.
+    async with _MayaServer() as server:
+        tts = server.tts()
+        assert await _synthesize(tts, text) == b""
+        await tts.aclose()
+
+    assert server.text_frames == []
+
+
+async def test_frames_from_another_turn_are_ignored() -> None:
+    # A pooled connection outlives a turn, so audio left over from one that was
+    # abandoned must not be spoken as part of this one.
+    async with _MayaServer(stray_context=True) as server:
+        tts = server.tts()
+        audio = await _synthesize(tts, "नमस्ते।")
+        await tts.aclose()
+
+    assert audio.startswith(_pcm(480))
+    assert len(audio) < len(_pcm(9600))  # the stray frame was not spoken
+
+
+async def test_an_abandoned_one_shot_is_cancelled() -> None:
+    # The same guarantee as the streaming path: nothing is left generating on a
+    # connection that goes back to the pool.
+    async with _MayaServer(never_ends=True) as server:
+        tts = server.tts()
+        stream = tts.synthesize("एक लंबा वाक्य।", conn_options=_NO_RETRY)
+
+        async def _drain() -> None:
+            with contextlib.suppress(Exception):
+                async for _ in stream:
+                    pass
+
+        task = asyncio.create_task(_drain())
+        await asyncio.sleep(0.3)
+        await stream.aclose()
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        await tts.aclose()
+
+    assert len(server.cancels) == 1
+    assert server.cancels[0]["context_id"] == server.text_frames[0]["context_id"]
