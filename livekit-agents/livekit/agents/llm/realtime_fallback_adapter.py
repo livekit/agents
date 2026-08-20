@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -24,6 +24,9 @@ from .realtime import (
     RealtimeSessionReconnectedEvent,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
+
+if TYPE_CHECKING:
+    from ..voice.agent_session import AgentSession
 
 
 @dataclass
@@ -188,6 +191,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
+        # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
+        self._agent_session: AgentSession | None = None
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False

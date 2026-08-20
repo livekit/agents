@@ -17,6 +17,7 @@ from livekit.agents.metrics.base import Metadata
 
 from .. import inference, llm, stt, tts, utils, vad
 from ..llm.chat_context import Instructions
+from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
     StopResponse,
     ToolFlag,
@@ -940,7 +941,8 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.off("metrics_collected", self._on_metrics_collected)
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
-                    self._rt_session._agent_session = None
+                    if isinstance(self._rt_session, _FallbackRealtimeSession):
+                        self._rt_session._agent_session = None
                     resources.rt_session = self._rt_session
                     self._rt_session = None  # prevent _close_session from closing it
 
@@ -1051,8 +1053,9 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
 
-            # Sessions that recover internally use this to coordinate interruption/regeneration.
-            self._rt_session._agent_session = self._session
+            # the fallback adapter's session needs the AgentSession to drive interrupt/generate_reply on swap
+            if isinstance(self._rt_session, _FallbackRealtimeSession):
+                self._rt_session._agent_session = self._session
 
             remove_instructions(self._agent._chat_ctx)
 
@@ -1307,7 +1310,8 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.off("metrics_collected", self._on_metrics_collected)
             self._rt_session.off("remote_item_added", self._on_remote_item_added)
             self._rt_session.off("error", self._on_error)
-            self._rt_session._agent_session = None
+            if isinstance(self._rt_session, _FallbackRealtimeSession):
+                self._rt_session._agent_session = None
 
         if isinstance(self.stt, stt.STT):
             self.stt.off("metrics_collected", self._on_metrics_collected)
