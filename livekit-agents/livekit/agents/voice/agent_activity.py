@@ -301,7 +301,8 @@ class AgentActivity(RecognitionHooks):
             self._resolve_interruption_detection()
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
-        self._interruption_detected: bool = False
+        self._pending_interruption: inference.OverlappingSpeechEvent | None = None
+        self._audio_activity_interruption_in_progress: bool = False
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -1017,7 +1018,6 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
-            self._interruption_detector.on("overlapping_speech", self._on_overlap_speech_ended)
 
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.on("metrics_collected", self._on_metrics_collected)
@@ -1382,7 +1382,6 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
-            self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
         if isinstance(self._turn_detection, inference.TurnDetector):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
@@ -1982,10 +1981,6 @@ class AgentActivity(RecognitionHooks):
 
         self._session._on_error(error)
 
-    def _on_overlap_speech_ended(self, ev: inference.OverlappingSpeechEvent) -> None:
-        self._interruption_detected = ev.is_interruption
-        self._session.emit("overlapping_speech", ev)
-
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
@@ -2079,16 +2074,23 @@ class AgentActivity(RecognitionHooks):
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
-    def _interrupt_by_audio_activity(
-        self, *, ignore_user_transcript_until: float | None = None
-    ) -> None:
-        """
-        Interrupt the current speech or generation, and optionally ignore the user transcript until the given timestamp.
+    def _on_end_of_agent_speech(self, *, ended_at: float) -> None:
+        if self._audio_recognition is not None:
+            self._audio_recognition._on_end_of_agent_speech(ended_at=ended_at)
+        self._pending_interruption = None
 
-        Args:
-            ignore_user_transcript_until: The timestamp until which the user transcript should be ignored.
-                If None, the user transcript will be ignored until the current time.
-        """
+    def _interrupt_by_audio_activity(self) -> None:
+        """Interrupt the current speech or generation from detected audio activity."""
+        if self._audio_activity_interruption_in_progress:
+            return
+
+        self._audio_activity_interruption_in_progress = True
+        try:
+            self._interrupt_by_audio_activity_once()
+        finally:
+            self._audio_activity_interruption_in_progress = False
+
+    def _interrupt_by_audio_activity_once(self) -> None:
         if not self._interruption_by_audio_activity_enabled:
             return
 
@@ -2098,9 +2100,13 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_turn_detection_enabled:
             # ignore if realtime model has turn detection enabled
+            self._pending_interruption = None
             return
 
         interruption_options = self._session.options.interruption
+        if self._audio_recognition is not None:
+            self._audio_recognition._release_transcripts_for_audio_activity()
+
         if (
             self.stt is not None
             and interruption_options["min_words"] > 0
@@ -2142,10 +2148,7 @@ class AgentActivity(RecognitionHooks):
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
-                if self._audio_recognition:
-                    self._audio_recognition._on_end_of_agent_speech(
-                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
-                    )
+                self._on_end_of_agent_speech(ended_at=time.time())
                 if self.interruption_enabled:
                     self._restore_interruption_by_audio_activity()
             else:
@@ -2153,6 +2156,10 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
+        elif self._current_speech is None or (
+            not self._current_speech.interrupted and not self._current_speech.allow_interruptions
+        ):
+            self._pending_interruption = None
 
     # region recognition hooks
 
@@ -2167,10 +2174,10 @@ class AgentActivity(RecognitionHooks):
                 started_at=speech_start_time,
                 speech_duration=ev.speech_duration if ev else 0.0,
                 user_speaking_span=self._session._user_speaking_span,
+                detect_overlap=self._pending_interruption is None,
             )
         self._user_silence_event.clear()
         self._stt_eos_received = False
-        self._interruption_detected = False
 
         # cancel the timer when user starts speaking but leave the paused state unchanged
         self._cancel_false_interruption_timer()
@@ -2201,7 +2208,7 @@ class AgentActivity(RecognitionHooks):
             self._audio_recognition._on_end_of_speech(
                 ended_at=speech_end_time,
                 user_speaking_span=self._session._user_speaking_span,
-                interruption=self._interruption_detected
+                interruption=self._pending_interruption is not None
                 if self._interruption_detection_enabled
                 else NOT_GIVEN,
             )
@@ -2259,17 +2266,20 @@ class AgentActivity(RecognitionHooks):
         ):
             self._rt_session.clear_audio()
 
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        # restore interruption by audio activity and then immediately interrupt
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
+        if ev.is_interruption:
+            self._pending_interruption = ev
+            self._interruption_by_audio_activity_enabled = False
+
+        self._session.emit("overlapping_speech", ev)
+        if self._audio_recognition is not None:
+            self._audio_recognition._apply_overlap_speech_event(ev)
+
+        if not ev.is_interruption:
+            return
+
         self._restore_interruption_by_audio_activity()
-        self._interrupt_by_audio_activity(
-            ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
-        )
-        # flush held transcripts again if possible
-        if self._audio_recognition:
-            self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
-            )
+        self._interrupt_by_audio_activity()
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -2831,10 +2841,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"
             )
-            if self._audio_recognition:
-                self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
+            self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
 
@@ -3066,10 +3073,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"
             )
-            if self._audio_recognition:
-                self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
+            self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
 
@@ -3563,20 +3567,14 @@ class AgentActivity(RecognitionHooks):
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
-            if self._audio_recognition:
-                self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
+            self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
         elif self._session.agent_state == "speaking":
             # a running tool keeps the agent busy; "listening" would arm the away timer
             tool_running = not speech_handle.interrupted and not exe_task.done()
             self._session._update_agent_state("thinking" if tool_running else "listening")
-            if self._audio_recognition:
-                self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
+            self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
 
@@ -4121,10 +4119,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"
             )
-            if self._audio_recognition:
-                self._audio_recognition._on_end_of_agent_speech(
-                    ignore_user_transcript_until=time.time()
-                )
+            self._on_end_of_agent_speech(ended_at=time.time())
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
             current_span.set_attribute(
@@ -4625,8 +4620,8 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
-            self._interruption_detector.off("overlapping_speech", self._on_overlap_speech_ended)
 
+        self._pending_interruption = None
         if self._audio_recognition:
             # this also releases any held transcripts
             self._audio_recognition._update_interruption_detection(None)
@@ -4682,12 +4677,8 @@ class AgentActivity(RecognitionHooks):
             # realtime commits turns manually; barge-in withholds the commit, so no STT is needed
             can_gatekeep = not self._rt_turn_detection_enabled
         else:
-            # the STT pipeline gatekeeps by holding and flushing transcripts
-            can_gatekeep = (
-                self.stt is not None
-                and self.stt.capabilities.aligned_transcript
-                and self.stt.capabilities.streaming
-            )
+            # Local arrival time plus VAD makes transcript alignment unnecessary.
+            can_gatekeep = self.stt is not None
 
         if (
             not can_gatekeep
