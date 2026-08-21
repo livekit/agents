@@ -39,6 +39,7 @@ from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
+    AgentTask,
     ModelSettings,
     _get_activity_task_info,
     _set_activity_task_info,
@@ -248,6 +249,9 @@ class AgentActivity(RecognitionHooks):
         self._authorization_allowed.set()
 
         self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
+        # The inline AgentTask that paused this activity, held from before the pause until
+        # after the resume. At most one at a time.
+        self._inline_task: AgentTask[Any] | None = None
         self._mcp_tools: list[mcp.MCPToolset] = []
 
         # activity-scoped executor: cancels cancellable tools / awaits the rest on drain,

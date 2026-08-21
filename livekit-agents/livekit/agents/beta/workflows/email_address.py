@@ -76,7 +76,14 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Get the user's email address. First scan the conversation - if an email "
+                "address was already given (e.g. the user volunteered it before the task "
+                "started), use it via update_email_address rather than re-asking. Only ask "
+                "fresh when no email address is in the conversation yet."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
