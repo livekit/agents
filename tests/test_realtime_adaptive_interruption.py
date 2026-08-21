@@ -78,8 +78,9 @@ def test_adaptive_verdict_transition_is_owned_by_activity() -> None:
     activity._interrupt_by_audio_activity.assert_called_once_with()  # type: ignore[attr-defined]
 
 
-def test_audio_activity_releases_held_transcripts_before_min_words() -> None:
+def test_audio_activity_release_is_non_reentrant_and_precedes_min_words() -> None:
     activity = AgentActivity.__new__(AgentActivity)
+    activity._audio_activity_interruption_in_progress = False
     activity._interruption_by_audio_activity_enabled = True
     activity._rt_turn_detection_enabled = False
     activity._rt_session = None
@@ -96,6 +97,7 @@ def test_audio_activity_releases_held_transcripts_before_min_words() -> None:
 
     def _release_transcripts() -> None:
         activity._audio_recognition._current_transcript = "enough words"
+        activity._interrupt_by_audio_activity()
 
     activity._audio_recognition._release_transcripts_for_audio_activity.side_effect = (
         _release_transcripts
@@ -110,10 +112,12 @@ def test_audio_activity_releases_held_transcripts_before_min_words() -> None:
 
     activity._audio_recognition._release_transcripts_for_audio_activity.assert_called_once_with()
     activity._current_speech.interrupt.assert_called_once_with()
+    assert not activity._audio_activity_interruption_in_progress
 
 
 def test_rejected_audio_interruption_clears_pending_verdict() -> None:
     activity = AgentActivity.__new__(AgentActivity)
+    activity._audio_activity_interruption_in_progress = False
     activity._interruption_by_audio_activity_enabled = True
     activity._rt_turn_detection_enabled = False
     activity._rt_session = None
