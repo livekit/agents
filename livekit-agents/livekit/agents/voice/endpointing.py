@@ -128,6 +128,21 @@ class DynamicEndpointing(BaseEndpointing):
         )
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
+        # VAD interrupt by audio activity is triggered before end of speech is detected
+        # adjust the utterance ended time to be just before the agent speech started
+        if (
+            self._agent_speech_started_at is None
+            and self._speaking
+            and self._utterance_started_at is not None
+            and self._utterance_ended_at is not None
+            and self._utterance_ended_at < self._utterance_started_at
+        ):
+            self._utterance_ended_at = started_at - 1e-3
+            logger.trace(
+                "utterance ended at adjusted: %s",
+                self._utterance_ended_at,
+            )
+
         self._agent_speech_started_at = started_at
         self._agent_speech_ended_at = None
         self._overlapping = self._speaking
@@ -147,21 +162,6 @@ class DynamicEndpointing(BaseEndpointing):
         if self._overlapping:
             # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
-
-        # VAD interrupt by audio activity is triggered before end of speech is detected
-        # adjust the utterance ended time to be just before the agent speech started
-        if (
-            self._utterance_started_at is not None
-            and self._utterance_ended_at is not None
-            and self._agent_speech_started_at is not None
-            and self._utterance_ended_at < self._utterance_started_at
-            and overlapping
-        ):
-            self._utterance_ended_at = self._agent_speech_started_at - 1e-3
-            logger.trace(
-                "utterance ended at adjusted: %s",
-                self._utterance_ended_at,
-            )
 
         self._utterance_started_at = started_at
         self._overlapping = overlapping
