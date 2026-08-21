@@ -262,20 +262,19 @@ class TestDynamicEndpointing:
         assert ep.min_delay == pytest.approx(0.3, rel=1e-5)
         assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
 
-    def test_interruption_adjusts_stale_utterance_end_time(self) -> None:
-        """Interruption path should adjust stale utterance end timestamp before delay updates."""
+    def test_agent_start_while_user_speaks_preserves_utterance_timestamps(self) -> None:
         ep = DynamicEndpointing(min_delay=0.06, max_delay=1.0, alpha=1.0)
 
-        # Simulate stale ordering where end timestamp still belongs to a previous utterance.
         ep.on_end_of_speech(ended_at=99.0)
         ep.on_start_of_speech(started_at=100.0)
-
         ep.on_start_of_agent_speech(started_at=100.2)
+
+        # A later audio-activity notification for the same speech must not replace its onset.
         ep.on_start_of_speech(started_at=100.25, overlapping=True)
 
-        assert ep._utterance_ended_at == pytest.approx(100.2, rel=1e-3)
-        assert ep.min_delay == pytest.approx(0.06, rel=1e-5)
-        assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
+        assert ep._overlapping is True
+        assert ep._utterance_started_at == 100.0
+        assert ep._utterance_ended_at == 99.0
 
     def test_update_options_preserves_filter_alpha(self) -> None:
         """Changing delays should not overwrite the EMA smoothing coefficient."""
@@ -403,6 +402,30 @@ class TestDynamicEndpointing:
         # _agent_speech_started_at is intentionally preserved so that
         # between_turn_delay can be computed in the normal end-of-speech path
         assert ep._agent_speech_started_at == 100.0
+        assert ep._overlapping is False
+
+    def test_agent_speech_resume_restores_overlap_while_user_speaks(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
+
+        ep.on_start_of_agent_speech(started_at=100.0)
+        ep.on_start_of_speech(started_at=100.1, overlapping=True)
+        ep.on_end_of_agent_speech(ended_at=100.2)
+
+        ep.on_start_of_agent_speech(started_at=100.3)
+
+        assert ep._overlapping is True
+        assert ep._utterance_started_at == 100.1
+
+    def test_agent_speech_resume_does_not_restore_overlap_after_user_ends(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
+
+        ep.on_start_of_agent_speech(started_at=100.0)
+        ep.on_start_of_speech(started_at=100.1, overlapping=True)
+        ep.on_end_of_agent_speech(ended_at=100.2)
+        ep.on_end_of_speech(ended_at=100.25)
+
+        ep.on_start_of_agent_speech(started_at=100.3)
+
         assert ep._overlapping is False
 
     def test_overlapping_inferred_from_agent_speech(self) -> None:

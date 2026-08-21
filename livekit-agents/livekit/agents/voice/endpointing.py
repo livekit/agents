@@ -130,7 +130,7 @@ class DynamicEndpointing(BaseEndpointing):
     def on_start_of_agent_speech(self, started_at: float) -> None:
         self._agent_speech_started_at = started_at
         self._agent_speech_ended_at = None
-        self._overlapping = False
+        self._overlapping = self._speaking
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
         # Keep the agent speech timestamps until the next user utterance ends so
