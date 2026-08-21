@@ -302,6 +302,7 @@ class AgentActivity(RecognitionHooks):
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
         self._pending_interruption: inference.OverlappingSpeechEvent | None = None
+        self._audio_activity_interruption_in_progress: bool = False
 
         # this allows taking over audio interruption temporarily until interruption is detected
         # by default it is true unless turn_detection is manual or realtime_llm
@@ -2080,6 +2081,16 @@ class AgentActivity(RecognitionHooks):
 
     def _interrupt_by_audio_activity(self) -> None:
         """Interrupt the current speech or generation from detected audio activity."""
+        if self._audio_activity_interruption_in_progress:
+            return
+
+        self._audio_activity_interruption_in_progress = True
+        try:
+            self._interrupt_by_audio_activity_once()
+        finally:
+            self._audio_activity_interruption_in_progress = False
+
+    def _interrupt_by_audio_activity_once(self) -> None:
         if not self._interruption_by_audio_activity_enabled:
             return
 
