@@ -1511,6 +1511,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._previous_status = status
             extra = {"load": effective_load, "threshold": load_threshold}
             if is_full:
+                telemetry.metrics.worker_became_full()
                 logger.info("worker is at full capacity, marking as unavailable", extra=extra)
             else:
                 logger.info("worker is below capacity, marking as available", extra=extra)
