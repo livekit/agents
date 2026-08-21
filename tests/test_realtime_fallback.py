@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import pytest
 
 from livekit import rtc
-from livekit.agents.llm import ChatContext, RealtimeModelFallbackAdapter
+from livekit.agents.llm import (
+    ChatContext,
+    GenerationCreatedEvent,
+    RealtimeError,
+    RealtimeModelFallbackAdapter,
+)
+from livekit.agents.llm.realtime import _UserMessageSyncResult, _UserMessageSyncStatus
 
-from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
 
 pytestmark = pytest.mark.unit
 
@@ -29,11 +36,13 @@ class _StubAgentSession:
     def __init__(self, agent_state: str = "listening", chat_ctx: ChatContext | None = None) -> None:
         self.agent_state = agent_state
         self.interrupt_calls = 0
+        self.interrupt_entered = asyncio.Event()
         self.generate_reply_calls = 0
         self.current_agent = _StubAgent(chat_ctx if chat_ctx is not None else ChatContext.empty())
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         self.interrupt_calls += 1
+        self.interrupt_entered.set()
         fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         fut.set_result(None)
         return fut
@@ -41,6 +50,21 @@ class _StubAgentSession:
     def generate_reply(self, **kwargs: object) -> object:
         self.generate_reply_calls += 1
         return object()
+
+
+class _DependentInterruptAgentSession(_StubAgentSession):
+    """Models an interrupt whose speech handle cannot finish until text sync advances."""
+
+    def __init__(self, *, sync_advanced: asyncio.Event, chat_ctx: ChatContext) -> None:
+        super().__init__(agent_state="thinking", chat_ctx=chat_ctx)
+        self._sync_advanced = sync_advanced
+        self.interrupt_entered = asyncio.Event()
+
+    async def interrupt(self, *, force: bool = False) -> None:
+        del force
+        self.interrupt_calls += 1
+        self.interrupt_entered.set()
+        await self._sync_advanced.wait()
 
 
 class _NamedRealtimeModel(FakeRealtimeModel):
@@ -58,6 +82,72 @@ class _NamedRealtimeModel(FakeRealtimeModel):
     @property
     def provider(self) -> str:
         return self._provider_name
+
+
+class _FailFirstReplacementModel(FakeRealtimeModel):
+    """Fail the first replacement session, then recover if retried."""
+
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        session = super().session(turn_detection_disabled=turn_detection_disabled)
+        if len(self.created_sessions) == 2:
+            session.update_error = RuntimeError("first replacement cannot start")
+        return session
+
+
+class _SyncRealtimeSession(FakeRealtimeSession):
+    def __init__(self, model: FakeRealtimeModel, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__(model)
+        self._sync_status = sync_status
+
+    async def _sync_user_message(
+        self, chat_ctx: ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        del chat_ctx, message_id
+        error = RuntimeError("child synchronization uncertain")
+        return _UserMessageSyncResult(self._sync_status, error)
+
+
+class _SyncRealtimeModel(FakeRealtimeModel):
+    def __init__(self, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__()
+        self._sync_status = sync_status
+
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        session = _SyncRealtimeSession(self, sync_status=self._sync_status)
+        session.turn_detection_disabled = turn_detection_disabled
+        self.created_sessions.append(session)
+        return session
+
+
+class _ControlledSyncRealtimeSession(FakeRealtimeSession):
+    def __init__(self, model: FakeRealtimeModel, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__(model)
+        self._sync_status = sync_status
+        self.sync_entered = asyncio.Event()
+        self.release_sync = asyncio.Event()
+
+    async def _sync_user_message(
+        self, chat_ctx: ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        del chat_ctx, message_id
+        self.sync_entered.set()
+        await self.release_sync.wait()
+        return _UserMessageSyncResult(
+            self._sync_status,
+            RuntimeError("retiring child synchronization result"),
+        )
+
+
+class _ControlledSyncRealtimeModel(FakeRealtimeModel):
+    def __init__(self, *, sync_status: _UserMessageSyncStatus) -> None:
+        super().__init__()
+        self._sync_status = sync_status
+
+    def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
+        session = _ControlledSyncRealtimeSession(self, sync_status=self._sync_status)
+        session.turn_detection_disabled = turn_detection_disabled
+        self.created_sessions.append(session)
+        return session
 
 
 async def test_reports_active_model_and_provider() -> None:
@@ -204,6 +294,223 @@ async def test_switch_session_moves_to_next_model() -> None:
     assert session._active is backup.active_session
 
 
+@pytest.mark.parametrize(
+    "sync_status",
+    [
+        _UserMessageSyncStatus.ACCEPTED,
+        _UserMessageSyncStatus.REJECTED,
+        _UserMessageSyncStatus.UNKNOWN,
+    ],
+)
+async def test_sync_user_message_waits_for_swap_and_preserves_child_result(
+    sync_status: _UserMessageSyncStatus,
+) -> None:
+    primary = FakeRealtimeModel()
+    backup = _SyncRealtimeModel(sync_status=sync_status)
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    old = primary.active_session
+    release_old = asyncio.Event()
+    old.block_aclose = release_old
+
+    old.emit_error(recoverable=False)
+    await old.aclose_entered.wait()
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="synchronize exactly once")
+    sync_task = asyncio.create_task(session._sync_user_message(chat_ctx, message.id))
+
+    release_old.set()
+    await session._swap_task
+    result = await sync_task
+
+    assert result.status is sync_status
+    assert isinstance(result.error, RuntimeError)
+
+
+async def test_sync_during_interrupting_swap_replays_on_replacement_without_watchdog() -> None:
+    primary = FakeRealtimeModel()
+    backup = _SyncRealtimeModel(sync_status=_UserMessageSyncStatus.ACCEPTED)
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="survive the provider swap")
+    sync_advanced = asyncio.Event()
+    agent_session = _DependentInterruptAgentSession(
+        sync_advanced=sync_advanced,
+        chat_ctx=chat_ctx,
+    )
+    session._agent_session = cast("object", agent_session)  # type: ignore[assignment]
+
+    swap_task = asyncio.create_task(session.restart(switch_model=True))
+    await agent_session.interrupt_entered.wait()
+
+    async def _sync_then_generate() -> tuple[
+        _UserMessageSyncResult, asyncio.Future[GenerationCreatedEvent]
+    ]:
+        result = await session._sync_user_message(chat_ctx, message.id)
+        generation_fut = session.generate_reply()
+        sync_advanced.set()
+        return result, generation_fut
+
+    turn_task = asyncio.create_task(_sync_then_generate())
+    try:
+        result, generation_fut = await asyncio.wait_for(turn_task, timeout=0.25)
+        await asyncio.wait_for(swap_task, timeout=0.25)
+    finally:
+        sync_advanced.set()
+        if not turn_task.done():
+            turn_task.cancel()
+        await asyncio.gather(turn_task, swap_task, return_exceptions=True)
+
+    assert result.status is _UserMessageSyncStatus.UNKNOWN
+    assert primary.active_session.generate_reply_calls == 0
+
+    await asyncio.wait_for(backup.active_session.generate_reply_entered.wait(), timeout=0.25)
+    assert backup.active_session.generate_reply_calls == 1
+    assert [item.id for item in backup.active_session.chat_ctx.items].count(message.id) == 1
+
+    backup.active_session._reply_futs[0].set_result(cast(GenerationCreatedEvent, object()))
+    assert await generation_fut is not None
+
+
+async def test_retiring_child_rejection_becomes_unknown_after_swap_starts() -> None:
+    primary = _ControlledSyncRealtimeModel(sync_status=_UserMessageSyncStatus.REJECTED)
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    agent_session = _StubAgentSession()
+    session._agent_session = cast("object", agent_session)  # type: ignore[assignment]
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="retiring child result")
+    old = cast(_ControlledSyncRealtimeSession, primary.active_session)
+
+    sync_task = asyncio.create_task(session._sync_user_message(chat_ctx, message.id))
+    await old.sync_entered.wait()
+    swap_task = asyncio.create_task(session.restart(switch_model=True))
+    try:
+        await asyncio.wait_for(agent_session.interrupt_entered.wait(), timeout=0.25)
+        old.release_sync.set()
+        result = await asyncio.wait_for(sync_task, timeout=0.25)
+        await asyncio.wait_for(swap_task, timeout=0.25)
+    finally:
+        old.release_sync.set()
+        await asyncio.gather(sync_task, swap_task, return_exceptions=True)
+
+    assert result.status is _UserMessageSyncStatus.UNKNOWN
+    assert isinstance(result.error, RealtimeError)
+
+
+async def test_cancelling_cross_swap_generation_does_not_cancel_shared_swap() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    old = primary.active_session
+    release_old = asyncio.Event()
+    old.block_aclose = release_old
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="cancel only this generation")
+    sync_advanced = asyncio.Event()
+    agent_session = _DependentInterruptAgentSession(
+        sync_advanced=sync_advanced,
+        chat_ctx=chat_ctx,
+    )
+    session._agent_session = cast("object", agent_session)  # type: ignore[assignment]
+
+    swap_task = asyncio.create_task(session.restart(switch_model=True))
+    await agent_session.interrupt_entered.wait()
+
+    try:
+        result = await asyncio.wait_for(
+            session._sync_user_message(chat_ctx, message.id), timeout=0.25
+        )
+        generation_fut = session.generate_reply()
+        sync_advanced.set()
+        await old.aclose_entered.wait()
+        generation_fut.cancel()
+        release_old.set()
+        await asyncio.wait_for(swap_task, timeout=0.25)
+    finally:
+        sync_advanced.set()
+        release_old.set()
+        await asyncio.gather(swap_task, return_exceptions=True)
+
+    assert result.status is _UserMessageSyncStatus.UNKNOWN
+    assert generation_fut.cancelled()
+    assert backup.active_session.generate_reply_calls == 0
+
+
+async def test_cross_swap_generation_fails_if_no_replacement_can_start() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    backup.bring_up_error = RuntimeError("cannot start replacement")
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="replacement must exist")
+    sync_advanced = asyncio.Event()
+    primary.bring_up_error = RuntimeError("primary also unavailable")
+    agent_session = _DependentInterruptAgentSession(
+        sync_advanced=sync_advanced,
+        chat_ctx=chat_ctx,
+    )
+    session._agent_session = cast("object", agent_session)  # type: ignore[assignment]
+
+    swap_task = asyncio.create_task(session.restart(switch_model=True))
+    await agent_session.interrupt_entered.wait()
+
+    async def _sync_then_generate() -> tuple[
+        _UserMessageSyncResult, asyncio.Future[GenerationCreatedEvent]
+    ]:
+        result = await session._sync_user_message(chat_ctx, message.id)
+        generation_fut = session.generate_reply()
+        sync_advanced.set()
+        return result, generation_fut
+
+    turn_task = asyncio.create_task(_sync_then_generate())
+    try:
+        result, generation_fut = await asyncio.wait_for(turn_task, timeout=0.25)
+        await asyncio.wait_for(swap_task, timeout=0.25)
+    finally:
+        sync_advanced.set()
+        if not turn_task.done():
+            turn_task.cancel()
+        await asyncio.gather(turn_task, swap_task, return_exceptions=True)
+
+    assert result.status is _UserMessageSyncStatus.UNKNOWN
+    with pytest.raises(RealtimeError, match="failed to replace realtime session"):
+        await generation_fut
+
+
+async def test_sync_waits_through_consecutive_swaps_for_latest_child_result() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    final = _SyncRealtimeModel(sync_status=_UserMessageSyncStatus.REJECTED)
+    adapter = RealtimeModelFallbackAdapter([primary, backup, final])
+    session = adapter.session()
+
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+    assert session._active is backup.active_session
+
+    old = backup.active_session
+    release_old = asyncio.Event()
+    old.block_aclose = release_old
+    old.emit_error(recoverable=False)
+    await old.aclose_entered.wait()
+    chat_ctx = ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="second replacement")
+    sync_task = asyncio.create_task(session._sync_user_message(chat_ctx, message.id))
+
+    release_old.set()
+    await session._swap_task
+    result = await sync_task
+
+    assert session._active is final.active_session
+    assert result.status is _UserMessageSyncStatus.REJECTED
+    assert isinstance(result.error, RuntimeError)
+
+
 async def test_switch_session_wraps_around() -> None:
     primary = FakeRealtimeModel()
     backup = FakeRealtimeModel()
@@ -339,6 +646,33 @@ async def test_non_recoverable_error_forwarded_as_recoverable_while_fallback_rem
     # the user is informed, but the error is re-stamped recoverable so the session is not closed
     assert len(errors) == 1
     assert errors[0].recoverable is True
+
+
+async def test_background_swap_failure_emits_terminal_error() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    errors: list = []
+    session.on("error", lambda e: errors.append(e))
+
+    class _BrokenAgent:
+        @property
+        def chat_ctx(self) -> ChatContext:
+            raise RuntimeError("failed to snapshot chat context")
+
+    agent_session = _StubAgentSession(agent_state="listening")
+    agent_session.current_agent = cast(_StubAgent, _BrokenAgent())
+    session._agent_session = agent_session
+
+    primary.active_session.emit_error(recoverable=False)
+    assert session._swap_task is not None
+    with pytest.raises(RuntimeError, match="failed to snapshot chat context"):
+        await session._swap_task
+    await asyncio.sleep(0)
+
+    assert [error.recoverable for error in errors] == [True, False]
+    assert isinstance(errors[-1].error, RuntimeError)
 
 
 async def test_recoverable_error_is_forwarded_unchanged_without_swap() -> None:
@@ -514,6 +848,26 @@ async def test_swap_cascades_past_a_model_that_cannot_start() -> None:
     assert session._active is backup2.active_session
     # only the recoverable hand-off was surfaced; nothing session-ending
     assert all(e.recoverable for e in errors)
+
+
+async def test_zero_cooldown_attempts_each_model_only_once_per_swap() -> None:
+    primary = _FailFirstReplacementModel()
+    failing_backup = FakeRealtimeModel()
+    final_backup = FakeRealtimeModel()
+    failing_backup.bring_up_error = RuntimeError("backup cannot start")
+    adapter = RealtimeModelFallbackAdapter(
+        [primary, failing_backup, final_backup],
+        cooldown=0,
+    )
+    session = adapter.session()
+
+    await session.restart(switch_model=True)
+
+    assert session._active_index == 2
+    assert session._active is final_backup.active_session
+    assert len(primary.created_sessions) == 2
+    assert len(failing_backup.created_sessions) == 1
+    assert len(final_backup.created_sessions) == 1
 
 
 async def test_swap_escalates_when_no_model_can_start() -> None:

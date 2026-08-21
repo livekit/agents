@@ -18,6 +18,10 @@ from pydantic import BaseModel, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
+from livekit.agents.llm.realtime import (
+    _UserMessageSyncResult,
+    _UserMessageSyncStatus,
+)
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -1425,56 +1429,97 @@ class RealtimeSession(
                 )
             )
 
-    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+    async def _apply_chat_ctx_update(
+        self, chat_ctx: llm.ChatContext
+    ) -> tuple[
+        list[ConversationItemCreateEvent | ConversationItemDeleteEvent],
+        list[BaseException | None],
+        bool,
+    ]:
         async with self._update_chat_ctx_lock:
             chat_ctx = chat_ctx.copy(
                 exclude_handoff=True,
                 exclude_config_update=True,
             )
-            # only remove the instructions but keep other system messages
+            # Only remove the instructions but keep other system messages.
             remove_instructions(chat_ctx)
 
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
             self._chat_ctx_event_futures = {}
 
-            for ev in events:
-                futs.append(f := asyncio.Future[None]())
-                if isinstance(ev, ConversationItemDeleteEvent):
-                    self._item_delete_future[ev.item_id] = f
+            for event in events:
+                futs.append(future := asyncio.Future[None]())
+                if isinstance(event, ConversationItemDeleteEvent):
+                    self._item_delete_future[event.item_id] = future
                 else:
-                    assert ev.item.id is not None
-                    self._item_create_future[ev.item.id] = f
+                    assert event.item.id is not None
+                    self._item_create_future[event.item.id] = future
 
-                # an updated item sends a delete and a create under the same id, so only the
-                # event id tells a rejection which of the two it answers
-                if ev.event_id:
-                    self._chat_ctx_event_futures[ev.event_id] = f
-                self.send_event(ev)
+                # An updated item sends a delete and create under one item id. The event id
+                # identifies which operation a rejection answers.
+                if event.event_id:
+                    self._chat_ctx_event_futures[event.event_id] = future
+                self.send_event(event)
 
             if not futs:
-                return
+                return events, [], False
+
+            timed_out = False
             try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(*futs, return_exceptions=True), timeout=5.0
-                )
-            except asyncio.TimeoutError:
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+                try:
+                    results = await asyncio.wait_for(
+                        asyncio.gather(*futs, return_exceptions=True), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    results = []
+                    for future in futs:
+                        if future.cancelled() or not future.done():
+                            results.append(asyncio.TimeoutError())
+                        else:
+                            results.append(future.exception())
             finally:
                 self._chat_ctx_event_futures = {}
-                for ev in events:
-                    if isinstance(ev, ConversationItemDeleteEvent):
-                        self._item_delete_future.pop(ev.item_id, None)
+                for event in events:
+                    if isinstance(event, ConversationItemDeleteEvent):
+                        self._item_delete_future.pop(event.item_id, None)
                     else:
-                        assert ev.item.id is not None
-                        self._item_create_future.pop(ev.item.id, None)
+                        assert event.item.id is not None
+                        self._item_create_future.pop(event.item.id, None)
 
-            # a rejected item is not worth failing the turn over
-            if rejected := [str(r) for r in results if isinstance(r, BaseException)]:
-                logger.warning(
-                    f"{self._realtime_model._provider_label} rejected part of a chat context update",  # noqa: E501
-                    extra={"errors": rejected},
-                )
+            return events, results, timed_out
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        _, results, timed_out = await self._apply_chat_ctx_update(chat_ctx)
+        if timed_out:
+            raise llm.RealtimeError("update_chat_ctx timed out.")
+
+        # A rejected item is not worth failing a general context update over.
+        if rejected := [str(result) for result in results if isinstance(result, BaseException)]:
+            logger.warning(
+                f"{self._realtime_model._provider_label} rejected part of a chat context update",  # noqa: E501
+                extra={"errors": rejected},
+            )
+
+    async def _sync_user_message(
+        self, chat_ctx: llm.ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        events, results, _ = await self._apply_chat_ctx_update(chat_ctx)
+        for event, result in zip(events, results, strict=True):
+            if not isinstance(event, ConversationItemCreateEvent) or event.item.id != message_id:
+                continue
+            if isinstance(result, asyncio.TimeoutError):
+                error = llm.RealtimeError("user message synchronization timed out.")
+                return _UserMessageSyncResult(_UserMessageSyncStatus.UNKNOWN, error)
+            if isinstance(result, llm.RealtimeError):
+                return _UserMessageSyncResult(_UserMessageSyncStatus.REJECTED, result)
+            if isinstance(result, BaseException):
+                raise result
+            return _UserMessageSyncResult(_UserMessageSyncStatus.ACCEPTED)
+
+        # No create event means the exact item is already present in the provider mirror.
+        return _UserMessageSyncResult(_UserMessageSyncStatus.ACCEPTED)
 
     def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
@@ -1818,14 +1863,17 @@ class RealtimeSession(
     def _handle_input_audio_buffer_speech_started(
         self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
-        if event.item_id:
+        if event.item_id and self._opts.input_audio_transcription is not None:
             self._input_speech_started_at[event.item_id] = time.time()
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
-        self, _: InputAudioBufferSpeechStoppedEvent
+        self, event: InputAudioBufferSpeechStoppedEvent
     ) -> None:
         user_transcription_enabled = self._opts.input_audio_transcription is not None
+        if not user_transcription_enabled and event.item_id:
+            self._input_speech_started_at.pop(event.item_id, None)
+
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),

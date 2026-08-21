@@ -33,9 +33,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, vad
+from livekit.agents import LanguageCode, UserTurnCommitAbortedError, stt, vad
 from livekit.agents.utils import aio
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import AudioRecognition, _TurnDisposition
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
     _StreamingTurnDetector,
@@ -110,11 +110,23 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._speech_start_time = None
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
+    ar._commit_user_turn_atask = None
+    ar._commit_user_turn_fut = None
     ar._user_turn_committed = False
+    ar._turn_backchannel_over_agent = False
+    ar._overlap_in_current_turn = False
+    ar._turn_disposition = _TurnDisposition()
     ar._vad = None
     ar._last_language = None
     ar._last_emitted_prediction = None
     ar._closing = asyncio.Event()
+
+    def _forward_start_of_speech(ev: vad.VADEvent | None, *, speech_start_time: float) -> None:
+        ar._on_start_of_speech(
+            started_at=speech_start_time, speech_duration=ev.speech_duration if ev else 0.0
+        )
+
+    ar._hooks.on_start_of_speech.side_effect = _forward_start_of_speech
     return ar
 
 
@@ -354,6 +366,425 @@ class TestEotPredictionDedup:
 
         assert ar._last_emitted_prediction is None
         assert ar._user_turn_start is None
+
+
+class TestTurnDispositionLifecycle:
+    @staticmethod
+    def _prepare_manual_commit(ar: AudioRecognition, *, wait_for_stt: bool = False) -> None:
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._stt = MagicMock()
+        ar._commit_user_turn_atask = None
+        ar._commit_user_turn_fut = None
+        ar._final_transcript_received = asyncio.Event()
+        ar._audio_interim_transcript = ""
+        ar._sample_rate = None
+        ar._last_final_transcript_time = None if wait_for_stt else time.time()
+        ar._endpointing.min_delay = 60.0
+        ar._audio_transcript = "first turn"
+
+    @staticmethod
+    async def _assert_commit_aborted(
+        transcript_fut: asyncio.Future[str], *, partial_transcript: str
+    ) -> None:
+        with pytest.raises(UserTurnCommitAbortedError) as exc_info:
+            await transcript_fut
+        assert not transcript_fut.cancelled()
+        assert exc_info.value.partial_transcript == partial_transcript
+
+    @staticmethod
+    async def _assert_next_turn_has_default_disposition(ar: AudioRecognition) -> None:
+        ar._hooks.on_end_of_turn.reset_mock()
+        ar._audio_transcript = "next turn"
+        ar._endpointing.min_delay = 0.0
+        ar._last_speaking_time = None
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+
+        ar._hooks.on_end_of_turn.assert_called_once()
+        next_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert next_turn.new_transcript == "next turn"
+        assert next_turn.skip_reply is False
+        assert next_turn.reply_already_triggered is False
+
+    async def test_vad_speech_start_abandons_skipped_manual_commit(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar)
+
+        transcript = await ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=1.0,
+            skip_reply=True,
+        )
+        assert transcript == "first turn"
+        abandoned = ar._end_of_turn_task
+        assert abandoned is not None
+        await asyncio.sleep(0)
+
+        await ar._on_vad_event(_start_of_speech())
+        with contextlib.suppress(asyncio.CancelledError):
+            await abandoned
+        assert abandoned.cancelled()
+
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_stt_speech_start_abandons_pretriggered_manual_commit(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar)
+        ar._turn_detection_mode = "stt"
+
+        transcript = await ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=1.0,
+            reply_already_triggered=True,
+        )
+        assert transcript == "first turn"
+        abandoned = ar._end_of_turn_task
+        assert abandoned is not None
+        await asyncio.sleep(0)
+
+        await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+        with contextlib.suppress(asyncio.CancelledError):
+            await abandoned
+        assert abandoned.cancelled()
+
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_provider_speech_start_abandons_pending_manual_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar)
+
+        await ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=1.0,
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+        abandoned = ar._end_of_turn_task
+        assert abandoned is not None
+        await asyncio.sleep(0)
+
+        try:
+            ar._on_start_of_speech(started_at=time.time())
+            await asyncio.sleep(0)
+            assert abandoned.cancelled()
+        finally:
+            if not abandoned.done():
+                await aio.cancel_and_wait(abandoned)
+
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_mode_transition_abandons_pending_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar)
+
+        await ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=1.0,
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+        abandoned = ar._end_of_turn_task
+        assert abandoned is not None
+        await asyncio.sleep(0)
+
+        ar._update_options(turn_detection="manual")
+        with contextlib.suppress(asyncio.CancelledError):
+            await abandoned
+        assert abandoned.cancelled()
+
+        ar._turn_detection_mode = "stt"
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_speech_start_aborts_public_manual_commit_with_dedicated_error(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar, wait_for_stt=True)
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=60.0,
+            skip_reply=True,
+        )
+        commit_task = ar._commit_user_turn_atask
+        assert commit_task is not None
+        await asyncio.sleep(0)
+        assert not commit_task.done()
+
+        await ar._on_vad_event(_start_of_speech())
+        await asyncio.sleep(0)
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await commit_task
+        assert commit_task.cancelled()
+        await self._assert_commit_aborted(transcript_fut, partial_transcript="first turn")
+        assert ar._end_of_turn_task is None
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_failed_manual_commit_does_not_leak_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar)
+        ar._hooks.retrieve_chat_ctx.side_effect = RuntimeError("failed to retrieve chat context")
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=1.0,
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+
+        with pytest.raises(RuntimeError, match="failed to retrieve chat context"):
+            await transcript_fut
+
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_clear_user_turn_settles_pending_commit_and_resets_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar, wait_for_stt=True)
+        ar._audio_preflight_transcript = ""
+        ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=60.0,
+            skip_reply=True,
+        )
+        commit_task = ar._commit_user_turn_atask
+        assert commit_task is not None
+        await asyncio.sleep(0)
+        assert not commit_task.done()
+
+        ar._clear_user_turn()
+        with contextlib.suppress(asyncio.CancelledError):
+            await commit_task
+        await asyncio.sleep(0)
+
+        assert commit_task.cancelled()
+        await self._assert_commit_aborted(transcript_fut, partial_transcript="first turn")
+        await self._assert_next_turn_has_default_disposition(ar)
+
+    async def test_mode_transition_aborts_public_manual_commit_with_dedicated_error(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar, wait_for_stt=True)
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=60.0,
+            skip_reply=True,
+        )
+        commit_task = ar._commit_user_turn_atask
+        assert commit_task is not None
+        await asyncio.sleep(0)
+
+        ar._update_options(turn_detection="manual")
+        with contextlib.suppress(asyncio.CancelledError):
+            await commit_task
+
+        assert commit_task.cancelled()
+        await self._assert_commit_aborted(transcript_fut, partial_transcript="first turn")
+
+    async def test_disposition_replacement_aborts_public_manual_commit_without_cancelling_caller(
+        self,
+    ) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar, wait_for_stt=True)
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=60.0,
+            skip_reply=True,
+        )
+        commit_task = ar._commit_user_turn_atask
+        assert commit_task is not None
+        await asyncio.sleep(0)
+
+        ar._advance_turn_disposition()
+        ar._final_transcript_received.set()
+        await commit_task
+
+        await self._assert_commit_aborted(transcript_fut, partial_transcript="first turn")
+
+    async def test_caller_cancellation_remains_cancelled_error(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        self._prepare_manual_commit(ar, wait_for_stt=True)
+
+        transcript_fut = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=60.0,
+            skip_reply=True,
+        )
+        transcript_fut.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await transcript_fut
+
+        ar._abandon_turn_disposition()
+        if ar._commit_user_turn_atask is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await ar._commit_user_turn_atask
+
+    async def test_late_stt_final_preserves_disposition_then_resets(self) -> None:
+        """A late STT final replaces the pending manual EOU bounce without
+        losing the manual turn's reply disposition. The latches are scoped to
+        that logical turn and must not affect the following turn."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detector_stream = None
+        ar._audio_transcript = "initial transcript"
+        ar._endpointing.min_delay = 0.0
+        chat_ctx = _make_chat_ctx_stub()
+
+        prediction_started = asyncio.Event()
+        release_prediction = asyncio.Event()
+
+        async def _wait_for_prediction(_language: object) -> bool:
+            prediction_started.set()
+            await release_prediction.wait()
+            return True
+
+        detector = MagicMock()  # not a streaming detector
+        detector.supports_language = AsyncMock(side_effect=_wait_for_prediction)
+        ar._turn_detector = detector
+
+        ar._run_eou_detection(
+            chat_ctx,
+            trigger="manual",
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+        first_task = ar._end_of_turn_task
+        assert first_task is not None
+        await prediction_started.wait()
+        assert not first_task.done()
+
+        # Replacing the pending bounce models the final transcript arriving
+        # after the manually bounded turn has already selected its disposition.
+        ar._audio_transcript = "initial transcript with late final"
+        ar._turn_detector = None
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        late_final_task = ar._end_of_turn_task
+        assert late_final_task is not None
+        await late_final_task
+
+        assert first_task.cancelled()
+        ar._hooks.on_end_of_turn.assert_called_once()
+        first_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert first_turn.new_transcript == "initial transcript with late final"
+        assert first_turn.skip_reply is True
+        assert first_turn.reply_already_triggered is True
+
+        ar._hooks.on_end_of_turn.reset_mock()
+        ar._audio_transcript = "next turn"
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        next_turn_task = ar._end_of_turn_task
+        assert next_turn_task is not None
+        await next_turn_task
+
+        ar._hooks.on_end_of_turn.assert_called_once()
+        next_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert next_turn.new_transcript == "next turn"
+        assert next_turn.skip_reply is False
+        assert next_turn.reply_already_triggered is False
+
+    async def test_vad_empty_bounce_is_replaced_by_late_final(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = MagicMock()
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._endpointing.min_delay = 60.0
+        ar._hooks.on_end_of_turn.return_value = True
+        ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+        chat_ctx = _make_chat_ctx_stub()
+        bounce_waiting = asyncio.Event()
+        closing_wait = ar._closing.wait
+
+        async def _observe_close_wait() -> None:
+            bounce_waiting.set()
+            await closing_wait()
+
+        ar._closing.wait = _observe_close_wait  # type: ignore[method-assign]
+
+        ar._run_eou_detection(
+            chat_ctx,
+            trigger="vad",
+            allow_empty_transcript=True,
+        )
+        empty_bounce = ar._end_of_turn_task
+        assert empty_bounce is not None
+        await asyncio.wait_for(bounce_waiting.wait(), timeout=0.25)
+
+        ar._audio_transcript = "late finalized text"
+        ar._endpointing.min_delay = 0.0
+        ar._run_eou_detection(chat_ctx, trigger="stt")
+        replacement = ar._end_of_turn_task
+        assert replacement is not None
+        assert replacement is not empty_bounce
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await empty_bounce
+        await replacement
+
+        assert empty_bounce.cancelled()
+        ar._hooks.on_end_of_turn.assert_called_once()
+        assert ar._hooks.on_end_of_turn.call_args.args[0].new_transcript == "late finalized text"
+        ar._restart_stt_input.assert_not_called()
+
+    async def test_stt_empty_bounce_consumes_late_final_before_cleanup(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = MagicMock()
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._endpointing.min_delay = 60.0
+        ar._hooks.on_end_of_turn.return_value = True
+        ar._restart_stt_input = MagicMock()  # type: ignore[method-assign]
+        bounce_waiting = asyncio.Event()
+        closing_wait = ar._closing.wait
+
+        async def _observe_close_wait() -> None:
+            bounce_waiting.set()
+            await closing_wait()
+
+        ar._closing.wait = _observe_close_wait  # type: ignore[method-assign]
+
+        ar._run_eou_detection(
+            _make_chat_ctx_stub(),
+            trigger="stt",
+            allow_empty_transcript=True,
+        )
+        bounce = ar._end_of_turn_task
+        assert bounce is not None
+        await asyncio.wait_for(bounce_waiting.wait(), timeout=0.25)
+
+        ar._audio_transcript = "late finalized text"
+        ar._closing.set()
+        await bounce
+
+        ar._hooks.on_end_of_turn.assert_called_once()
+        assert ar._hooks.on_end_of_turn.call_args.args[0].new_transcript == "late finalized text"
+        assert ar._audio_transcript == ""
+        ar._restart_stt_input.assert_called_once_with()
+
+    async def test_manual_turn_without_stt_does_not_leak_disposition(self) -> None:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = None
+
+        result = ar._commit_user_turn(
+            audio_detached=False,
+            transcript_timeout=0.1,
+            skip_reply=True,
+            reply_already_triggered=True,
+        )
+
+        assert await result == ""
+        assert ar._turn_disposition.skip_reply is False
+        assert ar._turn_disposition.reply_already_triggered is False
+
+        ar._audio_transcript = "next turn"
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        assert ar._end_of_turn_task is not None
+        await ar._end_of_turn_task
+        next_turn = ar._hooks.on_end_of_turn.call_args.args[0]
+        assert next_turn.skip_reply is False
+        assert next_turn.reply_already_triggered is False
 
 
 class TestBackchannelOpportunityEmit:
@@ -702,3 +1133,29 @@ class TestVadMinSilenceRequirement:
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
         detector.stream.assert_not_called()
+
+
+async def test_duplicate_vad_and_stt_onsets_keep_same_manual_turn() -> None:
+    ar = _make_full_recognition_for_eou()
+    ar._turn_detection_mode = "stt"
+    ar._vad = MagicMock()
+    ar._audio_interim_transcript = ""
+
+    await ar._on_vad_event(_start_of_speech())
+    pending_commit: asyncio.Future[str] = asyncio.Future()
+    blocked_commit = asyncio.create_task(asyncio.Event().wait())
+    ar._commit_user_turn_fut = pending_commit
+    ar._commit_user_turn_atask = blocked_commit
+    ar._turn_disposition = _TurnDisposition(skip_reply=True)
+
+    try:
+        await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+        assert not pending_commit.done()
+        assert not blocked_commit.done()
+        assert ar._turn_disposition.skip_reply is True
+    finally:
+        if not blocked_commit.done():
+            await aio.cancel_and_wait(blocked_commit)
+        if not pending_commit.done():
+            pending_commit.cancel()

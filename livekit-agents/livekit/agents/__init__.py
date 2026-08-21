@@ -28,6 +28,7 @@ from ._exceptions import (
     APITimeoutError,
     AssignmentTimeoutError,
     UnexpectedModelBehavior,
+    UserTurnCommitAbortedError,
     create_api_error_from_http,
 )
 from .job import (
@@ -142,6 +143,7 @@ from .voice.turn import (
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
+    RealtimeInputMode,
     TurnHandlingOptions,
     UserTurnLimitOptions,
 )
@@ -236,6 +238,7 @@ __all__ = [
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UserTurnCommitAbortedError",
     "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",
@@ -280,6 +283,7 @@ __all__ = [
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",
+    "RealtimeInputMode",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

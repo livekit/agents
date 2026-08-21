@@ -38,6 +38,7 @@ class TestAudioRecognitionAclose:
         audio_recognition._interruption_atask = None
         audio_recognition._turn_detector_stream = None
         audio_recognition._commit_user_turn_atask = None
+        audio_recognition._commit_user_turn_fut = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._vad_ch = None
         audio_recognition._interruption_ch = None
@@ -179,6 +180,31 @@ class TestAudioRecognitionAclose:
         release.set()
         await close_task
         assert task.done()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("task_attr", ["_commit_user_turn_atask", "_end_of_turn_task"])
+    async def test_aclose_propagates_cancellation_while_waiting_for_turn_task(
+        self, task_attr: str
+    ) -> None:
+        audio_recognition = self._create_audio_recognition()
+        started = asyncio.Event()
+
+        async def pending_task() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(pending_task())
+        await started.wait()
+        setattr(audio_recognition, task_attr, task)
+
+        close_task = asyncio.create_task(audio_recognition._aclose())
+        await asyncio.sleep(0)
+        close_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+        assert task.cancelled()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

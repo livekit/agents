@@ -84,7 +84,9 @@ def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionComplet
     session = RealtimeSession.__new__(RealtimeSession)
     session._remote_chat_ctx = RemoteChatContext()  # type: ignore[attr-defined]
     session._current_generation = _DiscardedGeneration()  # type: ignore[attr-defined]
-    session._opts = SimpleNamespace(modalities=["audio", "text"])  # type: ignore[assignment]
+    session._opts = SimpleNamespace(  # type: ignore[assignment]
+        modalities=["audio", "text"], input_audio_transcription=object()
+    )
     session._item_create_future = {}  # type: ignore[attr-defined]
     session._msg_ch = utils.aio.Chan()  # type: ignore[attr-defined]
     session._pending_say_event_ids = deque()

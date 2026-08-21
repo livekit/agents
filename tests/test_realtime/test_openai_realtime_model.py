@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
@@ -110,6 +110,49 @@ def test_create_response_false_warns_when_the_server_still_interrupts(
             ),
         )
     assert caplog.text == ""
+
+
+@pytest.mark.parametrize("transcription_enabled", [False, True])
+def test_speech_timestamp_is_tracked_only_when_transcription_is_enabled(
+    transcription_enabled: bool,
+) -> None:
+    emitted: list[tuple[str, object]] = []
+    session = cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _opts=SimpleNamespace(
+                input_audio_transcription=object() if transcription_enabled else None
+            ),
+            _input_speech_started_at={},
+            emit=lambda name, event: emitted.append((name, event)),
+        ),
+    )
+
+    RealtimeSession._handle_input_audio_buffer_speech_started(
+        session, cast(Any, SimpleNamespace(item_id="item-1"))
+    )
+
+    assert ("item-1" in session._input_speech_started_at) is transcription_enabled
+    assert [name for name, _ in emitted] == ["input_speech_started"]
+
+
+def test_disabling_transcription_mid_turn_removes_exact_speech_timestamp() -> None:
+    emitted: list[tuple[str, object]] = []
+    session = cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _opts=SimpleNamespace(input_audio_transcription=None),
+            _input_speech_started_at={"item-1": 1.0, "item-2": 2.0},
+            emit=lambda name, event: emitted.append((name, event)),
+        ),
+    )
+
+    RealtimeSession._handle_input_audio_buffer_speech_stopped(
+        session, cast(Any, SimpleNamespace(item_id="item-1"))
+    )
+
+    assert session._input_speech_started_at == {"item-2": 2.0}
+    assert [name for name, _ in emitted] == ["input_speech_stopped"]
 
 
 def test_legacy_turn_detection_keeps_interrupt_response() -> None:

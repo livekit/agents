@@ -55,10 +55,12 @@ class FakeRealtimeSession(RealtimeSession):
         self.audio_cleared = False
         self.pushed_audio: list[rtc.AudioFrame] = []
         self.generate_reply_calls = 0
+        self.generate_reply_entered = asyncio.Event()
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
         self.user_activity_started = False
+        self.user_activity_start_calls = 0
         self._reply_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         self.say_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         # test hooks to pause or fail aclose() mid-swap
@@ -104,6 +106,7 @@ class FakeRealtimeSession(RealtimeSession):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
         self.generate_reply_calls += 1
+        self.generate_reply_entered.set()
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
         self._reply_futs.append(fut)
         return fut
@@ -129,6 +132,7 @@ class FakeRealtimeSession(RealtimeSession):
 
     def start_user_activity(self) -> None:
         self.user_activity_started = True
+        self.user_activity_start_calls += 1
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         self.say_calls.append(text)
