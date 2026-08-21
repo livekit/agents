@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-rnnoise"
+dynamic = ["version"]
+description = "OSS self-hosted noise cancellation (RNNoise) plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["voice","ai","realtime","audio","livekit","webrtc","noise-reduction","noise-cancellation","rnnoise","audio-filter","self-hosted","oss"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.6.4",
+    "livekit>=1.0.23,<2",
+    "numpy>=1.20.0",
+    # Only used to locate/load its bundled native librnnoise via ctypes -- the
+    # pyrnnoise Python package itself is never imported.
+    "pyrnnoise>=0.4.3",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/rnnoise/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
