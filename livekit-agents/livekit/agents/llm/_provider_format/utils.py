@@ -1,12 +1,43 @@
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from typing import Any
 
 from livekit.agents import llm
 from livekit.agents.log import logger
 
 _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
+
+
+def parse_tool_call_arguments(fnc_call: llm.FunctionCall) -> dict[str, Any]:
+    """Parse a stored function call's arguments into a dict for JSON-object providers.
+
+    ``FunctionCall.arguments`` is only canonicalized to valid JSON when the model's
+    output parses successfully; when it can't be parsed the raw string is kept
+    verbatim (an open-weight model's output that ``json_repair`` couldn't recover, or
+    history restored via ``ChatContext.from_dict`` / a custom ``llm_node``). The
+    Anthropic, Google, and AWS formatters send the arguments as a JSON object, so
+    formatting such history would otherwise raise ``json.JSONDecodeError`` on an
+    unrelated later turn. Fall back to an empty object rather than fabricating
+    arguments the model never sent, since the historical call already produced its
+    output.
+    """
+    arguments = fnc_call.arguments
+    if not arguments:
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    logger.warning(
+        "could not parse stored tool call arguments as a JSON object, using empty arguments",
+        extra={"call_id": fnc_call.call_id, "tool_name": fnc_call.name},
+    )
+    return {}
 
 
 def convert_mid_conversation_instructions(
