@@ -41,6 +41,7 @@ from .types import GrokVoices, TTSLanguages
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+_SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/tts"
 DEFAULT_VOICE = "ara"
@@ -54,6 +55,7 @@ class _TTSOptions:
     optimize_streaming_latency: NotGivenOr[int]
     speed: NotGivenOr[float]
     text_normalization: NotGivenOr[bool]
+    sample_rate: int
 
 
 class TTS(tts.TTS):
@@ -66,6 +68,7 @@ class TTS(tts.TTS):
         optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        sample_rate: int = SAMPLE_RATE,
         tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -80,12 +83,17 @@ class TTS(tts.TTS):
             optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
+            sample_rate (int, optional): Output audio sample rate in Hz. One of 8000, 16000, 22050, 24000, 44100, 48000. Defaults to 24000. Match this to your pipeline (e.g. 16000) to avoid an extra resampling stage.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """  # noqa: E501
+        if sample_rate not in _SUPPORTED_SAMPLE_RATES:
+            raise ValueError(
+                f"sample_rate must be one of {_SUPPORTED_SAMPLE_RATES}, got {sample_rate}"
+            )
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
 
@@ -105,6 +113,7 @@ class TTS(tts.TTS):
             optimize_streaming_latency=optimize_streaming_latency,
             speed=speed,
             text_normalization=text_normalization,
+            sample_rate=sample_rate,
         )
 
         self._session = http_session
@@ -138,7 +147,7 @@ class TTS(tts.TTS):
             "voice": opts.voice,
             "language": opts.language,
             "codec": "pcm",
-            "sample_rate": SAMPLE_RATE,
+            "sample_rate": opts.sample_rate,
         }
         if is_given(opts.optimize_streaming_latency):
             params["optimize_streaming_latency"] = opts.optimize_streaming_latency
@@ -266,7 +275,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
-            sample_rate=SAMPLE_RATE,
+            sample_rate=self._opts.sample_rate,
             num_channels=NUM_CHANNELS,
             stream=True,
             mime_type="audio/pcm",
