@@ -25,7 +25,6 @@ def _make_recognition(
     recognition._backchannel_boundary = (0.0, end_boundary)
     recognition._transcript_buffer = deque()
     recognition._transcript_gate_active = True
-    recognition._pending_interruption = None
     recognition._process_stt_event = MagicMock()  # type: ignore[method-assign]
     return recognition
 

@@ -133,7 +133,7 @@ class _UserTurnTracker:
 
 
 class RecognitionHooks(Protocol):
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None: ...
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None: ...
     def on_backchannel_confirmed(self) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
@@ -166,7 +166,7 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for this stream, used for STT-derived turn metrics
+        # STT-derived turn metrics use this stream's wall-clock anchor.
         self.input_started_at: float | None = None
 
     @property
@@ -305,7 +305,6 @@ class AudioRecognition:
         self._turn_backchannel_over_agent: bool = False
         # an overlap is open right now, awaiting a verdict; several can occur within one turn
         self._overlap_open: bool = False
-        self._pending_interruption: inference.OverlappingSpeechEvent | None = None
 
         _backchannel_boundary: float | tuple[float, float] | None = (
             session.options.interruption.get("backchannel_boundary")
@@ -507,7 +506,6 @@ class AudioRecognition:
             self._drain_transcript_gate()
             self._agent_speaking = False
             self._agent_speech_started_at = None
-            self._clear_pending_interruption()
             return
 
         if self._agent_speaking:
@@ -528,18 +526,19 @@ class AudioRecognition:
                 vad_speech_started_at=self._active_vad_speech_started_at,
             )
 
-        # the sentinel sent above resets the detector stream, dropping any open overlap
+        # The reset sentinel drops any overlap still open.
         self._overlap_open = False
         self._drain_transcript_gate()
         self._agent_speaking = False
         self._agent_speech_started_at = None
-        self._clear_pending_interruption()
 
     def _on_start_of_speech(
         self,
         started_at: float,
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
+        *,
+        detect_overlap: bool = True,
     ) -> None:
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
@@ -549,11 +548,12 @@ class AudioRecognition:
         if not self._agent_speaking:
             self._overlap_in_current_turn = False
 
-        self._on_start_of_overlap_speech(
-            started_at=started_at,
-            speech_duration=speech_duration,
-            user_speaking_span=user_speaking_span,
-        )
+        if detect_overlap:
+            self._on_start_of_overlap_speech(
+                started_at=started_at,
+                speech_duration=speech_duration,
+                user_speaking_span=user_speaking_span,
+            )
 
     def _on_start_of_overlap_speech(
         self,
@@ -561,17 +561,12 @@ class AudioRecognition:
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
     ) -> None:
-        if (
-            self._interruption_pending
-            or not self._adaptive_interruption_active
-            or not self._agent_speaking
-        ):
+        if not self._adaptive_interruption_active or not self._agent_speaking:
             return
         # overlap over agent speech started this turn; gates verdict acceptance below
         self._overlap_in_current_turn = True
         self._overlap_open = True
-        # a prior release (e.g. a failed interrupt attempt) must not leave later overlaps
-        # un-gated; each overlap holds its transcripts until its own verdict
+        # A later overlap must re-arm a gate released by a failed interrupt attempt.
         self._sync_transcript_gate()
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
@@ -645,23 +640,10 @@ class AudioRecognition:
             return
         await self._user_silence_ev.wait()
 
-    @property
-    def _interruption_pending(self) -> bool:
-        return self._pending_interruption is not None
-
-    def _clear_pending_interruption(self) -> None:
-        self._pending_interruption = None
-
     def _sync_transcript_gate(self) -> None:
-        """Arm the transcript gate iff the agent is speaking and adaptive interruption is active."""
-        self._transcript_gate_active = (
-            self._agent_speaking
-            and self._adaptive_interruption_active
-            and not self._interruption_pending
-        )
+        self._transcript_gate_active = self._agent_speaking and self._adaptive_interruption_active
 
     def _transcript_flush_start(self, *, now: float, vad_speech_started_at: float | None) -> float:
-        """Return the earliest event creation time retained during a flush."""
         end_boundary = self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
         flush_start = now - end_boundary
         if vad_speech_started_at is not None:
@@ -1394,7 +1376,7 @@ class AudioRecognition:
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
-    async def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
+    def _apply_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
         self._overlap_open = False
 
@@ -1405,7 +1387,6 @@ class AudioRecognition:
             return
 
         if ev.is_interruption:
-            self._pending_interruption = ev
             self._release_transcript_gate(
                 at=ev.detected_at,
                 vad_speech_started_at=ev.overlap_started_at,
@@ -1424,9 +1405,6 @@ class AudioRecognition:
             # clear the backchannel audio, but only between segments — else we'd clip a real turn
             if not ev.is_interruption and not self._speaking:
                 self._hooks.on_backchannel_confirmed()
-
-        if ev.is_interruption:
-            self._hooks.on_interruption(ev)
 
     def _on_missing_eot_prediction(self) -> None:
         if self._turn_detector_flushed:
@@ -1849,7 +1827,7 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
-                await self._on_overlap_speech_event(ev)
+                self._hooks.on_overlap_speech(ev)
         except APIError:
             # avoid already emitted error from the stream
             return
