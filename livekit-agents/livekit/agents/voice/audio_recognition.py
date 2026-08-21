@@ -813,8 +813,7 @@ class AudioRecognition:
         self._closing.set()
         try:
             if self._commit_user_turn_atask is not None:
-                # A cancelled child becomes a result, but cancellation of _aclose still
-                # propagates and cancels the child.
+                # return_exceptions suppresses child cancellation, not cancellation of _aclose().
                 result = (
                     await asyncio.gather(self._commit_user_turn_atask, return_exceptions=True)
                 )[0]

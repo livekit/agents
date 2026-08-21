@@ -1,5 +1,3 @@
-"""Tests for cancellation while closing ``AudioRecognition``."""
-
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,8 +10,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 
 
 class TestAudioRecognitionAclose:
-    """Test ``AudioRecognition._aclose()`` task handling."""
-
     def _create_audio_recognition(self) -> AudioRecognition:
         """Create an AudioRecognition instance with mocked dependencies."""
         with patch.object(AudioRecognition, "__init__", lambda self, *args, **kwargs: None):
@@ -105,7 +101,6 @@ class TestAudioRecognitionAclose:
 
     @pytest.mark.asyncio
     async def test_aclose_handles_precancelled_tasks_gracefully(self):
-        """A pre-cancelled turn task does not stop the remaining cleanup."""
         audio_recognition = self._create_audio_recognition()
 
         async def long_running_task():
