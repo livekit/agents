@@ -48,6 +48,7 @@ from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnI
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -435,6 +436,136 @@ async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
     speaking_ends = [ev.new_state for ev in agent_state_events if ev.old_state == "speaking"]
     assert speaking_ends == ["thinking", "thinking", "listening"]
     assert all(ev.new_state != "away" for ev in user_state_events)
+
+
+async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="silent_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def silent_lookup(self, context: RunContext) -> None:
+            """A slow tool that returns nothing, so no reply follows it."""
+            await asyncio.sleep(8.0)
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SilentToolAgent(), drain_delay=20), timeout=SESSION_TIMEOUT
+    )
+
+    # the tool holds the agent in "thinking", and nothing follows it to hand the turn back
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
+
+
+async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+    """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> str:
+            """Look an order up in the background."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    # the agent is genuinely listening while the tool runs, so nothing but the tool holds
+    # the window off; landing restarts it in full rather than firing on what was left
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
+
+
+async def test_async_tool_without_a_reply_still_restarts_the_away_window() -> None:
+    """A tool returning ``None`` after an update files no reply, so nothing else can
+    restart the window it held off."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> None:
+            """Look an order up in the background and say nothing more."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
 
 
 @pytest.mark.parametrize(
