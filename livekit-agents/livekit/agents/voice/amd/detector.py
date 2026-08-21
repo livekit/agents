@@ -107,10 +107,11 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     the pre-answer phase. If the call ends before audio arrives, AMD settles
     immediately with an ``uncertain`` verdict (``reason="participant_missing"``).
 
-    For SIP participants, the no-speech timer and
-    audio/transcript processing are deferred until ``sip.callStatus ==
-    "active"`` so pre-answer audio (ringback, carrier early media, dialtone)
-    does not poison the classifier or burn the no-speech budget.
+    For SIP participants, the no-speech timer and audio/transcript processing
+    are deferred by default until ``sip.callStatus == "active"`` so pre-answer
+    audio (ringback, carrier early media, dialtone) does not poison the
+    classifier or burn the no-speech budget. Set ``wait_until_answered=False``
+    to process early media from the subscribed audio track instead.
 
     The recommended pattern is the async context manager::
 
@@ -135,6 +136,13 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             audio track, and settles immediately if that participant
             disconnects before publishing audio. If omitted, the first remote
             audio track wins and the publisher is resolved from the track sid.
+        wait_until_answered: For SIP participants, whether to defer detection
+            timers and audio/transcript processing until ``sip.callStatus ==
+            "active"``. Defaults to ``True``. Set to ``False`` to process
+            early media, including ringback, carrier announcements, and
+            dialtone. To consume a verdict before the call is answered, also
+            set ``wait_until_answered=False`` on the SIP participant request.
+            Has no effect on non-SIP participants.
         stt: STT used for transcript generation. Accepts an :class:`STT`
             instance or an inference model string (e.g.
             ``"cartesia/ink-whisper"``). When omitted, AMD auto-selects:
@@ -174,6 +182,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         interrupt_on_machine: bool = True,
         ivr_detection: bool = True,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
+        wait_until_answered: bool = True,
         suppress_compatibility_warning: bool = False,
         detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
         wait_until_finished: bool = True,
@@ -197,6 +206,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._session: AgentSession = session
         self._interrupt_on_machine = interrupt_on_machine
         self._ivr_detection = ivr_detection
+        self._wait_until_answered = wait_until_answered
         self._wait_until_finished = wait_until_finished
         self._suppress_compatibility_warning = suppress_compatibility_warning
         self._participant_identity: NotGivenOr[str] = participant_identity
@@ -438,7 +448,10 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 self._settle_participant_missing("participant disappeared after track subscription")
                 return
 
-            if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            if (
+                publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                and self._wait_until_answered
+            ):
                 self._sip_answer_task = asyncio.create_task(
                     self._wait_for_sip_answer(room, publisher.identity),
                     name="amd_sip_answer",
