@@ -1,6 +1,8 @@
+from .inference_realtime_model import InferenceRealtimeModel
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
+    "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",
 ]

@@ -171,6 +171,7 @@ def _handle_error_session(
             _opts=SimpleNamespace(turn_detection=turn_detection),
             _chat_ctx_event_futures={},
             _response_created_futures={},
+            _is_fatal_error=_is_fatal_error,
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
