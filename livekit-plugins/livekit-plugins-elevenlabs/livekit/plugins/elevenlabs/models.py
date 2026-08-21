@@ -9,6 +9,7 @@ TTSModels = Literal[
     "eleven_flash_v2_5",
     "eleven_flash_v2",
     "eleven_v3",
+    "eleven_v3_conversational",
 ]
 
 # https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
