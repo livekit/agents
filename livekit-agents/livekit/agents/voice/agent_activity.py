@@ -2211,8 +2211,8 @@ class AgentActivity(RecognitionHooks):
         self._interrupt_by_audio_activity(
             ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
         )
-        # flush held transcripts again if possible
-        if self._audio_recognition:
+        # flush held transcripts if the pause path did not already end agent speech
+        if self._audio_recognition and self._paused_speech is None:
             self._audio_recognition._on_end_of_agent_speech(
                 ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
