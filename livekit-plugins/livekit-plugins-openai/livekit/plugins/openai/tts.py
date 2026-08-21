@@ -49,6 +49,27 @@ AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
 
 SSE_CONTENT_TYPE = "text/event-stream"
 
+# Content types `AudioEmitter` knows how to decode, mirroring the codecs decoder table.
+DECODABLE_CONTENT_TYPES = frozenset(
+    {
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/x-mpeg",
+        "audio/aac",
+        "audio/x-aac",
+        "audio/flac",
+        "audio/x-flac",
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+        "audio/opus",
+        "audio/ogg",
+        "audio/webm",
+        "audio/mp4",
+        "audio/pcm",
+    }
+)
+
 
 @dataclass
 class _TTSOptions:
@@ -247,14 +268,20 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with oai_stream as stream:
+                media_type = stream.headers.get("content-type", "").split(";")[0].strip().lower()
+                # a server that ignored response_format still declares what it sent
+                mime_type = (
+                    media_type
+                    if media_type in DECODABLE_CONTENT_TYPES
+                    else f"audio/{self._opts.response_format}"
+                )
                 output_emitter.initialize(
                     request_id=stream.request_id or "",
                     sample_rate=SAMPLE_RATE,
                     num_channels=NUM_CHANNELS,
-                    mime_type=f"audio/{self._opts.response_format}",
+                    mime_type=mime_type,
                 )
 
-                media_type = stream.headers.get("content-type", "").split(";")[0].strip().lower()
                 if media_type != SSE_CONTENT_TYPE:
                     # An OpenAI-compatible server that ignored stream_format and returned the
                     # audio bytes of response_format directly.

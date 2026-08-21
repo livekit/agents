@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import pathlib
 
 import httpx
 import openai
@@ -42,6 +43,19 @@ async def test_audio_body_is_decoded_whatever_the_model(model: str) -> None:
     audio = await _synthesize(_tts(handler, model=model))
 
     assert audio[: len(PCM)] == PCM
+
+
+async def test_declared_content_type_wins_over_requested_format() -> None:
+    """A server may ignore response_format; decode what it says it sent, not what we asked for."""
+    mp3 = pathlib.Path(__file__).parent.joinpath("long.mp3").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=mp3, headers={"content-type": "audio/mpeg"})
+
+    # response_format="wav" is requested, but the server answers with mp3
+    audio = await _synthesize(_tts(handler, model="kokoro", response_format="wav"))
+
+    assert audio
 
 
 async def test_sse_body_is_parsed() -> None:
