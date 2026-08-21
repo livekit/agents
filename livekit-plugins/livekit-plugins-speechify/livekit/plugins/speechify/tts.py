@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
@@ -42,6 +43,11 @@ from livekit.agents.voice.io import TimedString
 from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
 from speechify.types.get_voice import GetVoice
+from speechify.types.speech_stream_event import (
+    SpeechStreamEvent_SpeechChunk,
+    SpeechStreamEvent_SpeechDone,
+    SpeechStreamEvent_SpeechError,
+)
 
 from .log import logger
 from .models import Gender, TTSModels, VoiceType
@@ -106,16 +112,25 @@ class TTS(tts.TTS):
     ) -> None:
         """Create a new instance of Speechify TTS.
 
-        Synthesis uses the Speechify ``/audio/speech`` endpoint, which returns
-        raw PCM (24 kHz mono) together with word-level speech marks. ``stream()``
-        splits input into sentences and issues one request per sentence, emitting
-        audio and aligned word timestamps as each sentence completes for
-        near-streaming time-to-first-audio.
+        ``synthesize()`` uses the Speechify ``/v1/audio/speech`` endpoint, which
+        returns raw PCM (24 kHz mono) together with word-level speech marks in a
+        single non-streamed response.
+
+        ``stream()`` uses the ``/v1/audio/stream/with-timestamps`` endpoint,
+        which streams audio chunks together with word-level speech marks so
+        audio and aligned timestamps are emitted as they become final. Input is
+        split into sentences and one streaming request is issued per sentence.
+        Speech marks are produced by the streaming-native models (``simba-3.0``
+        and ``simba-3.2``); the legacy ``simba-english`` and
+        ``simba-multilingual`` models do not serve the streaming route and fall
+        back to one ``/v1/audio/speech`` request per sentence.
 
         Args:
             voice_id: Id of the voice to synthesize with. The voice must support
                 the chosen ``model`` (see the ``/v1/voices`` endpoint). Defaults
-                to ``dominic_32``.
+                to ``dominic_32``. Voices whose id carries a ``_32`` suffix are
+                part of the curated simba-3.2 roster; a warning is logged when
+                they are paired with any other model.
             model: Synthesis model. One of ``simba-english``,
                 ``simba-multilingual``, ``simba-3.0`` or ``simba-3.2``. Defaults
                 to ``simba-3.2``.
@@ -176,6 +191,7 @@ class TTS(tts.TTS):
         )
 
         _check_deprecated_args(kwargs)
+        _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     @property
     def model(self) -> str:
@@ -213,6 +229,7 @@ class TTS(tts.TTS):
             self._opts.loudness_normalization = loudness_normalization
         if is_given(text_normalization):
             self._opts.text_normalization = text_normalization
+        _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     def synthesize(
         self,
@@ -251,10 +268,52 @@ def _request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
     return kwargs
 
 
-def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
-    chunks = getattr(speech_marks, "chunks", None)
-    if not chunks:
-        return []
+def _stream_request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
+    options: dict[str, bool] = {}
+    if is_given(opts.loudness_normalization):
+        options["loudness_normalization"] = opts.loudness_normalization
+    if is_given(opts.text_normalization):
+        options["text_normalization"] = opts.text_normalization
+
+    kwargs: dict[str, object] = {
+        "input": text,
+        "voice_id": opts.voice_id,
+        "output_format": f"pcm_{SAMPLE_RATE}",
+    }
+    if is_given(opts.model):
+        kwargs["model"] = opts.model
+    if is_given(opts.language):
+        kwargs["language"] = opts.language
+    if options:
+        kwargs["options"] = options
+    return kwargs
+
+
+def _supports_streaming_marks(model: NotGivenOr[TTSModels]) -> bool:
+    # The streaming route serves word-level marks only on the streaming-native
+    # models; when no model is given the server defaults to simba-3.0.
+    if not is_given(model):
+        return True
+    return model in ("simba-3.0", "simba-3.2")
+
+
+def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> None:
+    # simba-3.2 serves a curated stock roster whose ids carry a "_32" suffix
+    # (e.g. "dominic_32"). Such voices are tuned for simba-3.2; pairing them
+    # with another model is likely to be rejected or sub-optimal.
+    if is_given(model) and model == "simba-3.2":
+        return
+    if not voice_id.endswith("_32"):
+        return
+    effective = model if is_given(model) else "simba-3.0 (server default)"
+    logger.warning(
+        f"voice {voice_id!r} is part of the curated simba-3.2 roster but the "
+        f"configured model is {effective!r}; this pairing may be unsupported. "
+        "Set model='simba-3.2' when using a '*_32' voice."
+    )
+
+
+def _marks_to_timed(chunks: Iterable[object], offset: float) -> list[TimedString]:
     out: list[TimedString] = []
     for chunk in chunks:
         value = getattr(chunk, "value", None)
@@ -270,6 +329,13 @@ def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
             )
         )
     return out
+
+
+def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
+    chunks = getattr(speech_marks, "chunks", None)
+    if not chunks:
+        return []
+    return _marks_to_timed(chunks, offset)
 
 
 def _raise_from(e: Exception) -> None:
@@ -361,17 +427,46 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not (text := ev.token.strip()):
                     continue
                 self._mark_started()
-                response = await self._tts._client.audio.speech(
-                    **_request_kwargs(text, self._opts),
-                    request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
-                )
-                audio = base64.b64decode(response.audio_data)
-                timed = _timed_transcript(response.speech_marks, offset)
-                if timed:
-                    output_emitter.push_timed_transcript(timed)
-                output_emitter.push(audio)
+                sentence_bytes = 0
+
+                if _supports_streaming_marks(self._opts.model):
+                    stream = self._tts._client.audio.stream_with_timestamps(
+                        **_stream_request_kwargs(text, self._opts),
+                        request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
+                    )
+                    async for event in stream:
+                        if isinstance(event, SpeechStreamEvent_SpeechChunk):
+                            if event.audio:
+                                audio = base64.b64decode(event.audio)
+                                output_emitter.push(audio)
+                                sentence_bytes += len(audio)
+                            if event.speech_marks:
+                                timed = _marks_to_timed(event.speech_marks, offset)
+                                if timed:
+                                    output_emitter.push_timed_transcript(timed)
+                        elif isinstance(event, SpeechStreamEvent_SpeechError):
+                            raise APIStatusError(
+                                message=event.error.message,
+                                status_code=-1,
+                                request_id=event.request_id,
+                                body=None,
+                            )
+                        elif isinstance(event, SpeechStreamEvent_SpeechDone):
+                            break
+                else:
+                    response = await self._tts._client.audio.speech(
+                        **_request_kwargs(text, self._opts),
+                        request_options={"timeout_in_seconds": int(self._conn_options.timeout)},
+                    )
+                    audio = base64.b64decode(response.audio_data)
+                    timed = _timed_transcript(response.speech_marks, offset)
+                    if timed:
+                        output_emitter.push_timed_transcript(timed)
+                    output_emitter.push(audio)
+                    sentence_bytes = len(audio)
+
                 output_emitter.flush()
-                offset += len(audio) / (2 * SAMPLE_RATE * NUM_CHANNELS)
+                offset += sentence_bytes / (2 * SAMPLE_RATE * NUM_CHANNELS)
 
             output_emitter.end_segment()
 
