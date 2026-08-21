@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import heapq
 import json
@@ -20,6 +21,7 @@ from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
     StopResponse,
+    ToolError,
     ToolFlag,
     get_fnc_tool_names,
 )
@@ -213,6 +215,8 @@ class AgentActivity(RecognitionHooks):
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
+        # one awaited inline AgentTask may pause this activity at a time
+        self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -833,7 +837,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 self._agent._activity = self
 
-                with trace.use_span(start_span, end_on_exit=False):
+                with tracer.use_span(start_span, end_on_exit=False):
                     if isinstance(self.llm, llm.LLM):
                         self.llm.prewarm()
 
@@ -1215,6 +1219,56 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
+
+    @contextlib.asynccontextmanager
+    async def _inline_task_slot(
+        self,
+        *,
+        speech_handle: SpeechHandle | None,
+        blocked_tasks: list[asyncio.Task[Any]],
+    ) -> AsyncGenerator[None, None]:
+        """Grants the floor to one awaited inline AgentTask at a time.
+
+        Pausing an activity is a single slot: concurrent handoffs would leave every switch
+        but the last overwritten, and those tasks awaiting a result nothing can produce. The
+        inline tasks of a turn's parallel tool calls queue here and take the slot in turn.
+
+        The queue is per activity, which is the thing a handoff contends for. A nested task
+        pauses the activity of the task it is nested in, so it takes that activity's slot
+        and never waits on the one its parent is holding.
+
+        Each step below is ordered against the queue, and inverting any of them hangs the
+        session in its own way, so they belong together rather than at the call site.
+        """
+        # before the queue: the tasks behind it share this speech, and a hold released
+        # between them lets one task's user turns interrupt it out from under the rest
+        if speech_handle is not None:
+            if speech_handle.interrupted:
+                raise RuntimeError("the speech that awaited the inline task is interrupted")
+
+            speech_handle._hold_interruptions()
+
+        try:
+            # before the queue: a queued task absent from the drain set makes session close
+            # wait on the slot it is still queued for
+            self._add_drain_blocked_tasks(blocked_tasks)
+
+            async with self._inline_task_lock:
+                if self._closed or self._session._closing:
+                    # reported to the model as a tool failure, the way a tool awaiting an
+                    # inline task through a session close has always been
+                    raise ToolError("the activity that awaited the inline task is closing")
+
+                # past the queue: a run watching a task still waiting its turn waits for
+                # the user input the task ahead of it needs
+                if (run_state := self._session._global_run_state) and not run_state.done():
+                    for task in blocked_tasks:
+                        run_state._watch_handle(task)
+
+                yield
+        finally:
+            if speech_handle is not None:
+                speech_handle._release_interruptions()
 
     def _add_drain_blocked_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
         # tasks blocked on an agent handoff are excluded from the drain wait,
@@ -2211,8 +2265,8 @@ class AgentActivity(RecognitionHooks):
         self._interrupt_by_audio_activity(
             ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
         )
-        # flush held transcripts again if possible
-        if self._audio_recognition:
+        # flush held transcripts if the pause path did not already end agent speech
+        if self._audio_recognition and self._paused_speech is None:
             self._audio_recognition._on_end_of_agent_speech(
                 ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
@@ -2360,7 +2414,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
 
             if self._session._closing:
@@ -2480,7 +2534,7 @@ class AgentActivity(RecognitionHooks):
             if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
-                    extra={"user_input": info.new_transcript},
+                    extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
@@ -2493,7 +2547,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
@@ -2527,7 +2581,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
@@ -2766,9 +2820,17 @@ class AgentActivity(RecognitionHooks):
                 # stacking copies, and an expressive-off turn removes it again
                 update_expressive_instructions(chat_ctx, text=text)
 
+    @property
+    def _no_pending_speech(self) -> bool:
+        return not self._speech_q and (not self._current_speech or self._current_speech.done())
+
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
-        if not self._speech_q and (not self._current_speech or self._current_speech.done()):
-            self._session._update_agent_state("listening")
+        if self._no_pending_speech:
+            # a speech awaiting its tool executions keeps the agent busy: stay in
+            # "thinking" so the user-away timer isn't armed mid-tool (#6904)
+            self._session._update_agent_state(
+                "thinking" if self._background_speeches else "listening"
+            )
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
@@ -3001,7 +3063,9 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
-            self._session._update_agent_state("listening")
+            self._session._update_agent_state(
+                "thinking" if self._background_speeches else "listening"
+            )
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
@@ -3506,7 +3570,9 @@ class AgentActivity(RecognitionHooks):
             if self.interruption_enabled:
                 self._restore_interruption_by_audio_activity()
         elif self._session.agent_state == "speaking":
-            self._session._update_agent_state("listening")
+            # a running tool keeps the agent busy; "listening" would arm the away timer
+            tool_running = not speech_handle.interrupted and not exe_task.done()
+            self._session._update_agent_state("thinking" if tool_running else "listening")
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
@@ -4052,7 +4118,9 @@ class AgentActivity(RecognitionHooks):
         await process_msg_task
 
         if audio_output is not None:
-            self._session._update_agent_state("listening")
+            self._session._update_agent_state(
+                "thinking" if self._background_speeches else "listening"
+            )
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_agent_speech(
                     ignore_user_transcript_until=time.time()
@@ -4208,6 +4276,7 @@ class AgentActivity(RecognitionHooks):
 
         # important: no agent output should be used after this point
 
+        tool_reply_expected = False
         if len(tool_output.output) > 0:
             speech_handle._num_steps += 1
 
@@ -4302,10 +4371,8 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
-            if (
-                fnc_executed_ev.has_tool_reply
-                and not self._rt_session.capabilities.auto_tool_reply_generation
-            ):
+            tool_reply_expected = fnc_executed_ev.has_tool_reply
+            if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
                 self._create_speech_task(
@@ -4326,6 +4393,12 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
+
+        # no reply follows, so nothing else clears the "thinking" the tool asserted
+        if not tool_reply_expected and self._no_pending_speech:
+            self._session._update_agent_state(
+                "thinking" if self._background_speeches else "listening"
+            )
 
     def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
         """Record that ``speech_handle`` is paused.

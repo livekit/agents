@@ -810,10 +810,11 @@ async def _execute_tools_task(
                 raw_args = llm_utils.parse_function_arguments(json_args)
             except ValueError as e:
                 logger.warning(
-                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
+                    f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
+                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -854,7 +855,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -1001,7 +1002,7 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "output": output},
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),

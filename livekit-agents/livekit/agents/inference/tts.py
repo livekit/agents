@@ -64,7 +64,6 @@ ElevenlabsModels = Literal[
 ]
 RimeModels = Literal[
     "rime",
-    "rime/arcana",
     "rime/coda",
     "rime/mistv2",
     "rime/mistv3",
@@ -122,7 +121,7 @@ class FallbackModel(TypedDict):
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
+    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda")."""
 
     voice: str
     """Voice to use for the model."""
@@ -193,7 +192,7 @@ class ElevenlabsOptions(TypedDict, total=False):
 
 
 class RimeOptions(TypedDict, total=False):
-    """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
+    """Rime-specific WebSocket JSON query parameters.
     See: https://docs.rime.ai/api-reference/endpoint/websockets-json
     """
 
