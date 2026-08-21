@@ -201,18 +201,25 @@ class TTS(tts.TTS):
         try:
             await ws.send_str(json.dumps(self._opts.start_frame()))
             msg = await asyncio.wait_for(ws.receive(), timeout)
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                raise APIConnectionError(f"unexpected Maya handshake message type {msg.type}")
+
+            try:
+                data = json.loads(msg.data)
+            except ValueError as e:
+                raise APIConnectionError("malformed Maya handshake reply") from e
+
+            if data.get("type") != "metadata":
+                raise APIError(f"Maya rejected the connection settings: {data}")
         except asyncio.TimeoutError:
             await ws.close()
             raise APITimeoutError() from None
-
-        if msg.type != aiohttp.WSMsgType.TEXT:
+        except BaseException:
+            # The pool only takes ownership once this returns, so a socket
+            # abandoned here would stay open with nothing left to close it.
             await ws.close()
-            raise APIConnectionError(f"unexpected Maya handshake message type {msg.type}")
-
-        data = json.loads(msg.data)
-        if data.get("type") != "metadata":
-            await ws.close()
-            raise APIError(f"Maya rejected the connection settings: {data}")
+            raise
 
         if (rate := data.get("sample_rate")) and rate != self._opts.sample_rate:
             logger.warning(

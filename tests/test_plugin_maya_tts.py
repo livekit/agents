@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 from typing import Any
+from unittest.mock import patch
 
 import aiohttp
 import pytest
@@ -40,17 +41,20 @@ class _MayaServer:
         samples_per_text: int = 480,
         never_ends: bool = False,
         stray_context: bool = False,
+        garbled_start: bool = False,
     ) -> None:
         self.reject_start = reject_start
         self.error_on_text = error_on_text
         self.samples_per_text = samples_per_text
         self.never_ends = never_ends
         self.stray_context = stray_context
+        self.garbled_start = garbled_start
 
         self.start_frames: list[dict[str, Any]] = []
         self.text_frames: list[dict[str, Any]] = []
         self.cancels: list[dict[str, Any]] = []
         self.connections = 0
+        self.disconnects = 0
 
         self._runner: web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
@@ -91,6 +95,9 @@ class _MayaServer:
 
             if kind == "start":
                 self.start_frames.append(frame)
+                if self.garbled_start:
+                    await ws.send_str("this is not json")
+                    continue
                 if self.reject_start:
                     await ws.send_str(json.dumps({"type": "error", "error": "invalid 'voice'"}))
                     continue
@@ -165,6 +172,7 @@ class _MayaServer:
                     open_turns.discard(ctx)
                     await ws.send_str(json.dumps({"type": "cancelled", "context_id": ctx}))
 
+        self.disconnects += 1
         return ws
 
 
@@ -501,3 +509,26 @@ async def test_an_abandoned_one_shot_is_cancelled() -> None:
 
     assert len(server.cancels) == 1
     assert server.cancels[0]["context_id"] == server.text_frames[0]["context_id"]
+
+
+async def test_a_failed_handshake_closes_the_socket() -> None:
+    # The pool only takes ownership once the handshake returns, so a socket
+    # abandoned there would stay open with nothing left to close it.
+    async with _MayaServer(garbled_start=True) as server:
+        tts = server.tts()
+        session = tts._ensure_session()
+        real_ws_connect = session.ws_connect
+        opened: list[aiohttp.ClientWebSocketResponse] = []
+
+        async def _spy(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
+            ws = await real_ws_connect(*args, **kwargs)
+            opened.append(ws)
+            return ws
+
+        with patch.object(session, "ws_connect", _spy):
+            with pytest.raises(APIError):
+                await _synthesize(tts, "नमस्ते।")
+
+        assert opened, "no connection was attempted"
+        assert all(ws.closed for ws in opened)
+        await tts.aclose()
