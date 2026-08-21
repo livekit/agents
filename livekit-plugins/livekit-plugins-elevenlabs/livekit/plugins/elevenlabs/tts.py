@@ -514,6 +514,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise e
             raise APIStatusError("Could not synthesize") from e
         finally:
+            # the connection is shared: unregister first so the audio the server flushes
+            # after close_context() isn't pushed into an emitter with no open segment
+            connection.unregister_stream(self._context_id)
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t, stream_t)
             if not context_closed:
@@ -759,16 +762,22 @@ class _Connection:
                     continue
 
                 if ctx is None:
-                    if data.get("type") == "flush_done":
-                        logger.debug(
-                            "ignoring elevenlabs flush_done message for inactive context",
-                            extra={"context_id": context_id, "data": data},
+                    if context_id is None:
+                        logger.warning(
+                            "unexpected message received from elevenlabs tts", extra={"data": data}
                         )
                         continue
 
-                    logger.warning(
-                        "unexpected message received from elevenlabs tts", extra={"data": data}
+                    logger.debug(
+                        "ignoring elevenlabs message for inactive context",
+                        extra={"context_id": context_id, "data": data},
                     )
+                    if data.get("isFinal"):
+                        # the server released the context, keep the drain check working
+                        self._active_contexts.discard(context_id)
+                        if not self._is_current and not self._active_contexts:
+                            logger.debug("no active contexts, shutting down connection")
+                            break
                     continue
 
                 emitter = ctx.emitter
@@ -836,12 +845,19 @@ class _Connection:
             if not self._closed:
                 await self.aclose()
 
-    def _cleanup_context(self, context_id: str) -> None:
-        """Clean up context state"""
+    def unregister_stream(self, context_id: str) -> None:
+        """Stop routing messages to a stream once its run ended.
+
+        The context stays in `_active_contexts` so `close_context()` still asks the server
+        to release it; the audio it flushes afterwards is dropped.
+        """
         ctx = self._context_data.pop(context_id, None)
         if ctx and ctx.timeout_timer:
             ctx.timeout_timer.cancel()
 
+    def _cleanup_context(self, context_id: str) -> None:
+        """Clean up context state"""
+        self.unregister_stream(context_id)
         self._active_contexts.discard(context_id)
 
     def _start_timeout_timer(self, context_id: str) -> None:
