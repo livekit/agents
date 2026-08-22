@@ -96,3 +96,27 @@ def test_tfidf_real_human_small_talk_does_not_trigger_loop() -> None:
     ]
 
     assert _count_loops(transcripts) == 0
+
+
+def test_tfidf_loop_detector_without_sklearn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verifies that TfidfLoopDetector detects loops without requiring scikit-learn."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "sklearn", None)
+    monkeypatch.setitem(sys.modules, "sklearn.feature_extraction.text", None)
+    monkeypatch.setitem(sys.modules, "sklearn.metrics.pairwise", None)
+
+    transcripts = [
+        "Welcome to automated phone system",
+        "Type 1 for sales",
+        "Type 2 for support",
+        "Type 3 for billing",
+        "Type 4 for technical support",
+        "Welcome to automated phone system",  # similar 1
+        "Type 1 for sales",  # similar 2
+        "Type 2 for support",  # similar 3, loop detected
+        "Type 3 for billing",  # similar 4, loop detected
+        "Type 4 for technical support",  # similar 5, loop detected
+    ]
+
+    assert _count_loops(transcripts) == 3
