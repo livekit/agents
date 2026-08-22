@@ -328,6 +328,13 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    item_id: str | None = None
+    """Stable id identifying the user utterance this transcript belongs to. On
+    realtime models, every interim and final ``UserInputTranscribedEvent`` for
+    a single utterance shares the same ``item_id``, so consumers can dedup
+    interim transcripts and react exactly once per utterance using the
+    provider-agnostic event surface. ``None`` on STT paths where no upstream
+    item id exists. See https://github.com/livekit/agents/issues/6109."""
     created_at: float = Field(default_factory=time.time)
 
 
