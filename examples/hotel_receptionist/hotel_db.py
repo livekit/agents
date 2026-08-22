@@ -184,6 +184,26 @@ class RoomTypeAvailability:
     views: list[str]
 
 
+def describe_room_options(avail: list[RoomTypeAvailability]) -> str:
+    """The available types as one line each, with the view verdict on the type's own line.
+
+    A single pipe-delimited line ("queen 2beds (city or garden views) | ... | double
+    queen (ocean view)") reads as one blob: the model binds a neighboring type's view
+    to the type the caller picked and offers a garden-view double queen, which has
+    never existed. One row per type keeps the binding local, and spelling out whether
+    the view is a question or a fact stops the offer from becoming a false choice.
+    """
+    return "\n".join(
+        f"- {a.type.replace('_', ' ')}: {speak_usd(a.nightly_rate)}/night, "
+        + (
+            f"{' or '.join(a.views)} view - ask which of those two they want"
+            if len(a.views) > 1
+            else f"{a.views[0]} view only - say so as a fact, there is no view to ask about"
+        )
+        for a in avail
+    )
+
+
 @dataclass
 class RoomBooking:
     id: int
