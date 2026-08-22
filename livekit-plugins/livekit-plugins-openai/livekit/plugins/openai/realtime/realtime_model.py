@@ -303,16 +303,22 @@ def _server_turn_taking_enabled(
     turn_detection: RealtimeAudioInputTurnDetection | None,
 ) -> bool:
     """Whether the server both detects turns and answers them."""
-    if turn_detection is None:
-        return False
-    if turn_detection.create_response is False:
-        if turn_detection.interrupt_response is not False:
-            logger.warning(
-                "create_response=False hands turn taking to the client, but the server still "
-                "cancels its response on user speech, pass interrupt_response=False as well"
-            )
-        return False
-    return True
+    return turn_detection is not None and turn_detection.create_response is not False
+
+
+def _warn_on_half_disabled_turn_taking(
+    turn_detection: RealtimeAudioInputTurnDetection | None,
+) -> None:
+    """Warn when the caller hands turn taking to the client but leaves interruption on the server."""
+    if (
+        turn_detection is not None
+        and turn_detection.create_response is False
+        and turn_detection.interrupt_response is not False
+    ):
+        logger.warning(
+            "create_response=False hands turn taking to the client, but the server still "
+            "cancels its response on user speech, pass interrupt_response=False as well"
+        )
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -470,6 +476,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         resolved_turn_detection = to_turn_detection(turn_detection)
+        _warn_on_half_disabled_turn_taking(resolved_turn_detection)
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
@@ -745,6 +752,8 @@ class RealtimeModel(llm.RealtimeModel):
             self._capabilities.turn_detection = _server_turn_taking_enabled(
                 self._opts.turn_detection
             )
+            # only the model warns: it re-runs the update on every session it owns
+            _warn_on_half_disabled_turn_taking(self._opts.turn_detection)
 
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
