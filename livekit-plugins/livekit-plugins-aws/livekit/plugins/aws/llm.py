@@ -39,6 +39,21 @@ if TYPE_CHECKING:
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
+# Model IDs that reject ``temperature``/``topP`` in the Converse API's
+# ``inferenceConfig`` with a ValidationException ("... is deprecated for this
+# model"). Matched as case-insensitive substrings so region-prefixed IDs and
+# inference profile ARNs containing the model name are covered too.
+_MODELS_REJECTING_SAMPLING_PARAMS = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+)
+
+
+def _model_rejects_sampling_params(model_id: str) -> bool:
+    lowered = model_id.lower()
+    return any(name in lowered for name in _MODELS_REJECTING_SAMPLING_PARAMS)
+
 
 @dataclass
 class _LLMOptions:
@@ -84,6 +99,8 @@ class LLM(llm.LLM):
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+                Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
+                Opus 4.7/4.8 and Sonnet 5.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
@@ -196,11 +213,20 @@ class LLM(llm.LLM):
         inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
-        temperature = temperature if is_given(temperature) else self._opts.temperature
-        if is_given(temperature):
-            inference_config["temperature"] = temperature
-        if is_given(self._opts.top_p):
-            inference_config["topP"] = self._opts.top_p
+        if _model_rejects_sampling_params(self._opts.model):
+            temperature = temperature if is_given(temperature) else self._opts.temperature
+            if is_given(temperature) or is_given(self._opts.top_p):
+                logger.warning(
+                    "aws bedrock llm: model %s does not support 'temperature'/'top_p'; "
+                    "ignoring them to avoid a ValidationException",
+                    self._opts.model,
+                )
+        else:
+            temperature = temperature if is_given(temperature) else self._opts.temperature
+            if is_given(temperature):
+                inference_config["temperature"] = temperature
+            if is_given(self._opts.top_p):
+                inference_config["topP"] = self._opts.top_p
 
         opts["inferenceConfig"] = inference_config
         if is_given(self._opts.additional_request_fields):
