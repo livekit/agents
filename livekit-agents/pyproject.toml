@@ -61,7 +61,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.24.0, <2"]
+mcp = ["mcp>=2, <3"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]
 anam = ["livekit-plugins-anam>=1.7.0"]
