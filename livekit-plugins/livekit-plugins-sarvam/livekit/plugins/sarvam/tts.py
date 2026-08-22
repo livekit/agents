@@ -99,6 +99,22 @@ _CODEC_TO_MIME: dict[str, str] = {
 
 _TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
+# Sample rates accepted by bulbul:v3 via the REST API only. Both HTTP
+# streaming and WebSocket streaming are capped at 24 kHz.
+_REST_ONLY_SAMPLE_RATES: frozenset[int] = frozenset({32000, 44100, 48000})
+
+# `pace` range per model: 0.5-2.0 on v3/v3-beta, 0.3-3.0 on v2.
+_PACE_RANGE_BY_MODEL: dict[str, tuple[float, float]] = {
+    "bulbul:v2": (0.3, 3.0),
+    "bulbul:v3-beta": (0.5, 2.0),
+    "bulbul:v3": (0.5, 2.0),
+}
+_DEFAULT_PACE_RANGE: tuple[float, float] = (0.5, 2.0)
+
+
+def _pace_range_for_model(model: str) -> tuple[float, float]:
+    return _PACE_RANGE_BY_MODEL.get(model, _DEFAULT_PACE_RANGE)
+
 
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
@@ -216,6 +232,16 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+    # bulbul:v3 Male (extended set)
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
 # Model-Speaker compatibility mapping
@@ -294,8 +320,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -317,6 +341,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
         "all": [
             "shubh",
@@ -342,13 +375,20 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
             "shruti",
             "kavitha",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
     },
 }
@@ -389,7 +429,7 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for v3/v3-beta, 0.3 to 3.0 for v2)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
@@ -441,7 +481,7 @@ class TTS(tts.TTS):
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for v3/v3-beta, 0.3 to 3.0 for v2)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -514,8 +554,9 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        if not _pace_range_for_model(model)[0] <= pace <= _pace_range_for_model(model)[1]:
+            low, high = _pace_range_for_model(model)
+            raise ValueError(f"Pace must be between {low} and {high} for {model}")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -795,8 +836,9 @@ class TTS(tts.TTS):
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
+            low, high = _pace_range_for_model(self._opts.model)
+            if not low <= pace <= high:
+                raise ValueError(f"Pace must be between {low} and {high} for {self._opts.model}")
             self._opts.pace = pace
 
         if loudness is not None:
@@ -860,6 +902,12 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        if self._opts.speech_sample_rate in _REST_ONLY_SAMPLE_RATES:
+            raise ValueError(
+                f"speech_sample_rate {self._opts.speech_sample_rate} Hz is only supported by the "
+                "REST API; streaming supports 8000, 16000, 22050 and 24000 Hz. Use synthesize() "
+                "for this sample rate, or lower it for stream()."
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
