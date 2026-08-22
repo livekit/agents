@@ -15,7 +15,7 @@ from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -31,15 +31,24 @@ class _EventSink:
         self.events.append(event)
 
 
-def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
+def _new_stream(
+    *,
+    server_vad=NOT_GIVEN,
+    language: str | None = "en",
+    include_timestamps: bool = False,
+    include_language_detection=NOT_GIVEN,
+    secondary_languages=NOT_GIVEN,
+) -> elevenlabs_stt.SpeechStream:
     stream = object.__new__(elevenlabs_stt.SpeechStream)
     stream._opts = elevenlabs_stt.STTOptions(
         model_id="scribe_v2_realtime",
         api_key="test-key",
         base_url=elevenlabs_stt.API_BASE_URL_V1,
         language_code=None,
+        secondary_languages=secondary_languages,
+        include_language_detection=include_language_detection,
         tag_audio_events=True,
-        include_timestamps=False,
+        include_timestamps=include_timestamps,
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
@@ -47,16 +56,23 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         enable_logging=True,
         previous_text=None,
     )
-    stream._language = None
+    stream._language = language
     stream._event_ch = _EventSink()
     stream._speaking = False
     stream._start_time_offset = 0.0
     return stream
 
 
-def _committed_transcript(text: str) -> dict:
-    return {
-        "message_type": "committed_transcript",
+def _committed_transcript(
+    text: str,
+    *,
+    with_timestamps: bool = False,
+    language_code: str | None = None,
+) -> dict:
+    message: dict = {
+        "message_type": "committed_transcript_with_timestamps"
+        if with_timestamps
+        else "committed_transcript",
         "text": text,
         "words": [
             {"text": text, "start": 0.1, "end": 0.4},
@@ -64,6 +80,11 @@ def _committed_transcript(text: str) -> dict:
         if text
         else [],
     }
+    # the server only carries the detected language on the delayed copy, and only when
+    # language detection is enabled
+    if language_code is not None:
+        message["language_code"] = language_code
+    return message
 
 
 def test_server_vad_commit_emits_end_of_speech() -> None:
@@ -269,6 +290,142 @@ def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
 
     assert stream._opts.keyterms == ["nginx"]
     assert stream._reconnect_event.is_set()
+
+
+async def test_connect_ws_normalizes_the_primary_language() -> None:
+    # LanguageCode keeps the region ("en-US") but the realtime API rejects it, so the primary
+    # language goes on the wire through the same normalization the secondary ones get
+    stream = _new_stream(language=LanguageCode("en_US"), secondary_languages=["ru-RU"])
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("language_code") == ["en"]
+    assert URL(url).query.getall("secondary_languages") == ["ru"]
+
+
+async def test_connect_ws_includes_secondary_languages() -> None:
+    # secondary languages ride along with the pinned primary one and are sent as
+    # repeated query params, the only serialization the realtime API accepts.
+    stream = _new_stream(language="en", secondary_languages=["ru", "es"])
+
+    url = await _connect_ws_url(stream)
+
+    assert "language_code=en" in url
+    assert URL(url).query.getall("secondary_languages") == ["ru", "es"]
+
+
+async def test_connect_ws_normalizes_secondary_languages() -> None:
+    # the realtime API takes ISO-639-1/3 and rejects anything else, including the region-tagged
+    # tags LanguageCode produces, so names and regions are mapped before the connect URL
+    stream = _new_stream(language="en", secondary_languages=["ru_RU", "french", "spa"])
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("secondary_languages") == ["ru", "fr", "es"]
+
+
+async def test_connect_ws_omits_secondary_languages_when_not_given() -> None:
+    url = await _connect_ws_url(_new_stream(language="en"))
+
+    assert "secondary_languages=" not in url
+
+
+def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key", model="scribe_v2", secondary_languages=["ru"]
+        )
+
+    assert instance._opts.secondary_languages is NOT_GIVEN
+    assert "only supported for Scribe v2 realtime" in caplog.text
+
+
+async def test_connect_ws_requests_language_detection_when_no_language_is_pinned() -> None:
+    url = await _connect_ws_url(_new_stream(language=None))
+
+    assert "include_language_detection=true" in url
+
+
+async def test_connect_ws_omits_language_detection_when_language_is_pinned() -> None:
+    url = await _connect_ws_url(_new_stream(language="en"))
+
+    assert "include_language_detection" not in url
+
+
+async def test_connect_ws_requests_language_detection_when_explicitly_enabled() -> None:
+    stream = _new_stream(language="en", include_language_detection=True)
+
+    url = await _connect_ws_url(stream)
+
+    assert "include_language_detection=true" in url
+
+
+async def test_connect_ws_omits_language_detection_when_explicitly_disabled() -> None:
+    url = await _connect_ws_url(_new_stream(language=None, include_language_detection=False))
+
+    assert "include_language_detection" not in url
+
+
+def test_final_transcript_reports_the_detected_language() -> None:
+    # with detection on, the detected language only reaches the delayed copy of the
+    # commit, so that copy has to be the final one or every transcript is labelled
+    # with the pinned language (or "en" when nothing is pinned).
+    stream = _new_stream(
+        server_vad={"vad_silence_threshold_secs": 0.5},
+        language="en",
+        include_language_detection=True,
+        secondary_languages=["ru"],
+    )
+
+    stream._process_stream_event(_committed_transcript("привет"))
+    stream._process_stream_event(
+        _committed_transcript("привет", with_timestamps=True, language_code="ru")
+    )
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "ru"
+
+
+def test_autodetected_language_reaches_the_final_transcript() -> None:
+    # without a pinned language the plugin asks the server to detect one; that language
+    # only rides on the delayed copy, so dropping it labelled every transcript "en"
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language=None)
+
+    stream._process_stream_event(
+        _committed_transcript("привет", with_timestamps=True, language_code="ru")
+    )
+    stream._process_stream_event(_committed_transcript("привет"))
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "ru"
+    # reading the timestamped copy must not start handing out word timings the caller
+    # never asked for
+    assert finals[0].alternatives[0].words is None
+
+
+def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language="es")
+
+    stream._process_stream_event(_committed_transcript("hola"))
+    stream._process_stream_event(_committed_transcript("hola", with_timestamps=True))
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "es"
 
 
 class _FakeWS:
