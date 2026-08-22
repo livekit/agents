@@ -1,8 +1,11 @@
 from .realtime_model import RealtimeModel, RealtimeSession
+from .translation_model import RealtimeTranslationModel, RealtimeTranslationSession
 
 __all__ = [
     "RealtimeSession",
     "RealtimeModel",
+    "RealtimeTranslationModel",
+    "RealtimeTranslationSession",
 ]
 
 # Cleanup docs of unexported modules
