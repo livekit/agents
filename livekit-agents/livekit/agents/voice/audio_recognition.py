@@ -1229,17 +1229,19 @@ class AudioRecognition:
                 await self._flush_held_transcripts(cooldown=end_cooldown)
                 # no return here to allow the new event to be processed normally
 
-        has_stt_end_time = bool(
+        has_stt_speech_end_time = ev.speech_end_time is not None and ev.speech_end_time > 0
+        has_stt_transcript_end_time = bool(
             len(ev.alternatives) > 0
             and ev.alternatives[0].end_time > 0
             and self._input_started_at is not None
         )
         now = time.time()
-        stt_last_speaking_time = (
-            min(ev.alternatives[0].end_time + self._input_started_at, now)
-            if has_stt_end_time and self._input_started_at is not None
-            else now
-        )
+        if has_stt_speech_end_time and ev.speech_end_time is not None:
+            stt_last_speaking_time = min(ev.speech_end_time, now)
+        elif has_stt_transcript_end_time and self._input_started_at is not None:
+            stt_last_speaking_time = min(ev.alternatives[0].end_time + self._input_started_at, now)
+        else:
+            stt_last_speaking_time = now
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language

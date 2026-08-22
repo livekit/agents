@@ -1320,17 +1320,57 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         await _close_test_session(session)
 
 
-async def _make_stt_eos_recognition() -> AudioRecognition:
+async def _make_stt_eos_recognition(*, min_delay: float = 0.0) -> AudioRecognition:
     return AudioRecognition(
         create_session(FakeActions()),
         hooks=_TestRecognitionHooks(),
-        endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=min_delay),
         stt=None,
         vad=None,
         using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
+
+
+@pytest.mark.parametrize("explicit_vad", [False, True])
+async def test_stt_eos_endpointing_uses_actual_speech_end_time(explicit_vad: bool) -> None:
+    recognition = await _make_stt_eos_recognition(min_delay=0.5)
+    signal_received_at = 100.7
+    speech_end_time = 100.4
+    endpointing_timeouts: list[float] = []
+
+    if explicit_vad:
+        recognition._vad = MagicMock()
+        recognition._last_speaking_time = speech_end_time
+
+    async def capture_endpointing_timeout(awaitable: object, timeout: float) -> None:
+        close = getattr(awaitable, "close", None)
+        if close is not None:
+            close()
+        endpointing_timeouts.append(timeout)
+        raise asyncio.TimeoutError
+
+    try:
+        with (
+            patch(
+                "livekit.agents.voice.audio_recognition.time.time",
+                return_value=signal_received_at,
+            ),
+            patch.object(asyncio, "wait_for", side_effect=capture_endpointing_timeout),
+        ):
+            await recognition._on_stt_event(
+                SpeechEvent(
+                    type=SpeechEventType.END_OF_SPEECH,
+                    speech_end_time=speech_end_time,
+                )
+            )
+            assert recognition._end_of_turn_task is not None
+            await recognition._end_of_turn_task
+
+        assert endpointing_timeouts == [pytest.approx(0.2)]
+    finally:
+        await _close_test_session(recognition._session)
 
 
 async def test_stt_eos_resets_active_vad_stream_without_restarting_vad() -> None:
