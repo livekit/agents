@@ -38,10 +38,12 @@ from speechmatics.voice import (
     AdditionalVocabEntry,
     AgentServerMessageType,
     AudioEncoding,
+    EndOfTurnConfig,
     OperatingPoint,
     SpeakerFocusConfig,
     SpeakerFocusMode,
     SpeakerIdentifier,
+    VoiceActivityConfig,
     VoiceAgentClient,
     VoiceAgentConfig,
     VoiceAgentConfigPreset,
@@ -109,6 +111,8 @@ class STTOptions:
     max_delay: float | None = None
     end_of_utterance_silence_trigger: float | None = None
     end_of_utterance_max_delay: float | None = None
+    end_of_turn_config: EndOfTurnConfig | None = None
+    vad_config: VoiceActivityConfig | None = None
     punctuation_overrides: dict | None = None
     include_partials: bool | None = None
 
@@ -135,6 +139,8 @@ class STT(stt.STT):
         max_delay: NotGivenOr[float] = NOT_GIVEN,
         end_of_utterance_silence_trigger: NotGivenOr[float] = NOT_GIVEN,
         end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
+        end_of_turn_config: NotGivenOr[EndOfTurnConfig] = NOT_GIVEN,
+        vad_config: NotGivenOr[VoiceActivityConfig] = NOT_GIVEN,
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
@@ -199,6 +205,16 @@ class STT(stt.STT):
             end_of_utterance_max_delay: Maximum delay in seconds for end of utterance.
                 Must be greater than `end_of_utterance_silence_trigger`.
                 Overrides preset if provided. Optional.
+
+            end_of_turn_config: End-of-turn configuration, controlling the penalty
+                multipliers applied to the `end_of_utterance_silence_trigger`, the
+                minimum end-of-turn delay and forced end-of-utterance behaviour.
+                Replaces the preset's `EndOfTurnConfig` when provided. Optional.
+
+            vad_config: Client-side voice activity configuration used by the
+                `ADAPTIVE` and `SMART_TURN` presets (e.g. `silence_duration` and
+                `threshold`). Replaces the preset's `VoiceActivityConfig` when
+                provided. Optional.
 
             additional_vocab: List of additional vocabulary entries to increase the
                 weight of specific words in the transcription model. Defaults to [].
@@ -320,6 +336,8 @@ class STT(stt.STT):
             max_delay=_set(max_delay),
             end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
+            end_of_turn_config=end_of_turn_config if is_given(end_of_turn_config) else None,
+            vad_config=vad_config if is_given(vad_config) else None,
             punctuation_overrides=_set(punctuation_overrides),
             include_partials=_set(include_partials),
             enable_diarization=_set(enable_diarization),
@@ -473,6 +491,7 @@ class STT(stt.STT):
             "enable_diarization",
             "end_of_utterance_max_delay",
             "end_of_utterance_silence_trigger",
+            "end_of_turn_config",
             "include_partials",
             "max_delay",
             "max_speakers",
@@ -480,6 +499,7 @@ class STT(stt.STT):
             "prefer_current_speaker",
             "punctuation_overrides",
             "speaker_sensitivity",
+            "vad_config",
         ]
 
         # Override preset parameters if provided
