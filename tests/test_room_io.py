@@ -5,12 +5,16 @@ from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
+    _ActiveSpeakerAudioInput,
+    _MixedParticipantAudioInput,
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
 )
@@ -20,7 +24,11 @@ from livekit.agents.voice.room_io._output import (
     _ParticipantTranscriptionOutput,
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
-from livekit.agents.voice.room_io.types import NoiseCancellationParams
+from livekit.agents.voice.room_io.types import (
+    AudioInputOptions,
+    NoiseCancellationParams,
+    RoomOptions,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -56,6 +64,12 @@ class _FakeRoom:
 
     def unregister_text_stream_handler(self, topic: str) -> None:
         self._events.pop(f"text:{topic}", None)
+
+    def register_byte_stream_handler(self, topic: str, callback: object) -> None:
+        self.on(f"bytes:{topic}", callback)
+
+    def unregister_byte_stream_handler(self, topic: str) -> None:
+        self._events.pop(f"bytes:{topic}", None)
 
 
 class _MockAudioStream:
@@ -680,3 +694,458 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
+
+
+# -- multi participant inputs -------------------------------------------------
+
+
+class _ConstantAudioStream:
+    """AudioStream stand-in delivering frames of a constant amplitude, paced like a track."""
+
+    def __init__(self, value: int, *, samples: int = 1200, count: int = 200) -> None:
+        self._frame = rtc.AudioFrame(
+            data=np.full(samples, value, dtype=np.int16).tobytes(),
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+        self._left = count
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._left <= 0:
+            raise StopAsyncIteration
+        self._left -= 1
+        await asyncio.sleep(self._frame.duration)
+        return SimpleNamespace(frame=self._frame)
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _make_room_audio_input(room: _FakeRoom, cls):
+    return cls(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=None,
+    )
+
+
+def _start_track(
+    stream,
+    identity: str,
+    value: int,
+    sid: str | None = None,
+    muted: bool = False,
+    count: int = 200,
+) -> None:
+    """Publish a microphone track of a constant amplitude for this participant."""
+    track, publication, participant = _make_track_available_args(
+        identity, sid=sid or f"TR_{identity}"
+    )
+    publication.muted = muted
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=lambda **kw: _ConstantAudioStream(value, count=count),
+    ):
+        stream._on_track_available(track, publication, participant)
+
+
+def _publish(audio_input, identity: str, value: int) -> None:
+    """Add a participant to a group input and start their microphone."""
+    audio_input.add_participant(identity)
+    _start_track(audio_input._streams[identity], identity, value)
+
+
+def _mute_track(room: _FakeRoom, audio_input, identity: str, muted: bool) -> None:
+    """Mute or unmute a participant's published track and deliver the room event."""
+    audio_input._streams[identity]._publication.muted = muted
+    event = "track_muted" if muted else "track_unmuted"
+    publication = MagicMock()
+    publication.source = rtc.TrackSource.SOURCE_MICROPHONE
+    for callback in list(room._events[event]):
+        callback(SimpleNamespace(identity=identity), publication)
+
+
+def _report_speakers(room: _FakeRoom, *identities: str) -> None:
+    """Deliver an `active_speakers_changed` update, loudest first."""
+    for callback in list(room._events["active_speakers_changed"]):
+        callback([SimpleNamespace(identity=identity) for identity in identities])
+
+
+async def _amplitudes(audio_input, count: int) -> list[int]:
+    """Amplitude of the next `count` frames the session would read."""
+    frames = [await asyncio.wait_for(audio_input.__anext__(), timeout=5.0) for _ in range(count)]
+    return [int(np.frombuffer(frame.data, dtype=np.int16)[0]) for frame in frames]
+
+
+@pytest.mark.asyncio
+async def test_linked_audio_input_only_hears_the_linked_participant() -> None:
+    """The default input follows `set_participant` and ignores the rest of the room."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ParticipantAudioInputStream)
+
+    try:
+        audio_input.set_participant("alice")
+        audio_input.add_participant("bob")  # RoomIO calls this for everyone, it is a no-op here
+        _start_track(audio_input, "alice", 100)
+        _start_track(audio_input, "bob", 200)
+
+        assert set(await _amplitudes(audio_input, 5)) == {100}
+
+        audio_input.remove_participant("bob")
+        assert set(await _amplitudes(audio_input, 3)) == {100}
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_sums_every_participant() -> None:
+    """Participants are summed while they stream, and dropped from the mix once removed."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+        assert audio_input._mixing == {"alice", "bob"}
+        assert 300 in await _amplitudes(audio_input, 3)
+
+        audio_input.remove_participant("bob")
+        assert audio_input._mixing == {"alice"}
+        assert 100 in await _amplitudes(audio_input, 5)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_forwards_one_participant_at_a_time() -> None:
+    """Only the reported speaker is forwarded, preceded by their pre-roll and a turn gap."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        # a second of alice speaking, which is also a second of bob held as pre-roll
+        _report_speakers(room, "alice")
+        assert set(await _amplitudes(audio_input, 20)) == {100}
+
+        _report_speakers(room, "bob")
+        started = asyncio.get_running_loop().time()
+        heard = await _amplitudes(audio_input, 15)
+        gap = heard.index(0)  # the turn boundary, so the stt doesn't merge both speakers
+        assert set(heard[gap + 1 :]) == {200}
+        # bob's pre-roll arrives at once: read live, those 15 frames would take 15 * 50ms
+        assert asyncio.get_running_loop().time() - started < 0.5
+    finally:
+        await audio_input.aclose()
+
+
+# -- participant linking ------------------------------------------------------
+
+
+class _RecordingAudioInput:
+    """Stands in for the audio input to record the lifecycle RoomIO drives."""
+
+    def __init__(self) -> None:
+        self.added: list[str] = []
+        self.removed: list[str] = []
+
+    def add_participant(self, participant) -> None:
+        self.added.append(participant.identity)
+
+    def remove_participant(self, identity: str) -> None:
+        self.removed.append(identity)
+
+
+def _remote_participant(
+    identity: str,
+    *,
+    kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    attributes: dict[str, str] | None = None,
+):
+    participant = MagicMock()
+    participant.identity = identity
+    participant.kind = kind
+    participant.attributes = attributes or {}
+    return participant
+
+
+def _make_room_io(room: _FakeRoom, **options) -> RoomIO:
+    agent_session = SimpleNamespace(
+        _on_room_io_participant_linked=MagicMock(),
+        on=MagicMock(),
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    return RoomIO(agent_session, room, options=RoomOptions(**options))
+
+
+@pytest.mark.asyncio
+async def test_roomio_links_only_the_configured_participant() -> None:
+    """`participant_identity` still decides who is linked, whatever else joins."""
+    room = _FakeRoom()
+    room_io = _make_room_io(room, participant_identity="alice")
+
+    room_io._on_participant_connected(_remote_participant("bob"))
+    assert room_io.linked_participant is None
+
+    alice = _remote_participant("alice")
+    room_io._on_participant_connected(alice)
+    assert room_io.linked_participant is alice
+
+
+@pytest.mark.asyncio
+async def test_roomio_skips_agent_publishers_and_unaccepted_kinds() -> None:
+    room = _FakeRoom()
+    room_io = _make_room_io(room)
+
+    # an avatar worker publishing on the agent's behalf is not the user
+    room_io._on_participant_connected(
+        _remote_participant("avatar", attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: "local"})
+    )
+    room_io._on_participant_connected(
+        _remote_participant("egress", kind=rtc.ParticipantKind.PARTICIPANT_KIND_EGRESS)
+    )
+    assert room_io.linked_participant is None
+
+    user = _remote_participant("user")
+    room_io._on_participant_connected(user)
+    assert room_io.linked_participant is user
+
+
+@pytest.mark.asyncio
+async def test_roomio_routes_every_participant_to_the_audio_input() -> None:
+    """Listening and linking are separate: `participant_identity` only picks the linked one."""
+    room = _FakeRoom()
+    room_io = _make_room_io(room, participant_identity="alice")
+    audio_input = _RecordingAudioInput()
+    room_io._audio_input = audio_input  # type: ignore[assignment]
+
+    bob = _remote_participant("bob")
+    alice = _remote_participant("alice")
+    room_io._on_participant_connected(bob)
+    room_io._on_participant_connected(alice)
+    room_io._on_participant_connected(
+        _remote_participant("avatar", attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: "local"})
+    )
+
+    assert audio_input.added == ["bob", "alice"]
+    assert room_io.linked_participant is alice
+
+    room_io._on_participant_disconnected(bob)
+    assert audio_input.removed == ["bob"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_republishing_does_not_close_the_turn() -> None:
+    """Swapping a track empties the mix for an instant, which is not the end of a turn."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        assert 100 in await _amplitudes(audio_input, 2)
+
+        _start_track(audio_input._streams["alice"], "alice", 100, sid="TR_alice_2")
+        assert audio_input._mixing == {"alice"}
+        assert 0 not in await _amplitudes(audio_input, 5), "no silence gap on a republish"
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_reselects_when_the_speaker_leaves() -> None:
+    """The floor goes to whoever else the server reported, not to nobody."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert set(await _amplitudes(audio_input, 3)) == {100}
+
+        audio_input.remove_participant("alice")
+        assert 200 in await _amplitudes(audio_input, 10)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_releases_a_muted_speaker() -> None:
+    """A muted speaker the server still reports must not hold the floor."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert audio_input._speaking == "alice"
+
+        _mute_track(room, audio_input, "alice", True)
+        await asyncio.sleep(0)  # the floor settles on the next tick
+        assert audio_input._speaking == "bob"
+        assert 200 in await _amplitudes(audio_input, 10)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_roomio_skips_pre_connect_audio_for_group_inputs() -> None:
+    """The buffer predates the participant, so it has nowhere to go in a combined stream."""
+    room = _FakeRoom()
+
+    outputs_off = {"audio_output": False, "text_output": False, "text_input": False}
+    linked = _make_room_io(room, audio_input=AudioInputOptions(), **outputs_off)
+    mixed = _make_room_io(room, audio_input=AudioInputOptions(participants="mix"), **outputs_off)
+    for room_io in (linked, mixed):
+        await room_io.start()
+
+    try:
+        assert linked._pre_connect_audio_handler is not None
+        assert mixed._pre_connect_audio_handler is None
+    finally:
+        for room_io in (linked, mixed):
+            await room_io.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_republishing_keeps_the_floor() -> None:
+    """Swapping a track is not the speaker stopping, they keep talking through it."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+
+        _report_speakers(room, "alice", "bob")
+        assert set(await _amplitudes(audio_input, 3)) == {100}
+
+        _start_track(audio_input._streams["alice"], "alice", 100, sid="TR_alice_2")
+        await asyncio.sleep(0)
+        assert audio_input._speaking == "alice"
+        assert set(await _amplitudes(audio_input, 5)) == {100}, "no gap, no handover to bob"
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_does_not_buffer_an_unmixed_participant() -> None:
+    """The mixer is a child's only reader, so a child it dropped must stop producing."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        _publish(audio_input, "bob", 200)
+        assert 300 in await _amplitudes(audio_input, 2)
+
+        # a muted track that keeps delivering is exactly the case that used to pile up
+        _mute_track(room, audio_input, "alice", True)
+        assert audio_input._mixing == {"bob"}
+
+        await asyncio.sleep(1.0)  # 20 frames' worth of audio nobody is reading
+        assert audio_input._streams["alice"]._data_ch.qsize() == 0
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_selects_a_participant_reported_before_joining() -> None:
+    """Someone already talking when the agent arrives must not wait for the next update."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _report_speakers(room, "alice")  # dispatched before the stream exists
+        _publish(audio_input, "alice", 100)
+
+        await asyncio.sleep(0)
+        assert audio_input._speaking == "alice"
+        assert 100 in await _amplitudes(audio_input, 3)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_does_not_buffer_a_participant_muted_on_arrival() -> None:
+    """A track subscribed while already muted never joins the mix, so it must not produce."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+
+    try:
+        audio_input.add_participant("alice")
+        _start_track(audio_input._streams["alice"], "alice", 100, muted=True)
+        assert audio_input._mixing == set()
+
+        await asyncio.sleep(1.0)  # 20 frames' worth of audio nobody is reading
+        assert audio_input._streams["alice"]._data_ch.qsize() == 0
+
+        _mute_track(room, audio_input, "alice", False)
+        assert audio_input._mixing == {"alice"}
+        assert 100 in await _amplitudes(audio_input, 3)
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_speaker_audio_input_keeps_pre_roll_free_of_flush_silence() -> None:
+    """A group segments its own turns, so a child's end-of-track gap must not fill a pre-roll."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _ActiveSpeakerAudioInput)
+
+    try:
+        _publish(audio_input, "alice", 100)
+        audio_input.add_participant("bob")
+        _start_track(audio_input._streams["bob"], "bob", 200, count=4)  # ends while alice talks
+
+        _report_speakers(room, "alice")
+        await asyncio.sleep(1.0)
+
+        held = [int(np.frombuffer(f.data, dtype=np.int16)[0]) for f in audio_input._preroll["bob"]]
+        assert held and 0 not in held
+    finally:
+        await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_audio_input_closes_children_before_the_mixer() -> None:
+    """A child still holds a `track_subscribed` handler, and it registers with the mixer."""
+    room = _FakeRoom()
+    audio_input = _make_room_audio_input(room, _MixedParticipantAudioInput)
+    _publish(audio_input, "alice", 100)
+
+    closed: list[str] = []
+    child, mixer = audio_input._streams["alice"], audio_input._mixer
+    child_aclose, mixer_aclose = child.aclose, mixer.aclose
+
+    async def _closing_child(**kwargs):
+        closed.append("child")
+        await child_aclose(**kwargs)
+
+    async def _closing_mixer():
+        closed.append("mixer")
+        await mixer_aclose()
+
+    child.aclose, mixer.aclose = _closing_child, _closing_mixer
+    await audio_input.aclose()
+
+    assert closed == ["child", "mixer"], "the mixer must outlive the streams that register"
+
+    # and once closed, whatever the room still dispatches reaches nothing
+    audio_input._child_stream_changed("alice")
+    audio_input.add_participant("bob")
+    assert audio_input._streams == {}
