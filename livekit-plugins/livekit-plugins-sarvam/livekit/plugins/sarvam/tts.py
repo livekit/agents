@@ -812,6 +812,16 @@ class TTS(tts.TTS):
                         f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers)}"
                     )
+            # The retained pace may be out of range for the new model (e.g. 2.5
+            # carried over from bulbul:v2 to bulbul:v3); revalidate it so the
+            # next request doesn't fail with an API error.
+            low, high = _pace_range_for_model(self._opts.model)
+            if not low <= self._opts.pace <= high:
+                raise ValueError(
+                    f"Pace {self._opts.pace} is invalid for {self._opts.model}: "
+                    f"must be between {low} and {high}. Call update_options(pace=...) "
+                    "with a valid value."
+                )
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
