@@ -303,6 +303,28 @@ def _is_fatal_error(error: object | None) -> bool:
     return isinstance(code, str) and code in _FATAL_ERROR_CODES
 
 
+def _server_turn_taking_enabled(
+    turn_detection: RealtimeAudioInputTurnDetection | None,
+) -> bool:
+    """Whether the server both detects turns and answers them."""
+    return turn_detection is not None and turn_detection.create_response is not False
+
+
+def _warn_on_half_disabled_turn_taking(
+    turn_detection: RealtimeAudioInputTurnDetection | None,
+) -> None:
+    """Warn when the caller hands turn taking to the client but leaves interruption on the server."""
+    if (
+        turn_detection is not None
+        and turn_detection.create_response is False
+        and turn_detection.interrupt_response is not False
+    ):
+        logger.warning(
+            "create_response=False hands turn taking to the client, but the server still "
+            "cancels its response on user speech, pass interrupt_response=False as well"
+        )
+
+
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -458,22 +480,11 @@ class RealtimeModel(llm.RealtimeModel):
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
         resolved_turn_detection = to_turn_detection(turn_detection)
-        if (
-            resolved_turn_detection is not None
-            and resolved_turn_detection.create_response is False
-            and resolved_turn_detection.interrupt_response is not False
-        ):
-            logger.warning(
-                "create_response=False hands turn taking to the client, but the server still "
-                "cancels its response on user speech, pass interrupt_response=False as well"
-            )
-
+        _warn_on_half_disabled_turn_taking(resolved_turn_detection)
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
-                # create_response=False leaves the reply to the client: client-side turn taking
-                turn_detection=resolved_turn_detection is not None
-                and resolved_turn_detection.create_response is not False,
+                turn_detection=_server_turn_taking_enabled(resolved_turn_detection),
                 can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
@@ -740,13 +751,20 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.voice = voice
 
         if is_given(turn_detection):
+            # a derived capability has to follow the option it is derived from
             self._opts.turn_detection = to_turn_detection(turn_detection)
+            self._capabilities.turn_detection = _server_turn_taking_enabled(
+                self._opts.turn_detection
+            )
+            # only the model warns: it re-runs the update on every session it owns
+            _warn_on_half_disabled_turn_taking(self._opts.turn_detection)
 
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)
+            self._capabilities.user_transcription = self._opts.input_audio_transcription is not None
 
         if is_given(input_audio_noise_reduction):
             self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
@@ -875,6 +893,13 @@ class RealtimeSession(
         self._opts = replace(
             realtime_model._opts,
             turn_detection=None if turn_detection_disabled else realtime_model._opts.turn_detection,
+        )
+        # this session's own copy: turn detection can be off here and on for the model
+        self._capabilities = replace(
+            realtime_model.capabilities,
+            turn_detection=False
+            if turn_detection_disabled
+            else realtime_model.capabilities.turn_detection,
         )
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
@@ -1323,6 +1348,10 @@ class RealtimeSession(
         )
 
     @property
+    def capabilities(self) -> llm.RealtimeCapabilities:
+        return self._capabilities
+
+    @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._remote_chat_ctx.to_chat_ctx()
 
@@ -1398,12 +1427,14 @@ class RealtimeSession(
                 audio_input.turn_detection = turn_detection
                 has_audio_config = True
             self._opts.turn_detection = turn_detection
+            self._capabilities.turn_detection = _server_turn_taking_enabled(turn_detection)
 
         if is_given(input_audio_transcription):
             if self._opts.input_audio_transcription != input_audio_transcription:
                 audio_input.transcription = input_audio_transcription
                 has_audio_config = True
             self._opts.input_audio_transcription = input_audio_transcription
+            self._capabilities.user_transcription = input_audio_transcription is not None
 
         if is_given(input_audio_noise_reduction):
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)

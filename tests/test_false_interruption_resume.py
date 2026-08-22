@@ -319,6 +319,30 @@ async def test_interrupting_paused_speech_does_not_end_agent_twice(
     activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
 
 
+async def test_interruption_event_does_not_end_agent_again_after_pausing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, handle = _paused_activity(session)
+    handle._generations = []
+    activity._paused_speech = None
+    activity._audio_recognition = MagicMock()
+    event = MagicMock(overlap_started_at=1.0, detected_at=2.0)
+
+    activity.on_interruption(event)
+    assert activity._paused_speech is not None
+    await session.aclose()
+
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(
+        ignore_user_transcript_until=1.0
+    )
+
+
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -62,6 +62,7 @@ class FakeRealtimeSession(RealtimeSession):
         self.user_activity_started = False
         self.user_activity_start_calls = 0
         self._reply_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
+        self.say_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         # test hooks to pause or fail aclose() mid-swap
         self.aclose_entered = asyncio.Event()
         self.block_aclose: asyncio.Event | None = None
@@ -135,7 +136,9 @@ class FakeRealtimeSession(RealtimeSession):
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         self.say_calls.append(text)
-        return asyncio.get_event_loop().create_future()
+        fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
+        self.say_futs.append(fut)
+        return fut
 
     async def aclose(self) -> None:
         self.aclose_entered.set()

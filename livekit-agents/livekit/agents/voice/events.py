@@ -222,8 +222,7 @@ class RunContext(Generic[Userdata_T]):
         if self._executor is None:
             return  # standalone — no executor, so no tool lifecycle to report
 
-        self._session.emit(
-            "tool_execution_updated",
+        self._session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
                     id=pair[0].call_id,

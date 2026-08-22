@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -12,6 +13,7 @@ from openai.types.realtime import (
     ConversationItemDeletedEvent,
     RealtimeErrorEvent,
 )
+from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -153,6 +155,75 @@ def test_disabling_transcription_mid_turn_removes_exact_speech_timestamp() -> No
 
     assert session._input_speech_started_at == {"item-2": 2.0}
     assert [name for name, _ in emitted] == ["input_speech_stopped"]
+
+
+def test_update_options_keeps_derived_capabilities_in_sync() -> None:
+    # a stale capability reports the server owning the turn after the caller handed turn
+    # taking to the client, and AgentActivity then rejects allow_interruptions=False
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+    model.update_options(
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+    assert model.capabilities.turn_detection is False
+    assert model.capabilities.user_transcription is False
+
+    model.update_options(
+        turn_detection=ServerVad(type="server_vad"),
+        input_audio_transcription=AudioTranscription(model="whisper-1"),
+    )
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+
+def test_update_options_leaves_derived_capabilities_alone_when_unset() -> None:
+    # an unrelated update must not resync a model that opted out of server-side turn taking
+    model = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+    )
+    model.update_options(voice="marin")
+    assert model.capabilities.turn_detection is False
+
+
+def _capabilities_session(model: RealtimeModel) -> RealtimeSession:
+    # only the state update_options touches; a real session would open a websocket
+    return cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _opts=replace(model._opts),
+            _capabilities=replace(model.capabilities),
+            send_event=lambda event: None,
+            _wrap_session_update=lambda event_id, session: session,
+        ),
+    )
+
+
+def test_session_update_options_keeps_capabilities_on_the_session() -> None:
+    # turn detection is per session: one session handing turn taking to the client must not
+    # change what the model, or any other session on it, reports
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    session = _capabilities_session(model)
+
+    RealtimeSession.update_options(
+        session,
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+
+    assert session._capabilities.turn_detection is False
+    assert session._capabilities.user_transcription is False
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
 
 
 def test_legacy_turn_detection_keeps_interrupt_response() -> None:
