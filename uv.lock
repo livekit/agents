@@ -993,6 +993,22 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.141.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8a/02/91e3416a8fdd715abb903a952a6bec7cdd8d14eed55d415fc8595524c319/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1", size = 425799, upload-time = "2026-07-29T17:18:05.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3", size = 131954, upload-time = "2026-07-29T17:18:04.364Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.30.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1918,6 +1934,7 @@ dependencies = [
     { name = "colorama" },
     { name = "docstring-parser" },
     { name = "eval-type-backport" },
+    { name = "fastapi" },
     { name = "json-repair" },
     { name = "livekit" },
     { name = "livekit-api" },
@@ -1940,7 +1957,9 @@ dependencies = [
     { name = "typer" },
     { name = "types-protobuf" },
     { name = "typing-extensions" },
+    { name = "uvicorn" },
     { name = "watchfiles" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -2171,6 +2190,7 @@ requires-dist = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "eval-type-backport" },
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "json-repair", specifier = "==0.60.1" },
     { name = "livekit", specifier = "==1.1.14" },
     { name = "livekit-api", specifier = ">=1.2.0,<2" },
@@ -2265,7 +2285,9 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15.1" },
     { name = "types-protobuf", specifier = ">=4" },
     { name = "typing-extensions", specifier = ">=4.12" },
+    { name = "uvicorn", specifier = ">=0.30" },
     { name = "watchfiles", specifier = ">=1.0" },
+    { name = "websockets", specifier = ">=13" },
 ]
 provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
