@@ -294,24 +294,33 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     devmode = args.dev
     colored_logs = devmode or args.log_format == "colored"
 
-    exit_raised = False
-
-    def _handle_exit(sig: int, frame: FrameType | None) -> None:
-        nonlocal exit_raised
-        if exit_raised:
-            os._exit(1)
-        exit_raised = True
-        raise _ExitCli()
-
-    for sig in HANDLED_SIGNALS:
-        signal.signal(sig, _handle_exit)
-
     setup_logging(args.log_level, devmode=colored_logs, console=False, compact=args.simulation)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
+
+    exit_fut: asyncio.Future[None] = loop.create_future()
+    exit_triggered = False
+
+    def _signal_exit() -> None:
+        if not exit_fut.done():
+            exit_fut.set_result(None)
+
+    def _handle_exit(sig: int, frame: FrameType | None) -> None:
+        nonlocal exit_triggered
+        if exit_triggered:
+            os._exit(1)
+        exit_triggered = True
+        # raising from the handler would surface the exception inside whatever
+        # frame the main thread is executing (e.g. a blocking request_fnc inside
+        # a job-request task) instead of at the run_until_complete boundary,
+        # losing the graceful shutdown; schedule the exit on the loop instead
+        loop.call_soon_threadsafe(_signal_exit)
+
+    for sig in HANDLED_SIGNALS:
+        signal.signal(sig, _handle_exit)
 
     async def _worker_run(worker: AgentServer) -> None:
         try:
@@ -329,7 +338,11 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     try:
         main_task = loop.create_task(_worker_run(server), name="worker_main_task_cli")
         try:
-            loop.run_until_complete(main_task)
+            # exit_fut interrupts the wait on the first signal while main_task
+            # (server.run) keeps running, so the drain below still has a live worker
+            loop.run_until_complete(
+                asyncio.wait([main_task, exit_fut], return_when=asyncio.FIRST_COMPLETED)
+            )
         except _ExitCli:
             pass
 
