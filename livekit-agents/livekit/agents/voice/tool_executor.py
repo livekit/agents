@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -114,6 +114,18 @@ class AsyncToolOptions(TypedDict, total=False):
     """Instruction for the deferred reply when newer items came after the pending update."""
 
 
+BeforeExecuteCallback = Callable[
+    ["RunContext", FunctionTool | RawFunctionTool, dict[str, Any]], Awaitable[None]
+]
+"""Async policy callback invoked immediately before a function tool runs.
+
+The callback receives the run context, the resolved function tool, and a copy of the
+parsed JSON arguments. Return normally to allow execution. Raise :class:`ToolError`
+to reject the call (or raise another exception to report a policy failure); the
+underlying tool is not invoked when the callback raises.
+"""
+
+
 class ToolHandlingOptions(TypedDict, total=False):
     """Configuration for the tool handling system.
 
@@ -126,6 +138,15 @@ class ToolHandlingOptions(TypedDict, total=False):
         )
 
     Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    """
+
+    before_execute: BeforeExecuteCallback | None
+    """Policy hook called after a tool call is resolved and before its body runs.
+
+    The hook receives ``(run_ctx, tool, arguments)``. Return ``None`` to proceed;
+    raise :class:`ToolError` to block the call. Hook exceptions are surfaced as the
+    tool error and never silently bypass the policy. Pass ``None`` on an agent or
+    toolset to explicitly disable an inherited hook.
     """
 
     async_options: AsyncToolOptions
@@ -271,6 +292,7 @@ class _ToolExecutor:
         *,
         owning_activity: AgentActivity | None = None,
         async_tool_options: AsyncToolOptions | None = None,
+        before_execute: BeforeExecuteCallback | None = None,
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
@@ -280,6 +302,7 @@ class _ToolExecutor:
 
         self._owning_activity: AgentActivity | None = owning_activity
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
+        self._before_execute = before_execute
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
@@ -287,6 +310,10 @@ class _ToolExecutor:
     def set_tool_options(self, options: AsyncToolOptions) -> None:
         """Replace the async tool templates. Caller must pre-resolve defaults."""
         self._tool_options = options
+
+    def set_before_execute(self, callback: BeforeExecuteCallback | None) -> None:
+        """Set the policy hook used before each function tool invocation."""
+        self._before_execute = callback
 
     @property
     def has_running_tasks(self) -> bool:
@@ -347,6 +374,11 @@ class _ToolExecutor:
         # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
+                if self._before_execute is not None:
+                    # Policy hooks are observers in the first version: pass a copy so
+                    # argument transformation cannot accidentally change execution.
+                    await self._before_execute(run_ctx, tool, dict(raw_arguments))
+
                 fnc_args, fnc_kwargs = prepare_function_arguments(
                     fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )

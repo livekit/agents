@@ -4,8 +4,10 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ..log import logger
+from ..types import NOT_GIVEN
 from ..utils.misc import is_given
 from ..voice.tool_executor import (
+    BeforeExecuteCallback,
     ToolHandlingOptions,
     _resolve_async_tool_options,
     _ToolExecutor,
@@ -70,6 +72,11 @@ class AsyncToolset(Toolset):
             )
 
         super().__init__(id=id, tools=tools)
+        self._before_execute_override = (
+            tool_handling.get("before_execute", NOT_GIVEN)
+            if tool_handling is not None
+            else NOT_GIVEN
+        )
         self._async_tool_options_override = (
             tool_handling.get("async_options") if tool_handling is not None else None
         )
@@ -79,6 +86,16 @@ class AsyncToolset(Toolset):
         """Bind this toolset to a scope. ``activity=None`` makes it session-scoped
         (replies survive handoff); otherwise replies stay with ``activity``'s agent."""
         self._executor.set_owning_activity(activity)
+
+        if is_given(self._before_execute_override):
+            before_execute: BeforeExecuteCallback | None = self._before_execute_override
+        elif activity is not None and is_given(
+            agent_before_execute := getattr(activity._agent, "_before_execute", NOT_GIVEN)
+        ):
+            before_execute = agent_before_execute
+        else:
+            before_execute = getattr(session, "_before_execute", None)
+        self._executor.set_before_execute(before_execute)
 
         if self._async_tool_options_override is not None:
             resolved = _resolve_async_tool_options(self._async_tool_options_override)
