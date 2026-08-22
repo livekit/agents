@@ -201,6 +201,16 @@ class _PreemptiveGeneration:
 
 
 @dataclass
+class _PreparedUserTurn:
+    """A pipeline turn whose ``on_user_turn_completed`` callback has already run."""
+
+    info: _EndOfTurnInfo
+    user_message: llm.ChatMessage
+    chat_ctx: llm.ChatContext
+    on_user_turn_completed_delay: float
+
+
+@dataclass
 class _PausedSpeechInfo:
     handle: SpeechHandle
     agent_state: AgentState
@@ -244,6 +254,7 @@ class AgentActivity(RecognitionHooks):
 
         self._scheduling_atask: asyncio.Task[None] | None = None
         self._user_turn_completed_atask: asyncio.Task[None] | None = None
+        self._handoff_user_turns: list[_EndOfTurnInfo | _PreparedUserTurn] = []
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
@@ -1158,6 +1169,59 @@ class AgentActivity(RecognitionHooks):
             if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
+        self._schedule_handoff_user_turns()
+
+    def _queue_handoff_user_turn(self, user_turn: _EndOfTurnInfo | _PreparedUserTurn) -> None:
+        """Keep an accepted pipeline turn until this activity's scheduler is running."""
+        self._handoff_user_turns.append(user_turn)
+
+    def _take_handoff_user_turns(self, source_activity: AgentActivity) -> None:
+        """Move queued turns from the activity being replaced to this activity."""
+        if source_activity._handoff_user_turns:
+            self._handoff_user_turns.extend(source_activity._handoff_user_turns)
+            source_activity._handoff_user_turns.clear()
+
+    def _persist_handoff_user_turns(self) -> None:
+        """Append unconsumed handoff turns using the session-close history semantics."""
+        handoff_user_turns = self._handoff_user_turns
+        self._handoff_user_turns = []
+        for user_turn in handoff_user_turns:
+            if isinstance(user_turn, _PreparedUserTurn):
+                # Its metrics were initialized from ``info`` before the source
+                # callback ran; preserve that finalized message verbatim.
+                user_message = user_turn.user_message
+            else:
+                info = user_turn
+                user_message = llm.ChatMessage(
+                    role="user",
+                    content=[info.new_transcript],
+                    transcript_confidence=info.transcript_confidence,
+                )
+                user_message.metrics = self._init_metrics_from_end_of_turn(info)
+
+            self._agent._chat_ctx.items.append(user_message)
+            self._session._conversation_item_added(user_message)
+
+    def _persist_prepared_user_turn(self, user_turn: _PreparedUserTurn) -> None:
+        """Commit an already-callbacked turn without recreating its message."""
+        self._agent._chat_ctx.items.append(user_turn.user_message)
+        self._session._conversation_item_added(user_turn.user_message)
+
+    def _schedule_handoff_user_turns(self) -> None:
+        """Continue turns accepted by the activity that handed off to this one."""
+        handoff_user_turns = self._handoff_user_turns
+        self._handoff_user_turns = []
+        for user_turn in handoff_user_turns:
+            old_task = self._user_turn_completed_atask
+            if isinstance(user_turn, _PreparedUserTurn):
+                task = self._prepared_user_turn_completed_task(old_task, user_turn)
+                task_name = "AgentActivity._prepared_user_turn_completed_task"
+            else:
+                task = self._user_turn_completed_task(old_task, user_turn)
+                task_name = "AgentActivity._user_turn_completed_task"
+
+            self._user_turn_completed_atask = self._create_speech_task(task, name=task_name)
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
         self, *, new_activity: AgentActivity | None = None
@@ -1413,6 +1477,7 @@ class AgentActivity(RecognitionHooks):
 
             self._closed = True
             self._cancel_preemptive_generation()
+            self._persist_handoff_user_turns()
             await self._session._keyterm_detector.aclose()
 
             # on_exit_task should be awaited in `drain`
@@ -2417,6 +2482,11 @@ class AgentActivity(RecognitionHooks):
                 extra={"lk.pii.user_input": info.new_transcript},
             )
 
+            if isinstance(self.llm, llm.LLM) and self._session._forward_handoff_user_turn(
+                self, info
+            ):
+                return True
+
             if self._session._closing:
                 # add user input to chat context
                 user_message = llm.ChatMessage(
@@ -2549,6 +2619,10 @@ class AgentActivity(RecognitionHooks):
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"lk.pii.user_input": info.new_transcript},
             )
+            if isinstance(self.llm, llm.LLM) and self._session._forward_handoff_user_turn(
+                self, info
+            ):
+                return
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
@@ -2572,42 +2646,112 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        if isinstance(self.llm, llm.RealtimeModel):
+        handoff_user_turn: _PreparedUserTurn | None = None
+        if isinstance(self.llm, llm.LLM):
+            handoff_user_turn = _PreparedUserTurn(
+                info=info,
+                user_message=user_message,
+                chat_ctx=temp_mutable_chat_ctx,
+                on_user_turn_completed_delay=on_user_turn_completed_delay,
+            )
+        elif isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
             return  # skip response if no llm is set
+
+        await self._schedule_reply_after_user_turn(
+            info=info,
+            user_message=user_message,
+            chat_ctx=temp_mutable_chat_ctx,
+            on_user_turn_completed_delay=on_user_turn_completed_delay,
+            handoff_user_turn=handoff_user_turn,
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _prepared_user_turn_completed_task(
+        self,
+        old_task: asyncio.Task[None] | None,
+        user_turn: _PreparedUserTurn,
+    ) -> None:
+        """Resume a handed-off pipeline turn after its callback already completed."""
+        if old_task is not None:
+            await old_task
+
+        self._preemptive_generation_count = 0
+        await asyncio.gather(*self._interrupt_background_speeches(force=False))
+
+        # A prepared turn is deliberately pipeline-only. Realtime input ownership
+        # stays with its remote session; committing the local message is safer than
+        # replaying it through a different lifecycle.
+        if not isinstance(self.llm, llm.LLM):
+            self._persist_prepared_user_turn(user_turn)
+            return
+
+        if (current_speech := self._current_speech) is not None:
+            if not current_speech.allow_interruptions:
+                logger.warning(
+                    "skipping reply to handed-off user input, current speech generation cannot be interrupted",
+                    extra={"user_input": user_turn.user_message.raw_text_content},
+                )
+                self._persist_prepared_user_turn(user_turn)
+                return
+            await self._cancel_speech_pause(self._cancel_speech_pause_task)
+            await current_speech.interrupt()
+
+        await self._schedule_reply_after_user_turn(
+            info=user_turn.info,
+            user_message=user_turn.user_message,
+            chat_ctx=user_turn.chat_ctx,
+            on_user_turn_completed_delay=user_turn.on_user_turn_completed_delay,
+            handoff_user_turn=user_turn,
+        )
+
+    async def _schedule_reply_after_user_turn(
+        self,
+        *,
+        info: _EndOfTurnInfo,
+        user_message: llm.ChatMessage | None,
+        chat_ctx: llm.ChatContext,
+        on_user_turn_completed_delay: float,
+        handoff_user_turn: _PreparedUserTurn | None,
+    ) -> None:
+        """Schedule reply/history work after a completed user-turn callback."""
 
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"lk.pii.user_input": info.new_transcript},
             )
-            if user_message and self._session._closing:
-                self._agent._chat_ctx.items.append(user_message)
-                self._session._conversation_item_added(user_message)
+            if handoff_user_turn and self._session._forward_handoff_user_turn(
+                self, handoff_user_turn
+            ):
+                return
+            if self._session._closing:
+                if handoff_user_turn:
+                    self._persist_prepared_user_turn(handoff_user_turn)
+                elif user_message:
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
             return
 
         speech_handle: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
-            # make sure the on_user_turn_completed didn't change some request parameters
-            # otherwise invalidate the preemptive generation
+            # make sure the callback didn't change some request parameters; otherwise
+            # invalidate the preemptive generation just as an ordinary pipeline turn does.
             if (
-                _transcripts_equivalent(
+                user_message is not None
+                and _transcripts_equivalent(
                     preemptive.info.new_transcript, user_message.raw_text_content
                 )
-                and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
+                and preemptive.chat_ctx.is_equivalent(chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
             ):
                 speech_handle = preemptive.speech_handle
-
-                # The pipeline task retains the ChatMessage created for preemptive generation.
-                # Reconcile it with the finalized message before scheduling so conversation
-                # history keeps the final transcript and on_user_turn_completed edits.
                 preemptive.user_message.content = user_message.content.copy()
                 preemptive.user_message.transcript_confidence = user_message.transcript_confidence
-                preemptive.user_message.metrics = metrics_report
+                preemptive.user_message.metrics = user_message.metrics
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
                     "using preemptive generation",
@@ -2623,19 +2767,15 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation = None
 
         if speech_handle is None:
-            # Ensure the new message is passed to generate_reply
-            # This preserves the original message_id, making it easier for users to track responses
             speech_handle = self._generate_reply(
                 user_message=user_message,
-                chat_ctx=temp_mutable_chat_ctx,
+                chat_ctx=chat_ctx,
                 input_details=InputDetails(modality="audio"),
             )
 
         if self._user_turn_completed_atask != asyncio.current_task():
-            # If a new user turn has already started, interrupt this one since it's now outdated
-            # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
-            # lose data like the beginning of a user speech).
-            # await the interrupt to make sure user message is added to the chat context before the new task starts
+            # A later accepted turn supersedes this one, but still let the pipeline
+            # commit its user message before it is interrupted.
             await speech_handle.interrupt()
 
         metadata: Metadata | None = None
