@@ -1200,7 +1200,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         await tunnel.start()
                         self._tunnel = tunnel
 
-                    # report all active jobs to the server after registration
                     await self._report_active_jobs()
 
                     await self._run_ws(ws)
