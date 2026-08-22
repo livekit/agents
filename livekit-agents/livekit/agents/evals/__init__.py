@@ -16,6 +16,11 @@ from .judge import (
     task_completion_judge,
     tool_use_judge,
 )
+from .reliability import (
+    ReliabilityObserver,
+    ReliabilityReporter,
+    ReliabilityTrace,
+)
 
 __all__ = [
     # Evaluation
@@ -35,4 +40,8 @@ __all__ = [
     "safety_judge",
     "task_completion_judge",
     "tool_use_judge",
+    # Reliability
+    "ReliabilityObserver",
+    "ReliabilityReporter",
+    "ReliabilityTrace",
 ]
