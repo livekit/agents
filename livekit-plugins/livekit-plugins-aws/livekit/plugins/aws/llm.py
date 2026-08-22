@@ -52,6 +52,13 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
 
 def _model_rejects_sampling_params(model_id: str) -> bool:
     lowered = model_id.lower()
+    # Application inference profiles hide the underlying model behind a
+    # user-chosen name, so a substring match would both miss rejecting models
+    # and misclassify profiles merely named after one (e.g.
+    # ".../claude-opus-4-7-prod" targeting a supporting model). Never guess for
+    # those; callers can use the explicit supports_sampling_params override.
+    if "application-inference-profile" in lowered:
+        return False
     return any(name in lowered for name in _MODELS_REJECTING_SAMPLING_PARAMS)
 
 

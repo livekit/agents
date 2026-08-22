@@ -51,9 +51,10 @@ async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixt
 
 
 async def test_explicit_override_for_opaque_inference_profiles() -> None:
-    # An application inference-profile ARN can hide the underlying model name,
-    # so auto-detection can't cover it and sampling params are sent by default;
-    # supports_sampling_params=False forces them to be dropped.
+    # An application inference-profile ARN can hide the underlying model name;
+    # auto-detection deliberately never guesses for those (the profile name may
+    # merely reference a model, or target an unrelated one), so sampling params
+    # are sent by default and supports_sampling_params=False forces them out.
     arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-agent-llm"
     config = await _inference_config(arn, temperature=0.5, top_p=0.9)
     assert config["temperature"] == 0.5
@@ -70,6 +71,16 @@ async def test_explicit_override_for_opaque_inference_profiles() -> None:
         temperature=0.5,
         supports_sampling_params=True,
     )
+    assert config["temperature"] == 0.5
+
+
+async def test_application_profile_named_after_model_is_not_misclassified() -> None:
+    # A supporting-model application profile that merely references a rejecting
+    # model name must keep its explicitly configured sampling parameters.
+    arn = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-opus-4-7-prod"
+    )
+    config = await _inference_config(arn, temperature=0.5)
     assert config["temperature"] == 0.5
 
 
