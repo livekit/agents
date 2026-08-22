@@ -17,6 +17,7 @@ from yarl import URL
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
 from livekit.agents.types import NOT_GIVEN
+from livekit.agents.utils import is_given
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
@@ -43,6 +44,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
+        secondary_languages=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
         previous_text=None,
@@ -269,6 +271,31 @@ def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
 
     assert stream._opts.keyterms == ["nginx"]
     assert stream._reconnect_event.is_set()
+
+
+async def test_connect_ws_includes_secondary_languages() -> None:
+    # secondary_languages constrain prediction to a subset of languages for
+    # bilingual use and are sent as repeated query params on the connect URL.
+    stream = _new_stream()
+    stream._opts.secondary_languages = ["hi", "es"]
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("secondary_languages") == ["hi", "es"]
+
+
+async def test_connect_ws_omits_secondary_languages_when_not_given() -> None:
+    url = await _connect_ws_url(_new_stream())
+
+    assert "secondary_languages=" not in url
+
+
+def test_secondary_languages_defaults_to_not_given() -> None:
+    assert not is_given(_stt()._opts.secondary_languages)
+
+
+def test_secondary_languages_can_be_set() -> None:
+    assert _stt(secondary_languages=["hi", "es"])._opts.secondary_languages == ["hi", "es"]
 
 
 class _FakeWS:
