@@ -67,7 +67,11 @@ def create_function_response(
 ) -> types.FunctionResponse:
     res = types.FunctionResponse(
         name=output.name,
-        response={"error": output.output} if output.is_error else {"output": output.output},
+        response=(
+            {"error": output.output_with_metadata}
+            if output.is_error
+            else {"output": output.output_with_metadata}
+        ),
     )
     if not vertexai:
         # vertexai supports neither scheduling nor id in FunctionResponse; the gemini api

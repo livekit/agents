@@ -160,11 +160,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
             id=item.id,
             type="function_call_output",
             call_id=_shorten_call_id(item.call_id),
-            output=item.output,
+            output=item.output_with_metadata,
         )
         conversation_item.type = "function_call_output"
         conversation_item.call_id = _shorten_call_id(item.call_id)
-        conversation_item.output = item.output
+        conversation_item.output = item.output_with_metadata
 
     elif item.type == "message":
         if item.role == "system" or item.role == "developer":

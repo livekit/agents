@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 from typing import Any
 
@@ -131,6 +132,50 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     ]
     chat_ctx = ChatContext(items)
     assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
+
+
+def test_normal_tool_output_is_unchanged_for_the_model() -> None:
+    output = FunctionCallOutput(name="lookup", call_id="call-1", output="sunny", is_error=False)
+
+    assert output.output_with_metadata == "sunny"
+
+
+@pytest.mark.parametrize(
+    ("provider_format", "extract_output"),
+    [
+        ("openai", lambda items: items[1]["content"]),
+        ("openai.responses", lambda items: items[1]["output"]),
+        ("anthropic", lambda items: items[2]["content"][0]["content"]),
+        (
+            "google",
+            lambda items: items[1]["parts"][0]["function_response"]["response"]["output"],
+        ),
+        ("aws", lambda items: items[2]["content"][0]["toolResult"]["content"][0]["text"]),
+        ("mistralai", lambda items: items[1]["result"]),
+    ],
+)
+def test_interrupted_tool_output_is_marked_for_the_model(
+    provider_format: str, extract_output: Any
+) -> None:
+    chat_ctx = ChatContext(
+        [
+            FunctionCall(name="lookup", call_id="call-1", arguments="{}"),
+            FunctionCallOutput(
+                name="lookup",
+                call_id="call-1",
+                output="sunny",
+                is_error=False,
+                reply_interrupted=True,
+            ),
+        ]
+    )
+
+    items, _ = chat_ctx.to_provider_format(format=provider_format)
+
+    assert json.loads(extract_output(items)) == {
+        "output": "sunny",
+        "reply_interrupted": True,
+    }
 
 
 @skip_if_no_credentials()

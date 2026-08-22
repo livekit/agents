@@ -424,11 +424,11 @@ class RealtimeSession(
 
                 if getattr(item, "is_error", False):
                     tool_result.error_type = "implementation-error"
-                    tool_result.error_message = getattr(item, "error_message", None) or str(
-                        getattr(item, "output", "")
+                    tool_result.error_message = (
+                        getattr(item, "error_message", None) or item.output_with_metadata
                     )
                 else:
-                    tool_result.result = str(getattr(item, "output", ""))
+                    tool_result.result = item.output_with_metadata
 
                 self._send_client_event(tool_result)
 

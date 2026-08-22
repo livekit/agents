@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 import time
 from collections.abc import Generator, Sequence
@@ -376,12 +377,21 @@ class FunctionCallOutput(BaseModel):
     call_id: str
     output: str
     is_error: bool
+    reply_interrupted: bool = False
+    """Whether delivery of the assistant reply for this output was interrupted."""
     created_at: float = Field(default_factory=time.time)
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
     Only realtime models read it, since they answer a result on their own.
     """
+
+    @property
+    def output_with_metadata(self) -> str:
+        """Return the output with its framework-managed state metadata."""
+        if not self.reply_interrupted:
+            return self.output
+        return json.dumps({"output": self.output, "reply_interrupted": True}, ensure_ascii=False)
 
 
 class AgentHandoff(BaseModel):
@@ -920,7 +930,8 @@ class ChatContext:
         Comparison rules:
           - Messages: compares the full `content` list, `role` and `interrupted`.
           - Function calls: compares `name`, `call_id`, and `arguments`.
-          - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
+          - Function call outputs: compares `name`, `call_id`, `output`, `is_error`, and
+            `reply_interrupted`.
 
         Does not consider timestamps or other metadata.
         """
@@ -948,6 +959,7 @@ class ChatContext:
                     or a.call_id != b.call_id
                     or a.output != b.output
                     or a.is_error != b.is_error
+                    or a.reply_interrupted != b.reply_interrupted
                 ):
                     return False
 
@@ -1030,7 +1042,9 @@ def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> C
             content=[
                 to_xml(
                     "function_call_output",
-                    item.output if not item.is_error else to_xml("error", item.output),
+                    item.output_with_metadata
+                    if not item.is_error
+                    else to_xml("error", item.output_with_metadata),
                     attrs={
                         "call_id": item.call_id,
                         "name": item.name,
