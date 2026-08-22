@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.amd import detector as amd_detector
@@ -65,6 +66,35 @@ class _RecordingClassifier:
 
     def settle(self, category: AMDCategory, reason: str) -> None:
         self.settled.append((category, reason))
+
+
+def _make_sip_detector(
+    *, wait_until_answered: bool | None = None
+) -> tuple[AMD, _AMDClassifier, SimpleNamespace]:
+    llm = FakeLLM()
+    publisher = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        identity="callee",
+        track_publications={"track_sid": object()},
+    )
+    session = SimpleNamespace(
+        llm=llm,
+        _activity=None,
+        _amd=None,
+        _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={"callee": publisher})),
+    )
+    kwargs = {"wait_until_answered": wait_until_answered} if wait_until_answered is not None else {}
+    detector = AMD(  # type: ignore[arg-type]
+        session,
+        llm=llm,
+        participant_identity="callee",
+        suppress_compatibility_warning=True,
+        **kwargs,
+    )
+    detector._stt = NOT_GIVEN
+    classifier = _make_classifier()
+    detector._classifier = classifier
+    return detector, classifier, session
 
 
 def _machine_vm_response(transcript: str = "voicemail greeting") -> FakeLLMResponse:
@@ -783,6 +813,155 @@ class TestAMDClassifier:
         assert classifier.timer_calls == 1
         assert classifier.listening is True
         assert classifier.settled == []
+
+    async def test_sip_setup_waits_for_answer_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer_wait_started = asyncio.Event()
+        answered = asyncio.Event()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            answer_wait_started.set()
+            await answered.wait()
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        detector, classifier, session = _make_sip_detector()
+        audio_ch = amd_detector.aio.Chan[rtc.AudioFrame]()
+        detector._audio_ch = audio_ch
+        early_frame = rtc.AudioFrame(bytes(2), 48000, 1, 1)
+
+        await detector._setup(session)  # type: ignore[arg-type]
+        await answer_wait_started.wait()
+
+        answer_task = detector._sip_answer_task
+        assert answer_task is not None
+        assert classifier.listening is False
+        assert classifier._detection_timeout_timer is None
+        assert classifier._no_speech_timer is None
+
+        detector._on_transcript("ringback")
+        detector.push_audio(early_frame)
+        assert classifier._transcript == ""
+        assert audio_ch.empty()
+
+        answered.set()
+        await answer_task
+
+        assert classifier.listening is True
+        assert classifier._detection_timeout_timer is not None
+        assert classifier._no_speech_timer is not None
+
+        answered_frame = rtc.AudioFrame(bytes(2), 48000, 1, 1)
+        detector._on_transcript("hello")
+        detector.push_audio(answered_frame)
+        assert classifier._transcript == "hello"
+        assert audio_ch.recv_nowait() is answered_frame
+
+        audio_ch.close()
+        await classifier.close()
+
+    async def test_sip_setup_processes_early_media_when_answer_wait_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fail_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            raise AssertionError("SIP answer gate must not run when disabled")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fail_wait_for_participant_attribute,
+        )
+
+        detector, classifier, session = _make_sip_detector(wait_until_answered=False)
+        audio_ch = amd_detector.aio.Chan[rtc.AudioFrame]()
+        detector._audio_ch = audio_ch
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert detector._sip_answer_task is None
+        assert classifier.listening is True
+        assert classifier._detection_timeout_timer is not None
+        assert classifier._no_speech_timer is not None
+
+        early_frame = rtc.AudioFrame(bytes(2), 48000, 1, 1)
+        detector._on_transcript("voicemail greeting")
+        detector.push_audio(early_frame)
+        assert classifier._transcript == "voicemail greeting"
+        assert audio_ch.recv_nowait() is early_frame
+
+        audio_ch.close()
+        await classifier.close()
+
+    async def test_close_cancels_pending_sip_answer_wait(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer_wait_started = asyncio.Event()
+        answer_wait_cancelled = asyncio.Event()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            answer_wait_started.set()
+            try:
+                await asyncio.Future[None]()
+            except asyncio.CancelledError:
+                answer_wait_cancelled.set()
+                raise
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        detector, classifier, session = _make_sip_detector()
+        classifier.on("amd_prediction", detector._on_amd_prediction)
+        session._amd = detector
+        detector._setup_task = asyncio.create_task(
+            detector._setup(session),  # type: ignore[arg-type]
+            name="amd_setup_test",
+        )
+
+        await answer_wait_started.wait()
+        answer_task = detector._sip_answer_task
+        assert answer_task is not None
+
+        await detector.aclose()
+
+        assert answer_wait_cancelled.is_set()
+        assert answer_task.cancelled()
+        assert detector._sip_answer_task is None
+        assert detector._setup_task is None
+        assert detector._classifier is None
+        assert classifier.closed
+        assert session._amd is None
 
     async def test_setup_settles_when_participant_disconnects_before_track(
         self, monkeypatch: pytest.MonkeyPatch
