@@ -34,6 +34,18 @@ async def test_temperature_omitted_for_opus_4_7(caplog: pytest.LogCaptureFixture
     assert "topP" not in config
 
 
+async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixture) -> None:
+    # chat() runs once per turn; the warning must not repeat every turn.
+    with caplog.at_level("WARNING"):
+        instance = BedrockLLM(model="us.anthropic.claude-opus-4-8", temperature=0.5)
+        for _ in range(3):
+            stream = instance.chat(chat_ctx=ChatContext())
+            await stream.aclose()
+
+    warnings = [r for r in caplog.records if "does not support" in r.message]
+    assert len(warnings) == 1
+
+
 async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
     for model in (
         "anthropic.claude-opus-4-8",

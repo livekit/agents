@@ -112,6 +112,7 @@ class LLM(llm.LLM):
         """  # noqa: E501
         super().__init__()
 
+        self._sampling_params_warned = False
         self._session = _resolve_session(session)
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
@@ -216,11 +217,15 @@ class LLM(llm.LLM):
         if _model_rejects_sampling_params(self._opts.model):
             temperature = temperature if is_given(temperature) else self._opts.temperature
             if is_given(temperature) or is_given(self._opts.top_p):
-                logger.warning(
-                    "aws bedrock llm: model %s does not support 'temperature'/'top_p'; "
-                    "ignoring them to avoid a ValidationException",
-                    self._opts.model,
-                )
+                # chat() runs once per turn: warn only the first time to avoid
+                # flooding the logs over a long conversation.
+                if not self._sampling_params_warned:
+                    logger.warning(
+                        "aws bedrock llm: model %s does not support 'temperature'/'top_p'; "
+                        "ignoring them to avoid a ValidationException",
+                        self._opts.model,
+                    )
+                    self._sampling_params_warned = True
         else:
             temperature = temperature if is_given(temperature) else self._opts.temperature
             if is_given(temperature):
