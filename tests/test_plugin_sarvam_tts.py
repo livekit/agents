@@ -58,9 +58,9 @@ def test_update_options_validates_pace_per_model() -> None:
 def test_update_options_revalidates_retained_pace_on_model_change() -> None:
     # A pace valid for v2 must be rejected when switching to v3, otherwise the
     # next request fails with a 400 from the API.
-    instance = _tts(model="bulbul:v2", speaker="shubh", pace=2.5)
+    instance = _tts(model="bulbul:v2", pace=2.5)
     with pytest.raises(ValueError, match="Pace 2.5 is invalid for bulbul:v3"):
-        instance.update_options(model="bulbul:v3")
+        instance.update_options(model="bulbul:v3", speaker="shubh")
 
 
 def test_stream_rejects_rest_only_sample_rates() -> None:
