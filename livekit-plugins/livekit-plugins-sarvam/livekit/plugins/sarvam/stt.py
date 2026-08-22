@@ -269,6 +269,20 @@ def _model_supports_vad_params(model: str) -> bool:
     return False
 
 
+def _model_supports_timestamps(model: str) -> bool:
+    """Check whether the model's REST endpoint can return word timestamps.
+
+    Sarvam's ``with_timestamps`` request field (and the resulting ``timestamps``
+    response block) is only honored on the plain ``/speech-to-text`` endpoint,
+    not on the legacy ``/speech-to-text-translate`` endpoint used by
+    translate-mode models (e.g. saaras:v2.5).
+    """
+    model_config = _get_model_config(model)
+    if model_config:
+        return not model_config.use_translate_endpoint
+    return True  # unknown model — same fallback as _get_urls_for_model
+
+
 class ConnectionState(enum.Enum):
     """WebSocket connection states."""
 
@@ -665,6 +679,8 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        if _model_supports_timestamps(opts_model):
+            form_data.add_field("with_timestamps", "true")
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
