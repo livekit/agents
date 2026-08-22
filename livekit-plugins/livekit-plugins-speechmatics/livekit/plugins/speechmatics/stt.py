@@ -289,6 +289,25 @@ class STT(stt.STT):
             )
             turn_detection_mode = TurnDetectionMode.EXTERNAL
 
+        # An enabled client-side VAD config must not be combined with an
+        # external VAD: in EXTERNAL mode the external VAD (or manual
+        # finalize()) drives turn boundaries while the client-side VAD would
+        # also endpoint the same audio, producing premature or duplicate
+        # boundaries. Validate before the Silero auto-load below so callers get
+        # this configuration error instead of an unrelated Silero ImportError.
+        resolved_vad_config = vad_config if is_given(vad_config) else None
+        if (
+            resolved_vad_config is not None
+            and resolved_vad_config.enabled
+            and turn_detection_mode == TurnDetectionMode.EXTERNAL
+        ):
+            raise ValueError(
+                "vad_config with enabled=True cannot be combined with "
+                "turn_detection_mode=EXTERNAL: the external VAD (or manual finalize()) "
+                "already controls turn boundaries. Use the built-in endpointing modes "
+                "(ADAPTIVE or SMART_TURN) with vad_config instead."
+            )
+
         # In EXTERNAL mode the STT does not endpoint on its own. Auto-load Silero
         # so finalize() is wired up, unless the caller explicitly passed `vad=None`
         # to opt out (they'll drive finalize() themselves).
@@ -305,24 +324,6 @@ class STT(stt.STT):
 
         # Normalize NOT_GIVEN -> None for downstream storage.
         self._vad = vad if is_given(vad) else None
-
-        # An enabled client-side VAD config must not be combined with an
-        # external VAD: in EXTERNAL mode the external VAD (or manual
-        # finalize()) drives turn boundaries while the client-side VAD would
-        # also endpoint the same audio, producing premature or duplicate
-        # boundaries.
-        resolved_vad_config = vad_config if is_given(vad_config) else None
-        if (
-            resolved_vad_config is not None
-            and resolved_vad_config.enabled
-            and turn_detection_mode == TurnDetectionMode.EXTERNAL
-        ):
-            raise ValueError(
-                "vad_config with enabled=True cannot be combined with "
-                "turn_detection_mode=EXTERNAL: the external VAD (or manual finalize()) "
-                "already controls turn boundaries. Use the built-in endpointing modes "
-                "(ADAPTIVE or SMART_TURN) with vad_config instead."
-            )
 
         # Set default values for optional parameters
         super().__init__(
