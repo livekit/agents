@@ -71,11 +71,14 @@ class ModifyBookingTask(AgentTask[RoomBooking]):
         # and to produce a faithful summary of what changed.
         self._changed: set[str] = set()
         # The model is asked to read the booking back - so the booking's actual
-        # facts must be IN its context, or it will invent dates and amounts.
+        # facts must be IN its context, or it will invent dates and amounts. The
+        # room's view is part of those facts: without it, a booking that was just
+        # moved for its view reads back as if the move never happened.
         extras = ", ".join(existing.extras) if existing.extras else "none"
+        view = db.room_view(existing.room_id)
         booking_facts = (
             f"\nThe loaded booking: {existing.first_name} {existing.last_name}, "
-            f"{existing.room_type.replace('_', ' ')}, "
+            f"{view}-view {existing.room_type.replace('_', ' ')}, "
             f"check-in {existing.check_in.strftime('%A, %B %-d')}, "
             f"check-out {existing.check_out.strftime('%A, %B %-d')}, "
             f"{existing.guests} guest{'s' if existing.guests != 1 else ''}, "

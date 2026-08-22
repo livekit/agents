@@ -14,14 +14,69 @@ from hotel_db import (
     FollowupKind,
     NotFound,
     Unavailable,
+    speak_room,
     speak_time,
     speak_usd,
 )
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from livekit.agents import RunContext, ToolError, function_tool
 
 logger = logging.getLogger("hotel-receptionist")
+
+
+def _departure_margin_note(*, pickup: time, departure: time) -> str:
+    """The pickup-vs-departure sanity check, computed instead of remembered.
+
+    The prose instruction to "sanity-check the pickup time against the flight"
+    was routinely skipped; with the departure time on file the tool hands the
+    agent the actual margin to say back.
+    """
+    minutes = (departure.hour * 60 + departure.minute) - (pickup.hour * 60 + pickup.minute)
+    spoken_dep = speak_time(departure)
+    if minutes <= 0:
+        return (
+            f"the pickup is not before the {spoken_dep} departure - re-check the "
+            "times with the guest before confirming anything."
+        )
+    halves = round(minutes / 30)
+    whole, half = divmod(halves, 2)
+    if whole == 0:
+        margin = "about half an hour"
+    elif half:
+        margin = f"about {whole} and a half hours"
+    else:
+        margin = f"about {whole} hour{'s' if whole != 1 else ''}"
+    if minutes < 120:
+        return (
+            f"that's only {margin} before the {spoken_dep} departure - TIGHT for an "
+            "airport run; flag it to the guest (about 3 hours ahead is right for "
+            "international)."
+        )
+    return (
+        f"that's {margin} before the {spoken_dep} departure - say this margin back "
+        "to the guest (about 3 hours ahead is right for international)."
+    )
+
+
+class NumberedRoom(BaseModel):
+    """A numbered room or suite, as the caller says it: "room 304" / "suite 401" -> 304 / 401."""
+
+    type: Literal["room"] = "room"
+    number: int
+
+
+class PenthouseSuite(BaseModel):
+    """The hotel's penthouse suite - the one room with no number."""
+
+    type: Literal["penthouse"] = "penthouse"
+
+
+Room = Annotated[NumberedRoom | PenthouseSuite, Field(discriminator="type")]
+
+
+def room_to_id(room: NumberedRoom | PenthouseSuite) -> str:
+    return "RM_PH" if room.type == "penthouse" else f"RM_{room.number}"
 
 
 class ServicesToolsMixin:
@@ -105,7 +160,7 @@ class ServicesToolsMixin:
     async def schedule_wakeup_call(
         self,
         ctx: RunContext[Userdata],
-        room: str,
+        room: Room,
         guest_name: str,
         call_date: date,
         call_time: time,
@@ -113,23 +168,25 @@ class ServicesToolsMixin:
         """Schedule a wake-up call to a guest's room. This actually sets the call - never log a wake-up request as a followup note instead. Collect the room, the name, and the exact date and time from the caller, read them back, and call this once they've agreed. No booking verification needed.
 
         Args:
-            room: The room number as the caller gave it (e.g. "304").
+            room: The guest's room, as the caller gave it.
             guest_name: The guest's name.
             call_date: The date of the wake-up call in ISO YYYY-MM-DD format ("tomorrow morning" = tomorrow's date).
             call_time: The wake-up time in 24-hour HH:MM format (4:45 a.m. = "04:45").
         """
+        room_id = room_to_id(room)
+        spoken = speak_room(room_id)
         try:
             code = await ctx.userdata.db.schedule_wakeup_call(
-                room=room, guest_name=guest_name, call_date=call_date, call_time=call_time
+                room=room_id, guest_name=guest_name, call_date=call_date, call_time=call_time
             )
         except NotFound:
             raise ToolError(
-                f"no room {room} exists - re-confirm the room number with the caller"
+                f"{spoken} doesn't exist here - re-confirm the room with the caller"
             ) from None
         except Unavailable as e:
             raise ToolError(f"can't schedule that: {e} - re-confirm the date") from None
         return (
-            f"wake-up call set for room {room}, {call_date.strftime('%A, %B %-d')} at "
+            f"wake-up call set for {spoken}, {call_date.strftime('%A, %B %-d')} at "
             f"{speak_time(call_time)}; reference {_speak_code(code)} | confirm it's set. If the "
             "caller worries about sleeping through: a second call comes about five minutes later "
             "if there's no answer, and no response to that sends staff up for an in-person room "
@@ -140,7 +197,7 @@ class ServicesToolsMixin:
     async def dispatch_emergency(
         self,
         ctx: RunContext[Userdata],
-        room: str,
+        room: Room,
         kind: Literal["medical", "fire", "security"],
         situation: str,
     ) -> str:
@@ -151,20 +208,22 @@ class ServicesToolsMixin:
         NOT for nuisances - a noisy neighbour with nobody in danger is record_followup (kind="other"), not this.
 
         Args:
-            room: The room number (e.g. "206"). Get this first if you don't have it.
+            room: The guest's room. Get this first if you don't have it.
             kind: medical, fire, or security - classify what's happening.
             situation: One short sentence: what's happening to whom.
         """
+        room_id = room_to_id(room)
+        spoken = speak_room(room_id)
         try:
             code = await ctx.userdata.db.dispatch_emergency(
-                room=room, kind=kind, situation=situation
+                room=room_id, kind=kind, situation=situation
             )
         except NotFound:
             raise ToolError(
-                f"no room {room} exists - re-confirm the room number, calmly, right now"
+                f"{spoken} doesn't exist here - re-confirm the room, calmly, right now"
             ) from None
         head = (
-            f"DISPATCHED (ref {code}): duty manager alerted, staff heading to room {room} now | "
+            f"DISPATCHED (ref {code}): duty manager alerted, staff heading to {spoken} now | "
             "tell the caller, short and calm, that our people are on their way up right now"
         )
         if kind == "medical":
@@ -311,37 +370,68 @@ class ServicesToolsMixin:
         ctx: RunContext[Userdata],
         arrangement: Literal["bouquet", "roses", "centerpiece"],
         on_date: date,
-        deliver_to: str,
         card_message: str,
         guest_name: str,
         guest_phone: str,
+        room: Room | None = None,
+        recipient: str | None = None,
+        delivery_instruction: str = "",
     ) -> str:
-        """Order a flower arrangement from the hotel florist for delivery to a room or recipient. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes (room number or recipient name), and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference.
+        """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instruction here, or via amend_florist_order after placing - never in a followup.
 
         Args:
             arrangement: The arrangement the caller picked.
             on_date: Delivery date in ISO YYYY-MM-DD format.
-            deliver_to: Where it goes - the number of the room or the recipient's name. Prefer room number when available.
             card_message: The gift-card message exactly as the caller dictates it.
             guest_name: The caller's full name.
             guest_phone: The caller's phone number, in case the florist needs to reach them.
+            room: The destination room, ONLY if the caller named one. A numbered room or suite is {"type": "room", "number": <number>}; the penthouse suite is {"type": "penthouse"}. Omit when no room was named - never guess; if you don't know where it goes, ask.
+            recipient: The recipient's name, ONLY when no room is known yet (an arriving guest whose room isn't assigned). Leave unset when you pass room.
+            delivery_instruction: How the delivery should be handled ("before the guest arrives", "leave with the concierge") if the caller says. Empty otherwise.
         """
+        room_id = room_to_id(room) if room else None
         try:
             code, a, total = await ctx.userdata.db.order_flowers(
                 arrangement_id=arrangement,
                 guest_name=guest_name,
                 guest_phone=guest_phone,
-                deliver_to=deliver_to,
+                room_id=room_id,
+                recipient_name=recipient,
                 on_date=on_date,
                 card_message=card_message,
+                delivery_instructions=delivery_instruction,
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
+        destination = speak_room(room_id) if room_id else recipient
         return (
-            f"{a.name} ordered for delivery to {deliver_to} on "
+            f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
             f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
             "total to the caller - no further tool call is needed for this order."
+        )
+
+    @function_tool
+    async def amend_florist_order(
+        self, ctx: RunContext[Userdata], order_code: str, delivery_instruction: str
+    ) -> str:
+        """Attach or replace the delivery handling note on a florist order already placed. Use it when the caller adds a handling request after the order ("make sure it's there before she arrives") - the note belongs on the order the florist reads, not in a followup nobody routes.
+
+        Args:
+            order_code: The florist order reference from order_flowers (e.g. "FLR-...").
+            delivery_instruction: How the delivery should be handled, in one line.
+        """
+        try:
+            await ctx.userdata.db.amend_florist_order(
+                code=order_code, delivery_instructions=delivery_instruction
+            )
+        except NotFound:
+            raise ToolError(
+                f"no florist order {order_code} - re-confirm the reference with the caller"
+            ) from None
+        return (
+            f'noted on the order: "{delivery_instruction}" | confirm to the caller that the '
+            "florist has it; no further tool call is needed."
         )
 
     @function_tool
@@ -401,34 +491,40 @@ class ServicesToolsMixin:
     async def request_flight_reconfirmation(
         self,
         ctx: RunContext[Userdata],
-        room: str,
+        room: Room,
         airline: str,
         flight_number: str,
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
+        departure_time: time | None = None,
     ) -> str:
         """Log a flight-reconfirmation request for an in-house guest: the concierge calls the carrier and rings the guest's room with the result. Collect ALL the flight details first and read the booking reference back before calling - a wrong reference makes the whole request useless.
 
         Args:
-            room: The guest's room number.
+            room: The guest's room.
             airline: The carrier name (e.g. "Iberia").
             flight_number: Airline code and number as given (e.g. "IB 6174").
             flight_date: Flight date in ISO YYYY-MM-DD format. When the caller says a weekday ("Thursday"), resolve it against today and say the concrete date back ("Thursday - that's June eleventh?") BEFORE calling; a one-day slip sends the whole request to the wrong flight.
             booking_reference: The airline booking reference, letters and digits only.
             seat_check: True if the guest also wants their seat assignment checked - it's handled in the same carrier call.
+            departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
         """
+        room_id = room_to_id(room)
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
-                room=room,
+                room=room_id,
                 airline=airline,
                 flight_number=flight_number,
                 flight_date=flight_date,
                 booking_reference=booking_reference,
                 seat_check=seat_check,
+                departure_time=departure_time,
             )
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(
+                f"{speak_room(room_id)} doesn't exist here - re-confirm the room"
+            ) from None
         return (
             f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
             "concierge will call the carrier and ring their room with the result within the hour"
@@ -440,7 +536,7 @@ class ServicesToolsMixin:
     async def book_airport_car(
         self,
         ctx: RunContext[Userdata],
-        room: str,
+        room: Room,
         pickup_date: date,
         pickup_time: time,
         passengers: Annotated[int, Field(ge=1, le=4)],
@@ -448,27 +544,41 @@ class ServicesToolsMixin:
         """Book the hotel car to the airport for an in-house guest: flat eighty-five dollars to SFO, seats up to four with luggage, charged to the room. (Taxis are hailed at the door, metered roughly fifty-five to seventy dollars, and can't be reserved ahead - cost comparison in lookup_policy topic "location_and_transport".) Sanity-check the pickup time against the flight when you know it - about three hours before departure is right for international.
 
         Args:
-            room: The guest's room number.
+            room: The guest's room.
             pickup_date: Pickup date in ISO YYYY-MM-DD format. Resolve a weekday against today and confirm the concrete date with the caller before booking.
             pickup_time: Pickup time in 24-hour HH:MM format (2:30 p.m. = "14:30").
             passengers: How many people are riding - ASK the caller; never assume one.
         """
+        room_id = room_to_id(room)
         try:
             code = await ctx.userdata.db.book_airport_car(
-                room=room,
+                room=room_id,
                 pickup_date=pickup_date,
                 pickup_time=pickup_time,
                 passengers=passengers,
             )
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(
+                f"{speak_room(room_id)} doesn't exist here - re-confirm the room"
+            ) from None
         except Unavailable as e:
             raise ToolError(f"can't book that: {e} - re-confirm the date") from None
+        # With a flight on file for this room and day, the pickup margin is computed
+        # here rather than left to the prose instruction the model routinely skips.
+        departure = await ctx.userdata.db.latest_flight_departure(
+            room=room_id, flight_date=pickup_date
+        )
+        margin_note = (
+            " " + _departure_margin_note(pickup=pickup_time, departure=departure)
+            if departure
+            else ""
+        )
         return (
             f"hotel car booked; reference {_speak_code(code)}. Pickup "
             f"{pickup_date.strftime('%A, %B %-d')} at {speak_time(pickup_time)}, front entrance, "
             f"{passengers} passenger{'s' if passengers != 1 else ''}, flat eighty-five dollars "
-            "charged to the room | confirm the time, the front-entrance pickup, the cost, and "
+            f"charged to the room -{margin_note or ' no flight on file to check the margin'}"
+            " | confirm the time, the front-entrance pickup, the cost, and "
             "the reference to the caller; no further tool call is needed for the car."
         )
 
@@ -527,18 +637,20 @@ class ServicesToolsMixin:
         )
 
     @function_tool
-    async def set_do_not_disturb(self, ctx: RunContext[Userdata], room: str) -> str:
+    async def set_do_not_disturb(self, ctx: RunContext[Userdata], room: Room) -> str:
         """Place a Do-Not-Disturb hold on an in-house guest's room when they ask not to be disturbed / to hold their calls and messages. It's a standing hold (until lifted), not a one-off like a single message or a wake-up call. Take the room number. Always tell the guest that a genuine emergency or hotel safety matter still overrides DND.
 
         Args:
-            room: The guest's room number.
+            room: The guest's room.
         """
+        room_id = room_to_id(room)
+        spoken = speak_room(room_id)
         try:
-            code = await ctx.userdata.db.set_do_not_disturb(room=room)
+            code = await ctx.userdata.db.set_do_not_disturb(room=room_id)
         except NotFound:
-            raise ToolError(f"no room {room} exists - re-confirm the room number") from None
+            raise ToolError(f"{spoken} doesn't exist here - re-confirm the room") from None
         return (
-            f"Do-Not-Disturb set on room {room}; reference {_speak_code(code)} | confirm it holds "
+            f"Do-Not-Disturb set on {spoken}; reference {_speak_code(code)} | confirm it holds "
             "their calls and messages until they ask to lift it, and that a genuine emergency "
             "still gets through."
         )

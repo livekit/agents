@@ -22,6 +22,7 @@ from hotel_db import (
     NotFound,
     RoomBooking,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from modify_booking import ModifyBookingTask
@@ -166,10 +167,12 @@ class RoomToolsMixin:
             )
             what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
-        return " | ".join(
-            f"{a.type.replace('_', ' ')}: {speak_usd(a.nightly_rate)} per night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''}"
-            for a in avail
+        # Same one-row-per-type render as set_stay: browsing feeds the same view
+        # blob into context, so a smeared type->view pair offered here survives
+        # into the booking flow.
+        return (
+            "the views on a type's line are the only views that type has:\n"
+            f"{describe_room_options(avail)}"
         )
 
     @function_tool
