@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import deque
+from collections.abc import Sequence
 
+import numpy as np
 from google.protobuf.json_format import MessageToDict
 
 from livekit import rtc
@@ -29,6 +32,53 @@ from ...types import (
 from .. import io
 from ..transcription import find_micro_track_id
 
+# extra audio kept in the fade history beyond the audio source queue size,
+# to absorb timing jitter between `queued_duration` and the frames we recorded
+_FADE_HISTORY_MARGIN: float = 0.1
+
+
+def _build_fade_out_frame(
+    history: Sequence[rtc.AudioFrame],
+    *,
+    unplayed_duration: float,
+    fade_out_duration: float,
+    sample_rate: int,
+    num_channels: int,
+) -> rtc.AudioFrame | None:
+    """Build a short faded tail to play right after an interruption.
+
+    ``history`` contains the frames already handed to the audio source (oldest first),
+    ``unplayed_duration`` is how much of it was still sitting in the source queue when
+    the interruption happened. The playback position is therefore at
+    ``end_of_history - unplayed_duration``; a linear gain ramp (1 -> 0) is applied to
+    the next ``fade_out_duration`` seconds from that position.
+    """
+    if fade_out_duration <= 0 or unplayed_duration <= 0 or not history:
+        return None
+
+    samples = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in history])
+    total_samples = len(samples) // num_channels
+    unplayed_samples = min(int(unplayed_duration * sample_rate), total_samples)
+    fade_samples = min(int(fade_out_duration * sample_rate), unplayed_samples)
+    if fade_samples <= 0:
+        return None
+
+    start = total_samples - unplayed_samples
+    segment = samples[start * num_channels : (start + fade_samples) * num_channels].astype(
+        np.float32
+    )
+    gain = np.linspace(1.0, 0.0, num=fade_samples, endpoint=False, dtype=np.float32)
+    if num_channels > 1:
+        gain = np.repeat(gain, num_channels)
+    segment *= gain
+
+    return rtc.AudioFrame(
+        data=segment.astype(np.int16).tobytes(),
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+        samples_per_channel=fade_samples,
+    )
+
 
 class _ParticipantAudioOutput(io.AudioOutput):
     def __init__(
@@ -39,6 +89,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         num_channels: int,
         track_publish_options: rtc.TrackPublishOptions,
         track_name: str = "roomio_audio",
+        fade_out_on_interruption: float = 0.0,
     ) -> None:
         super().__init__(
             label="RoomIO",
@@ -49,7 +100,19 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._room = room
         self._track_name = track_name
         self._lock = asyncio.Lock()
-        self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)
+        queue_size_ms = 200
+        self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=queue_size_ms)
+        self._source_sample_rate = sample_rate
+        self._num_channels = num_channels
+
+        self._fade_out_duration = fade_out_on_interruption
+        # rolling history of frames pushed to the audio source, used to rebuild
+        # the faded tail on interruption (see _build_fade_out_frame)
+        self._fade_history: deque[rtc.AudioFrame] = deque()
+        self._fade_history_duration: float = 0.0
+        self._fade_history_max_duration = (
+            queue_size_ms / 1000 + self._fade_out_duration + _FADE_HISTORY_MARGIN
+        )
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
         self._subscribed_fut = asyncio.Future[None]()
@@ -176,15 +239,30 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         if interrupted:
             self._interruption_generation += 1
-            queued_duration = self._audio_source.queued_duration
+            source_queued_duration = self._audio_source.queued_duration
+            queued_duration = source_queued_duration
             while not self._audio_buf.empty():
                 self._audio_buf.recv_nowait()
 
             pushed_duration = max(pushed_duration - queued_duration, 0)
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
+
+            if self._fade_out_duration > 0:
+                fade_frame = _build_fade_out_frame(
+                    self._fade_history,
+                    unplayed_duration=source_queued_duration,
+                    fade_out_duration=self._fade_out_duration,
+                    sample_rate=self._source_sample_rate,
+                    num_channels=self._num_channels,
+                )
+                if fade_frame is not None:
+                    await self._audio_source.capture_frame(fade_frame)
         else:
             wait_for_interruption.cancel()
+
+        self._fade_history.clear()
+        self._fade_history_duration = 0.0
 
         self._pushed_duration = 0
         self._source_pushed_duration = 0
@@ -201,6 +279,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 if not self._playback_enabled.is_set():
                     self._source_discarded_duration += self._audio_source.queued_duration
                     self._audio_source.clear_queue()
+                    # discarded queue is no longer in the source; drop fade history
+                    # so a later interrupt cannot rebuild a tail from stale frames
+                    self._fade_history.clear()
+                    self._fade_history_duration = 0.0
                     await self._playback_enabled.wait()
                     # drop a paused frame when its original segment was interrupted.
                     if interruption_generation != self._interruption_generation:
@@ -220,6 +302,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._first_frame_event.set()
                     self.on_playback_started(created_at=time.time())
                 self._source_pushed_duration += frame.duration
+                if self._fade_out_duration > 0:
+                    self._fade_history.append(frame)
+                    self._fade_history_duration += frame.duration
+                    while (
+                        self._fade_history
+                        and self._fade_history_duration - self._fade_history[0].duration
+                        >= self._fade_history_max_duration
+                    ):
+                        self._fade_history_duration -= self._fade_history.popleft().duration
                 await self._audio_source.capture_frame(frame)
             finally:
                 self._forwarding_idle.set()
