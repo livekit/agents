@@ -33,6 +33,7 @@ from ..utils import aio, is_given
 from ..vad import VADStream
 from . import io
 from ._utils import _set_participant_attributes
+from .backchannel import is_backchannel_only
 from .endpointing import BaseEndpointing
 from .events import (
     EotPredictionEvent,
@@ -139,7 +140,13 @@ class RecognitionHooks(Protocol):
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
-    def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
+    def on_final_transcript(
+        self,
+        ev: stt.SpeechEvent,
+        *,
+        speaking: bool | None = None,
+        backchannel_discarded: bool = False,
+    ) -> None: ...
     def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
@@ -299,6 +306,10 @@ class AudioRecognition:
         # Tracks active audio playout, independently of the generation lifecycle.
         self._agent_speaking: bool = False
         self._agent_speech_started_at: float | None = None
+        # utterance-scoped: sampled at each speech onset for the phrase-based
+        # backchannel filter; sticky past end-of-speech because the final
+        # transcript usually lands after it (see _should_drop_backchannel_final)
+        self._speech_overlapped_agent: bool = False
         # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
         self._overlap_in_current_turn: bool = False
         self._turn_backchannel_over_agent: bool = False
@@ -545,6 +556,7 @@ class AudioRecognition:
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
         )
+        self._speech_overlapped_agent = self._agent_mid_utterance
         # every speech onset clears the prior backchannel verdict; an overlap re-derives it below
         self._turn_backchannel_over_agent = False
         if not self._agent_speaking:
@@ -622,6 +634,44 @@ class AudioRecognition:
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time(), agent_ended=agent_ended)
         )
+
+    @property
+    def _agent_mid_utterance(self) -> bool:
+        # audibly speaking, or generating a reply that's about to play
+        return self._agent_speaking or self._session.agent_state == "thinking"
+
+    def _should_drop_backchannel_final(self, transcript: str) -> bool:
+        """True when a final transcript is a backchannel over the agent's
+        turn and must not be accumulated or committed.
+
+        The overlap is judged at EITHER boundary of the utterance: at its
+        onset (``_speech_overlapped_agent``, sticky because the final usually
+        lands after end-of-speech) or live at final arrival — an utterance
+        that starts right before the agent's reply launches would otherwise
+        sample "listening" at onset, then commit mid-reply and interrupt the
+        very speech it acknowledged.
+
+        Only an ENTIRELY backchannel turn is dropped: once real words have
+        accumulated for the turn, a trailing "yes"/"right" chunk is part of
+        the sentence ("Wait, is that right? ... Yes.") and deleting it would
+        change the meaning of the committed turn. (The interruption gate is
+        already consistent with this — it judges the accumulated
+        ``_current_transcript``, not the chunk.)
+        """
+        backchannel_filter = self._session.options.interruption.get("backchannel_filter")
+        if not backchannel_filter:
+            return False
+        if self._turn_detection_mode == "manual":
+            # a manual commit_user_turn is an explicit app decision and commits
+            # even with an empty transcript — dropping the final here would
+            # resolve that commit to "" and generate a reply to nothing. the
+            # min_words gates exempt manual mode for the same reason
+            return False
+        if self._audio_transcript:
+            return False
+        if not (self._speech_overlapped_agent or self._agent_mid_utterance):
+            return False
+        return is_backchannel_only(transcript, backchannel_filter)
 
     @property
     def _speaking(self) -> bool:
@@ -1251,6 +1301,28 @@ class AudioRecognition:
             if not transcript:
                 return
 
+            if self._should_drop_backchannel_final(transcript):
+                # the user acknowledged ("okay", "thank you") over the agent's
+                # turn — discard it: no interruption attempt, no user turn.
+                # the agent keeps talking
+                logger.debug(
+                    "dropping backchannel transcript overlapping agent speech",
+                    extra={"user_transcript": transcript},
+                )
+                # the final transcription event is still delivered: live
+                # captions publish under one segment id until an is_final
+                # flushes it, so swallowing the final would leave the
+                # acknowledgment as a stuck open caption that the next
+                # utterance merges into
+                self._hooks.on_final_transcript(ev, backchannel_discarded=True)
+                # also drop the utterance's partial text, mirroring the reset
+                # below — left in place it would keep feeding _current_transcript
+                # (suppressing a later real barge-in if no interim overwrites it)
+                # and would resurface in a manual commit_user_turn
+                self._audio_interim_transcript = ""
+                self._audio_preflight_transcript = ""
+                return
+
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
@@ -1802,6 +1874,7 @@ class AudioRecognition:
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
             self._overlap_in_current_turn = False
+            self._speech_overlapped_agent = False
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:

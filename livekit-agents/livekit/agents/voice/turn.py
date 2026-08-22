@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -185,6 +186,30 @@ class InterruptionOptions(TypedDict, total=False):
     different values for start and end separately. ``None`` disables. Defaults
     to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
     inaccuracy."""
+    backchannel_filter: Sequence[str] | Callable[[str], bool] | None
+    """Classifies overlapping speech as a pure acknowledgment ("okay",
+    "thank you", "uh-huh") by its transcript. While the agent is
+    mid-utterance (speaking, or generating a reply), an overlapping
+    utterance classified as backchannel-only does not interrupt the agent
+    and does not commit a user turn — the agent keeps talking and the
+    acknowledgment is discarded (its final transcription event is still
+    emitted so live captions close the segment). Utterances spoken while
+    the agent is idle and listening are never filtered.
+
+    Either a phrase list — the utterance must consist solely of the given
+    phrases and filler sounds ("uh", "um"); see
+    ``examples/voice_agents/backchannel_filter.py`` for a starter list and
+    its caveats — or a callback receiving the transcribed text and
+    returning ``True`` when it is backchannel-only, for full control over
+    the classification (custom languages, model-based detection). The
+    callback is invoked with live interim transcripts on the interruption
+    path and with the final transcript at turn commit, only for speech
+    overlapping the agent's turn.
+
+    Requires an STT transcript (complements the adaptive detector's
+    acoustic backchannel classification, which needs no transcript but only
+    runs with a VAD and an interruption detection model). ``None``
+    disables. Defaults to ``None``."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
@@ -195,6 +220,7 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
     "backchannel_boundary": (1.0, 1.0),
+    "backchannel_filter": None,
 }
 
 
