@@ -1229,6 +1229,86 @@ class TestAsyncToolOptions:
         ts._attach_activity(activity=activity, session=session)
         assert ts._executor._tool_options["update_template"] == "session"
 
+    def test_toolset_before_execute_override_wins(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.voice.tool_executor import _resolve_async_tool_options
+
+        async def session_hook(_ctx, _tool, _arguments):
+            pass
+
+        async def agent_hook(_ctx, _tool, _arguments):
+            pass
+
+        async def toolset_hook(_ctx, _tool, _arguments):
+            pass
+
+        class _Session:
+            _async_tool_options = _resolve_async_tool_options({"update_template": "session"})
+            _before_execute = staticmethod(session_hook)
+
+        class _Agent:
+            _async_tool_options = {"update_template": "agent"}
+            _before_execute = staticmethod(agent_hook)
+
+        class _Activity:
+            _agent = _Agent()
+
+        ts = AsyncToolset(
+            id="t",
+            tools=[mock_tool_1],
+            tool_handling={"before_execute": toolset_hook},
+        )
+        ts._attach_activity(activity=_Activity(), session=_Session())
+        assert ts._executor._before_execute is toolset_hook
+
+    def test_toolset_inherits_agent_before_execute(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.voice.tool_executor import _resolve_async_tool_options
+
+        async def session_hook(_ctx, _tool, _arguments):
+            pass
+
+        async def agent_hook(_ctx, _tool, _arguments):
+            pass
+
+        class _Session:
+            _async_tool_options = _resolve_async_tool_options({"update_template": "session"})
+            _before_execute = staticmethod(session_hook)
+
+        class _Agent:
+            _async_tool_options = {"update_template": "agent"}
+            _before_execute = staticmethod(agent_hook)
+
+        class _Activity:
+            _agent = _Agent()
+
+        ts = AsyncToolset(id="t", tools=[mock_tool_1])
+        ts._attach_activity(activity=_Activity(), session=_Session())
+        assert ts._executor._before_execute is agent_hook
+
+    def test_toolset_inherits_session_before_execute(self):
+        from livekit.agents.llm.async_toolset import AsyncToolset
+        from livekit.agents.types import NOT_GIVEN
+        from livekit.agents.voice.tool_executor import _resolve_async_tool_options
+
+        async def session_hook(_ctx, _tool, _arguments):
+            pass
+
+        class _Session:
+            _async_tool_options = _resolve_async_tool_options({"update_template": "session"})
+            _before_execute = staticmethod(session_hook)
+
+        class _Agent:
+            _async_tool_options = {"update_template": "agent"}
+            _before_execute = NOT_GIVEN
+
+        class _Activity:
+            _agent = _Agent()
+
+        ts = AsyncToolset(id="t", tools=[mock_tool_1])
+        ts._attach_activity(activity=_Activity(), session=_Session())
+        assert ts._executor._before_execute is session_hook
+
     def test_session_scoped_toolset_skips_agent(self):
         # _attach_activity(activity=None) marks the toolset as session-scoped;
         # agent options are ignored even if present.
@@ -1283,6 +1363,15 @@ class TestAsyncToolOptions:
         # other keys fall back to defaults, not to anything else
         assert "{function_name}" in session._async_tool_options["duplicate_reject_template"]
 
+    def test_session_stores_before_execute_hook(self):
+        from livekit.agents.voice.agent_session import AgentSession
+
+        async def hook(_ctx, _tool, _arguments):
+            pass
+
+        session = AgentSession(tool_handling={"before_execute": hook})
+        assert session._before_execute is hook
+
     def test_agent_stores_raw_options(self):
         from livekit.agents.utils.misc import is_given
         from livekit.agents.voice.agent import Agent
@@ -1293,6 +1382,17 @@ class TestAsyncToolOptions:
         )
         assert is_given(agent._async_tool_options)
         assert agent._async_tool_options["update_template"] == "from-agent"
+
+    def test_agent_stores_before_execute_hook(self):
+        from livekit.agents.utils.misc import is_given
+        from livekit.agents.voice.agent import Agent
+
+        async def hook(_ctx, _tool, _arguments):
+            pass
+
+        agent = Agent(instructions="x", tool_handling={"before_execute": hook})
+        assert is_given(agent._before_execute)
+        assert agent._before_execute is hook
 
 
 # --- helpers for executor / RunContext tests ----------------------------------
@@ -1946,6 +2046,59 @@ class TestToolExecutorLifecycle:
         await _asyncio.sleep(0)  # let _on_done fire
         assert run_ctx._executor is None
         assert run_ctx._first_update_fut is None
+
+    @pytest.mark.asyncio
+    async def test_before_execute_hook_observes_call_without_mutating_arguments(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        seen: dict[str, Any] = {}
+        body_calls: list[str] = []
+
+        @function_tool
+        async def gated(value: str) -> str:
+            """Return the value."""
+            body_calls.append(value)
+            return value
+
+        async def before_execute(ctx, tool, arguments):
+            seen.update(ctx=ctx, tool=tool, arguments=arguments)
+            arguments["value"] = "changed by policy"
+
+        executor = _ToolExecutor(before_execute=before_execute)
+        run_ctx = _make_run_context(call_id="policy-allow", name="gated")
+        result = await executor.execute(
+            tool=gated,
+            run_ctx=run_ctx,
+            raw_arguments={"value": "allowed"},
+        )
+
+        assert result == "allowed"
+        assert seen == {"ctx": run_ctx, "tool": gated, "arguments": {"value": "changed by policy"}}
+        assert body_calls == ["allowed"]
+
+    @pytest.mark.asyncio
+    async def test_before_execute_tool_error_blocks_body(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        body_calls = 0
+
+        @function_tool
+        async def gated() -> str:
+            """Should not run when policy blocks it."""
+            nonlocal body_calls
+            body_calls += 1
+            return "unexpected"
+
+        async def before_execute(_ctx, _tool, _arguments):
+            raise ToolError("blocked by policy")
+
+        executor = _ToolExecutor(before_execute=before_execute)
+        run_ctx = _make_run_context(call_id="policy-block", name="gated")
+        with pytest.raises(ToolError, match="blocked by policy"):
+            await executor.execute(tool=gated, run_ctx=run_ctx, raw_arguments={})
+
+        await _drain_executor(executor)
+        assert body_calls == 0
 
 
 class TestAgentSessionWaitForIdle:

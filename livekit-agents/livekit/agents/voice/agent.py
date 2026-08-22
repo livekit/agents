@@ -110,7 +110,10 @@ class Agent:
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
         self._turn_handling = turn_handling
         # stored unresolved so the resolution chain can tell "set on agent" from "fall
-        # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
+        # back to session"; absent tool-handling keys mean NOT_GIVEN
+        self._before_execute = (
+            tool_handling.get("before_execute", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
+        )
         self._async_tool_options = (
             tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
         )

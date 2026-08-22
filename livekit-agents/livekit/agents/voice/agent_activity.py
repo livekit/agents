@@ -260,8 +260,15 @@ class AgentActivity(RecognitionHooks):
             activity_options = _resolve_async_tool_options(self._agent._async_tool_options)
         else:
             activity_options = self._session._async_tool_options
+        before_execute = (
+            self._agent._before_execute
+            if is_given(self._agent._before_execute)
+            else self._session._before_execute
+        )
         self._tool_executor = _ToolExecutor(
-            owning_activity=self, async_tool_options=activity_options
+            owning_activity=self,
+            async_tool_options=activity_options,
+            before_execute=before_execute,
         )
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None

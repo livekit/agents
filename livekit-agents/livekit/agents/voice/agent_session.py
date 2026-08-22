@@ -434,7 +434,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
                 tools shared by every agent in the agent session.
             tool_handling (ToolHandlingOptions, optional): Tool handling configuration.
-                ``tool_handling["async_options"]`` holds prompt templates for ``ctx.update()`` /
+                ``tool_handling["before_execute"]`` can asynchronously allow or reject
+                a resolved function call immediately before its body runs; raise
+                ``ToolError`` from the hook to reject it. ``tool_handling["async_options"]``
+                holds prompt templates for ``ctx.update()`` /
                 duplicate-handling / coalesced replies. Unspecified keys keep their defaults;
                 can be overridden per-``Agent`` or per-``AsyncToolset``.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
@@ -630,6 +633,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        self._before_execute = (
+            tool_handling.get("before_execute") if is_given(tool_handling) else None
+        )
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
