@@ -1,4 +1,4 @@
-"""Unit tests for the AWS Bedrock LLM plugin."""
+"""Hermetic unit tests for the AWS Bedrock LLM plugin (no AWS access needed)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 from livekit.agents.llm import ChatContext
 from livekit.plugins.aws import LLM as BedrockLLM
 
-pytestmark = pytest.mark.plugin("aws")
+pytestmark = pytest.mark.unit
 
 
 async def _inference_config(model: str, **kwargs: object) -> dict:
@@ -44,6 +44,33 @@ async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixt
 
     warnings = [r for r in caplog.records if "does not support" in r.message]
     assert len(warnings) == 1
+    # the model ID may contain customer data (inference-profile ARNs) and must
+    # stay out of the message body
+    assert "claude-opus-4-8" not in warnings[0].getMessage()
+    assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-4-8"
+
+
+async def test_explicit_override_for_opaque_inference_profiles() -> None:
+    # An application inference-profile ARN can hide the underlying model name,
+    # so auto-detection can't cover it and sampling params are sent by default;
+    # supports_sampling_params=False forces them to be dropped.
+    arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-agent-llm"
+    config = await _inference_config(arn, temperature=0.5, top_p=0.9)
+    assert config["temperature"] == 0.5
+
+    config = await _inference_config(
+        arn, temperature=0.5, top_p=0.9, supports_sampling_params=False
+    )
+    assert "temperature" not in config
+    assert "topP" not in config
+
+    # an explicit True keeps them even for known-rejecting models
+    config = await _inference_config(
+        "us.anthropic.claude-opus-4-7",
+        temperature=0.5,
+        supports_sampling_params=True,
+    )
+    assert config["temperature"] == 0.5
 
 
 async def test_temperature_omitted_for_region_prefix_and_arn() -> None:

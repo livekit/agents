@@ -82,6 +82,7 @@ class LLM(llm.LLM):
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         cache_system: bool = False,
         cache_tools: bool = False,
+        supports_sampling_params: NotGivenOr[bool] = NOT_GIVEN,
         session: AioSession | aioboto3.Session | None = None,
     ) -> None:
         """
@@ -107,6 +108,11 @@ class LLM(llm.LLM):
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
             cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
+            supports_sampling_params (bool, optional): Explicit override for whether the model accepts
+                'temperature'/'top_p'. By default the plugin detects known-rejecting models from the
+                model ID, which cannot cover application inference-profile ARNs that hide the
+                underlying model name — set False for those profiles to have sampling parameters
+                dropped instead of triggering a ValidationException. Defaults to NOT_GIVEN (auto-detect).
             session (AioSession, optional): Optional aiobotocore session to use. Passing a legacy
                 aioboto3.Session is deprecated but still accepted.
         """  # noqa: E501
@@ -136,6 +142,11 @@ class LLM(llm.LLM):
             additional_request_fields=additional_request_fields,
             cache_system=cache_system,
             cache_tools=cache_tools,
+        )
+        self._supports_sampling_params = (
+            supports_sampling_params
+            if is_given(supports_sampling_params)
+            else not _model_rejects_sampling_params(bedrock_model)
         )
 
     @property
@@ -214,20 +225,22 @@ class LLM(llm.LLM):
         inference_config: dict[str, Any] = {}
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
-        if _model_rejects_sampling_params(self._opts.model):
-            temperature = temperature if is_given(temperature) else self._opts.temperature
+        temperature = temperature if is_given(temperature) else self._opts.temperature
+        if not self._supports_sampling_params:
             if is_given(temperature) or is_given(self._opts.top_p):
                 # chat() runs once per turn: warn only the first time to avoid
-                # flooding the logs over a long conversation.
+                # flooding the logs over a long conversation. The model ID can
+                # contain customer data (e.g. an application inference-profile
+                # ARN), so it goes into a structured attribute, not the message.
                 if not self._sampling_params_warned:
                     logger.warning(
-                        "aws bedrock llm: model %s does not support 'temperature'/'top_p'; "
-                        "ignoring them to avoid a ValidationException",
-                        self._opts.model,
+                        "aws bedrock llm: this model does not support "
+                        "'temperature'/'top_p'; ignoring them to avoid a "
+                        "ValidationException",
+                        extra={"lk.pii.model": self._opts.model},
                     )
                     self._sampling_params_warned = True
         else:
-            temperature = temperature if is_given(temperature) else self._opts.temperature
             if is_given(temperature):
                 inference_config["temperature"] = temperature
             if is_given(self._opts.top_p):
