@@ -15,9 +15,8 @@
 from typing import Literal
 
 SarvamLLMModels = Literal[
-    "sarvam-m",
-    "sarvam-30b",
-    "sarvam-30b-16k",  # deprecated, kept for backward compatibility
+    "gemma4",
     "sarvam-105b",
-    "sarvam-105b-32k",  # deprecated, kept for backward compatibility
+    "glm5.2",
+    "sarvam-105b-conversations",
 ]
