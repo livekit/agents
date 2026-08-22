@@ -9,7 +9,17 @@ TTSModels = Literal[
     "eleven_flash_v2_5",
     "eleven_flash_v2",
     "eleven_v3",
+    "eleven_v3_conversational",
 ]
+
+# Synthesized via text-to-dialogue instead of text-to-speech (see tts.py).
+DIALOGUE_TTS_MODEL_PREFIX = "eleven_v3"
+
+
+def is_dialogue_model(model: str) -> bool:
+    """Whether `model` must be synthesized via the text-to-dialogue API."""
+    return model.startswith(DIALOGUE_TTS_MODEL_PREFIX)
+
 
 # https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
 TTSEncoding = Literal[
