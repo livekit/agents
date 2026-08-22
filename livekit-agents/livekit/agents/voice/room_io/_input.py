@@ -41,14 +41,17 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._data_ch = aio.Chan[T]()
         self._publication: rtc.RemoteTrackPublication | None = None
+        self._track: rtc.RemoteTrack | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
         self._attached = True
+        self._closed = False
 
         self._forward_atask: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
+        self._room.on("track_unsubscribed", self._on_track_unsubscribed)
         self._room.on("track_unpublished", self._on_track_unavailable)
 
         self._processor = processor
@@ -118,10 +121,16 @@ class _ParticipantInputStream(Generic[T], ABC):
                 self._on_track_available(publication.track, publication, participant)
 
     async def aclose(self) -> None:
-        if self._stream:
-            await self._stream.aclose()
-            self._stream = None
+        if self._closed:
+            return
+        self._closed = True
+
+        stream = self._stream
+        self._stream = None
+        self._track = None
         self._publication = None
+        if stream:
+            await stream.aclose()
         if self._processor:
             self._processor._close()
             self._processor = None
@@ -129,6 +138,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             await aio.cancel_and_wait(self._forward_atask)
 
         self._room.off("track_subscribed", self._on_track_available)
+        self._room.off("track_unsubscribed", self._on_track_unsubscribed)
         self._room.off("track_unpublished", self._on_track_unavailable)
         self._data_ch.close()
 
@@ -137,6 +147,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self,
         old_task: asyncio.Task[None] | None,
         stream: rtc.VideoStream | rtc.AudioStream,
+        track: rtc.RemoteTrack,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
@@ -178,12 +189,14 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._processor_owned = processor is not None
 
     def _close_stream(self) -> None:
-        if self._stream is not None:
-            task = asyncio.create_task(self._stream.aclose())
+        stream = self._stream
+        self._stream = None
+        self._track = None
+        self._publication = None
+        if stream is not None:
+            task = asyncio.create_task(stream.aclose())
             task.add_done_callback(self._tasks.discard)
             self._tasks.add(task)
-            self._stream = None
-            self._publication = None
         self._update_processor(None)
 
     def _on_track_available(
@@ -193,19 +206,48 @@ class _ParticipantInputStream(Generic[T], ABC):
         participant: rtc.RemoteParticipant,
     ) -> bool:
         if (
-            self._participant_identity != participant.identity
+            self._closed
+            or self._participant_identity != participant.identity
             or publication.source not in self._accepted_sources
-            or (self._publication and self._publication.sid == publication.sid)
+            or (
+                self._publication is not None
+                and self._publication.sid == publication.sid
+                and self._track is track
+            )
         ):
             return False
 
         self._close_stream()
         self._stream = self._create_stream(track, participant)
+        self._track = track
         self._publication = publication
         self._forward_atask = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, publication, participant)
+            self._forward_task(self._forward_atask, self._stream, track, publication, participant)
         )
         return True
+
+    def _on_track_unsubscribed(
+        self,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        if (
+            self._track is not track
+            or not self._publication
+            or self._publication.sid != publication.sid
+            or participant.identity != self._participant_identity
+        ):
+            return
+
+        self._close_stream()
+
+        # subscribe to the first available track
+        for candidate in participant.track_publications.values():
+            if candidate.sid == publication.sid or candidate.track is None:
+                continue
+            if self._on_track_available(candidate.track, candidate, participant):
+                return
 
     def _on_track_unavailable(
         self, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant
@@ -259,6 +301,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
         self._pre_connect_audio_handler = pre_connect_audio_handler
+        self._pre_connect_audio_publications: set[tuple[str, str]] = set()
         self._apm: rtc.AudioProcessingModule | None = None
         if auto_gain_control:
             self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
@@ -292,24 +335,29 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self,
         old_task: asyncio.Task[None] | None,
         stream: rtc.AudioStream,  # type: ignore[override]
+        track: rtc.RemoteTrack,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
         if old_task:
             await aio.cancel_and_wait(old_task)
 
+        pre_connect_key = (participant.identity, publication.sid)
         if (
             self._pre_connect_audio_handler
-            and publication.track
             and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
+            and pre_connect_key not in self._pre_connect_audio_publications
         ):
+            self._pre_connect_audio_publications.add(pre_connect_key)
             logging_extra = {
-                "track_id": publication.track.sid,
+                "track_id": track.sid,
                 "participant": participant.identity,
             }
             try:
                 duration: float = 0
-                frames = await self._pre_connect_audio_handler.wait_for_data(publication.track.sid)
+                frames = await self._pre_connect_audio_handler.wait_for_data(
+                    logging_extra["track_id"]
+                )
                 for frame in self._resample_frames(self._apply_audio_processor(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
@@ -331,9 +379,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
 
-        await super()._forward_task(old_task, stream, publication, participant)
-
-        # push a silent frame to flush the stt final result if any
+        await super()._forward_task(None, stream, track, publication, participant)
         silent_samples = int(self._sample_rate * 0.5)
         await self._data_ch.send(
             rtc.AudioFrame(
