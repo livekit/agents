@@ -21,7 +21,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.7.0", "anthropic>=0.41", "httpx"]
+# `anthropic>=0.47` is the first release whose `messages.create()` accepts the
+# `thinking` parameter (and defines the thinking/signature delta events the stream
+# parser reads). `create()` has no `**kwargs`, so an older client raises a TypeError
+# on every request instead of answering.
+dependencies = ["livekit-agents>=1.7.0", "anthropic>=0.47", "httpx"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
