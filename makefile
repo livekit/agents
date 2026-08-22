@@ -82,9 +82,9 @@ check: format-check lint type-check ## Run all checks (format, lint, type-check)
 
 fix: format lint-fix ## Run format and lint checks and fix issues automatically (format, lint)
 
-unit-tests: ## Run unit tests (modules marked with `pytestmark = pytest.mark.unit`)
+unit-tests: ## Run unit tests (modules marked `pytest.mark.unit` or `pytest.mark.audio_eot`)
 	@echo "$(BOLD)$(CYAN)Running unit tests...$(RESET)"
-	PYTHONPATH="$$PWD" uv run pytest --unit $(PYTEST_ARGS)
+	PYTHONPATH="$$PWD" uv run pytest --unit --audio_eot $(PYTEST_ARGS)
 
 # ============================================
 # Development Workflows
