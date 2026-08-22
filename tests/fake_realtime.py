@@ -36,6 +36,8 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
         "mutable_tools": True,
         "per_response_tool_choice": True,
         "supports_say": True,
+        # a different interruption model rather than a richer one, so it stays off
+        "server_barge_in": False,
     }
     defaults.update(overrides)
     return RealtimeCapabilities(**defaults)

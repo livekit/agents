@@ -31,7 +31,15 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import get_job_context
-from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
+from ..llm import (
+    LLM,
+    AgentHandoff,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    MetricsReport,
+    RealtimeModel,
+)
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
@@ -374,7 +382,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         stt_context_options: NotGivenOr[STTContextOptions] = NOT_GIVEN,
@@ -606,7 +616,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if not is_given(vad):
             vad = inference.VAD(model="silero")
         self._vad = vad or None
-        self._llm = llm or None
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: LLM | RealtimeModel | None = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else (llm or None)
+        )
         self._tts = tts or None
 
         # eagerly establish DNS/TLS to the LLM provider so the first inference
