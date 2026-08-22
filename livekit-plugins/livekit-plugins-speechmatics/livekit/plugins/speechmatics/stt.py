@@ -214,7 +214,9 @@ class STT(stt.STT):
             vad_config: Client-side voice activity configuration used by the
                 `ADAPTIVE` and `SMART_TURN` presets (e.g. `silence_duration` and
                 `threshold`). Replaces the preset's `VoiceActivityConfig` when
-                provided. Optional.
+                provided. Cannot be combined with `turn_detection_mode=EXTERNAL`
+                when enabled, since the external VAD already controls turn
+                boundaries. Optional.
 
             additional_vocab: List of additional vocabulary entries to increase the
                 weight of specific words in the transcription model. Defaults to [].
@@ -303,6 +305,24 @@ class STT(stt.STT):
 
         # Normalize NOT_GIVEN -> None for downstream storage.
         self._vad = vad if is_given(vad) else None
+
+        # An enabled client-side VAD config must not be combined with an
+        # external VAD: in EXTERNAL mode the external VAD (or manual
+        # finalize()) drives turn boundaries while the client-side VAD would
+        # also endpoint the same audio, producing premature or duplicate
+        # boundaries.
+        resolved_vad_config = vad_config if is_given(vad_config) else None
+        if (
+            resolved_vad_config is not None
+            and resolved_vad_config.enabled
+            and turn_detection_mode == TurnDetectionMode.EXTERNAL
+        ):
+            raise ValueError(
+                "vad_config with enabled=True cannot be combined with "
+                "turn_detection_mode=EXTERNAL: the external VAD (or manual finalize()) "
+                "already controls turn boundaries. Use the built-in endpointing modes "
+                "(ADAPTIVE or SMART_TURN) with vad_config instead."
+            )
 
         # Set default values for optional parameters
         super().__init__(

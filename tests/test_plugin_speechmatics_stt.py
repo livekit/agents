@@ -60,6 +60,28 @@ def test_options_store_configs() -> None:
     assert instance._stt_options.vad_config is vad_cfg
 
 
+def test_enabled_vad_config_rejected_with_external_mode() -> None:
+    # The external VAD (or manual finalize()) already controls turn boundaries;
+    # an enabled client-side VAD would endpoint the same audio a second time.
+    with pytest.raises(ValueError, match="turn_detection_mode=EXTERNAL"):
+        speechmatics_stt.STT(
+            api_key="test-key",
+            turn_detection_mode=TurnDetectionMode.EXTERNAL,
+            vad=None,
+            vad_config=VoiceActivityConfig(enabled=True, silence_duration=0.3),
+        )
+
+
+def test_disabled_vad_config_allowed_with_external_mode() -> None:
+    instance = speechmatics_stt.STT(
+        api_key="test-key",
+        turn_detection_mode=TurnDetectionMode.EXTERNAL,
+        vad=None,
+        vad_config=VoiceActivityConfig(enabled=False, threshold=0.5),
+    )
+    assert instance._stt_options.vad_config is not None
+
+
 def test_omitted_configs_change_nothing_for_existing_users() -> None:
     # A default-constructed STT must produce exactly the preset values.
     config = _stt()._prepare_config()
