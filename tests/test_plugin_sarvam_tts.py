@@ -63,6 +63,26 @@ def test_update_options_revalidates_retained_pace_on_model_change() -> None:
         instance.update_options(model="bulbul:v3", speaker="shubh")
 
 
+def test_update_options_allows_atomic_model_and_pace_change() -> None:
+    # A combined update with a pace valid for the new model must succeed even
+    # though the retained pace was out of range for it.
+    instance = _tts(model="bulbul:v2", pace=2.5)
+    instance.update_options(model="bulbul:v3", speaker="shubh", pace=1.0)
+
+    assert instance._opts.model == "bulbul:v3"
+    assert instance._opts.pace == 1.0
+
+
+def test_update_options_rejection_leaves_state_untouched() -> None:
+    instance = _tts(model="bulbul:v2", pace=1.0)
+    with pytest.raises(ValueError):
+        instance.update_options(model="bulbul:v3", speaker="shubh", pace=2.5)
+
+    assert instance._opts.model == "bulbul:v2"
+    assert instance._opts.pace == 1.0
+    assert instance._opts.speaker == "anushka"
+
+
 def test_stream_rejects_rest_only_sample_rates() -> None:
     # 32/44.1/48 kHz are REST-only; streaming must fail locally with a clear
     # error instead of an opaque server error frame mid-session.
