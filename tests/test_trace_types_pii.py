@@ -44,8 +44,6 @@ SAFE_KEYS = frozenset(
         # correlation ids / session metadata
         "lk.speech_id",
         "lk.agent_label",
-        "lk.start_time",
-        "lk.end_time",
         "lk.retry_count",
         "lk.provider_request_ids",
         "lk.participant_id",
@@ -54,7 +52,6 @@ SAFE_KEYS = frozenset(
         "lk.agent_name",
         "lk.cloud_agent_id",
         "lk.deployment_id",
-        "lk.session_options",
         "lk.generation_id",
         "lk.parent_generation_id",
         "lk.interrupted",
