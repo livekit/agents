@@ -277,3 +277,83 @@ def test_stt_stream_inherits_language():
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
     assert stream._opts.language == "hi-IN"
+
+
+async def test_stt_rest_headers_include_source_and_request_id():
+    """REST recognize() sends X-Source: livekit and a generated X-API-Request-ID."""
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.gnani import STT
+
+    class _FakePostCM:
+        async def __aenter__(self):
+            raise APIConnectionError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    captured: dict = {}
+
+    def _fake_post(url, *, headers=None, data=None, **kwargs):
+        captured.update(url=url, headers=headers)
+        return _FakePostCM()
+
+    fake_session = MagicMock()
+    fake_session.post = _fake_post
+
+    stt = STT(api_key="test-key")
+    stt._session = fake_session
+
+    import numpy as np
+
+    from livekit import rtc
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+    frame = rtc.AudioFrame(
+        data=np.zeros(1600, dtype=np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=1600,
+    )
+
+    with pytest.raises(APIConnectionError):
+        await stt._recognize_impl(buffer=[frame], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    assert captured["headers"]["X-Source"] == "livekit"
+    assert captured["headers"]["X-API-Request-ID"].startswith("lk_req_")
+
+
+async def test_stt_websocket_headers_include_source_and_request_id():
+    """WebSocket streaming sends x-source: livekit and a generated x-api-request-id."""
+    from livekit.agents import APIConnectionError
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.gnani.stt import STT, GnaniSTTOptions, SpeechStream
+
+    captured: dict = {}
+
+    class _FakeConnectCM:
+        async def __aenter__(self):
+            raise ConnectionRefusedError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    def _fake_connect(url, *, additional_headers=None, **kwargs):
+        captured.update(url=url, headers=additional_headers)
+        return _FakeConnectCM()
+
+    stt = STT(api_key="test-key")
+    opts = GnaniSTTOptions(api_key="test-key", language="en-IN")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = SpeechStream(stt=stt, opts=opts, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    with patch("websockets.connect", side_effect=_fake_connect):
+        with pytest.raises(APIConnectionError):
+            await stream._run()
+
+    assert captured["headers"]["x-source"] == "livekit"
+    assert captured["headers"]["x-api-request-id"].startswith("lk_req_")
