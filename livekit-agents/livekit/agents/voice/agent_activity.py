@@ -101,6 +101,11 @@ from .turn import (
     _StreamingTurnDetectorStream,
 )
 
+# false-interruption resume: re-check cadence and cap while a speech window's
+# transcript is still in flight (see _start_false_interruption_timer)
+_PENDING_TRANSCRIPT_RECHECK = 0.1
+_PENDING_TRANSCRIPT_MAX_DEFERRAL = 2.0
+
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
@@ -4472,6 +4477,10 @@ class AgentActivity(RecognitionHooks):
     def _start_false_interruption_timer(self, timeout: float) -> None:
         self._cancel_false_interruption_timer()
 
+        # set when resume is first deferred on a pending transcript; a dead STT
+        # stream with interims never finalizing degrades to plain timeout behavior
+        transcript_wait_deadline: float | None = None
+
         def _on_false_interruption() -> None:
             if self._paused_speech is None or (
                 self._current_speech and self._current_speech is not self._paused_speech.handle
@@ -4524,6 +4533,7 @@ class AgentActivity(RecognitionHooks):
             _on_false_interruption()
 
         def _on_timeout() -> None:
+            nonlocal transcript_wait_deadline
             self._false_interruption_timer = None
 
             # an open turn decision owns the paused speech: it either commits and interrupts it
@@ -4535,6 +4545,22 @@ class AgentActivity(RecognitionHooks):
                 self._false_interruption_pending = True
                 eot_task.add_done_callback(_on_turn_settled)
                 return
+
+            # a speech window closed but its transcript is still in flight: the
+            # coming final will start (or refresh) the turn decision that owns
+            # this pause — re-check instead of resuming stale audio into the gap
+            if self._audio_recognition and getattr(
+                self._audio_recognition, "_audio_interim_transcript", ""
+            ):
+                if transcript_wait_deadline is None:
+                    transcript_wait_deadline = time.monotonic() + _PENDING_TRANSCRIPT_MAX_DEFERRAL
+                if time.monotonic() < transcript_wait_deadline:
+                    self._false_interruption_timer = self._session._loop.call_later(
+                        _PENDING_TRANSCRIPT_RECHECK, _on_timeout
+                    )
+                    return
+                # the transcript never materialized (e.g. the STT stream died):
+                # fall through and let the timeout rule, as before this guard
 
             _on_false_interruption()
 
