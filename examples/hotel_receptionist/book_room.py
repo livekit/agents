@@ -105,6 +105,21 @@ class BookRoomTask(AgentTask[RoomBooking]):
             "never compute your own."
         )
 
+    def _not_booked(self) -> str:
+        # The refusal path gets its own text; _status() is for the success and
+        # progress returns only. _status() on its own reads as "here is the next
+        # step" - nothing in it says no booking happened, and by this point in a
+        # multi-room call the model has usually already spoken a real "HTL-..."
+        # code, so it has a template to invent one from. The is_error flag is no
+        # help here: the OpenAI provider format drops it and sends a tool message
+        # whose content is this string and nothing else, so the text itself has to
+        # carry the outcome. Still no missing-field list, for the reason above.
+        return (
+            "NOT booked - no reservation was created and no confirmation code exists. "
+            "Do not tell the caller they're booked and never speak a confirmation code. "
+            f"Where the booking actually stands: {self._status()}"
+        )
+
     @function_tool()
     async def set_stay(
         self,
@@ -274,7 +289,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
             and phone
             and card_last4
         ):
-            raise ToolError(self._status())
+            raise ToolError(self._not_booked())
         try:
             booking = await self._db.book_room(
                 room_type=room_type,
