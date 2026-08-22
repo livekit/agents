@@ -193,7 +193,13 @@ class AgentsConsole:
                 sess.output.transcription = text_output
 
 
-def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = False) -> None:
+def _run_tcp_console(
+    *,
+    server: AgentServer,
+    connect_addr: str,
+    record: bool = False,
+    log_level: str = "DEBUG",
+) -> None:
     """Run console in TCP mode — connects to the Go CLI's TCP server."""
     from ..voice.remote_session import TcpSessionTransport
     from .tcp_console import TcpAudioInput, TcpAudioOutput
@@ -201,7 +207,7 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
     host, port_str = connect_addr.rsplit(":", 1)
     port = int(port_str)
 
-    setup_logging("DEBUG", devmode=True, console=True)
+    setup_logging(log_level, devmode=True, console=True)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
