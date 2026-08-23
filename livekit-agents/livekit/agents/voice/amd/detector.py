@@ -290,7 +290,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             "skipping auto reply: AMD already returned a machine verdict",
             extra={
                 "category": self._result.category.value,
-                "transcript": info.new_transcript,
+                "lk.pii.transcript": info.new_transcript,
             },
         )
         return True
@@ -525,7 +525,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                 "reason": result.reason,
                 "speech_duration": result.speech_duration,
                 "delay": result.delay,
-                "transcript": result.transcript,
+                "lk.pii.transcript": result.transcript,
             },
         )
         if self._classifier:
@@ -554,7 +554,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     "category": result.category.value,
                     "speech_duration": result.speech_duration,
                     "reason": result.reason,
-                    "transcript": result.transcript,
+                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
                     "delay": result.delay,
                 },
             )

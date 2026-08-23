@@ -110,6 +110,29 @@ async def test_late_content_after_generation_complete_is_dropped(
         assert any("after generation completed" in r.message for r in caplog.records)
 
 
+async def test_input_transcription_uses_generation_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interim and final transcripts stay on the timeline before the reply they prompted."""
+    async with _make_session(monkeypatch) as session:
+        transcripts: list[llm.InputTranscriptionCompleted] = []
+        session.on("input_audio_transcription_completed", transcripts.append)
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        gen._created_timestamp = 1234.5
+
+        session._handle_server_content(
+            types.LiveServerContent(input_transcription=types.Transcription(text="hello"))
+        )
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert [(event.is_final, event.turn_started_at) for event in transcripts] == [
+            (False, 1234.5),
+            (True, 1234.5),
+        ]
+
+
 async def test_session_close_releases_the_genai_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,7 +11,7 @@ The plugin supports Amharic (`am`) and Afaan Oromo (`om`):
 ## Installation
 
 ```bash
-uv add "livekit-agents[addisai]~=1.6"
+uv add "livekit-agents[addisai]~=1.7"
 ```
 
 Or install the plugin package directly:
