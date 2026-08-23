@@ -1305,23 +1305,23 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         # backchannels during the cooldown are dropped
         event = _backchannel_event()
         hooks.on_overlap_speech(event)
-        recognition._apply_overlap_speech_event(event)
+        recognition._on_overlap_speech_event(event)
         assert hooks.interruptions == []
 
         # a real interruption during the cooldown must still fire
         event = _interruption_event()
         hooks.on_overlap_speech(event)
-        recognition._apply_overlap_speech_event(event)
+        recognition._on_overlap_speech_event(event)
         assert len(hooks.interruptions) == 1
 
         # after cooldown, both event types behave normally
         await asyncio.sleep(0.06)
         backchannel_event = _backchannel_event()
         hooks.on_overlap_speech(backchannel_event)
-        recognition._apply_overlap_speech_event(backchannel_event)
+        recognition._on_overlap_speech_event(backchannel_event)
         interruption_event = _interruption_event()
         hooks.on_overlap_speech(interruption_event)
-        recognition._apply_overlap_speech_event(interruption_event)
+        recognition._on_overlap_speech_event(interruption_event)
         assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
@@ -1400,6 +1400,7 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
 
     try:
         recognition._on_start_of_agent_speech(started_at=8.0)
+        recognition._on_start_of_speech(started_at=8.1)
         await recognition._on_stt_event(
             _final_transcript_event(
                 text="before the boundary", start_time=0.0, end_time=0.0, created_at=9.0
@@ -1770,7 +1771,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
         await _close_test_session(session)
 
 
-async def test_drain_transcript_gate_emits_buffered_events() -> None:
+async def test_flush_held_transcripts_emits_buffered_events() -> None:
     actions = FakeActions()
     session = create_session(actions)
     hooks = _TestRecognitionHooks()
@@ -1789,7 +1790,7 @@ async def test_drain_transcript_gate_emits_buffered_events() -> None:
     )
 
     try:
-        recognition._drain_transcript_gate()
+        recognition._flush_held_transcripts()
 
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
@@ -1823,7 +1824,7 @@ async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
         assert list(recognition._transcript_buffer) == [event]
         assert hooks.final_transcripts == []
 
-        recognition._drain_transcript_gate()
+        recognition._flush_held_transcripts()
 
         assert timeout_handle.cancelled()
         assert recognition._turn_transcript_received
@@ -1866,7 +1867,7 @@ async def test_true_verdict_releases_late_transcripts() -> None:
             overlap_started_at=overlap_started_at,
         )
         hooks.on_overlap_speech(event)
-        recognition._apply_overlap_speech_event(event)
+        recognition._on_overlap_speech_event(event)
         await recognition._on_stt_event(
             _final_transcript_event(text="arrived later", start_time=0.0, end_time=0.0)
         )
@@ -2320,6 +2321,7 @@ class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
         self.final_transcripts: list[str] = []
+        self.interruption_by_audio_activity_enabled = False
 
     def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
         if ev.is_interruption:

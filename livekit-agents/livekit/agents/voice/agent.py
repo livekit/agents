@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
@@ -526,6 +526,17 @@ class Agent:
                 forward_task = asyncio.create_task(_forward_input())
                 try:
                     async for event in stream:
+                        if (
+                            event.speech_end_time is None
+                            and wrapped_stt.capabilities.aligned_transcript
+                            and event.alternatives
+                            and event.alternatives[0].end_time > 0
+                        ):
+                            speech_end_time = (
+                                _audio_input_started_at + event.alternatives[0].end_time
+                            )
+                            if speech_end_time <= event.created_at:
+                                event = replace(event, speech_end_time=speech_end_time)
                         yield event
                 finally:
                     await utils.aio.cancel_and_wait(forward_task)
