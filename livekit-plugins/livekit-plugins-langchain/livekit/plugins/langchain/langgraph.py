@@ -264,7 +264,7 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         id=message_id,
         delta=llm.ChoiceDelta(
             role="assistant",
-            content=content,
+            content=content or None,
         ),
         usage=usage,
     )
