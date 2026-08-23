@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -317,6 +318,32 @@ async def test_interrupting_paused_speech_does_not_end_agent_twice(
 
     handle.interrupt.assert_called_once()
     activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
+
+
+async def test_interruption_event_does_not_end_agent_again_after_pausing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, handle = _paused_activity(session)
+    handle._generations = []
+    activity._paused_speech = None
+    activity._audio_recognition = MagicMock()
+    event = OverlappingSpeechEvent(
+        is_interruption=True,
+        overlap_started_at=1.0,
+        detected_at=2.0,
+    )
+
+    activity.on_overlap_speech(event)
+    assert activity._paused_speech is not None
+    await session.aclose()
+
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(ended_at=ANY)
 
 
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(

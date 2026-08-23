@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import heapq
 import json
@@ -20,6 +21,7 @@ from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
     StopResponse,
+    ToolError,
     ToolFlag,
     get_fnc_tool_names,
 )
@@ -213,6 +215,8 @@ class AgentActivity(RecognitionHooks):
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
+        # one awaited inline AgentTask may pause this activity at a time
+        self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -1227,6 +1231,56 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
+
+    @contextlib.asynccontextmanager
+    async def _inline_task_slot(
+        self,
+        *,
+        speech_handle: SpeechHandle | None,
+        blocked_tasks: list[asyncio.Task[Any]],
+    ) -> AsyncGenerator[None, None]:
+        """Grants the floor to one awaited inline AgentTask at a time.
+
+        Pausing an activity is a single slot: concurrent handoffs would leave every switch
+        but the last overwritten, and those tasks awaiting a result nothing can produce. The
+        inline tasks of a turn's parallel tool calls queue here and take the slot in turn.
+
+        The queue is per activity, which is the thing a handoff contends for. A nested task
+        pauses the activity of the task it is nested in, so it takes that activity's slot
+        and never waits on the one its parent is holding.
+
+        Each step below is ordered against the queue, and inverting any of them hangs the
+        session in its own way, so they belong together rather than at the call site.
+        """
+        # before the queue: the tasks behind it share this speech, and a hold released
+        # between them lets one task's user turns interrupt it out from under the rest
+        if speech_handle is not None:
+            if speech_handle.interrupted:
+                raise RuntimeError("the speech that awaited the inline task is interrupted")
+
+            speech_handle._hold_interruptions()
+
+        try:
+            # before the queue: a queued task absent from the drain set makes session close
+            # wait on the slot it is still queued for
+            self._add_drain_blocked_tasks(blocked_tasks)
+
+            async with self._inline_task_lock:
+                if self._closed or self._session._closing:
+                    # reported to the model as a tool failure, the way a tool awaiting an
+                    # inline task through a session close has always been
+                    raise ToolError("the activity that awaited the inline task is closing")
+
+                # past the queue: a run watching a task still waiting its turn waits for
+                # the user input the task ahead of it needs
+                if (run_state := self._session._global_run_state) and not run_state.done():
+                    for task in blocked_tasks:
+                        run_state._watch_handle(task)
+
+                yield
+        finally:
+            if speech_handle is not None:
+                speech_handle._release_interruptions()
 
     def _add_drain_blocked_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
         # tasks blocked on an agent handoff are excluded from the drain wait,
