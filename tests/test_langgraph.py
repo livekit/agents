@@ -7,7 +7,7 @@ from typing import Annotated
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import StreamWriter
@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 
 from livekit.agents.llm import ChatContext
 from livekit.plugins.langchain import LLMAdapter
+from livekit.plugins.langchain.langgraph import _to_chat_chunk
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -259,3 +260,20 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+
+def test_message_chunk_usage_metadata_is_preserved():
+    """Usage-only LangChain chunks must become LiveKit usage chunks."""
+    chunk = AIMessageChunk(
+        content="",
+        usage_metadata={"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
+    )
+
+    result = _to_chat_chunk(chunk)
+
+    assert result is not None
+    assert result.delta.content is None
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 12
+    assert result.usage.completion_tokens == 7
+    assert result.usage.total_tokens == 19
