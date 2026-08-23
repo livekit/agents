@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, inference
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -71,6 +72,8 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._turn_detector_flushed = False
     ar._turn_detector_late_prediction_warned = False
     ar._agent_speaking = False
+    ar._transcript_buffer = deque()
+    ar._transcript_gate_active = False
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._vad_base_turn_detection = True
@@ -199,7 +202,7 @@ async def test_committed_turn_suppresses_the_resume(monkeypatch: pytest.MonkeyPa
     session = _session()
     activity, _ = _paused_activity(session)
     # a confirmed interruption: on_end_of_turn commits and the reply task interrupts the pause
-    activity._pending_interruption = inference.OverlappingSpeechEvent(is_interruption=True)
+    activity._interruption_detected = True
     activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
 
     events: list[str] = []
@@ -256,7 +259,7 @@ async def test_skipped_reply_keeps_the_resume_armed(monkeypatch: pytest.MonkeyPa
 
     session = _session()
     activity, _ = _paused_activity(session)
-    activity._pending_interruption = inference.OverlappingSpeechEvent(is_interruption=True)
+    activity._interruption_detected = True
     activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
 
     events: list[str] = []

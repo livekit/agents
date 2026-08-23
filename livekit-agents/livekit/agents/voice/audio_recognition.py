@@ -133,6 +133,12 @@ class _UserTurnTracker:
 
 
 class RecognitionHooks(Protocol):
+    @property
+    def interruption_by_audio_activity_enabled(self) -> bool: ...
+
+    @interruption_by_audio_activity_enabled.setter
+    def interruption_by_audio_activity_enabled(self, enabled: bool) -> None: ...
+
     def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None: ...
     def on_backchannel_confirmed(self) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
@@ -166,7 +172,7 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # STT-derived turn metrics use this stream's wall-clock anchor.
+        # wall-clock anchor for stream-based (STT and barge-in) timestamps
         self.input_started_at: float | None = None
 
     @property
@@ -470,9 +476,9 @@ class AudioRecognition:
         This lifecycle follows audible playout, not the generation. Resuming paused playout
         starts a new active-speech interval.
         """
+        self._transcript_gate_active = False
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
-        self._sync_transcript_gate()
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
 
         # reset user turn tracker when agent starts speaking
@@ -503,7 +509,8 @@ class AudioRecognition:
         if self._agent_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
         if not self._adaptive_interruption_active:
-            self._drain_transcript_gate()
+            self._flush_held_transcripts()
+            self._overlap_open = False
             self._agent_speaking = False
             self._agent_speech_started_at = None
             return
@@ -514,21 +521,19 @@ class AudioRecognition:
 
         self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
-        if self._agent_speaking:
+        if self._agent_speaking and self._transcript_gate_active:
             logger.trace(
                 "flushing held transcripts",
                 extra={
                     "vad_speech_started_at": self._active_vad_speech_started_at,
                 },
             )
-            self._release_transcript_gate(
-                at=ended_at,
+            self._flush_held_transcripts(
+                resolved_at=ended_at,
                 vad_speech_started_at=self._active_vad_speech_started_at,
             )
 
-        # The reset sentinel drops any overlap still open.
         self._overlap_open = False
-        self._drain_transcript_gate()
         self._agent_speaking = False
         self._agent_speech_started_at = None
 
@@ -538,7 +543,7 @@ class AudioRecognition:
         speech_duration: float = 0.0,
         user_speaking_span: trace.Span | None = None,
         *,
-        detect_overlap: bool = True,
+        skip_adaptive_interruption: bool = False,
     ) -> None:
         self._endpointing.on_start_of_speech(
             started_at=started_at, overlapping=self._agent_speaking
@@ -548,7 +553,7 @@ class AudioRecognition:
         if not self._agent_speaking:
             self._overlap_in_current_turn = False
 
-        if detect_overlap:
+        if not skip_adaptive_interruption:
             self._on_start_of_overlap_speech(
                 started_at=started_at,
                 speech_duration=speech_duration,
@@ -563,11 +568,26 @@ class AudioRecognition:
     ) -> None:
         if not self._adaptive_interruption_active or not self._agent_speaking:
             return
+
+        start_boundary = self._backchannel_boundary[0] if self._backchannel_boundary else 0.0
+        started_in_boundary = (
+            start_boundary > 0
+            and self._agent_speech_started_at is not None
+            and started_at <= self._agent_speech_started_at + start_boundary
+        )
+        if (
+            self._hooks.interruption_by_audio_activity_enabled
+            or self._backchannel_boundary_active
+            or started_in_boundary
+        ):
+            self._hooks.interruption_by_audio_activity_enabled = True
+            self._flush_held_transcripts()
+            return
+
         # overlap over agent speech started this turn; gates verdict acceptance below
         self._overlap_in_current_turn = True
         self._overlap_open = True
-        # A later overlap must re-arm a gate released by a failed interrupt attempt.
-        self._sync_transcript_gate()
+        self._transcript_gate_active = True
         self._interruption_ch.send_nowait(  # type: ignore[union-attr]
             _OverlapSpeechStartedSentinel(
                 speech_duration=speech_duration,
@@ -640,25 +660,50 @@ class AudioRecognition:
             return
         await self._user_silence_ev.wait()
 
-    def _sync_transcript_gate(self) -> None:
-        self._transcript_gate_active = self._agent_speaking and self._adaptive_interruption_active
-
-    def _transcript_flush_start(self, *, now: float, vad_speech_started_at: float | None) -> float:
+    def _trim_held_transcripts(
+        self,
+        *,
+        resolved_at: float,
+        vad_speech_started_at: float | None,
+    ) -> None:
         end_boundary = self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
-        flush_start = now - end_boundary
+        trim_start = resolved_at - end_boundary
         if vad_speech_started_at is not None:
-            flush_start = min(flush_start, vad_speech_started_at)
+            trim_start = min(trim_start, vad_speech_started_at)
         if self._agent_speech_started_at is not None:
-            flush_start = max(flush_start, self._agent_speech_started_at)
-        return flush_start
+            trim_start = max(trim_start, self._agent_speech_started_at)
 
-    def _trim_held_transcripts(self, *, flush_start: float) -> None:
-        while self._transcript_buffer and (self._transcript_buffer[0].created_at < flush_start):
+        while self._transcript_buffer:
+            event = self._transcript_buffer[0]
+            # Known speech timing takes precedence; arrival time is the fallback.
+            if event.speech_end_time is not None:
+                should_trim = event.speech_end_time < trim_start and (
+                    self._agent_speech_started_at is None
+                    or self._agent_speech_started_at < event.speech_end_time
+                )
+            else:
+                should_trim = event.created_at < trim_start
+
+            if not should_trim:
+                # Keep the provider-ordered suffix. Events have no stable utterance ID,
+                # so filtering later events can separate SOS, transcripts, and EOS.
+                break
             self._transcript_buffer.popleft()
 
-    def _drain_transcript_gate(self) -> None:
-        """Disable the gate and synchronously emit all held events in provider order."""
+    def _flush_held_transcripts(
+        self,
+        *,
+        resolved_at: float | None = None,
+        vad_speech_started_at: float | None = None,
+    ) -> None:
+        """Stop holding transcripts and emit the retained events in provider order."""
         self._transcript_gate_active = False
+        if resolved_at is not None:
+            self._trim_held_transcripts(
+                resolved_at=resolved_at,
+                vad_speech_started_at=vad_speech_started_at,
+            )
+
         if not self._transcript_buffer:
             return
 
@@ -668,31 +713,10 @@ class AudioRecognition:
             logger.trace("re-emitting held STT event", extra={"event": ev.type})
             self._process_stt_event(ev)
 
-    def _release_transcript_gate(self, *, at: float, vad_speech_started_at: float | None) -> None:
-        if not self._transcript_gate_active:
-            return
-        flush_start = self._transcript_flush_start(
-            now=at,
-            vad_speech_started_at=vad_speech_started_at,
-        )
-        self._trim_held_transcripts(flush_start=flush_start)
-        self._drain_transcript_gate()
-
-    def _release_transcripts_for_audio_activity(self) -> None:
-        if not self._transcript_gate_active:
-            return
-        self._release_transcript_gate(
-            at=time.time(),
-            vad_speech_started_at=self._active_vad_speech_started_at,
-        )
-
     def _set_interruption_enabled(self, enabled: bool) -> None:
-        was_enabled = self._interruption_enabled
         self._interruption_enabled = enabled
         if not enabled:
-            self._drain_transcript_gate()
-        elif not was_enabled:
-            self._sync_transcript_gate()
+            self._flush_held_transcripts()
 
     def _push_audio(
         self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
@@ -893,6 +917,7 @@ class AudioRecognition:
     def _update_interruption_detection(
         self, interruption_detection: inference.AdaptiveInterruptionDetector | None
     ) -> None:
+        self._flush_held_transcripts()
         self._interruption_detection = interruption_detection
         self._overlap_open = False  # the stream it belonged to is gone either way
         if interruption_detection is not None:
@@ -902,8 +927,6 @@ class AudioRecognition:
                     interruption_detection, self._interruption_ch, self._interruption_atask
                 )
             )
-            self._transcript_buffer.clear()
-            self._sync_transcript_gate()
         else:
             if self._interruption_atask is not None:
                 task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
@@ -1111,6 +1134,12 @@ class AudioRecognition:
             and ev.alternatives[0].text
         ):
             self._mark_turn_transcribed()
+            # whenever there is a final transcript when the gate is off
+            # fall back to vad interruption for the rest of the turn:
+            # - late STT transcript during backchannel boundary
+            # - late STT transcript when no overlap speech has been detected
+            if self._agent_speaking and not self._transcript_gate_active:
+                self._hooks.interruption_by_audio_activity_enabled = True
 
         if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._transcript_gate_active:
             logger.trace("holding STT event during agent speech", extra={"event": ev.type})
@@ -1376,7 +1405,7 @@ class AudioRecognition:
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
-    def _apply_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
+    def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
         self._overlap_open = False
 
@@ -1386,17 +1415,16 @@ class AudioRecognition:
             )
             return
 
-        if ev.is_interruption:
-            self._release_transcript_gate(
-                at=ev.detected_at,
+        if ev.is_interruption and self._transcript_gate_active:
+            self._flush_held_transcripts(
+                resolved_at=ev.detected_at,
                 vad_speech_started_at=ev.overlap_started_at,
             )
         elif self._transcript_gate_active:
-            flush_start = self._transcript_flush_start(
-                now=ev.detected_at,
+            self._trim_held_transcripts(
+                resolved_at=ev.detected_at,
                 vad_speech_started_at=self._active_vad_speech_started_at,
             )
-            self._trim_held_transcripts(flush_start=flush_start)
 
         # only honor the verdict while this turn's overlap is unresolved so a late verdict
         # can't leak into the next turn; an interruption supersedes a prior backchannel
@@ -1835,7 +1863,7 @@ class AudioRecognition:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
             if self._interruption_ch is audio_input:
-                self._drain_transcript_gate()
+                self._flush_held_transcripts()
 
     def _cancel_transcription_timeout(self) -> None:
         if (handle := getattr(self, "_transcription_timeout_handle", None)) is not None:
