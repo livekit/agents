@@ -272,7 +272,7 @@ def test_message_chunk_usage_metadata_is_preserved():
     result = _to_chat_chunk(chunk)
 
     assert result is not None
-    assert result.delta.content == ""
+    assert result.delta.content is None
     assert result.usage is not None
     assert result.usage.prompt_tokens == 12
     assert result.usage.completion_tokens == 7
