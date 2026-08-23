@@ -277,3 +277,20 @@ def test_message_chunk_usage_metadata_is_preserved():
     assert result.usage.prompt_tokens == 12
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 19
+
+
+def test_message_chunk_usage_metadata_with_content_is_preserved():
+    """Text and usage from the same LangChain chunk must both be preserved."""
+    chunk = AIMessageChunk(
+        content="hello",
+        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+    )
+
+    result = _to_chat_chunk(chunk)
+
+    assert result is not None
+    assert result.delta.content == "hello"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 3
+    assert result.usage.completion_tokens == 2
+    assert result.usage.total_tokens == 5
