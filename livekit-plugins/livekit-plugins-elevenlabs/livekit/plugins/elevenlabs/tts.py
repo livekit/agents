@@ -553,7 +553,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(input_t, stream_t)
             if not context_closed:
                 with contextlib.suppress(Exception):
-                    connection.close_context(self._context_id, drain=False)
+                    connection.close_context(self._context_id)
             await sent_tokenizer_stream.aclose()
 
 
@@ -641,7 +641,6 @@ class _SynthesizeContent:
 @dataclass
 class _CloseContext:
     context_id: str
-    drain: bool = True
 
 
 @dataclass
@@ -754,11 +753,11 @@ class _Connection:
             raise APIConnectionError("WebSocket connection is closed")
         self._input_queue.send_nowait(content)
 
-    def close_context(self, context_id: str, *, drain: bool = True) -> None:
+    def close_context(self, context_id: str) -> None:
         """Close a specific context"""
         if self._closed or not self._ws or self._ws.closed:
             raise APIConnectionError("WebSocket connection is closed")
-        self._input_queue.send_nowait(_CloseContext(context_id, drain=drain))
+        self._input_queue.send_nowait(_CloseContext(context_id))
 
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
@@ -979,25 +978,12 @@ class _Connection:
         self._ws = None
 
 
-# Fallback wait bound when a context has no registered stream to size a timeout from.
-_CLOSE_CONTEXT_DRAIN_TIMEOUT = 10.0
-
-
 class _DialogueConnection(_Connection):
     """Like `_Connection`, but speaks the text-to-dialogue multi-stream-input
     protocol (different message framing and response field casing) for models
     ElevenLabs doesn't support on the regular text-to-speech websocket."""
 
     _TIMEOUT_LABEL = "11labs text-to-dialogue"
-
-    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
-        super().__init__(opts, session)
-        # per-context "audio fully drained" signal; see _wait_for_turn_drained
-        self._turn_drained: dict[str, asyncio.Event] = {}
-        self._flushes_sent: dict[str, int] = {}
-        self._turn_boundaries_received: dict[str, int] = {}
-        self._send_lock = asyncio.Lock()
-        self._pending_close_tasks: set[asyncio.Task] = set()
 
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
@@ -1022,8 +1008,7 @@ class _DialogueConnection(_Connection):
                             self._opts,
                             context_id=msg.context_id,
                         )
-                        async with self._send_lock:
-                            await self._ws.send_json(init_pkt)
+                        await self._ws.send_json(init_pkt)
                         self._active_contexts.add(msg.context_id)
 
                     pkt: dict[str, Any] = {
@@ -1032,71 +1017,24 @@ class _DialogueConnection(_Connection):
                     }
                     if msg.flush:
                         pkt["flush"] = True
-                        self._mark_flush_sent(msg.context_id)
 
                     self._start_timeout_timer(msg.context_id)
 
-                    async with self._send_lock:
-                        await self._ws.send_json(pkt)
+                    await self._ws.send_json(pkt)
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
-                        task = asyncio.create_task(
-                            self._close_context_when_drained(msg.context_id, drain=msg.drain)
-                        )
-                        self._pending_close_tasks.add(task)
-                        task.add_done_callback(self._pending_close_tasks.discard)
+                        close_pkt = {
+                            "context_id": msg.context_id,
+                            "close_context": True,
+                        }
+                        await self._ws.send_json(close_pkt)
 
         except Exception as e:
             logger.warning("dialogue send loop error", exc_info=e)
         finally:
             if not self._closed:
                 await self.aclose()
-
-    async def _close_context_when_drained(self, context_id: str, *, drain: bool = True) -> None:
-        try:
-            if drain:
-                await self._wait_for_turn_drained(context_id)
-            if self._closed or not self._ws or self._ws.closed:
-                return
-            close_pkt = {"context_id": context_id, "close_context": True}
-            async with self._send_lock:
-                await self._ws.send_json(close_pkt)
-        except Exception as e:
-            logger.warning("dialogue close context error", exc_info=e)
-            if not self._closed:
-                await self.aclose()
-
-    def _mark_flush_sent(self, context_id: str) -> None:
-        self._flushes_sent[context_id] = self._flushes_sent.get(context_id, 0) + 1
-        self._sync_turn_drained_event(context_id)
-
-    def _mark_turn_boundary_received(self, context_id: str) -> None:
-        self._turn_boundaries_received[context_id] = (
-            self._turn_boundaries_received.get(context_id, 0) + 1
-        )
-        self._sync_turn_drained_event(context_id)
-
-    def _sync_turn_drained_event(self, context_id: str) -> None:
-        event = self._turn_drained.setdefault(context_id, asyncio.Event())
-        sent = self._flushes_sent.get(context_id, 0)
-        received = self._turn_boundaries_received.get(context_id, 0)
-        if received >= sent:
-            event.set()
-        else:
-            event.clear()
-
-    async def _wait_for_turn_drained(self, context_id: str) -> None:
-        """Wait for every sent flush's `is_final_audio_for_turn` before sending
-        close_context: sending it right after the final flush (like the regular
-        protocol does) races the server's stream teardown and drops the last
-        turn's audio."""
-        self._sync_turn_drained_event(context_id)
-        event = self._turn_drained[context_id]
-        ctx = self._context_data.get(context_id)
-        timeout = ctx.stream._conn_options.timeout if ctx else _CLOSE_CONTEXT_DRAIN_TIMEOUT
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=timeout)
 
     async def _recv_loop(self) -> None:
         """Receive loop - processes messages from WebSocket"""
@@ -1180,15 +1118,6 @@ class _DialogueConnection(_Connection):
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
 
-                # turn boundary; unblocks a pending close_context (see above), not
-                # otherwise exposed by this plugin's API
-                if data.get("is_final_audio_for_turn"):
-                    logger.debug(
-                        "elevenlabs text-to-dialogue turn boundary",
-                        extra={"context_id": context_id},
-                    )
-                    self._mark_turn_boundary_received(context_id)
-
                 if data.get("is_final"):
                     timed_words, _ = _to_timed_words(
                         stream._text_buffer,
@@ -1216,44 +1145,6 @@ class _DialogueConnection(_Connection):
         finally:
             if not self._closed:
                 await self.aclose()
-
-    def _cleanup_context(self, context_id: str) -> None:
-        super()._cleanup_context(context_id)
-        self._turn_drained.pop(context_id, None)
-        self._flushes_sent.pop(context_id, None)
-        self._turn_boundaries_received.pop(context_id, None)
-
-    async def aclose(self) -> None:
-        """Close the connection and clean up"""
-        if self._closed:
-            return
-
-        self._closed = True
-        self._input_queue.close()
-
-        for ctx in self._context_data.values():
-            if not ctx.waiter.done():
-                # do not cancel the future as it becomes difficult to catch
-                # all pending tasks will be aborted with an exception
-                ctx.waiter.set_exception(APIStatusError("connection closed"))
-            if ctx.timeout_timer:
-                ctx.timeout_timer.cancel()
-        self._context_data.clear()
-
-        current_task = asyncio.current_task()
-        pending_close_tasks = self._pending_close_tasks - {current_task}
-        if pending_close_tasks:
-            await utils.aio.gracefully_cancel(*pending_close_tasks)
-
-        if self._ws:
-            await self._ws.close()
-
-        if self._send_task:
-            await utils.aio.gracefully_cancel(self._send_task)
-        if self._recv_task:
-            await utils.aio.gracefully_cancel(self._recv_task)
-
-        self._ws = None
 
 
 def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:

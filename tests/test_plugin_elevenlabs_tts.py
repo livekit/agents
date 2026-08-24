@@ -64,37 +64,12 @@ class _FakeConnection:
             )
         }
         self.preferred_alignment = "normalized"
-        self._turn_drained: dict[str, asyncio.Event] = {}
-        self._flushes_sent: dict[str, int] = {}
-        self._turn_boundaries_received: dict[str, int] = {}
-
-    def _mark_flush_sent(self, context_id: str) -> None:
-        self._flushes_sent[context_id] = self._flushes_sent.get(context_id, 0) + 1
-        self._sync_turn_drained_event(context_id)
-
-    def _mark_turn_boundary_received(self, context_id: str) -> None:
-        self._turn_boundaries_received[context_id] = (
-            self._turn_boundaries_received.get(context_id, 0) + 1
-        )
-        self._sync_turn_drained_event(context_id)
-
-    def _sync_turn_drained_event(self, context_id: str) -> None:
-        event = self._turn_drained.setdefault(context_id, asyncio.Event())
-        sent = self._flushes_sent.get(context_id, 0)
-        received = self._turn_boundaries_received.get(context_id, 0)
-        if received >= sent:
-            event.set()
-        else:
-            event.clear()
 
     def unregister_stream(self, context_id: str) -> None:
         elevenlabs_tts._Connection.unregister_stream(self, context_id)  # pyright: ignore[reportArgumentType]
 
     def _cleanup_context(self, context_id: str) -> None:
         elevenlabs_tts._Connection._cleanup_context(self, context_id)  # pyright: ignore[reportArgumentType]
-        self._turn_drained.pop(context_id, None)
-        self._flushes_sent.pop(context_id, None)
-        self._turn_boundaries_received.pop(context_id, None)
 
     async def aclose(self) -> None:
         self._closed = True
@@ -339,7 +314,7 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
         def unregister_stream(self, context_id: str) -> None:
             calls.append("unregister_stream")
 
-        def close_context(self, context_id: str, *, drain: bool = True) -> None:
+        def close_context(self, context_id: str) -> None:
             calls.append("close_context")
 
     connection = _StubConnection()
@@ -572,63 +547,28 @@ async def test_dialogue_recv_loop_reports_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_turn_drained_returns_once_event_is_set() -> None:
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
-    async with aiohttp.ClientSession() as session:
-        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
-            tts._opts, session
-        )
-        connection._turn_drained["ctx-1"] = asyncio.Event()
-        connection._turn_drained["ctx-1"].set()
+async def test_dialogue_recv_loop_drops_audio_for_unregistered_context() -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"late-audio").decode("ascii"),
+                    "is_final": True,
+                }
+            ),
+        ],
+    )
+    connection.unregister_stream(context_id)
 
-        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-1"), timeout=1.0)
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
 
-
-@pytest.mark.asyncio
-async def test_wait_for_turn_drained_resolves_immediately_with_no_flush_sent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(elevenlabs_tts, "_CLOSE_CONTEXT_DRAIN_TIMEOUT", 10.0)
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
-    async with aiohttp.ClientSession() as session:
-        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
-            tts._opts, session
-        )
-        # a context that was opened but never flushed (e.g. cancelled before any
-        # flush) has nothing to wait for and must not block for the fallback timeout
-        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-missing"), timeout=1.0)
-
-
-@pytest.mark.asyncio
-async def test_wait_for_turn_drained_falls_through_when_flush_unacknowledged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(elevenlabs_tts, "_CLOSE_CONTEXT_DRAIN_TIMEOUT", 0.05)
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
-    async with aiohttp.ClientSession() as session:
-        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
-            tts._opts, session
-        )
-        connection._mark_flush_sent("ctx-1")
-        await asyncio.wait_for(connection._wait_for_turn_drained("ctx-1"), timeout=1.0)
-
-
-@pytest.mark.asyncio
-async def test_turn_drained_waits_for_every_sent_flush() -> None:
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
-    async with aiohttp.ClientSession() as session:
-        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
-            tts._opts, session
-        )
-        connection._mark_flush_sent("ctx-1")
-        connection._mark_flush_sent("ctx-1")
-        connection._mark_turn_boundary_received("ctx-1")
-
-        assert not connection._turn_drained["ctx-1"].is_set()
-
-        connection._mark_turn_boundary_received("ctx-1")
-
-        assert connection._turn_drained["ctx-1"].is_set()
+    assert connection.emitter.audio_chunks == []
+    assert connection._active_contexts == set()
 
 
 class _RecordingWs:
@@ -639,19 +579,35 @@ class _RecordingWs:
     async def send_json(self, data: dict[str, object]) -> None:
         self.sent.append(data)
 
+    async def close(self) -> None:
+        self.closed = True
+
 
 @pytest.mark.asyncio
-async def test_close_context_skips_drain_wait_when_interrupted() -> None:
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
+async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
     async with aiohttp.ClientSession() as session:
         connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
             tts._opts, session
         )
-        connection._ws = _RecordingWs()  # type: ignore[assignment]
-        connection._mark_flush_sent("ctx-1")  # unacknowledged; would normally block
-
-        await asyncio.wait_for(
-            connection._close_context_when_drained("ctx-1", drain=False), timeout=1.0
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
         )
+        connection.close_context("ctx-1")
+        connection._input_queue.close()
 
-        assert connection._ws.sent == [{"context_id": "ctx-1", "close_context": True}]
+        await asyncio.wait_for(connection._send_loop(), timeout=1.0)
+
+        assert ws.sent == [
+            {"context_id": "ctx-1", "voices": ["voice-1"]},
+            {
+                "context_id": "ctx-1",
+                "inputs": [{"text": "hello ", "voice_id": "voice-1"}],
+                "flush": True,
+            },
+            {"context_id": "ctx-1", "close_context": True},
+        ]
