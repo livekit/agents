@@ -142,3 +142,37 @@ def test_short_call_id_is_unchanged() -> None:
         llm.FunctionCall(id="item_1", call_id="call_abc", name="get_weather", arguments="{}")
     )
     assert call.call_id == "call_abc"
+
+
+async def test_an_item_anchored_to_a_deleted_one_is_appended() -> None:
+    # the server sometimes anchors a new item to one it has just confirmed deleting; dropping
+    # the item leaves the mirror short of it, and the next update then re-creates an item the
+    # server already has, which it rejects as a duplicate
+    from openai.types.realtime import ConversationItemAdded
+
+    session = _create_session()
+    session._realtime_model = types.SimpleNamespace(_provider_label="openai.realtime")
+    session.emit = lambda name, ev: None
+    session._remote_chat_ctx.insert(None, llm.ChatMessage(role="user", content=["hi"], id="item_1"))
+
+    session._handle_conversion_item_added(
+        ConversationItemAdded.construct(
+            type="conversation.item.added",
+            event_id="evt",
+            previous_item_id="deleted_item",
+            item={
+                "id": "item_2",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello"}],
+                "status": "completed",
+            },
+        )
+    )
+    remote_ctx = session._remote_chat_ctx.to_chat_ctx()
+
+    assert [item.id for item in remote_ctx.items] == ["item_1", "item_2"]
+
+    await session.update_chat_ctx(remote_ctx)
+
+    assert session._sent_events == []
