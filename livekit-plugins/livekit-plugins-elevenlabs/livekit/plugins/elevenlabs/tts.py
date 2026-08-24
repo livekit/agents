@@ -1031,7 +1031,10 @@ class _DialogueConnection(_Connection):
                         await self._ws.send_json(close_pkt)
 
         except Exception as e:
-            logger.warning("dialogue send loop error", exc_info=e)
+            logger.warning(
+                "dialogue send loop error",
+                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
+            )
         finally:
             if not self._closed:
                 await self.aclose()
