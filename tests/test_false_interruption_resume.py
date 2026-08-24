@@ -282,7 +282,7 @@ async def test_server_side_turn_detection_keeps_the_resume_armed(
 
     session = _session()
     activity, _ = _paused_activity(session)
-    activity._rt_turn_detection_enabled = True
+    activity._rt_server_reply_enabled = True
     activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
 
     events: list[str] = []

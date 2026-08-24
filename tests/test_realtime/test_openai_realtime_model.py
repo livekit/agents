@@ -72,23 +72,27 @@ def test_with_azure_preserves_can_disable_turn_detection() -> None:
     assert explicit_off.capabilities.can_disable_turn_detection is False
 
 
-def test_create_response_false_reports_client_side_turn_taking() -> None:
-    # server VAD with create_response=False commits and transcribes the audio server-side but
-    # leaves the reply to the client, so it must not count as server-side turn detection —
-    # otherwise allow_interruptions=False is rejected (issue #6635)
+def test_create_response_false_reports_client_side_replies() -> None:
+    # server VAD with create_response=False still segments and commits the audio server-side, it
+    # only leaves the reply to the client. Reporting it as no turn detection makes the framework
+    # commit a buffer the server already committed (issue #6635)
     manual_reply = RealtimeModel(
         api_key="fake",
         turn_detection=ServerVad(type="server_vad", create_response=False),
     )
-    assert manual_reply.capabilities.turn_detection is False
+    assert manual_reply.capabilities.turn_detection is True
+    assert manual_reply.capabilities.auto_turn_reply_generation is False
 
     auto_reply = RealtimeModel(
         api_key="fake",
         turn_detection=ServerVad(type="server_vad"),
     )
     assert auto_reply.capabilities.turn_detection is True
+    assert auto_reply.capabilities.auto_turn_reply_generation is True
 
-    assert RealtimeModel(api_key="fake").capabilities.turn_detection is True
+    no_server_vad = RealtimeModel(api_key="fake", turn_detection=None)
+    assert no_server_vad.capabilities.turn_detection is False
+    assert no_server_vad.capabilities.auto_turn_reply_generation is False
 
 
 def test_create_response_false_warns_when_the_server_still_interrupts(
@@ -118,7 +122,7 @@ def test_update_options_keeps_derived_capabilities_in_sync() -> None:
     # a stale capability reports the server owning the turn after the caller handed turn
     # taking to the client, and AgentActivity then rejects allow_interruptions=False
     model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
-    assert model.capabilities.turn_detection is True
+    assert model.capabilities.auto_turn_reply_generation is True
     assert model.capabilities.user_transcription is True
 
     model.update_options(
@@ -127,14 +131,18 @@ def test_update_options_keeps_derived_capabilities_in_sync() -> None:
         ),
         input_audio_transcription=None,
     )
-    assert model.capabilities.turn_detection is False
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.auto_turn_reply_generation is False
     assert model.capabilities.user_transcription is False
+
+    model.update_options(turn_detection=None)
+    assert model.capabilities.turn_detection is False
 
     model.update_options(
         turn_detection=ServerVad(type="server_vad"),
         input_audio_transcription=AudioTranscription(model="whisper-1"),
     )
-    assert model.capabilities.turn_detection is True
+    assert model.capabilities.auto_turn_reply_generation is True
     assert model.capabilities.user_transcription is True
 
 
@@ -147,7 +155,7 @@ def test_update_options_leaves_derived_capabilities_alone_when_unset() -> None:
         ),
     )
     model.update_options(voice="marin")
-    assert model.capabilities.turn_detection is False
+    assert model.capabilities.auto_turn_reply_generation is False
 
 
 def _capabilities_session(model: RealtimeModel) -> RealtimeSession:
@@ -177,9 +185,9 @@ def test_session_update_options_keeps_capabilities_on_the_session() -> None:
         input_audio_transcription=None,
     )
 
-    assert session._capabilities.turn_detection is False
+    assert session._capabilities.auto_turn_reply_generation is False
     assert session._capabilities.user_transcription is False
-    assert model.capabilities.turn_detection is True
+    assert model.capabilities.auto_turn_reply_generation is True
     assert model.capabilities.user_transcription is True
 
 

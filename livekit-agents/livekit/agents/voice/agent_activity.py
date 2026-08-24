@@ -272,6 +272,12 @@ class AgentActivity(RecognitionHooks):
 
         # session-scoped truth read by every server-side turn-detection check below
         self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
+        # the server owns the turn only when it answers it too, otherwise it just segments audio
+        self._rt_server_reply_enabled = (
+            self._rt_turn_detection_enabled
+            and isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.auto_turn_reply_generation
+        )
         if (
             isinstance(self.llm, llm.RealtimeModel)
             and not self._rt_turn_detection_enabled
@@ -282,7 +288,7 @@ class AgentActivity(RecognitionHooks):
                 "turn detection."
             )
 
-        if self._rt_turn_detection_enabled and not self.allow_interruptions:
+        if self._rt_server_reply_enabled and not self.allow_interruptions:
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "
                 "allow_interruptions cannot be False, disable turn_detection in "
@@ -1503,7 +1509,7 @@ class AgentActivity(RecognitionHooks):
                 "add a TTS model to AgentSession to enable say()"
             )
 
-        if self._rt_turn_detection_enabled and allow_interruptions is False:
+        if self._rt_server_reply_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1569,7 +1575,7 @@ class AgentActivity(RecognitionHooks):
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
-        if self._rt_turn_detection_enabled and allow_interruptions is False:
+        if self._rt_server_reply_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1741,8 +1747,9 @@ class AgentActivity(RecognitionHooks):
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
     ) -> asyncio.Future[str]:
         if self._rt_session is not None:
-            # commit audio buffer and conditionally trigger response generation
-            self._rt_session.commit_audio()
+            if not self._rt_turn_detection_enabled:
+                # when the server segments, it commits each turn itself
+                self._rt_session.commit_audio()
             if not skip_reply:
                 self._session.generate_reply()
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
@@ -2000,7 +2007,7 @@ class AgentActivity(RecognitionHooks):
         except RuntimeError:
             # only out of sync when the server cancelled its own response, with client-side turn
             # taking an uninterruptible speech is expected
-            if self._rt_turn_detection_enabled:
+            if self._rt_server_reply_enabled:
                 logger.exception(
                     "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
                 )
@@ -2465,7 +2472,7 @@ class AgentActivity(RecognitionHooks):
 
         # a replying turn interrupts the paused speech, so cancel the resume that would race it —
         # but the reply task returns before that in these two cases, so leave the resume armed
-        if not info.skip_reply and not self._rt_turn_detection_enabled:
+        if not info.skip_reply and not self._rt_server_reply_enabled:
             self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask
@@ -2512,7 +2519,7 @@ class AgentActivity(RecognitionHooks):
             user_message.metrics = metrics_report
 
         if isinstance(self.llm, llm.RealtimeModel):
-            if self._rt_turn_detection_enabled:
+            if self._rt_server_reply_enabled:
                 return
 
             if self._rt_session is not None:
@@ -2522,7 +2529,9 @@ class AgentActivity(RecognitionHooks):
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
                     return
-                self._rt_session.commit_audio()
+                if not self._rt_turn_detection_enabled:
+                    # when the server segments, it commits each turn itself
+                    self._rt_session.commit_audio()
 
         if info.skip_reply:
             if info.new_transcript != "":

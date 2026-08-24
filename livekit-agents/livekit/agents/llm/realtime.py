@@ -61,7 +61,8 @@ class RealtimeCapabilities:
     message_truncation: bool
     """Whether generated assistant messages can be truncated after interruption"""
     turn_detection: bool
-    """Whether the model emits server-side speech start and stop events for turn taking"""
+    """Whether the model detects turns server-side, segmenting and committing the input audio
+    itself. The client must not commit or clear that buffer."""
     user_transcription: bool
     """Whether the model emits user audio transcription events"""
     auto_tool_reply_generation: bool
@@ -70,6 +71,11 @@ class RealtimeCapabilities:
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
     """Whether function call items already in the chat context can be resumed"""
+    auto_turn_reply_generation: bool = True
+    """Whether the model replies on its own when its server-side turn detection ends a user turn.
+
+    When False the server keeps segmenting the input audio but the client decides when to reply.
+    """
     can_disable_turn_detection: bool = False
     """Whether server-side turn detection can be disabled for a session so the client drives
     turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
