@@ -3814,6 +3814,9 @@ class AgentActivity(RecognitionHooks):
                 # cancel the pending generation; the plugin emits response.cancel
                 if not generate_reply_fut.done():
                     generate_reply_fut.cancel()
+                else:
+                    # the response already landed, cancelling the future no longer reaches it
+                    self._rt_session.interrupt()
                 return
 
             try:
@@ -3909,6 +3912,41 @@ class AgentActivity(RecognitionHooks):
         )
         tool_ctx = llm.ToolContext(self.tools)
 
+        tasks: list[asyncio.Task[Any]] = []
+        tees: list[utils.aio.itertools.Tee[Any]] = []
+
+        msg_tee = utils.aio.itertools.tee(generation_ev.message_stream, 2)
+        msg_stream, msg_stream_to_drain = msg_tee
+        tees.append(msg_tee)
+
+        fnc_tee = utils.aio.itertools.tee(generation_ev.function_stream, 2)
+        fnc_stream, fnc_stream_for_tracing = fnc_tee
+        tees.append(fnc_tee)
+
+        function_calls: list[llm.FunctionCall] = []
+        generation_ended = False
+
+        async def _read_fnc_stream() -> None:
+            async for fnc in fnc_stream_for_tracing:
+                function_calls.append(fnc)
+
+        async def _drain_msg_stream() -> None:
+            async for _ in msg_stream_to_drain:
+                pass
+
+        async def _watch_generation_end() -> None:
+            # the provider closes both streams when it ends the response
+            nonlocal generation_ended
+            await asyncio.gather(_drain_msg_stream(), _read_fnc_stream())
+            generation_ended = True
+
+        tasks.append(
+            asyncio.create_task(
+                _watch_generation_end(),
+                name="AgentActivity.realtime_generation.watch_end",
+            )
+        )
+
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
@@ -3919,7 +3957,12 @@ class AgentActivity(RecognitionHooks):
         speech_handle._clear_authorization()
 
         if speech_handle.interrupted:
-            await utils.aio.cancel_and_wait(*authorization_tasks)
+            # nothing was played, but the response may still be generating server-side
+            if not generation_ended:
+                self._rt_session.interrupt()
+            await utils.aio.cancel_and_wait(*authorization_tasks, *tasks)
+            for tee in tees:
+                await tee.aclose()
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             return  # TODO(theomonnom): remove the message from the serverside history
 
@@ -3958,9 +4001,6 @@ class AgentActivity(RecognitionHooks):
                 self._audio_recognition._on_start_of_agent_speech(started_at=started_speaking_at)
             if self.interruption_enabled:
                 self._disable_vad_interruption_soon()
-
-        tasks: list[asyncio.Task[Any]] = []
-        tees: list[utils.aio.itertools.Tee[Any]] = []
 
         read_transcript_from_tts = False
 
@@ -4051,7 +4091,7 @@ class AgentActivity(RecognitionHooks):
 
         @utils.log_exceptions(logger=logger)
         async def _process_messages() -> None:
-            async for msg in generation_ev.message_stream:
+            async for msg in msg_stream:
                 if speech_handle.interrupted:
                     # remaining messages are left out of message_outputs so
                     # update_chat_ctx below removes them server-side.
@@ -4065,23 +4105,6 @@ class AgentActivity(RecognitionHooks):
             _process_messages(), name="AgentActivity.realtime_generation.process_messages"
         )
         tasks.append(process_msg_task)
-
-        # read function calls
-        fnc_tee = utils.aio.itertools.tee(generation_ev.function_stream, 2)
-        fnc_stream, fnc_stream_for_tracing = fnc_tee
-        tees.append(fnc_tee)
-        function_calls: list[llm.FunctionCall] = []
-
-        async def _read_fnc_stream() -> None:
-            async for fnc in fnc_stream_for_tracing:
-                function_calls.append(fnc)
-
-        tasks.append(
-            asyncio.create_task(
-                _read_fnc_stream(),
-                name="AgentActivity.realtime_generation.read_fnc_stream",
-            )
-        )
 
         # messages in RunResult are ordered by the `created_at` field
         def _tool_execution_started_cb(fnc_call: llm.FunctionCall) -> None:
@@ -4107,6 +4130,10 @@ class AgentActivity(RecognitionHooks):
         )
 
         await speech_handle.wait_if_not_interrupted([*tasks])
+
+        # the cancel is session-wide, so send it only while this response is still generating
+        if speech_handle.interrupted and not generation_ended:
+            self._rt_session.interrupt()
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         current_span.set_attribute(
