@@ -1952,6 +1952,15 @@ class RealtimeSession(
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         assert event.item.id is not None, "item.id is None"
 
+        if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
+            # the server can anchor to an item it just deleted; the item belongs at the tail
+            logger.warning(
+                f"{self._realtime_model._provider_label} anchored an item to one it is no longer "
+                "tracking, appending it instead",
+                extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
+            )
+            event.previous_item_id = self._remote_chat_ctx.tail_id
+
         try:
             lk_item = openai_item_to_livekit_item(event.item)
             self._remote_chat_ctx.insert(event.previous_item_id, lk_item)
@@ -2309,7 +2318,11 @@ class RealtimeSession(
             # leave update_chat_ctx to stall inside the speech that awaits it
             if fut := self._chat_ctx_event_futures.pop(event_id, None):
                 if not fut.done():
-                    fut.set_exception(llm.RealtimeError(event.error.message))
+                    # a duplicate id means the item is already there, as the create wanted
+                    if event.error.code == "item_create_duplicate_item_id":
+                        fut.set_result(None)
+                    else:
+                        fut.set_exception(llm.RealtimeError(event.error.message))
                 # a terminal one still has to end the session, whatever it came in reply to
                 if not _is_fatal_error(event.error):
                     return
