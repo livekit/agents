@@ -618,9 +618,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "raw_arguments": json_arguments[:500],
-                "repaired": cleaned,
-                "error": str(strict_err),
+                "lk.pii.raw_arguments": json_arguments[:500],
+                "lk.pii.repaired": cleaned,
+                "lk.pii.error": str(strict_err),
             },
         )
         args_dict = cleaned
@@ -673,7 +673,7 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "arguments": json_arguments},
+                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
@@ -692,13 +692,13 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise
 
@@ -897,7 +897,7 @@ def _is_valid_function_output(value: Any) -> bool:
 @dataclass
 class FunctionCallResult:
     fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput | None
+    fnc_call_out: FunctionCallOutput
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
@@ -933,9 +933,16 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="",
+                is_error=False,
+                reply_required=False,
+            ),
             raw_output=output,
             raw_exception=exception,
         )
@@ -956,11 +963,16 @@ def make_function_call_output(
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="the tool returned an invalid output",
+                is_error=True,
+            ),
             raw_output=output,
             raw_exception=None,
         )
@@ -1032,7 +1044,7 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

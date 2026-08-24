@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import aiohttp
 import pytest
 
+from livekit.agents import tts as agents_tts, utils
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -52,6 +53,7 @@ class _FakeConnection:
         self._ws = _FakeWebSocket(messages)
         self._is_current = True
         self._active_contexts = {context_id}
+        self._input_queue = utils.aio.Chan[object]()
         self.emitter = _FakeEmitter()
         self.waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         self._context_data = {
@@ -85,11 +87,11 @@ class _FakeConnection:
         else:
             event.clear()
 
+    def unregister_stream(self, context_id: str) -> None:
+        elevenlabs_tts._Connection.unregister_stream(self, context_id)  # pyright: ignore[reportArgumentType]
+
     def _cleanup_context(self, context_id: str) -> None:
-        ctx = self._context_data.pop(context_id, None)
-        if ctx and ctx.timeout_timer:
-            ctx.timeout_timer.cancel()
-        self._active_contexts.discard(context_id)
+        elevenlabs_tts._Connection._cleanup_context(self, context_id)  # pyright: ignore[reportArgumentType]
         self._turn_drained.pop(context_id, None)
         self._flushes_sent.pop(context_id, None)
         self._turn_boundaries_received.pop(context_id, None)
@@ -280,6 +282,88 @@ async def test_recv_loop_ignores_flush_done_for_inactive_context() -> None:
     assert connection.emitter.audio_chunks == [audio_chunk]
     assert connection.waiter.done()
     assert connection.waiter.result() is None
+
+
+@pytest.mark.asyncio
+async def test_recv_loop_drops_audio_for_unregistered_context() -> None:
+    """Audio flushed after the stream ended must not reach its emitter."""
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"late-audio").decode("ascii"),
+                    "isFinal": True,
+                }
+            ),
+        ],
+    )
+    connection.unregister_stream(context_id)
+
+    await elevenlabs_tts._Connection._recv_loop(connection)
+
+    assert connection.emitter.audio_chunks == []
+    # the server released the context, so the connection can drain
+    assert connection._active_contexts == set()
+
+
+def test_unregister_stream_keeps_the_context_closable() -> None:
+    """close_context() must still reach the server, otherwise contexts leak (#5844)."""
+    context_id = "ctx_123"
+    connection = _FakeConnection(context_id, [])
+    connection.unregister_stream(context_id)
+
+    assert context_id not in connection._context_data
+    assert context_id in connection._active_contexts
+
+    elevenlabs_tts._Connection.close_context(connection, context_id)  # pyright: ignore[reportArgumentType]
+    assert connection._input_queue.recv_nowait() == elevenlabs_tts._CloseContext(context_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupted_stream_unregisters_before_ending_the_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #6929: a cancelled run must stop routing audio to its emitter."""
+    calls: list[str] = []
+
+    class _StubConnection:
+        def register_stream(self, stream: object, emitter: object, waiter: object) -> None:
+            pass
+
+        def send_content(self, content: object) -> None:
+            calls.append("send_content")
+
+        def unregister_stream(self, context_id: str) -> None:
+            calls.append("unregister_stream")
+
+        def close_context(self, context_id: str, *, drain: bool = True) -> None:
+            calls.append("close_context")
+
+    connection = _StubConnection()
+
+    async def _current_connection(self: object) -> tuple[object, float, bool]:
+        return connection, 0.0, True
+
+    original_end_segment = agents_tts.AudioEmitter.end_segment
+
+    def _end_segment(self: agents_tts.AudioEmitter) -> None:
+        calls.append("end_segment")
+        original_end_segment(self)
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(agents_tts.AudioEmitter, "end_segment", _end_segment)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    stream = tts.stream()
+    stream.push_text("hello world. ")
+    await asyncio.sleep(0.1)  # let the run reach `await waiter`
+    await stream.aclose()  # the interruption
+
+    assert calls.index("unregister_stream") < calls.index("end_segment")
+    assert "close_context" in calls
 
 
 # -- eleven_v3 / eleven_v3_conversational (text-to-dialogue) --------------------------

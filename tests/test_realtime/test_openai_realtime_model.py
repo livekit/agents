@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
 
@@ -12,6 +13,7 @@ from openai.types.realtime import (
     ConversationItemDeletedEvent,
     RealtimeErrorEvent,
 )
+from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import llm
@@ -112,6 +114,75 @@ def test_create_response_false_warns_when_the_server_still_interrupts(
     assert caplog.text == ""
 
 
+def test_update_options_keeps_derived_capabilities_in_sync() -> None:
+    # a stale capability reports the server owning the turn after the caller handed turn
+    # taking to the client, and AgentActivity then rejects allow_interruptions=False
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+    model.update_options(
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+    assert model.capabilities.turn_detection is False
+    assert model.capabilities.user_transcription is False
+
+    model.update_options(
+        turn_detection=ServerVad(type="server_vad"),
+        input_audio_transcription=AudioTranscription(model="whisper-1"),
+    )
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+
+def test_update_options_leaves_derived_capabilities_alone_when_unset() -> None:
+    # an unrelated update must not resync a model that opted out of server-side turn taking
+    model = RealtimeModel(
+        api_key="fake",
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+    )
+    model.update_options(voice="marin")
+    assert model.capabilities.turn_detection is False
+
+
+def _capabilities_session(model: RealtimeModel) -> RealtimeSession:
+    # only the state update_options touches; a real session would open a websocket
+    return cast(
+        RealtimeSession,
+        SimpleNamespace(
+            _opts=replace(model._opts),
+            _capabilities=replace(model.capabilities),
+            send_event=lambda event: None,
+            _wrap_session_update=lambda event_id, session: session,
+        ),
+    )
+
+
+def test_session_update_options_keeps_capabilities_on_the_session() -> None:
+    # turn detection is per session: one session handing turn taking to the client must not
+    # change what the model, or any other session on it, reports
+    model = RealtimeModel(api_key="fake", turn_detection=ServerVad(type="server_vad"))
+    session = _capabilities_session(model)
+
+    RealtimeSession.update_options(
+        session,
+        turn_detection=ServerVad(
+            type="server_vad", create_response=False, interrupt_response=False
+        ),
+        input_audio_transcription=None,
+    )
+
+    assert session._capabilities.turn_detection is False
+    assert session._capabilities.user_transcription is False
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.user_transcription is True
+
+
 def test_legacy_turn_detection_keeps_interrupt_response() -> None:
     # the deprecated session.TurnDetection carries interrupt_response for server_vad too;
     # dropping it silently re-enabled server-side interruption
@@ -170,6 +241,7 @@ def _handle_error_session(
             _realtime_model=SimpleNamespace(_provider_label="openai"),
             _opts=SimpleNamespace(turn_detection=turn_detection),
             _chat_ctx_event_futures={},
+            _response_created_futures={},
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -334,6 +406,7 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     session._item_delete_future = {}
     session._item_create_future = {}
     session._chat_ctx_event_futures = {}
+    session._response_created_futures = {}
     sent: list[ConversationItemCreateEvent] = []
     session.send_event = sent.append  # type: ignore[method-assign,assignment]
     errors: list[llm.RealtimeModelError] = []
@@ -350,6 +423,19 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     session._handle_error(_rejection(sent[0].event_id))
 
     assert [e.recoverable for e in errors] == [True], "swallowed by a retired waiter"
+
+
+async def test_a_duplicate_item_id_settles_its_waiter_as_a_no_op() -> None:
+    # the item is already on the conversation, which is all the create asked for; failing the
+    # waiter would report a rejection for an update that got what it wanted
+    session = _chat_ctx_update_session()
+    waiter = session._item_create_future["item_1"]
+
+    RealtimeSession._handle_error(
+        session, _rejection("chat_ctx_create_abc", code="item_create_duplicate_item_id")
+    )
+
+    assert waiter.done() and waiter.exception() is None
 
 
 async def test_a_rejection_leaves_its_sibling_event_alone() -> None:
@@ -375,3 +461,58 @@ async def test_a_fatal_error_on_a_chat_ctx_event_still_ends_the_session() -> Non
 
     assert exc_info.value.retryable is False
     assert isinstance(waiter.exception(), llm.RealtimeError)
+
+
+# --------------------------------------------------------------------------- #
+# a response.create rejected before any response.created (the conversation already
+# has an active response) must fail its generate_reply future immediately with the
+# provider code, instead of orphaning it until the 10s timeout — while still emitting
+# the error event.
+# --------------------------------------------------------------------------- #
+
+
+def _active_response_rejection(event_id: str) -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.construct(
+        type="error",
+        event_id=event_id,
+        error={
+            "message": "Conversation already has an active response",
+            "type": "invalid_request_error",
+            "code": "conversation_already_has_active_response",
+            "event_id": event_id,
+        },
+    )
+
+
+def test_active_response_rejection_fails_generate_reply_future_fast() -> None:
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_1"))
+
+    # settled immediately (no 10s timeout), with the typed error and provider code
+    assert fut.done()
+    err = fut.exception()
+    assert isinstance(err, llm.RealtimeError)
+    assert err.code == "conversation_already_has_active_response"
+    # the future was consumed so nothing else touches it
+    assert "response_create_1" not in session._response_created_futures
+    # both surfaces: the error is still emitted as a recoverable "error" event
+    assert captured["recoverable"] is True
+
+
+def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -> None:
+    # an error naming an event_id we aren't tracking must not disturb a pending future
+    captured: dict[str, object] = {}
+    session = _handle_error_session(captured)
+    fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.Future()
+    session._response_created_futures = {"response_create_1": fut}
+
+    RealtimeSession._handle_error(session, _active_response_rejection("response_create_other"))
+
+    assert not fut.done()
+    assert session._response_created_futures == {"response_create_1": fut}
+    # still reported down the ordinary path
+    assert captured["recoverable"] is True
