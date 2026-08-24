@@ -54,6 +54,7 @@ from openai.types.realtime import (
     InputAudioBufferAppendEvent,
     InputAudioBufferClearEvent,
     InputAudioBufferCommitEvent,
+    InputAudioBufferCommittedEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
     NoiseReductionType,
@@ -1188,6 +1189,10 @@ class RealtimeSession(
                         self._handle_input_audio_buffer_speech_stopped(
                             InputAudioBufferSpeechStoppedEvent.construct(**event)
                         )
+                    elif event["type"] == "input_audio_buffer.committed":
+                        self._handle_input_audio_buffer_committed(
+                            InputAudioBufferCommittedEvent.construct(**event)
+                        )
                     elif event["type"] == "response.created":
                         self._handle_response_created(ResponseCreatedEvent.construct(**event))
                     elif event["type"] == "response.output_item.added":
@@ -1861,6 +1866,12 @@ class RealtimeSession(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(user_transcription_enabled=user_transcription_enabled),
         )
+
+    def _handle_input_audio_buffer_committed(self, _: InputAudioBufferCommittedEvent) -> None:
+        # only a segment the server closed itself leaves us nothing to commit; our own commit
+        # is echoed here too, and it already cleared the audio it owned
+        if self._opts.turn_detection is not None:
+            self._pushed_duration_s = 0
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         assert event.response.id is not None, "response.id is None"

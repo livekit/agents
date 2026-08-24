@@ -11,6 +11,7 @@ from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetectio
 from openai.types.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    InputAudioBufferCommittedEvent,
     RealtimeErrorEvent,
 )
 from openai.types.realtime.audio_transcription import AudioTranscription
@@ -24,6 +25,7 @@ from livekit.plugins.openai.realtime.realtime_model import (
     RealtimeModel,
     RealtimeSession,
     _is_fatal_error,
+    _RealtimeOptions,
 )
 
 pytestmark = pytest.mark.unit
@@ -503,3 +505,49 @@ def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -
     assert session._response_created_futures == {"response_create_1": fut}
     # still reported down the ordinary path
     assert captured["recoverable"] is True
+
+
+def _audio_buffer_session(turn_detection: ServerVad | None) -> RealtimeSession:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._opts = cast("_RealtimeOptions", SimpleNamespace(turn_detection=turn_detection))
+    session._pushed_duration_s = 3.0
+    session._sent_events = []
+    session.send_event = session._sent_events.append  # type: ignore[method-assign]
+    return session
+
+
+def _server_commit(session: RealtimeSession) -> None:
+    RealtimeSession._handle_input_audio_buffer_committed(
+        session, InputAudioBufferCommittedEvent.construct(item_id="item_1")
+    )
+
+
+def test_a_turn_the_server_committed_is_not_committed_again() -> None:
+    # server-side turn detection closes each segment itself, and committing again asks the
+    # server to close a buffer it already emptied (code=input_audio_buffer_commit_empty)
+    session = _audio_buffer_session(ServerVad(type="server_vad"))
+    _server_commit(session)
+    session.commit_audio()
+
+    assert session._sent_events == []
+
+
+def test_audio_pushed_after_a_server_commit_is_still_committed() -> None:
+    # the client owns the turn boundary when the server does not reply on its own, so audio
+    # the server has not segmented yet has to reach the conversation before the reply
+    session = _audio_buffer_session(ServerVad(type="server_vad"))
+    _server_commit(session)
+    session._pushed_duration_s = 3.0
+    session.commit_audio()
+
+    assert [event.type for event in session._sent_events] == ["input_audio_buffer.commit"]
+
+
+def test_the_echo_of_our_own_commit_keeps_the_pushed_audio() -> None:
+    # a client commit is acknowledged with the same event, and the audio that arrived while it
+    # was in flight is still ours to commit
+    session = _audio_buffer_session(None)
+    _server_commit(session)
+    session.commit_audio()
+
+    assert [event.type for event in session._sent_events] == ["input_audio_buffer.commit"]
