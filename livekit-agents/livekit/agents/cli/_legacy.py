@@ -846,6 +846,8 @@ class FrequencyVisualizer:
 
 
 class RichLoggingHandler(logging.Handler):
+    _DEFAULT_TIME_WIDTH = len("00:00:00.000")
+
     def __init__(self, agents_console: AgentsConsole):
         super().__init__()
         self.c = agents_console
@@ -881,15 +883,6 @@ class RichLoggingHandler(logging.Handler):
 
         MAX_NAME_WIDTH = 18
 
-        output = Table.grid(padding=(0, 1))
-        output.add_column(style="log.time")
-        output.add_column(style="log.level", width=8, no_wrap=True)
-        output.add_column(style="log.name", width=MAX_NAME_WIDTH, no_wrap=True, overflow="ellipsis")
-        output.add_column(ratio=1, style="log.message")
-        output.add_column(style="log.extra", no_wrap=True)
-
-        row: list[RenderableType] = []
-
         time_format = None if self.formatter is None else self.formatter.datefmt
         log_time = datetime.datetime.fromtimestamp(record.created)
         log_time = log_time or self.c.console.get_datetime()
@@ -899,6 +892,19 @@ class RichLoggingHandler(logging.Handler):
             if time_format
             else Text(log_time.strftime("%H:%M:%S.%f")[:-3])
         )
+
+        output = Table.grid(padding=(0, 1))
+        output.add_column(
+            style="log.time",
+            width=self._DEFAULT_TIME_WIDTH if time_format is None else None,
+            no_wrap=time_format is None,
+        )
+        output.add_column(style="log.level", width=8, no_wrap=True)
+        output.add_column(style="log.name", width=MAX_NAME_WIDTH, no_wrap=True, overflow="ellipsis")
+        output.add_column(ratio=1, style="log.message")
+        output.add_column(style="log.extra", no_wrap=True)
+
+        row: list[RenderableType] = []
 
         if log_time_display == self._last_time:
             time_str = log_time_display.plain
