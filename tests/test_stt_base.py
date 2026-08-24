@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
-from types import SimpleNamespace
-from typing import Literal
 
 import pytest
 
-from livekit import rtc
-from livekit.agents import Agent, APIConnectionError, APIStatusError, ModelSettings
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -38,11 +34,9 @@ class _DummyStream(RecognizeStream):
         *,
         stt: STT,
         fail_first_run: bool = False,
-        event: SpeechEvent | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
         self._fail_first_run = fail_first_run
-        self._event = event
         self._run_count = 0
 
     async def _run(self) -> None:
@@ -51,8 +45,7 @@ class _DummyStream(RecognizeStream):
             raise APIConnectionError("fake failure to trigger retry")
         # emit a final and exit so _main_task can complete normally
         self._event_ch.send_nowait(
-            self._event
-            or SpeechEvent(
+            SpeechEvent(
                 type=SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[SpeechData(language="", text="hello")],
             )
@@ -60,26 +53,14 @@ class _DummyStream(RecognizeStream):
 
 
 class _DummySTT(STT):
-    def __init__(
-        self,
-        *,
-        aligned_transcript: Literal["chunk", False] = False,
-        event: SpeechEvent | None = None,
-    ) -> None:
-        super().__init__(
-            capabilities=STTCapabilities(
-                streaming=True,
-                interim_results=False,
-                aligned_transcript=aligned_transcript,
-            )
-        )
-        self._event = event
+    def __init__(self) -> None:
+        super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
 
     async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
         raise NotImplementedError
 
     def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _DummyStream:
-        return _DummyStream(stt=self, event=self._event)
+        return _DummyStream(stt=self)
 
 
 class _NonRetryableStream(RecognizeStream):
@@ -199,42 +180,3 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
     assert end_event.speech_end_time is not None
     assert final_event.speech_end_time == end_event.speech_end_time
     assert final_event.created_at - end_event.created_at == pytest.approx(0.5, abs=0.01)
-
-
-@pytest.mark.parametrize(
-    ("aligned_transcript", "has_speech_end_time"),
-    [("chunk", True), (False, False)],
-)
-async def test_default_stt_node_normalizes_only_aligned_speech_end_time(
-    aligned_transcript: Literal["chunk", False],
-    has_speech_end_time: bool,
-) -> None:
-    input_started_at = time.time() - 10.0
-    event = SpeechEvent(
-        type=SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[SpeechData(language="", text="hello", end_time=9.0)],
-    )
-    stt_impl = _DummySTT(aligned_transcript=aligned_transcript, event=event)
-    agent = Agent(instructions="test")
-    agent._activity = SimpleNamespace(  # type: ignore[assignment]
-        stt=stt_impl,
-        vad=None,
-        session=SimpleNamespace(
-            conn_options=SimpleNamespace(stt_conn_options=DEFAULT_API_CONNECT_OPTIONS),
-            _recorder_io=None,
-            _started_at=None,
-        ),
-        _audio_recognition=SimpleNamespace(_input_started_at=input_started_at),
-    )
-
-    async def _empty_audio() -> AsyncIterator[rtc.AudioFrame]:
-        if False:
-            yield silence_frame(duration=0.1, sample_rate=16_000)
-
-    events = [item async for item in Agent.default.stt_node(agent, _empty_audio(), ModelSettings())]
-
-    assert len(events) == 1
-    if has_speech_end_time:
-        assert events[0].speech_end_time == input_started_at + 9.0
-    else:
-        assert events[0].speech_end_time is None

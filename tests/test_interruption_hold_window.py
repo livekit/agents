@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import AsyncIterable, AsyncIterator
 from unittest.mock import MagicMock
 
 import pytest
 
+from livekit import rtc
+from livekit.agents import ModelSettings
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import AudioRecognition, _STTPipeline
 
 pytestmark = pytest.mark.unit
 
@@ -27,6 +30,7 @@ def _make_recognition(
     recognition._backchannel_boundary_timer = None
     recognition._transcript_buffer = deque()
     recognition._transcript_gate_active = True
+    recognition._stt_aligned_transcript = False
     recognition._hooks = MagicMock()
     recognition._hooks.interruption_by_audio_activity_enabled = False
     recognition._process_stt_event = MagicMock()  # type: ignore[method-assign]
@@ -218,7 +222,7 @@ def test_agent_speech_does_not_arm_gate_without_overlap() -> None:
     assert not recognition._transcript_gate_active
 
 
-async def test_delayed_overlap_from_start_boundary_stays_with_audio_activity() -> None:
+async def test_start_boundary_uses_audio_activity_for_agent_speech_interval() -> None:
     recognition = _make_recognition(vad_sos=None)
     recognition._agent_speaking = False
     recognition._interruption_enabled = True
@@ -240,6 +244,16 @@ async def test_delayed_overlap_from_start_boundary_stays_with_audio_activity() -
     assert not recognition._overlap_open
     recognition._interruption_ch.send_nowait.assert_called_once()
 
+    recognition._speaking = True
+    recognition._on_end_of_speech(ended_at=5.75)
+    recognition._speaking = False
+    recognition._on_start_of_speech(started_at=6.5)
+
+    assert recognition._hooks.interruption_by_audio_activity_enabled
+    assert not recognition._transcript_gate_active
+    assert not recognition._overlap_open
+    recognition._interruption_ch.send_nowait.assert_called_once()
+
 
 async def test_ungated_final_during_agent_speech_uses_audio_activity() -> None:
     recognition = _make_recognition(vad_sos=None)
@@ -255,6 +269,53 @@ async def test_ungated_final_during_agent_speech_uses_audio_activity() -> None:
 
     assert recognition._hooks.interruption_by_audio_activity_enabled
     recognition._process_stt_event.assert_called_once_with(event)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("aligned_transcript", "speech_end_time", "end_time", "expected_speech_end_time"),
+    [
+        (True, None, 9.0, 10.0),
+        (False, None, 9.0, None),
+        (True, 8.0, 9.0, 8.0),
+        (True, None, 11.0, None),
+    ],
+)
+async def test_custom_stt_node_normalizes_aligned_speech_end_time(
+    aligned_transcript: bool,
+    speech_end_time: float | None,
+    end_time: float,
+    expected_speech_end_time: float | None,
+) -> None:
+    event = _event(
+        "custom",
+        created_at=11.0,
+        end_time=end_time,
+        speech_end_time=speech_end_time,
+    )
+
+    async def custom_stt_node(
+        _audio: AsyncIterable[rtc.AudioFrame], _model_settings: ModelSettings
+    ) -> AsyncIterator[SpeechEvent]:
+        yield event
+
+    pipeline = _STTPipeline(custom_stt_node)
+    pipeline.input_started_at = 1.0
+    recognition = _make_recognition(vad_sos=None)
+    recognition._stt_pipeline = pipeline
+    recognition._stt_aligned_transcript = aligned_transcript
+    recognition._agent_speaking = True
+    recognition._turn_detection_mode = "vad"
+    recognition._user_turn_committed = False
+    recognition._stt_request_ids = []
+    recognition._mark_turn_transcribed = MagicMock()  # type: ignore[method-assign]
+
+    try:
+        received = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=1.0)
+        await recognition._on_stt_event(received)
+    finally:
+        await pipeline.aclose()
+
+    assert recognition._transcript_buffer[0].speech_end_time == expected_speech_end_time
 
 
 def test_disabling_vad_flushes_held_transcripts() -> None:

@@ -6,7 +6,7 @@ import math
 import time
 from collections import deque
 from collections.abc import AsyncIterable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from opentelemetry import trace
@@ -250,6 +250,7 @@ class AudioRecognition:
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
         stt_provider: str | None = None,
+        stt_aligned_transcript: bool = False,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -265,6 +266,7 @@ class AudioRecognition:
         self._using_default_vad = using_default_vad
         self._stt_model = stt_model
         self._stt_provider = stt_provider
+        self._stt_aligned_transcript = stt_aligned_transcript
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
@@ -580,6 +582,8 @@ class AudioRecognition:
             or self._backchannel_boundary_active
             or started_in_boundary
         ):
+            # VAD/STT owns the rest of this agent-speech interval because this
+            # overlap's transcript can arrive after VAD EOS.
             self._hooks.interruption_by_audio_activity_enabled = True
             self._flush_held_transcripts()
             return
@@ -811,6 +815,7 @@ class AudioRecognition:
         pipeline: _STTPipeline | None = None,
         model: NotGivenOr[str | None] = NOT_GIVEN,
         provider: NotGivenOr[str | None] = NOT_GIVEN,
+        aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         reset_context: bool = False,
     ) -> None:
         self._stt = stt
@@ -820,6 +825,8 @@ class AudioRecognition:
             self._stt_model = model
         if is_given(provider):
             self._stt_provider = provider
+        if is_given(aligned_transcript):
+            self._stt_aligned_transcript = aligned_transcript
         # speaker metadata belongs to the old stream; drop it so a new STT starts clean
         if reset_context:
             self.stt_context = None
@@ -1109,6 +1116,17 @@ class AudioRecognition:
         return self._audio_transcript
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if (
+            ev.speech_end_time is None
+            and self._stt_aligned_transcript
+            and ev.alternatives
+            and ev.alternatives[0].end_time > 0
+            and self._input_started_at is not None
+        ):
+            speech_end_time = self._input_started_at + ev.alternatives[0].end_time
+            if speech_end_time <= ev.created_at:
+                ev = replace(ev, speech_end_time=speech_end_time)
+
         # Collect provider-known STT ids for this user turn. The actual attribute
         # is written once when the user_turn span ends (see _on_end_of_turn), to
         # avoid ordering issues with span creation.

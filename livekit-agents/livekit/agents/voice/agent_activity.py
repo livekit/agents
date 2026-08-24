@@ -734,6 +734,9 @@ class AgentActivity(RecognitionHooks):
                     self._agent.stt_node if resolved_stt else None,
                     model=resolved_stt.model if isinstance(resolved_stt, stt.STT) else None,
                     provider=resolved_stt.provider if isinstance(resolved_stt, stt.STT) else None,
+                    aligned_transcript=bool(resolved_stt.capabilities.aligned_transcript)
+                    if isinstance(resolved_stt, stt.STT)
+                    else False,
                     reset_context=True,
                 )
             self._session._keyterm_detector.swap_stt(resolved_stt)
@@ -1143,6 +1146,9 @@ class AgentActivity(RecognitionHooks):
             turn_detection=self._turn_detection,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
+            stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
+            if self.stt
+            else False,
         )
         stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
         turn_detector_stream = reuse_resources.turn_detector_stream if reuse_resources else None
