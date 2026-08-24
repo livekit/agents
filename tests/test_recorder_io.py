@@ -155,7 +155,7 @@ def _loud(samples: int, sample_rate: int = 1000, channels: int = 1) -> rtc.Audio
 
 def test_placed_audio_lands_at_its_own_timestamp() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
-    track.push(2.0, _loud(100), ends_run=True)
+    track.push(2.0, _loud(100))
 
     block = track.take(0, 3000)
     assert np.all(block[:2000] == 0.0)  # unwritten time is silence
@@ -165,8 +165,8 @@ def test_placed_audio_lands_at_its_own_timestamp() -> None:
 
 def test_a_gap_between_runs_stays_a_gap() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
-    track.push(0.0, _loud(100), ends_run=True)
-    track.push(0.5, _loud(100), ends_run=True)
+    track.push(0.0, _loud(100))
+    track.push(0.5, _loud(100))
 
     block = track.take(0, 1000)
     assert np.all(block[:100] > 0.0)
@@ -177,7 +177,7 @@ def test_a_gap_between_runs_stays_a_gap() -> None:
 def test_audio_arriving_after_its_window_was_written_is_dropped_and_counted() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
     track.take(0, 2000)  # the first two seconds have already gone to the encoder
-    track.push(0.5, _loud(100), ends_run=True)
+    track.push(0.5, _loud(100))
 
     assert np.all(track.take(2000, 3000) == 0.0)
     assert track.dropped_samples == 100
@@ -185,26 +185,28 @@ def test_audio_arriving_after_its_window_was_written_is_dropped_and_counted() ->
 
 def test_a_run_is_re_anchored_when_its_clock_drifts() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
-    track.push(0.0, _loud(100), ends_run=False)
-    track.push(0.1, _loud(100), ends_run=False)  # contiguous, extends the run
-    track.push(5.0, _loud(100), ends_run=False)  # beyond tolerance, anchors on its own timestamp
+    track.push(0.0, _loud(100))
+    track.push(0.1, _loud(100))  # contiguous, extends the run
+    track.push(5.0, _loud(100))  # beyond tolerance, anchors on its own timestamp
 
     assert [pos for pos, _ in track._placed] == [0, 100, 5000]
 
 
 def test_a_source_below_the_recording_rate_is_resampled_in_place() -> None:
     track = _Track(sample_rate=48000, t0=0.0)
-    track.push(1.0, _loud(2400, sample_rate=24000), ends_run=True)  # 100ms at 24kHz
+    track.push(1.0, _loud(2400, sample_rate=24000))  # 100ms at 24kHz
+    track.push(9.0, _loud(2400, sample_rate=24000))  # a new run, so the first one is complete
 
     block = track.take(0, 48000 * 2)
     assert np.all(block[:48000] == 0.0)
-    # 100ms of audio, twice as many samples at the recording rate
+    # 100ms of audio, twice as many samples at the recording rate; the samples the resampler
+    # still held when the run ended are part of it
     assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
 
 
 def test_a_stereo_source_is_mixed_down() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
-    track.push(0.0, _loud(100, channels=2), ends_run=True)
+    track.push(0.0, _loud(100, channels=2))
 
     block = track.take(0, 200)
     assert np.count_nonzero(block) == 100  # samples, not interleaved values

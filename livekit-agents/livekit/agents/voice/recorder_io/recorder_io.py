@@ -41,7 +41,6 @@ class _Captured:
     channel: int
     started_at: float
     frame: rtc.AudioFrame
-    ends_run: bool
 
 
 @dataclass
@@ -62,12 +61,18 @@ class _Track:
         self._run_samples = 0
         self.dropped_samples = 0
 
-    def _resample(self, frame: rtc.AudioFrame, *, flush: bool) -> np.ndarray:
+    def _resample(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+        """Mono frames at the recording rate, of which the resampler may still hold some back."""
         data = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
         mono = data.mean(axis=1).astype(np.int16) if frame.num_channels > 1 else data[:, 0]
-
+        mono_frame = rtc.AudioFrame(
+            data=mono.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=1,
+            samples_per_channel=len(mono),
+        )
         if frame.sample_rate == self._sample_rate:
-            return mono.astype(np.float32) / 32768.0
+            return [mono_frame]
 
         if self._resampler is None or self._source_rate != frame.sample_rate:
             self._source_rate = frame.sample_rate
@@ -75,24 +80,22 @@ class _Track:
                 input_rate=frame.sample_rate, output_rate=self._sample_rate, num_channels=1
             )
 
-        out = self._resampler.push(
-            rtc.AudioFrame(
-                data=mono.tobytes(),
-                sample_rate=frame.sample_rate,
-                num_channels=1,
-                samples_per_channel=len(mono),
-            )
-        )
-        if flush:
-            out = [*out, *self._resampler.flush()]
-        if not out:
-            return np.zeros(0, dtype=np.float32)
+        return self._resampler.push(mono_frame)
 
-        joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in out])
-        return joined.astype(np.float32) / 32768.0
-
-    def push(self, started_at: float, frame: rtc.AudioFrame, *, ends_run: bool) -> None:
+    def push(self, started_at: float, frame: rtc.AudioFrame) -> None:
         """Add audio that began at ``started_at``, extending the open run where it fits."""
+
+        def _place(frames: list[rtc.AudioFrame]) -> None:
+            if not frames:
+                return
+
+            assert self._run_start is not None
+            joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
+            samples = joined.astype(np.float32) / 32768.0
+            start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+            self._placed.append((start, samples))
+            self._run_samples += len(samples)
+
         expected = (
             None
             if self._run_start is None
@@ -100,19 +103,11 @@ class _Track:
         )
         if expected is None or abs(started_at - expected) > RESYNC_TOLERANCE:
             if self._resampler is not None:
-                # the leftover belongs to the run that just ended
-                self._resampler.flush()
+                # whatever the resampler still holds is the tail of the run that just ended
+                _place(self._resampler.flush())
             self._run_start, self._run_samples = started_at, 0
 
-        samples = self._resample(frame, flush=ends_run)
-        if len(samples):
-            assert self._run_start is not None
-            start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
-            self._placed.append((start, samples))
-            self._run_samples += len(samples)
-
-        if ends_run:
-            self._run_start, self._run_samples = None, 0
+        _place(self._resample(frame))
 
     def take(self, start: int, end: int) -> np.ndarray:
         """The channel over ``[start, end)``, silent wherever nothing was placed."""
@@ -200,9 +195,7 @@ class RecorderIO:
         def on_frame(started_at: float, frame: rtc.AudioFrame) -> None:
             # a contiguous stream, so what has arrived is exactly what is settled
             self._input_settled = started_at + frame.duration
-            self._q.put_nowait(
-                _Captured(channel=0, started_at=started_at, frame=frame, ends_run=False)
-            )
+            self._q.put_nowait(_Captured(channel=0, started_at=started_at, frame=frame))
 
         self._in_record = RecorderAudioInput(
             recording_io=self, source=audio_input, on_frame=on_frame
@@ -212,9 +205,7 @@ class RecorderIO:
     def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
 
         def on_played(started_at: float, frame: rtc.AudioFrame) -> None:
-            self._q.put_nowait(
-                _Captured(channel=1, started_at=started_at, frame=frame, ends_run=False)
-            )
+            self._q.put_nowait(_Captured(channel=1, started_at=started_at, frame=frame))
 
         self._out_record = RecorderAudioOutput(
             recording_io=self, audio_output=audio_output, on_played=on_played
@@ -278,9 +269,7 @@ class RecorderIO:
             with container:
                 while (item := self._q.get()) is not None:
                     if isinstance(item, _Captured):
-                        tracks[item.channel].push(
-                            item.started_at, item.frame, ends_run=item.ends_run
-                        )
+                        tracks[item.channel].push(item.started_at, item.frame)
                         continue
 
                     end = round((item.until - self._t0) * self._sample_rate)

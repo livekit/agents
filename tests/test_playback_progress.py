@@ -120,6 +120,27 @@ async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
     assert ev.started_at == pytest.approx(dry_at - played)
 
 
+async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -> None:
+    """A segment whose flush trails its own playout still sits where it played."""
+    async with _Harness() as h:
+        # 60ms is the progressive ramp, 20ms then 40ms, so the byte stream holds nothing back
+        await h.push(0.06)
+        played, dry_at = h.sink._source_pushed_duration, h.sink._dry_at
+        assert dry_at is not None
+
+        h.source.queued_duration = 0.0
+        h.now = dry_at + 0.7  # the flush arrives long after the last audio played
+        h.sink.flush()
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+    assert len(h.progress) == 1
+    ev = h.progress[0]
+    assert ev.offset == 0.0
+    assert ev.duration == pytest.approx(played)
+    assert ev.started_at == pytest.approx(dry_at - played)
+
+
 async def test_a_cleared_queue_leaves_a_hole_rather_than_a_short_tail() -> None:
     """pause() drops what the source holds, so the audio that never played is in the middle."""
     async with _Harness() as h:
