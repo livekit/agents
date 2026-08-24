@@ -483,7 +483,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     logger.error(
                         f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                        extra={"request_id": request_id, "full_response": data},
+                        extra={"request_id": request_id, "lk.pii.full_response": data},
                     )
 
                     raise APIStatusError(
@@ -516,14 +516,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 elif data.get("event") == "task_failed":
-                    error_msg = (
-                        f"MiniMax returned task failed (trace_id: {current_trace_id}): {msg.data}"
-                    )
-                    logger.error(error_msg)
+                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
+                    logger.error(error_msg, extra={"lk.pii.data": msg.data})
                     raise APIError(error_msg)
 
                 else:
-                    logger.warning(f"unexpected Minimax message: {msg.data}")
+                    logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
             ws = await self._tts._connect_ws(self._conn_options.timeout)
@@ -633,7 +631,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if not line:
                         continue
                     if not line.startswith("data:"):
-                        logger.warning("unexpected Minimax message: %s", line)
+                        logger.warning("unexpected Minimax message", extra={"lk.pii.data": line})
                         continue
 
                     data = json.loads(line[5:])
@@ -655,7 +653,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                             logger.error(
                                 f"MiniMax HTTP stream error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                                extra={"full_response": data},
+                                extra={"lk.pii.full_response": data},
                             )
 
                             raise APIStatusError(

@@ -402,6 +402,9 @@ class LLMStream(ABC):
                     trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
                     trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
                     trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: metrics.prompt_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: (
+                        metrics.prompt_cached_tokens
+                    ),
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
                 },
             )
@@ -496,8 +499,7 @@ class LLMStream(ABC):
             for tc in response.tool_calls:
                 result = await llm.execute_function_call(tc, tool_ctx)
                 ctx.insert(result.fnc_call)
-                if result.fnc_call_out:
-                    ctx.insert(result.fnc_call_out)
+                ctx.insert(result.fnc_call_out)
             ```
         """
         text_parts: list[str] = []

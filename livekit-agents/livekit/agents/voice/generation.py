@@ -810,10 +810,11 @@ async def _execute_tools_task(
                 raw_args = llm_utils.parse_function_arguments(json_args)
             except ValueError as e:
                 logger.warning(
-                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
+                    f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
+                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -854,7 +855,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -902,13 +903,12 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-                    if fnc_call_out := output.fnc_call_out:
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
-                        )
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error
-                        )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
+                    )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
@@ -962,11 +962,10 @@ async def _execute_tools_task(
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
-    fnc_call_out: llm.FunctionCallOutput | None
+    fnc_call_out: llm.FunctionCallOutput
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
-    reply_required: bool = field(default=True)
 
 
 def make_tool_output(
@@ -1003,11 +1002,16 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "output": output},
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
-                fnc_call_out=None,
+                fnc_call_out=llm.FunctionCallOutput(
+                    name=fnc_call.name,
+                    call_id=fnc_call.call_id,
+                    output="the tool returned more than one agent",
+                    is_error=True,
+                ),
                 agent_task=None,
                 raw_output=output,
                 raw_exception=exception,
@@ -1031,15 +1035,30 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
+    # a tool with nothing to say, such as a bare handoff, expects no reply
+    base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,
         raw_exception=exception,
     )
+
+
+def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
+    """The output to record for a tool that finished on an interrupted turn.
+
+    A handoff answers as a failure, since the interruption left it unapplied.
+    """
+    fnc_call_out = out.fnc_call_out
+    if out.agent_task is not None:
+        fnc_call_out.output = "the agent handoff was interrupted and did not happen"
+        fnc_call_out.is_error = True
+
+    fnc_call_out.reply_required = False
+    return fnc_call_out
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change

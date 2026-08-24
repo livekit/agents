@@ -269,7 +269,7 @@ examples:
           - { value: inworld/inworld-tts-1.5-mini, label: Inworld TTS 1.5 Mini }
           - { value: inworld/inworld-tts-1.5-max, label: Inworld TTS 1.5 Max }
           - { value: inworld/inworld-tts-2, label: Inworld TTS 2 }
-          - { value: rime/arcana, label: Rime Arcana }
+          - { value: rime/coda, label: Rime Coda }
           - { value: rime/mist, label: Rime Mist }
           - { value: rime/mistv2, label: Rime Mist v2 }
           - { value: rime/mistv3, label: Rime Mist v3 }
