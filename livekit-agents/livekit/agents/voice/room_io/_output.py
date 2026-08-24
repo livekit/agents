@@ -142,6 +142,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             return
+
+        # a detaching sink never reaches the playout wait, so the playhead is reported here
+        self._report_run(
+            offset=self._source_pushed_duration - self._audio_source.queued_duration,
+            ended_at=time.time(),
+        )
         self._interrupted_event.set()
 
     def pause(self) -> None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from livekit import rtc
@@ -341,10 +342,14 @@ class _AudioSinkProxy(AudioOutput):
         # whether the wrapper above us has attached the proxy; set_next_in_chain
         # uses this to decide if a new/old downstream should be notified
         self._attached = False
-        self.set_next_in_chain(next_in_chain)
-
         self._capturing = False
         self._pushed_duration: float = 0.0
+        # the current sink counts from its own zero; these place its runs in the segment
+        self._offset_base: float = 0.0
+        self._sink_reported = False
+        self._sink_started_at: float | None = None
+
+        self.set_next_in_chain(next_in_chain)
 
     @property
     def next_in_chain(self) -> AudioOutput:
@@ -368,12 +373,24 @@ class _AudioSinkProxy(AudioOutput):
 
         old = self._next_in_chain
         if old is not None:
+            # a clear can finish a segment that is not over, and that call is the proxy's
             old.off("playback_finished", self._forward_next_playback_finished)
             old.off("playback_started", self._forward_next_playback_started)
-            old.off("playback_progressed", self._forward_next_playback_progressed)
             if self._pending_playback_count > 0:
                 # stop audio still playing on the old sink
                 old.clear_buffer()
+            # progress only observes, so the clear is still the sink's last word
+            old.off("playback_progressed", self._forward_next_playback_progressed)
+
+            if self._capturing:
+                # it cannot be asked once detached, so all it was given counts as played
+                if not self._sink_reported:
+                    self._report_run(self._pushed_duration - self._offset_base)
+
+                # the new sink counts from its own zero, this far into the segment
+                self._offset_base = self._pushed_duration
+                self._sink_reported = False
+                self._sink_started_at = None
 
             if self._attached:
                 old.on_detached()
@@ -391,6 +408,34 @@ class _AudioSinkProxy(AudioOutput):
         if old is not None and self._pending_playback_count > 0 and not self._capturing:
             self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
 
+    def _report_run(self, duration: float) -> None:
+        """Report a run the current sink played but never reported itself."""
+        if duration <= 0:
+            return
+
+        self.on_playback_progressed(
+            started_at=self._sink_started_at
+            if self._sink_started_at is not None
+            else time.time() - duration,
+            offset=self._offset_base,
+            duration=duration,
+        )
+
+    def _forward_next_playback_started(self, ev: PlaybackStartedEvent) -> None:
+        self._sink_started_at = ev.created_at
+        super()._forward_next_playback_started(ev)
+
+    def _forward_next_playback_progressed(self, ev: PlaybackProgressedEvent) -> None:
+        self._sink_reported = True
+        super()._forward_next_playback_progressed(replace(ev, offset=self._offset_base + ev.offset))
+
+    def _forward_next_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
+        if self._offset_base and not self._sink_reported:
+            # all it said is how much played; the offset is the segment's to supply
+            self._report_run(ev.playback_position)
+
+        super()._forward_next_playback_finished(ev)
+
     @property
     def sample_rate(self) -> int | None:
         return self.next_in_chain.sample_rate
@@ -403,6 +448,9 @@ class _AudioSinkProxy(AudioOutput):
         if not self._capturing:
             self._capturing = True
             self._pushed_duration = 0.0
+            self._offset_base = 0.0
+            self._sink_reported = False
+            self._sink_started_at = None
 
         await super().capture_frame(frame)
         await self.next_in_chain.capture_frame(frame)

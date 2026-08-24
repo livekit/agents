@@ -141,6 +141,22 @@ async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -
     assert ev.started_at == pytest.approx(dry_at - played)
 
 
+async def test_a_cleared_buffer_reports_the_playhead_without_waiting() -> None:
+    """A swap detaches the sink before its playout wait runs, so the clear is its last word."""
+    async with _Harness() as h:
+        await h.push(0.5)
+        pushed = h.sink._source_pushed_duration
+        h.now += 0.3
+        h.source.queued_duration = 0.2  # queued, so not yet played
+
+        h.sink.clear_buffer()
+
+    assert len(h.progress) == 1
+    ev = h.progress[0]
+    assert ev.offset == 0.0
+    assert ev.duration == pytest.approx(pushed - 0.2)
+
+
 async def test_a_cleared_queue_leaves_a_hole_rather_than_a_short_tail() -> None:
     """pause() drops what the source holds, so the audio that never played is in the middle."""
     async with _Harness() as h:

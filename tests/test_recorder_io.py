@@ -130,6 +130,150 @@ async def test_the_fallback_truncates_an_interrupted_segment() -> None:
     assert round(placed[0][1].duration, 3) == 0.4
 
 
+class _RemoteSink(io.AudioOutput):
+    """A leaf shaped like a remote avatar worker: no runs, a position only at the end."""
+
+    def __init__(self, started_at: float = 100.0) -> None:
+        super().__init__(label="test", capabilities=io.AudioOutputCapabilities(pause=True))
+        self._started_at = started_at
+        self._received = 0.0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        if not self._received:
+            self.on_playback_started(created_at=self._started_at)
+        self._received += frame.duration
+
+    def flush(self) -> None:
+        super().flush()
+
+    def clear_buffer(self) -> None:
+        pass
+
+    def finish_segment(self) -> None:
+        self.on_playback_finished(playback_position=self._received, interrupted=False)
+
+
+class _ReportingSink(_RemoteSink):
+    """A leaf with a local playhead, which reports it as it is cleared."""
+
+    def __init__(self, played: float = 0.0, started_at: float = 100.0) -> None:
+        super().__init__(started_at=started_at)
+        self._played = played
+
+    def clear_buffer(self) -> None:
+        self.on_playback_progressed(started_at=self._started_at, offset=0.0, duration=self._played)
+
+
+async def test_a_detached_sink_places_only_the_audio_it_played() -> None:
+    """A swap mid-playout must not record what the old sink still held."""
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=_ReportingSink(played=0.4),
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+
+    await output.capture_frame(_tone(1.0))
+    output.flush()
+    output.on_playback_started(created_at=100.0)
+
+    proxy.set_next_in_chain(_ReportingSink())  # 0.6s of the segment never played
+
+    assert len(placed) == 1
+    started_at, frame = placed[0]
+    assert started_at == 100.0
+    assert round(frame.duration, 3) == 0.4
+
+
+def _second(frame: rtc.AudioFrame) -> int:
+    """Which second of the marked segment a placed frame holds."""
+    data = np.frombuffer(frame.data, dtype=np.int16)
+    return int(np.unique(data)[0]) // 100 - 1
+
+
+def _marked(second: int) -> rtc.AudioFrame:
+    """One second of audio whose samples name their place in the segment."""
+    data = np.full(RATE, (second + 1) * 100, dtype=np.int16)
+    return rtc.AudioFrame(data.tobytes(), RATE, 1, RATE)
+
+
+async def _swap_mid_segment(
+    old: _RemoteSink, new: _RemoteSink
+) -> list[tuple[float, rtc.AudioFrame]]:
+    """A 10s segment whose sink is replaced after 5s, and where the recorder puts it."""
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=old,
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+
+    for s in range(5):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(new)
+    for s in range(5, 10):
+        await output.capture_frame(_marked(s))
+    output.flush()
+    new.finish_segment()
+    return placed
+
+
+async def test_a_sink_taking_over_a_segment_places_its_own_half() -> None:
+    """It counts from its own zero, so only the segment knows where its audio belongs."""
+    placed = await _swap_mid_segment(
+        _ReportingSink(played=2.0, started_at=100.0), _RemoteSink(started_at=105.0)
+    )
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 2.0),  # what the old sink reported playing
+        (105.0, 5, 5.0),  # the rest, which the new sink reports only as a position
+    ]
+
+
+async def test_a_detached_sink_that_reports_nothing_keeps_its_half() -> None:
+    """Everything it was given counts as played, the same as when a segment ends on it."""
+    placed = await _swap_mid_segment(_RemoteSink(started_at=100.0), _RemoteSink(started_at=105.0))
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 5.0),
+        (105.0, 5, 5.0),
+    ]
+
+
+async def test_each_sink_of_a_segment_places_the_stretch_it_was_given() -> None:
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=_RemoteSink(started_at=100.0),
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+    second, third = _RemoteSink(started_at=104.0), _RemoteSink(started_at=107.0)
+
+    for s in range(4):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(second)
+    for s in range(4, 7):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(third)
+    for s in range(7, 10):
+        await output.capture_frame(_marked(s))
+    output.flush()
+    third.finish_segment()
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 4.0),
+        (104.0, 4, 3.0),
+        (107.0, 7, 3.0),
+    ]
+
+
 async def test_a_segment_in_flight_holds_the_timeline() -> None:
     """The writer cannot settle a window whose agent audio has not been reported yet."""
     output, _ = _placing_output()
