@@ -1139,7 +1139,10 @@ class _DialogueConnection(_Connection):
                         logger.debug("no active contexts, shutting down connection")
                         break
         except Exception as e:
-            logger.warning("dialogue recv loop error", exc_info=e)
+            logger.warning(
+                "dialogue recv loop error",
+                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
+            )
             for ctx in self._context_data.values():
                 if not ctx.waiter.done():
                     ctx.waiter.set_exception(e)
