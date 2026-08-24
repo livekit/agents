@@ -1787,9 +1787,9 @@ class RealtimeSession(  # noqa: F811
 
                 # Format tool result as proper JSON
                 if item.is_error:
-                    tool_result = json.dumps({"error": str(item.output)})
+                    tool_result = json.dumps({"error": item.output_with_metadata})
                 else:
-                    tool_result = item.output
+                    tool_result = item.output_with_metadata
 
                 self._tool_results_ch.send_nowait(
                     {

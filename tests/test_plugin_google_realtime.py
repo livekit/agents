@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -461,6 +462,19 @@ def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> Non
     else:
         assert res.scheduling == types.FunctionResponseScheduling.SILENT
         assert res.id == "fc_1"
+
+
+def test_interrupted_tool_output_is_marked_in_function_response() -> None:
+    output = _tool_output()
+    output.reply_interrupted = True
+
+    response = create_function_response(output)
+
+    assert response.response is not None
+    assert json.loads(response.response["output"]) == {
+        "output": "42",
+        "reply_interrupted": True,
+    }
 
 
 def test_vertex_scheduling_warns(

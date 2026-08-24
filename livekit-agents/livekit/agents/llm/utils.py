@@ -111,6 +111,12 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
                 if new_msg.raw_text_content != old_msg.raw_text_content:
                     to_update.append((prev_id, new_msg.id))
                 # TODO: check other content types
+            elif (
+                new_msg.type == "function_call_output"
+                and old_msg.type == "function_call_output"
+                and new_msg.reply_interrupted != old_msg.reply_interrupted
+            ):
+                to_update.append((prev_id, new_msg.id))
 
         prev_id = new_msg.id
 
