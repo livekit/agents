@@ -15,8 +15,10 @@ import httpx
 import openai
 import pytest
 
-from livekit.agents import APIConnectOptions, APITimeoutError, llm
+import livekit.agents.inference.llm as inference_llm
+from livekit.agents import APIConnectionError, APIConnectOptions, APITimeoutError, llm
 from livekit.agents.inference import LLM
+from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.metrics import LLMMetrics
 
 pytestmark = pytest.mark.unit
@@ -194,6 +196,29 @@ async def test_partial_tool_arguments_stay_retryable() -> None:
     _, attempts = await _run([_METADATA_ONLY, _TOOL_NAME, _TOOL_ARGS], max_retry=2)
 
     assert len(attempts) == 3, "arguments still streaming have reached nobody"
+
+
+@pytest.mark.asyncio
+async def test_retries_get_fresh_sdk_session_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    session_ids = iter(("inference_first", "inference_second", "inference_third"))
+    monkeypatch.setattr(
+        inference_llm,
+        "get_inference_headers",
+        lambda **_kwargs: {HEADER_SESSION_ID: next(session_ids)},
+    )
+    llm_model, attempts, _ = _llm_for(lambda _: _StallingStream([_METADATA_ONLY]))
+    llm_model._opts.extra_kwargs["extra_headers"] = {HEADER_SESSION_ID: "caller_value"}
+
+    with pytest.raises(APIConnectionError):
+        async with _drain(llm_model, max_retry=2) as stream:
+            async for _ in stream:
+                pass
+
+    assert [request.headers[HEADER_SESSION_ID] for request in attempts] == [
+        "inference_first",
+        "inference_second",
+        "inference_third",
+    ]
 
 
 @pytest.mark.asyncio

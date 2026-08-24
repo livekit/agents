@@ -1964,15 +1964,14 @@ class TestAgentSessionWaitForIdle:
 
 
 def _emitted_items(session: Any) -> list[Any]:
-    """Updates carried by tool_execution_updated events emitted on a mocked session."""
+    """Updates carried by tool_execution_updated events reported on a mocked session."""
     from livekit.agents.voice.events import ToolExecutionUpdatedEvent
 
     items = []
-    for call in session.emit.call_args_list:
-        name, ev = call.args
-        if name == "tool_execution_updated":
-            assert isinstance(ev, ToolExecutionUpdatedEvent)
-            items.append(ev.update)
+    for call in session._tool_execution_updated.call_args_list:
+        (ev,) = call.args
+        assert isinstance(ev, ToolExecutionUpdatedEvent)
+        items.append(ev.update)
     return items
 
 

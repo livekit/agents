@@ -753,7 +753,7 @@ class _Connection:
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error, "data": data},
+                        extra={"context_id": context_id, "error": error, "lk.pii.data": data},
                     )
                     if context_id is not None:
                         if ctx and not ctx.waiter.done():
@@ -764,13 +764,14 @@ class _Connection:
                 if ctx is None:
                     if context_id is None:
                         logger.warning(
-                            "unexpected message received from elevenlabs tts", extra={"data": data}
+                            "unexpected message received from elevenlabs tts",
+                            extra={"lk.pii.data": data},
                         )
                         continue
 
                     logger.debug(
                         "ignoring elevenlabs message for inactive context",
-                        extra={"context_id": context_id, "data": data},
+                        extra={"context_id": context_id, "lk.pii.data": data},
                     )
                     if data.get("isFinal"):
                         # the server released the context, keep the drain check working

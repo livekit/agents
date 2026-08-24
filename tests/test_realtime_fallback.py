@@ -262,6 +262,42 @@ async def test_restart_preserves_wrapper_subscribers() -> None:
     assert received == ["after-restart"]
 
 
+async def test_restart_preserves_provider_event_subscribers() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    received: list[object] = []
+    session.on("provider_event", lambda ev: received.append(ev))
+
+    primary.active_session.emit("provider_event", "before-restart")
+    await adapter.restart_session()
+    primary.active_session.emit("provider_event", "after-restart")
+
+    assert received == ["before-restart", "after-restart"]
+
+
+async def test_provider_event_subscribed_during_restart_skips_old_child() -> None:
+    primary = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
+    old_child = primary.active_session
+    close_gate = asyncio.Event()
+    old_child.block_aclose = close_gate
+
+    restart_task = asyncio.create_task(adapter.restart_session())
+    await old_child.aclose_entered.wait()
+
+    received: list[object] = []
+    session.on("provider_event", lambda ev: received.append(ev))
+    old_child.emit("provider_event", "old-child")
+
+    close_gate.set()
+    await restart_task
+    primary.active_session.emit("provider_event", "new-child")
+
+    assert received == ["new-child"]
+
+
 async def test_restart_emits_no_error() -> None:
     primary = FakeRealtimeModel()
     adapter = RealtimeModelFallbackAdapter([primary])
