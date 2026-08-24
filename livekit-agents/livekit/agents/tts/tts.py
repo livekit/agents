@@ -1267,6 +1267,9 @@ class AudioEmitter:
                         if isinstance(data, (AudioEmitter._EndSegment, AudioEmitter._FlushSegment)):
                             continue  # empty segment, ignore
 
+                        if isinstance(data, bytes):
+                            continue  # late audio from a reused connection, ignore
+
                         raise RuntimeError(
                             "start_segment() must be called before pushing audio data"
                         )

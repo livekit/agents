@@ -186,6 +186,28 @@ async def test_streaming_transcripts_across_segments():
 
 
 @pytest.mark.asyncio
+async def test_streaming_ignores_late_audio_after_segment_end():
+    """Late bytes from a reused provider connection must not crash the emitter."""
+
+    def produce(e):
+        e.start_segment(segment_id="seg_0")
+        e.push(_make_pcm(SR, NC, 100))
+        e.end_segment()
+        e.push(_make_pcm(SR, NC, 100))
+
+        e.start_segment(segment_id="seg_1")
+        e.push(_make_pcm(SR, NC, 100))
+        e.end_segment()
+        e.end_input()
+
+    _, events = await _run_emitter(produce, stream=True, expect_finals=2)
+
+    assert len([event for event in events if event.is_final]) == 2
+    total = sum(event.frame.duration for event in events)
+    assert abs(total - 0.2) < 0.02
+
+
+@pytest.mark.asyncio
 async def test_pushed_duration_accurate():
     def produce(e):
         e.push(_make_pcm(SR, NC, 500))
