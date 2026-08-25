@@ -389,7 +389,15 @@ def test_dialogue_multi_stream_url_omits_regular_tts_only_params() -> None:
 
 def test_build_dialogue_synthesize_body_single_turn() -> None:
     tts = elevenlabs_tts.TTS(
-        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        pronunciation_dictionary_locators=[
+            elevenlabs_tts.PronunciationDictionaryLocator(
+                pronunciation_dictionary_id="dict-1",
+                version_id="v1",
+            )
+        ],
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
         tts._opts, "hello there", voice_settings=None
@@ -398,6 +406,9 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
     assert body["inputs"] == [{"text": "hello there", "voice_id": "voice-1"}]
     assert body["model_id"] == "eleven_v3_conversational"
     assert "settings" not in body
+    assert body["pronunciation_dictionary_locators"] == [
+        {"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}
+    ]
 
 
 def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:

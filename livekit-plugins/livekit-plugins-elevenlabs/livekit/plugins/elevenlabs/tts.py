@@ -1306,6 +1306,10 @@ def _build_dialogue_synthesize_body(
         body["settings"] = settings
     if is_given(opts.language):
         body["language_code"] = opts.language.language
+    if is_given(opts.pronunciation_dictionary_locators):
+        body["pronunciation_dictionary_locators"] = _pronunciation_dictionary_locators_payload(
+            opts.pronunciation_dictionary_locators
+        )
     return body
 
 
