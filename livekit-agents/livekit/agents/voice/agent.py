@@ -1051,6 +1051,10 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
                     old_agent._chat_ctx.items[:] = merged_chat_ctx.items
 
+                    # the call sorts after the sub-conversation it produced, next to its output
+                    if (fnc_call := task_info.function_call) is not None:
+                        fnc_call.created_at = time.time()
+
                     await session._update_activity(
                         old_agent, new_activity="resume", wait_on_enter=False
                     )
