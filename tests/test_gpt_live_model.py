@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import llm
+from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -317,6 +318,63 @@ async def test_only_session_started_releases_the_audio_hold(
         session._handle_event({"type": "session.started", "session": {"id": "s1"}})
         assert session._session_started_fut.done()
         assert session._session_id == "s1"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_delegated_model_is_billed_under_its_own_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The frontend is billed by duration; each backend entry names the model that spent it."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    collected: list[Any] = []
+    session.on("metrics_collected", collected.append)
+    try:
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            {
+                "type": "session.usage.updated",
+                "usage": {"audio_duration_ms": 56600, "backend_model_usage": []},
+            }
+        )
+        session._handle_event(
+            {
+                "type": "session.usage.updated",
+                "usage": {
+                    "audio_duration_ms": 74200,
+                    "backend_model_usage": [
+                        {
+                            "model": "gpt-5.6-sol",
+                            "input_tokens": 10581,
+                            "input_tokens_details": {
+                                "cached_tokens": 5070,
+                                "cache_write_tokens": 5299,
+                            },
+                            "output_tokens": 92,
+                            "output_tokens_details": {"reasoning_tokens": 54},
+                            "total_tokens": 10673,
+                        }
+                    ],
+                },
+            }
+        )
+
+        backend = [m for m in collected if isinstance(m, LLMMetrics)]
+        assert [m.metadata.model_name for m in backend] == ["gpt-5.6-sol"]
+        assert backend[0].prompt_tokens == 10581
+        assert backend[0].prompt_cached_tokens == 5070
+        assert backend[0].cache_creation_tokens == 5299
+        assert backend[0].completion_tokens == 92
+        assert backend[0].reasoning_tokens == 54
+
+        # the session's own row carries the duration and none of the delegated tokens
+        frontend = [m for m in collected if isinstance(m, RealtimeModelMetrics)]
+        assert [round(m.session_duration, 1) for m in frontend] == [56.6, 17.6]
+        assert all(m.input_tokens == 0 and m.output_tokens == 0 for m in frontend)
     finally:
         await session.aclose()
         await model.aclose()

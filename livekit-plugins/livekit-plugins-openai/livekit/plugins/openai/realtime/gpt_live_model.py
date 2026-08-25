@@ -15,7 +15,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -125,17 +125,6 @@ def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
         else:
             logger.debug("gpt-live delegation ignores unsupported tool", extra={"tool": tool})
     return oai_tools
-
-
-def _sum_backend(usage: types.Usage) -> types.BackendModelUsage:
-    """Total the usage of every delegated backend model into one entry."""
-    total = types.BackendModelUsage()
-    for entry in usage.backend_model_usage or []:
-        total.input_tokens += entry.input_tokens
-        total.output_tokens += entry.output_tokens
-        total.total_tokens += entry.total_tokens
-        total.input_tokens_details.cached_tokens += entry.input_tokens_details.cached_tokens
-    return total
 
 
 def _render_item(item: llm.ChatItem) -> tuple[llm.ChatRole, str] | None:
@@ -886,17 +875,38 @@ class GPTLiveSession(
             return max(0, new - old)
 
         if usage.backend_model_usage is not None or usage.audio_duration_ms:
-            # the frontend is billed by duration; backend tokens arrive per model, so sum first
-            current, before = _sum_backend(usage), _sum_backend(previous)
-            input_tokens = delta(current.input_tokens, before.input_tokens)
-            output_tokens = delta(current.output_tokens, before.output_tokens)
-            total_tokens = delta(current.total_tokens, before.total_tokens)
-            input_details = RealtimeModelMetrics.InputTokenDetails(
-                cached_tokens=delta(
-                    current.input_tokens_details.cached_tokens,
-                    before.input_tokens_details.cached_tokens,
-                ),
-            )
+            # the frontend is billed by duration alone; every token here was spent by a model
+            # each entry names, so it is reported under that name rather than this session's
+            before = {entry.model: entry for entry in previous.backend_model_usage or []}
+            for entry in usage.backend_model_usage or []:
+                was = before.get(entry.model) or types.BackendModelUsage()
+                now_in, was_in = entry.input_tokens_details, was.input_tokens_details
+                now_out, was_out = entry.output_tokens_details, was.output_tokens_details
+                self.emit(
+                    "metrics_collected",
+                    LLMMetrics(
+                        label=self._live_model.label,
+                        request_id=self._session_id or "",
+                        timestamp=time.time(),
+                        duration=0,
+                        ttft=-1,
+                        cancelled=False,
+                        prompt_tokens=delta(entry.input_tokens, was.input_tokens),
+                        prompt_cached_tokens=delta(now_in.cached_tokens, was_in.cached_tokens),
+                        cache_creation_tokens=delta(
+                            now_in.cache_write_tokens, was_in.cache_write_tokens
+                        ),
+                        completion_tokens=delta(entry.output_tokens, was.output_tokens),
+                        reasoning_tokens=delta(now_out.reasoning_tokens, was_out.reasoning_tokens),
+                        total_tokens=delta(entry.total_tokens, was.total_tokens),
+                        tokens_per_second=0,
+                        metadata=Metadata(
+                            model_name=entry.model, model_provider=self._live_model.provider
+                        ),
+                    ),
+                )
+            input_tokens = output_tokens = total_tokens = 0
+            input_details = RealtimeModelMetrics.InputTokenDetails()
             output_details = RealtimeModelMetrics.OutputTokenDetails()
             session_duration = delta(usage.audio_duration_ms, previous.audio_duration_ms) / 1000
         else:
