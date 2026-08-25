@@ -2131,7 +2131,14 @@ class AgentActivity(RecognitionHooks):
             if self.stt is None and ev.transcript and (amd := self._session._amd) is not None:
                 amd._on_transcript(ev.transcript)
 
-            msg = llm.ChatMessage(role="user", content=[ev.transcript], id=ev.item_id)
+            msg = llm.ChatMessage(
+                role="user",
+                content=[ev.transcript],
+                id=ev.item_id,
+                # a model that scores its own transcript says so; one that does not still
+                # transcribed speech, and this field is what tells that from typed text
+                transcript_confidence=ev.confidence if ev.confidence is not None else 1.0,
+            )
             if ev.turn_started_at is not None:
                 # a provider may withhold the final transcript until its reply has finished
                 # generating, which would otherwise stamp the turn after the reply it prompted
