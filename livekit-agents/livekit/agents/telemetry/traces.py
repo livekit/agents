@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -457,13 +458,11 @@ def _chat_item_span_attribute(item: ChatItem) -> dict:
     return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
 
 
-async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
-    """Parse a protobuf Status error response for RetryInfo and return the retry delay in seconds,
-    or None if the error is not retryable."""
+def _parse_retry_delay(body: bytes) -> float | None:
+    """Return the delay from a protobuf ``RetryInfo`` detail, if present."""
     from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
 
     try:
-        body = await resp.read()
         status = status_pb2.Status()
         status.ParseFromString(body)
         for detail in status.details:
@@ -475,6 +474,14 @@ async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
         pass
 
     return None
+
+
+_RECORDING_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_connect=30)
+_RECORDING_UPLOAD_MAX_RETRIES = 3
+
+
+def _recording_upload_retry_delay(attempt: int) -> float:
+    return random.uniform(0.0, min(2.0**attempt, 8.0))
 
 
 async def _upload_session_report(
@@ -671,8 +678,7 @@ async def _upload_session_report(
 
         return mp
 
-    max_retries = 3
-    for attempt in range(max_retries + 1):
+    for attempt in range(_RECORDING_UPLOAD_MAX_RETRIES + 1):
         mp = _build_multipart()
         headers = {
             "Authorization": f"Bearer {jwt}",
@@ -680,27 +686,45 @@ async def _upload_session_report(
         }
 
         logger.debug("uploading session report to LiveKit Cloud")
-        async with http_session.post(url, data=mp, headers=headers) as resp:
-            if resp.status < 400:
-                break
+        retry: tuple[float, str] | None = None
+        try:
+            async with http_session.post(
+                url,
+                data=mp,
+                headers=headers,
+                timeout=_RECORDING_UPLOAD_TIMEOUT,
+            ) as resp:
+                if resp.status < 400:
+                    break
 
-            body = await resp.read()
-            if _upload_gate.is_disabled_response(resp.status, body):
-                _upload_gate.disable()
-                return
+                body = await resp.read()
+                if _upload_gate.is_disabled_response(resp.status, body):
+                    _upload_gate.disable()
+                    return
 
-            retry_delay = await _parse_retry_delay(resp)
-            if retry_delay is None or attempt == max_retries:
-                resp.raise_for_status()
-                raise RuntimeError(f"recording upload failed: status {resp.status}")
+                retry_delay = _parse_retry_delay(body)
+                if retry_delay is None or attempt == _RECORDING_UPLOAD_MAX_RETRIES:
+                    resp.raise_for_status()
+                else:
+                    retry = (retry_delay, f"status {resp.status}")
+        except aiohttp.ClientSSLError:
+            raise
+        except (aiohttp.ConnectionTimeoutError, aiohttp.ClientConnectorError) as e:
+            if attempt == _RECORDING_UPLOAD_MAX_RETRIES:
+                raise
+            retry = (_recording_upload_retry_delay(attempt), type(e).__name__)
 
-            logger.warning(
-                "recording upload failed (attempt %d/%d), retrying in %.1fs",
-                attempt + 1,
-                max_retries + 1,
-                retry_delay,
-            )
-            await asyncio.sleep(retry_delay)
+        if retry is None:
+            break
+        retry_delay, failure = retry
+        logger.warning(
+            "recording upload failed (%s, attempt %d/%d), retrying in %.1fs",
+            failure,
+            attempt + 1,
+            _RECORDING_UPLOAD_MAX_RETRIES + 1,
+            retry_delay,
+        )
+        await asyncio.sleep(retry_delay)
 
     logger.debug("finished uploading")
 

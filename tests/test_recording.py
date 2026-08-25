@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import ssl
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
 from livekit.agents.telemetry.traces import _upload_session_report
@@ -200,6 +203,14 @@ def _get_multipart_parts(mp_writer: aiohttp.MultipartWriter) -> dict[str, Any]:
     return parts
 
 
+def _retry_info_body(delay_seconds: int = 0) -> bytes:
+    retry_info = error_details_pb2.RetryInfo()
+    retry_info.retry_delay.seconds = delay_seconds
+    status = status_pb2.Status()
+    status.details.add().Pack(retry_info)
+    return status.SerializeToString()
+
+
 # ---------------------------------------------------------------------------
 # Group 1: RecordingOptions normalization (no JobContext)
 # ---------------------------------------------------------------------------
@@ -357,6 +368,134 @@ async def test_upload_transcript_only() -> None:
     assert "header" in part_names
     assert "chat_history" in part_names
     assert "audio" not in part_names
+
+
+async def test_upload_uses_extended_timeout() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    mock_http = _make_mock_http()
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    timeout = mock_http.post.call_args.kwargs["timeout"]
+    assert timeout.total == 900
+    assert timeout.sock_connect == 30
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(aiohttp.ConnectionTimeoutError("connect timed out"), id="connect-timeout"),
+        pytest.param(
+            aiohttp.ClientConnectorError(MagicMock(), OSError("connection failed")),
+            id="connector-error",
+        ),
+    ],
+)
+async def test_upload_retries_connection_failure(error: Exception) -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    failure_cm = AsyncMock()
+    failure_cm.__aenter__.side_effect = error
+
+    success_resp = AsyncMock()
+    success_resp.status = 200
+    success_cm = AsyncMock()
+    success_cm.__aenter__.return_value = success_resp
+
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.side_effect = [failure_cm, success_cm]
+
+    with (
+        _patch_upload_deps(),
+        patch(f"{_TRACES_MOD}._recording_upload_retry_delay", return_value=0.0),
+    ):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 2
+
+
+async def test_upload_retries_response_with_retry_info() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    retry_resp = AsyncMock()
+    retry_resp.status = 503
+    retry_resp.read.return_value = _retry_info_body()
+    retry_cm = AsyncMock()
+    retry_cm.__aenter__.return_value = retry_resp
+
+    success_resp = AsyncMock()
+    success_resp.status = 200
+    success_cm = AsyncMock()
+    success_cm.__aenter__.return_value = success_resp
+
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.side_effect = [retry_cm, success_cm]
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 2
+
+
+async def test_upload_does_not_retry_response_without_retry_info() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    response_error = aiohttp.ClientResponseError(
+        MagicMock(), (), status=503, message="service unavailable"
+    )
+    response = AsyncMock()
+    response.status = 503
+    response.read.return_value = b""
+    response.raise_for_status = MagicMock(side_effect=response_error)
+    response_cm = AsyncMock()
+    response_cm.__aenter__.return_value = response
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = response_cm
+
+    with _patch_upload_deps(), pytest.raises(aiohttp.ClientResponseError) as exc_info:
+        await _call_upload(report, http_session=mock_http)
+
+    assert exc_info.value.status == 503
+    assert mock_http.post.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(asyncio.TimeoutError("upload timed out"), id="total-timeout"),
+        pytest.param(aiohttp.ServerDisconnectedError("response lost"), id="disconnected"),
+        pytest.param(
+            aiohttp.ClientConnectorSSLError(MagicMock(), ssl.SSLError("TLS failed")),
+            id="tls-error",
+        ),
+    ],
+)
+async def test_upload_does_not_retry_ambiguous_or_tls_failure(error: Exception) -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    failure_cm = AsyncMock()
+    failure_cm.__aenter__.side_effect = error
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = failure_cm
+
+    with _patch_upload_deps(), pytest.raises(type(error)):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 1
+
+
+async def test_upload_stops_after_connection_retries_are_exhausted() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    timeout_cm = AsyncMock()
+    timeout_cm.__aenter__.side_effect = aiohttp.ConnectionTimeoutError("connect timed out")
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = timeout_cm
+
+    with (
+        _patch_upload_deps(),
+        patch(f"{_TRACES_MOD}._recording_upload_retry_delay", return_value=0.0),
+        pytest.raises(aiohttp.ConnectionTimeoutError, match="connect timed out"),
+    ):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 4
 
 
 async def test_upload_session_report_sent_without_transcript() -> None:
