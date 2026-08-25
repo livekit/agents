@@ -200,16 +200,16 @@ scenarios:
       DO, IN ORDER:
       1. When the agent asks for your card number, give the 10-digit partial
          number as if it were complete.
-      2. When the agent says it's invalid or asks you to repeat, give the full
-         4242 4242 4242 4242.
+      2. When the agent says it's invalid, incomplete, or asks you to continue or
+         repeat, give all sixteen digits: 4242 4242 4242 4242.
       3. Repeat the full number when asked to confirm it.
       4. Provide the expiration, security code, and name as asked, repeating
          each back when asked to confirm.
       5. Don't hang up until the agent confirms the card details are complete.
     agent_expectations: >
-      Tells the user the number is invalid (wrong length) and asks them to
-      repeat it — it must not accept the 10-digit number, must not go silent
-      after the invalid attempt, and must not read the card number back aloud.
+      Does not record the 10-digit number, and keeps talking: it asks for the
+      full number or for the remaining digits. It must not go silent after the
+      short attempt and must not read the card number back aloud.
       After the full 16-digit number is given and repeated, the flow proceeds
       through expiration, security code, and cardholder name to completion.
     tags:
