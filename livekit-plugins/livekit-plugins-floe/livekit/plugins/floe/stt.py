@@ -176,6 +176,7 @@ class STT(stt.STT):
                 f"got {sample_rate}."
             )
         _require_secure_ws_url(base_url)
+        _require_secure_http_url(batch_url)
 
         self._model = model
         self._language = language
@@ -364,6 +365,25 @@ def _require_secure_ws_url(url: str) -> None:
     raise ValueError(
         f"Floe requires a wss base_url; got {url!r}. Refusing to send your Floe "
         "API key over a non-TLS WebSocket."
+    )
+
+
+def _require_secure_http_url(url: str) -> None:
+    """Refuse to send the Floe agent key + audio over a cleartext HTTP request.
+
+    Mirrors :func:`_require_secure_ws_url` for the batch endpoint: allows https
+    to any host (incl. self-hosted Floe on a custom domain); allows http only
+    for loopback (local dev). Fail closed on anything else.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and host in {"localhost", "127.0.0.1", "::1"}:
+        return
+    raise ValueError(
+        f"Floe requires an https batch_url; got {url!r}. Refusing to send your "
+        "Floe API key or audio over a non-TLS connection."
     )
 
 

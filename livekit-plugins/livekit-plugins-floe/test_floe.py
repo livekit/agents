@@ -380,6 +380,20 @@ def test_stt_rejects_out_of_range_sample_rate(monkeypatch: pytest.MonkeyPatch) -
         floe.STT(sample_rate=192000)
 
 
+def test_stt_rejects_plaintext_batch_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The batch recognize() path sends the agent key + audio to batch_url, so a
+    # non-loopback http:// batch_url must be refused (mirrors the ws guard).
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    with pytest.raises(ValueError):
+        floe.STT(batch_url="http://evil.example.com/v1/audio/transcriptions")
+
+
+def test_stt_allows_https_and_loopback_batch_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    floe.STT(batch_url="https://my-floe.example.com/v1/audio/transcriptions")
+    floe.STT(batch_url="http://localhost:8080/v1/audio/transcriptions")
+
+
 def test_stt_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FLOE_API_KEY", "floe_agentkey")
     s = floe.STT(task_id="t-9")
