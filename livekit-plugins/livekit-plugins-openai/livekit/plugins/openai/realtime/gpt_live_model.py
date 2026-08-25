@@ -324,6 +324,7 @@ class GPTLiveSession(
         # user vs assistant transcript by turn_id instead of by whichever side is currently open
         self._turn_roles: dict[str, types.TurnRole] = {}
         self._user_transcripts: dict[str, str] = {}
+        self._user_turn_started_at: dict[str, float] = {}
         self._assistant_transcripts: dict[str, str] = {}
         # the turn output audio is attributed to, so the framework can tell one apart from the next
         self._assistant_turn_id: str | None = None
@@ -491,6 +492,7 @@ class GPTLiveSession(
             self._end_assistant_turn(self._assistant_turn_id)
         self._turn_roles.clear()
         self._user_transcripts.clear()
+        self._user_turn_started_at.clear()
         self._assistant_transcripts.clear()
         self._delegated_calls.clear()
         # a new connection is a new session, so its usage counters restart from zero
@@ -757,6 +759,7 @@ class GPTLiveSession(
                 item_id=turn_id,
                 transcript=self._user_transcripts.get(turn_id, ""),
                 is_final=is_final,
+                turn_started_at=self._user_turn_started_at.get(turn_id),
             ),
         )
 
@@ -770,6 +773,7 @@ class GPTLiveSession(
             # a user turn is a projection over transcript fragments, not a state change: the model
             # may well keep speaking over it, so the open assistant turn is left alone and ends on
             # its own turn.done
+            self._user_turn_started_at.setdefault(turn.id, time.time())
             self._user_transcripts[turn.id] = turn.transcript or ""
             self.emit("input_speech_started", llm.InputSpeechStartedEvent())
             if self._user_transcripts[turn.id]:
@@ -797,6 +801,7 @@ class GPTLiveSession(
             if turn.transcript:
                 self._user_transcripts[turn_id] = turn.transcript
             self._emit_user_transcript(turn_id, is_final=True)
+            self._user_turn_started_at.pop(turn_id, None)
             final_transcript = self._user_transcripts.pop(turn_id, "")
             if final_transcript:
                 self._remote_chat_ctx.items.append(
@@ -804,7 +809,8 @@ class GPTLiveSession(
                 )
             self.emit(
                 "input_speech_stopped",
-                llm.InputSpeechStoppedEvent(user_transcription_enabled=True),
+                # user_transcription_enabled is not needed as the transcription arrives before this event
+                llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
             )
         elif role == "assistant":
             self._end_assistant_turn(turn_id)

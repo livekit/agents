@@ -378,3 +378,49 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
     finally:
         await session.aclose()
         await model.aclose()
+
+
+async def test_a_user_turn_is_stamped_when_it_began_not_when_it_was_transcribed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model answers over the caller, so turn.done lands after the reply it prompted."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    finals: list[llm.InputTranscriptionCompleted] = []
+    session.on(
+        "input_audio_transcription_completed",
+        lambda ev: finals.append(ev) if ev.is_final else None,
+    )
+    try:
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            {
+                "type": "turn.created",
+                "turn": {"id": "turn_u", "role": "user", "start_ms": 6400, "transcript": " Hello"},
+            }
+        )
+        began = session._user_turn_started_at["turn_u"]
+
+        # the model starts replying while the caller is still speaking
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            {"type": "turn.created", "turn": {"id": "turn_a", "role": "assistant"}}
+        )
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            {
+                "type": "turn.done",
+                "turn": {"id": "turn_u", "role": "user", "transcript": " Hello, how are you"},
+            }
+        )
+
+        assert [ev.transcript for ev in finals] == [" Hello, how are you"]
+        assert finals[0].turn_started_at == began
+        assert began < time.time() - 0.05  # stamped at turn.created, not at turn.done
+        # the turn is done with, so nothing is kept for it
+        assert "turn_u" not in session._user_turn_started_at
+    finally:
+        await session.aclose()
+        await model.aclose()
