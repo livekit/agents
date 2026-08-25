@@ -676,8 +676,10 @@ class _LangStats(NamedTuple):
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
-    Tokens are assumed to arrive in chronological order, so start_time is taken
-    from the first token and end_time is continuously overwritten by the latest.
+    Tokens are assumed to arrive in chronological order, but individual tokens
+    may omit timing keys. start_time is the earliest ``start_ms`` seen and
+    end_time the latest ``end_ms`` seen, so a token that carries timing late
+    (or regresses) cannot collapse the span onto itself.
     """
 
     def __init__(self) -> None:
@@ -714,11 +716,13 @@ class _TokenAccumulator:
             self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
-        if "start_ms" in token and not self._has_start_time:
-            self._has_start_time = True
-            self.start_time = float(token["start_ms"])
+        if "start_ms" in token:
+            start_ms = float(token["start_ms"])
+            if not self._has_start_time or start_ms < self.start_time:
+                self._has_start_time = True
+                self.start_time = start_ms
         if "end_ms" in token:
-            self.end_time = float(token["end_ms"])
+            self.end_time = max(self.end_time, float(token["end_ms"]))
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1
