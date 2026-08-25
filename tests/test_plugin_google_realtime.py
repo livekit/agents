@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
-from google.genai import types
+from google.genai import _api_client, client as genai_client, types
 
 from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.api_proto import ClientEvents
@@ -13,6 +13,20 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+# The genai ``AsyncClient.__del__`` and ``BaseApiClient.__del__`` schedule
+# ``aclose()`` on whatever event loop is running when the garbage collector
+# reaches them. Sessions in this module close their clients explicitly in
+# ``RealtimeSession.aclose()``, so those finalizers are pure redundancy — but
+# they leak tasks into whichever test happens to be running at GC time (issue
+# #6881). Disarm them here, in the module that owns the clients.
+def _noop_finalizer(self: object) -> None:
+    pass
+
+
+genai_client.AsyncClient.__del__ = _noop_finalizer  # type: ignore[attr-defined]
+_api_client.BaseApiClient.__del__ = _noop_finalizer  # type: ignore[attr-defined]
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
 _PCM_FRAME = b"\x00\x01" * 240
