@@ -14,6 +14,11 @@ from ..log import logger
 _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
 
+# aiohttp's total is cumulative over the whole operation, body consumption included,
+# so a still-flowing streaming response is cancelled once it's reached. sock_connect is
+# restated because a bare ClientTimeout(total=...) drops aiohttp's 30s default to None.
+_DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_connect=30)
+
 
 def _has_system_trust_store() -> bool:
     """Whether OpenSSL's default verify paths resolve to something on disk.
@@ -82,7 +87,9 @@ def _new_session_ctx() -> _ClientFactory:
                 keepalive_timeout=120,  # the default is only 15s
                 ssl=_create_ssl_context(),
             )
-            g_session = aiohttp.ClientSession(proxy=http_proxy, connector=connector)
+            g_session = aiohttp.ClientSession(
+                proxy=http_proxy, connector=connector, timeout=_DEFAULT_TIMEOUT
+            )
         return g_session
 
     _ContextVar.set(_new_session)

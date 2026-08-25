@@ -317,6 +317,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._user_silence_ev = asyncio.Event()
     ar._user_silence_ev.set()
     ar._hooks = MagicMock()
+    ar._session = MagicMock()
     return ar, ch
 
 
@@ -324,44 +325,55 @@ def _sentinel_names(ch: _RecordingChan) -> list[str]:
     return [type(item).__name__ for item in ch.sent]
 
 
-async def test_pause_keeps_overlap_inference_alive() -> None:
-    # pausing is provisional: the verdict for this overlap is what decides whether the
-    # pause becomes an interruption, so the inference must survive it
+async def test_agent_speech_end_closes_overlap_before_reset() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
     ch.sent.clear()
 
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
 
-    assert _sentinel_names(ch) == []
+    assert _sentinel_names(ch) == [
+        "_OverlapSpeechEndedSentinel",
+        "_AgentSpeechEndedSentinel",
+    ]
+    assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
+    assert ar._overlap_open is False
 
 
-async def test_pause_still_lets_the_user_close_the_overlap() -> None:
-    # the user finishing their utterance during the pause is what produces the verdict
+async def test_user_speech_ending_after_agent_end_does_not_close_overlap_again() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
     ch.sent.clear()
 
     ar._on_end_of_speech(ended_at=time.time())
 
-    assert _sentinel_names(ch) == ["_OverlapSpeechEndedSentinel"]
-    assert ch.sent[0]._agent_ended is False  # type: ignore[attr-defined]
+    assert _sentinel_names(ch) == []
 
 
-async def test_resume_does_not_restart_the_detector() -> None:
-    # a resume re-enters the same agent turn; restarting would reset the open overlap
+async def test_resume_restarts_the_detector() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
-    ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
+    user_started_at = time.time()
+    ar._speaking = True
+    ar._on_start_of_speech(started_at=user_started_at)
+    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
     ch.sent.clear()
 
-    ar._on_start_of_agent_speech(started_at=time.time(), resumed=True)
+    resumed_at = time.time()
+    ar._on_start_of_agent_speech(started_at=resumed_at)
 
-    assert _sentinel_names(ch) == []
+    assert _sentinel_names(ch) == [
+        "_AgentSpeechStartedSentinel",
+        "_OverlapSpeechStartedSentinel",
+    ]
+    assert ch.sent[1]._speech_duration == 0.0  # type: ignore[attr-defined]
+    assert ch.sent[1]._started_at == resumed_at  # type: ignore[attr-defined]
+    ar._endpointing.on_start_of_speech.assert_called_once_with(
+        started_at=user_started_at, overlapping=True
+    )
 
 
 async def test_a_resolved_overlap_is_not_closed_again() -> None:
@@ -377,19 +389,6 @@ async def test_a_resolved_overlap_is_not_closed_again() -> None:
     assert _sentinel_names(ch) == []
 
 
-async def test_interrupting_a_paused_speech_tears_down() -> None:
-    # the pause withheld the teardown for a possible resume; an interrupt ends the turn instead
-    ar, ch = _recognition_with_interruption_ch()
-    ar._on_start_of_agent_speech(started_at=time.time())
-    ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time(), paused=True)
-    ch.sent.clear()
-
-    ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
-
-    assert _sentinel_names(ch) == ["_AgentSpeechEndedSentinel"]
-
-
 async def test_real_end_of_agent_speech_still_tears_down() -> None:
     # the agent turn genuinely ending must stop the inference
     ar, ch = _recognition_with_interruption_ch()
@@ -399,4 +398,8 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
 
     ar._on_end_of_agent_speech(ignore_user_transcript_until=time.time())
 
-    assert "_AgentSpeechEndedSentinel" in _sentinel_names(ch)
+    assert _sentinel_names(ch) == [
+        "_OverlapSpeechEndedSentinel",
+        "_AgentSpeechEndedSentinel",
+    ]
+    assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]

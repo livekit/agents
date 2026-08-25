@@ -22,6 +22,7 @@ import os
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
+from urllib.parse import quote
 
 import aiohttp
 
@@ -137,9 +138,9 @@ class STT(stt.STT):
                 be selected based on parameters provided.
             model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
-                Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
-                (not realtime streaming). Usage incurs additional costs.
+                Supported for both Scribe v2 (batch) and Scribe v2 realtime. Batch accepts up to
+                1000 keyterms of at most 50 characters each; realtime accepts up to 50 keyterms of
+                at most 20 characters each. Usage incurs additional costs.
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
@@ -352,7 +353,7 @@ class STT(stt.STT):
             self._opts.no_verbatim = no_verbatim
 
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim)
+            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim, keyterms=keyterms)
 
     def stream(
         self,
@@ -399,12 +400,16 @@ class SpeechStream(stt.SpeechStream):
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
+            self._reconnect_event.set()
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -610,6 +615,9 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.no_verbatim:
             params.append("no_verbatim=true")
 
+        if is_given(self._opts.keyterms):
+            params.extend(f"keyterms={quote(keyterm)}" for keyterm in self._opts.keyterms)
+
         query_string = "&".join(params)
 
         # Convert HTTPS URL to WSS
@@ -666,7 +674,7 @@ class SpeechStream(stt.SpeechStream):
             ]
 
         if message_type == "partial_transcript":
-            logger.debug("Received message type partial_transcript: %s", data)
+            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
@@ -747,7 +755,11 @@ class SpeechStream(stt.SpeechStream):
         ):
             pass
         else:
-            logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+            logger.warning(
+                "ElevenLabs STT unknown message type: %s",
+                message_type,
+                extra={"lk.pii.data": data},
+            )
 
 
 def _synthesize_url(opts: STTOptions) -> str:

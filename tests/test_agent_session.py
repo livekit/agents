@@ -23,6 +23,7 @@ from livekit.agents import (
     MetricsCollectedEvent,
     ModelSettings,
     NotGivenOr,
+    RunContext,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -47,6 +48,7 @@ from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnI
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -331,11 +333,32 @@ async def test_tool_call() -> None:
     session.on("function_tools_executed", tool_executed_events.append)
     session.output.audio.on("playback_finished", playback_finished_events.append)
 
-    t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+    agent_speech_end_states: list[str] = []
+    on_end_of_agent_speech = AudioRecognition._on_end_of_agent_speech
+
+    def _record_agent_speech_end(
+        recognition: AudioRecognition,
+        *,
+        ignore_user_transcript_until: float,
+    ) -> None:
+        agent_speech_end_states.append(session.agent_state)
+        on_end_of_agent_speech(
+            recognition,
+            ignore_user_transcript_until=ignore_user_transcript_until,
+        )
+
+    with patch.object(
+        AudioRecognition,
+        "_on_end_of_agent_speech",
+        _record_agent_speech_end,
+    ):
+        t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
     assert len(playback_finished_events) == 2
     check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
     check_timestamp(playback_finished_events[1].playback_position, 3.0, speed_factor=speed)
+    assert agent_speech_end_states[0] == "thinking"
+    assert all(state == "listening" for state in agent_speech_end_states[1:])
 
     assert len(agent_state_events) == 6
     assert agent_state_events[0].old_state == "initializing"
@@ -373,6 +396,176 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="lookup_order", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_tts(1.0, input="Just a moment.")
+    actions.add_llm(content="Order 42 is on the way.", input="order 42 shipped")
+    actions.add_tts(1.0)
+
+    class SlowToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def lookup_order(self, context: RunContext) -> str:
+            async with context.with_filler("Just a moment.", delay=0.5):
+                await asyncio.sleep(8.0)
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SlowToolAgent(), drain_delay=10), timeout=SESSION_TIMEOUT
+    )
+
+    # both the reply and the filler end while the tool is still running, so each
+    # must hand back "thinking", not "listening" (which arms the user-away timer)
+    speaking_ends = [ev.new_state for ev in agent_state_events if ev.old_state == "speaking"]
+    assert speaking_ends == ["thinking", "thinking", "listening"]
+    assert all(ev.new_state != "away" for ev in user_state_events)
+
+
+async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="silent_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def silent_lookup(self, context: RunContext) -> None:
+            """A slow tool that returns nothing, so no reply follows it."""
+            await asyncio.sleep(8.0)
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SilentToolAgent(), drain_delay=20), timeout=SESSION_TIMEOUT
+    )
+
+    # the tool holds the agent in "thinking", and nothing follows it to hand the turn back
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
+
+
+async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+    """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> str:
+            """Look an order up in the background."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    # the agent is genuinely listening while the tool runs, so nothing but the tool holds
+    # the window off; landing restarts it in full rather than firing on what was left
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
+
+
+async def test_async_tool_without_a_reply_still_restarts_the_away_window() -> None:
+    """A tool returning ``None`` after an update files no reply, so nothing else can
+    restart the window it held off."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> None:
+            """Look an order up in the background and say nothing more."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
 
 
 @pytest.mark.parametrize(
@@ -2441,6 +2634,55 @@ async def test_agent_turn_detection_override_resolves_endpointing_per_activity()
         vad_activity = AgentActivity(Agent(instructions="test", turn_detection="vad"), session)
         assert vad_activity.endpointing_opts["min_delay"] == 0.5
         assert vad_activity.endpointing_opts["max_delay"] == 3.0
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize(
+    ("session_min_delay", "agent_min_delay", "reply_held"),
+    [
+        pytest.param(0.2, 1.0, True, id="agent-holds-longer"),
+        pytest.param(1.0, 0.2, False, id="agent-releases-earlier"),
+    ],
+)
+async def test_reply_holdoff_uses_agent_endpointing_delay(
+    session_min_delay: float, agent_min_delay: float, reply_held: bool
+) -> None:
+    """VAD silence uses the active agent's delay for pending reply hold-off."""
+    from livekit.agents.voice.agent_session import AgentSession
+
+    from .fake_vad import FakeVAD
+
+    session = AgentSession(
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling={
+            "turn_detection": "vad",
+            "endpointing": {"min_delay": session_min_delay},
+        },
+    )
+    try:
+        activity = AgentActivity(
+            Agent(
+                instructions="test",
+                turn_handling={"endpointing": {"min_delay": agent_min_delay}},
+            ),
+            session,
+        )
+        assert activity.endpointing_opts["min_delay"] == agent_min_delay
+
+        activity.on_vad_inference_done(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=0.0,
+                speech_duration=0.0,
+                silence_duration=0.25,
+                speaking=True,
+                raw_accumulated_silence=0.25,
+            )
+        )
+
+        assert activity._user_silence_event.is_set() == (not reply_held)
     finally:
         await session.aclose()
 

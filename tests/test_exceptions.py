@@ -76,9 +76,14 @@ def test_str_stops_after_ten_distinct_causes() -> None:
     assert str(_wrap(root)) == "Connection error. (caused by APIConnectionError: wrapped 10)"
 
 
-def test_timeout_subclass_keeps_its_own_message() -> None:
+def test_str_omits_separator_for_empty_cause_message() -> None:
     err = _wrap(TimeoutError(), APITimeoutError())
-    assert str(err).startswith("Request timed out. (caused by TimeoutError")
+    assert str(err) == "Request timed out. (caused by TimeoutError)"
+
+
+def test_str_omits_separator_for_empty_connection_error_message() -> None:
+    err = _wrap(APIConnectionError(""))
+    assert str(err) == "Connection error. (caused by APIConnectionError)"
 
 
 def test_raise_from_populates_the_message() -> None:
