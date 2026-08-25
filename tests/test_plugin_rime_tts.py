@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -72,3 +74,74 @@ def test_coda_request_controls() -> None:
     assert updated_params["top_p"] == ["0.8"]
     assert updated_params["max_tokens"] == ["300"]
     assert updated_params["timeScaleFactor"] == ["1.1"]
+
+
+def test_websocket_url_selects_coda_v1() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(
+        api_key="test-key",
+        websocket_url="wss://api.rimetts.com/coda/v1/coda/ws",
+    )
+
+    assert tts.model == "coda"
+    assert tts.capabilities.streaming is True
+    assert tts.capabilities.aligned_transcript is False
+    assert "websocket_url" in inspect.signature(TTS).parameters
+    assert "tokenizer" in inspect.signature(TTS).parameters
+    assert "websocket_protocol" not in inspect.signature(TTS).parameters
+    assert "sentence_tokenization" not in inspect.signature(TTS).parameters
+
+
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "https://api.rimetts.com/coda/v1/coda/ws",
+        "/coda/v1/coda/ws",
+    ],
+)
+def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
+    from livekit.plugins.rime import TTS
+
+    with pytest.raises(ValueError, match="absolute ws or wss URL"):
+        TTS(api_key="test-key", websocket_url=websocket_url)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "base_url": "https://example.com/coda",
+            },
+            "cannot be used with base_url",
+        ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "model": "mistv2",
+            },
+            'selects model="coda"',
+        ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "use_websocket": True,
+            },
+            "omit use_websocket",
+        ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "speed_alpha": 1.1,
+            },
+            "speed_alpha",
+        ),
+    ],
+)
+def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) -> None:
+    from livekit.plugins.rime import TTS
+
+    with pytest.raises(ValueError, match=message):
+        TTS(api_key="test-key", **kwargs)
