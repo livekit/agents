@@ -41,7 +41,7 @@ from . import gpt_live_types as types
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "gpt-live-1-lava-alpha"
+DEFAULT_MODEL = "gpt-live-1-marble-alpha"
 DEFAULT_VOICE = "marin"
 DEFAULT_BACKEND_MODEL = "gpt-5.6-sol"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -52,6 +52,7 @@ ALPHA_VALUE = "quicksilver=v2"
 _MAX_INITIAL_ITEMS = 128
 _MAX_INITIAL_CHARS = 8192 * 4
 _MAX_CONTEXT_CHARS = 500 * 4
+_MAX_OPENING_CHARS = 250 * 4
 _MAX_FEEDBACK_CHARS = 4096
 
 # no client event asks for a turn, so a reply is requested by putting the ask in the context
@@ -61,7 +62,7 @@ _SPEAK_NOW = (
 )
 
 # session.closed carries the final usage; the service drains first, capped at 10s server-side
-_SESSION_CLOSE_TIMEOUT = 2.0
+_SESSION_CLOSE_TIMEOUT = 5.0
 _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
@@ -74,6 +75,10 @@ _FATAL_ERROR_CODES = frozenset(
         "billing_hard_limit_reached",
     }
 )
+
+
+# reported before session.opening.completed, and between them they mean the caller heard nothing
+_OPENING_FAILURE_CODES = frozenset({"opening_timeout", "opening_no_output_audio"})
 
 
 def _is_fatal_error(error: types.ErrorBody) -> bool:
@@ -163,6 +168,7 @@ class _LiveOptions:
     model: str
     voice: str
     instructions: str | None
+    opening: str | None
     delegation: types.DelegationTarget
     backend_model: str
     backend_instructions: str | None
@@ -185,6 +191,7 @@ class GPTLiveModel(llm.DuplexModel):
         model: str = DEFAULT_MODEL,
         voice: str = DEFAULT_VOICE,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        opening: NotGivenOr[str] = NOT_GIVEN,
         delegation: types.DelegationTarget = "responses",
         backend_model: str = DEFAULT_BACKEND_MODEL,
         backend_instructions: NotGivenOr[str] = NOT_GIVEN,
@@ -203,6 +210,9 @@ class GPTLiveModel(llm.DuplexModel):
             model: GPT-Live voice model slug.
             voice: Output voice. Immutable after the session starts.
             instructions: Voice-model system instructions. Immutable after the session starts.
+            opening: A passage the model speaks first, at most 250 tokens. The server mutes the
+                microphone for its duration, so the caller cannot interrupt it. The model may
+                reword it, and it cannot be set after the session starts.
             delegation: Where delegated work goes. ``responses`` runs it on a backend model, so
                 ``@function_tool`` works as usual; ``client`` hands it to the application as a
                 ``delegation_created`` event, which no framework tool can answer.
@@ -241,6 +251,7 @@ class GPTLiveModel(llm.DuplexModel):
             model=model,
             voice=voice,
             instructions=instructions if is_given(instructions) else None,
+            opening=opening if is_given(opening) else None,
             delegation=delegation,
             backend_model=backend_model,
             backend_instructions=backend_instructions if is_given(backend_instructions) else None,
@@ -310,6 +321,10 @@ class GPTLiveSession(
         self._closing = False
         # the first session.update of a connection carries the config that is immutable after it
         self._initial_config_sent = False
+        # an opening only belongs in a conversation nobody has spoken in yet: a connection that
+        # drops before anyone did still carries it, a later one would talk over what is under way
+        self._conversation_started = False
+        self._opening_failed = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
         self._session_id: str | None = None
@@ -397,12 +412,25 @@ class GPTLiveSession(
         items.reverse()
         return items
 
+    def _build_opening(self) -> types.Opening | None:
+        """The protected passage, carried until someone has taken a turn."""
+        if not (text := self._opts.opening) or self._conversation_started:
+            return None
+        if len(text) > _MAX_OPENING_CHARS:
+            logger.warning(
+                "gpt-live opening exceeds the 250 token limit; truncating",
+                extra={"chars": len(text)},
+            )
+            text = text[:_MAX_OPENING_CHARS]
+        return types.Opening(text=text)
+
     def _create_session_update_event(self) -> types.SessionUpdateEvent:
         """The whole configuration, composed fresh for each connection."""
         return types.SessionUpdateEvent(
             event_id=utils.shortuuid("session_update_"),
             session=types.SessionConfig(
                 instructions=self._instructions,
+                opening=self._build_opening(),
                 audio=types.AudioConfig(
                     format=types.AudioFormat(type="audio/pcm", rate=SAMPLE_RATE),
                     output=types.AudioOutput(voice=self._opts.voice),
@@ -479,6 +507,7 @@ class GPTLiveSession(
         # a new connection is a new session, so its usage counters restart from zero
         self._usage_total = types.Usage()
         self._session_id = None
+        self._opening_failed = False
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {
@@ -605,7 +634,7 @@ class GPTLiveSession(
         if etype == "session.started":
             self._handle_session_started(types.SessionStartedEvent.construct(**event))
         elif etype == "session.updated":
-            self._handle_session_started(types.SessionUpdatedEvent.construct(**event))
+            self._handle_session_updated(types.SessionUpdatedEvent.construct(**event))
         elif etype == "output_audio.delta":
             self._handle_output_audio_delta(types.OutputAudioDeltaEvent.construct(**event))
         elif etype == "output_transcript.added":
@@ -624,40 +653,53 @@ class GPTLiveSession(
             self._handle_response_output_item_done(
                 types.ResponseOutputItemDoneEvent.construct(**event)
             )
+        elif etype == "session.opening.started":
+            self._handle_opening_started(types.SessionOpeningStartedEvent.construct(**event))
+        elif etype == "session.opening.completed":
+            self._handle_opening_completed(types.SessionOpeningCompletedEvent.construct(**event))
         elif etype == "session.usage.updated":
-            usage_event = types.SessionUsageUpdatedEvent.construct(**event)
-            self._handle_usage(usage_event.usage, usage_event.usage_limit)
+            self._handle_session_usage_updated(types.SessionUsageUpdatedEvent.construct(**event))
         elif etype == "session.closed":
-            self._handle_usage(types.SessionClosedEvent.construct(**event).usage)
-            if not self._session_closed_fut.done():
-                self._session_closed_fut.set_result(None)
+            self._handle_session_closed(types.SessionClosedEvent.construct(**event))
         elif etype == "error":
             self._handle_error(types.ErrorEvent.construct(**event).error)
         elif etype == "session.context_window.rolled_over":
-            # the service summarised the earlier conversation in place, on its own terms
-            logger.info(
-                "gpt-live compacted the session context",
-                extra={
-                    "rollover_id": types.ContextWindowRolledOverEvent.construct(**event).rollover_id
-                },
+            self._handle_context_window_rolled_over(
+                types.ContextWindowRolledOverEvent.construct(**event)
             )
         elif etype == "input_transcript.added":
-            # the user-side twin of output_transcript.added, repeating fragments turn.delta already
-            # carries; its per-fragment timing has no consumer, since only the agent's own speech is
-            # paced against playout
-            pass
+            self._handle_input_transcript_added(types.InputTranscriptAddedEvent.construct(**event))
         elif lk_oai_debug:
             logger.debug(f"unhandled gpt-live event: {etype}")
 
     # -- model output ----------------------------------------------------------------------------
 
-    def _handle_session_started(
-        self, event: types.SessionStartedEvent | types.SessionUpdatedEvent
-    ) -> None:
+    def _handle_session_started(self, event: types.SessionStartedEvent) -> None:
         if event.session.id:
             self._session_id = event.session.id
         if not self._session_started_fut.done():
             self._session_started_fut.set_result(None)
+
+    def _handle_session_updated(self, event: types.SessionUpdatedEvent) -> None:
+        """A receipt for one sparse update, which nothing waits on yet.
+
+        Startup acknowledges with ``session.started``, and only that releases the audio hold. The
+        echoed ``event_id`` is where an update that has to be correlated would be answered.
+        """
+
+    def _handle_opening_started(self, event: types.SessionOpeningStartedEvent) -> None:
+        logger.debug("gpt-live is speaking its opening; the microphone is muted until it ends")
+
+    def _handle_opening_completed(self, event: types.SessionOpeningCompletedEvent) -> None:
+        # no failure means the caller heard it, whether or not any of it was transcribed
+        self._conversation_started = self._conversation_started or not self._opening_failed
+        logger.debug("gpt-live finished its opening")
+
+    def _handle_context_window_rolled_over(self, event: types.ContextWindowRolledOverEvent) -> None:
+        """The service summarised the earlier conversation in place, on its own terms."""
+        logger.info(
+            "gpt-live compacted the session context", extra={"rollover_id": event.rollover_id}
+        )
 
     def _handle_output_audio_delta(self, event: types.OutputAudioDeltaEvent) -> None:
         data = base64.b64decode(event.audio) if event.audio else b""
@@ -700,6 +742,13 @@ class GPTLiveSession(
             ),
         )
 
+    def _handle_input_transcript_added(self, event: types.InputTranscriptAddedEvent) -> None:
+        """The user-side twin of output_transcript.added, which nothing here reads.
+
+        It repeats fragments turn.delta already carries, and only the agent's own speech is paced
+        against playout, so its per-fragment timing has no consumer.
+        """
+
     def _end_assistant_turn(self, turn_id: str) -> None:
         """End an assistant turn, recording what it said in the local conversation mirror."""
         if self._assistant_turn_id == turn_id:
@@ -726,6 +775,7 @@ class GPTLiveSession(
         turn = event.turn
         if not turn.id or turn.role not in ("user", "assistant"):
             return
+        self._conversation_started = True
         self._turn_roles[turn.id] = turn.role
         if turn.role == "user":
             # a user turn is a projection over transcript fragments, not a state change: the model
@@ -810,7 +860,19 @@ class GPTLiveSession(
 
     # -- metrics and errors ----------------------------------------------------------------------
 
+    def _handle_session_usage_updated(self, event: types.SessionUsageUpdatedEvent) -> None:
+        self._handle_usage(event.usage, event.usage_limit)
+
+    def _handle_session_closed(self, event: types.SessionClosedEvent) -> None:
+        self._handle_usage(event.usage)
+        if not self._session_closed_fut.done():
+            self._session_closed_fut.set_result(None)
+
     def _handle_usage(self, usage: types.Usage, limit: types.UsageLimit | None = None) -> None:
+        # cumulative, so the backend entries stay empty until the model delegates something
+        logger.debug(
+            "gpt-live reported usage", extra={"usage": usage.model_dump(exclude_none=True)}
+        )
         if limit is not None and limit.status:
             logger.warning(
                 f"{self._live_model._provider_label} reported a usage limit",
@@ -877,6 +939,8 @@ class GPTLiveSession(
         self.emit("metrics_collected", metrics)
 
     def _handle_error(self, error: types.ErrorBody) -> None:
+        if (error.code or "") in _OPENING_FAILURE_CODES:
+            self._opening_failed = True
         logger.error(
             f"{self._live_model._provider_label} returned an error",
             extra={"error": error.model_dump(exclude_none=True)},

@@ -1,4 +1,4 @@
-"""Wire types of the OpenAI GPT-Live API, as of the 2026-08-06 alpha.
+"""Wire types of the OpenAI GPT-Live API, as of the 2026-08-24 alpha.
 
 Server events are read with ``Event.construct(**payload)``: it builds nested models without
 validating, so a field the alpha reshapes cannot break a live session. Client events serialise with
@@ -40,6 +40,8 @@ class InitialItem(BaseModel):
 
 
 class FunctionCallOutputItem(BaseModel):
+    """Sent to answer a call, and echoed back on acceptance."""
+
     id: str | None = None
     type: Literal["function_call_output"] = "function_call_output"
     call_id: str = ""
@@ -82,24 +84,28 @@ class Delegation(BaseModel):
     responses: ResponsesConfig | None = None
 
 
+class Opening(BaseModel):
+    """A passage the model speaks before microphone input can interrupt it."""
+
+    text: str = ""
+
+
 class SessionConfig(BaseModel):
     """Startup configuration; a later update carries only the fields it changes."""
 
     instructions: str | None = None
+    opening: Opening | None = None
     audio: AudioConfig | None = None
     delegation: Delegation | None = None
     initial_items: list[InitialItem] | None = None
 
 
 class SessionResource(BaseModel):
-    """The public session as the service reports it back."""
+    """The public session as the service reports it back, bounded to its identity."""
 
     id: str | None = None
     expires_at: int | None = None
-    model: str | None = None
-    instructions: str | None = None
-    audio: AudioConfig | None = None
-    delegation: Delegation | None = None
+    status: str | None = None
 
 
 # -- client events -------------------------------------------------------------------------------
@@ -108,18 +114,18 @@ class SessionResource(BaseModel):
 class SessionUpdateEvent(BaseModel):
     type: Literal["session.update"] = "session.update"
     event_id: str | None = None
-    session: SessionConfig = SessionConfig()
+    session: SessionConfig
 
 
 class SessionFeedbackEvent(BaseModel):
     type: Literal["session.feedback"] = "session.feedback"
-    text: str = ""
+    text: str
 
 
 class InputAudioAppendEvent(BaseModel):
     type: Literal["input_audio.append"] = "input_audio.append"
     event_id: str | None = None
-    audio: str = ""
+    audio: str
 
 
 class InputAudioPauseEvent(BaseModel):
@@ -136,7 +142,7 @@ class SessionContextAppendEvent(BaseModel):
     type: Literal["session.context.append"] = "session.context.append"
     event_id: str | None = None
     channel: Channel | None = None
-    content: list[InputTextPart] = []
+    content: list[InputTextPart]
 
 
 class DelegationContextAppendEvent(BaseModel):
@@ -144,9 +150,9 @@ class DelegationContextAppendEvent(BaseModel):
 
     type: Literal["delegation.context.append"] = "delegation.context.append"
     event_id: str | None = None
-    delegation_item_id: str = ""
+    delegation_item_id: str
     channel: Channel | None = None
-    content: list[InputTextPart] = []
+    content: list[InputTextPart]
 
 
 class DelegationFunctionCallOutputCreateEvent(BaseModel):
@@ -154,7 +160,7 @@ class DelegationFunctionCallOutputCreateEvent(BaseModel):
         "delegation.function_call_output.create"
     )
     event_id: str | None = None
-    item: FunctionCallOutputItem = FunctionCallOutputItem()
+    item: FunctionCallOutputItem
 
 
 class SessionCloseEvent(BaseModel):
@@ -184,7 +190,10 @@ class SessionStartedEvent(BaseModel):
 
 
 class SessionUpdatedEvent(BaseModel):
+    """Echoes ``event_id`` where the update carried one, so concurrent updates can be told apart."""
+
     type: Literal["session.updated"] = "session.updated"
+    event_id: str | None = None
     session: SessionResource = SessionResource()
 
 
@@ -197,6 +206,16 @@ class ContextWindowApproachingEvent(BaseModel):
 class ContextWindowRolledOverEvent(BaseModel):
     type: Literal["session.context_window.rolled_over"] = "session.context_window.rolled_over"
     rollover_id: str = ""
+
+
+class SessionOpeningStartedEvent(BaseModel):
+    type: Literal["session.opening.started"] = "session.opening.started"
+
+
+class SessionOpeningCompletedEvent(BaseModel):
+    """The protected phase is over; it does not certify what the model said."""
+
+    type: Literal["session.opening.completed"] = "session.opening.completed"
 
 
 class InputAudioPausedEvent(BaseModel):

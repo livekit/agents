@@ -19,6 +19,9 @@ Notes for this alpha:
   session starts; the backend reasoning model is configured via ``backend_instructions``.
 - Audio the model never transcribes — a backchannel, a laugh — still plays; it simply
   produces no chat item.
+- ``opening`` is the way to speak first: the server mutes the microphone for its duration, so
+  nothing here pauses input. It is startup-only, and the model may reword it, so use prerecorded
+  audio where the exact wording is a compliance requirement.
 
 Run it in the terminal (needs OPENAI_API_KEY and alpha access):
 
@@ -84,13 +87,8 @@ class Assistant(Agent):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(
-            user_input="What is the weather in New York?",
-            # instructions=(
-            #     "greet the caller by picking up where the earlier conversation left off, "
-            #     "and ask how you can help."
-            # )
-        )
+        # nothing to do: the session's `opening` already greets the caller
+        pass
 
     @function_tool
     async def lookup_weather(self, context: RunContext, location: str) -> str:
@@ -139,15 +137,22 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         llm=GPTLiveModel(
             voice="marin",
+            # spoken before the caller can interrupt it, in place of an on_enter greeting
+            opening="Thanks for calling Acme. How can I help you today?",
             # backend Responses model that handles reasoning and tools
             backend_model="gpt-5.6-sol",
             backend_instructions="Use tools when current information is required.",
         ),
     )
 
-    await session.start(agent=Assistant(), room=ctx.room)
+    async def log_usage() -> None:
+        # gpt-live reports usage about once a minute, and the last of it only on close
+        logger.info("usage: %s", session.usage)
 
-    await ctx.connect()
+    # shutdown callbacks are triggered when the session is over
+    ctx.add_shutdown_callback(log_usage)
+
+    await session.start(agent=Assistant(), room=ctx.room)
 
 
 if __name__ == "__main__":

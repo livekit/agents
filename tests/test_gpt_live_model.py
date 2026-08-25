@@ -248,3 +248,75 @@ async def test_a_hosted_tool_is_delegated_to_the_backend(monkeypatch: pytest.Mon
     finally:
         await session.aclose()
         await model.aclose()
+
+
+async def test_an_opening_is_repeated_until_the_caller_has_heard_something(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """session.opening.started only says the phase is active; the failure codes say what came out."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", opening="This call may be recorded.")
+    session = model.session()
+    try:
+        await asyncio.sleep(0.05)
+        assert ws.sent[0]["session"]["opening"] == {"text": "This call may be recorded."}
+
+        # the phase ran but produced nothing, so the next connection carries it again
+        session._handle_event({"type": "session.opening.started"})
+        session._handle_event(
+            {"type": "error", "error": {"code": "opening_no_output_audio", "message": "silent"}}
+        )
+        session._handle_event({"type": "session.opening.completed"})
+        session._reset_for_reconnect()
+        assert session._create_session_update_event().session.opening is not None
+
+        session._handle_event({"type": "session.opening.started"})
+        session._handle_event({"type": "session.opening.completed"})
+        session._reset_for_reconnect()
+        assert session._create_session_update_event().session.opening is None
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_opening_never_reaches_a_conversation_under_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn from either side means someone has spoken."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", opening="This call may be recorded.")
+    session = model.session()
+    try:
+        await asyncio.sleep(0.05)
+        session._handle_event({"type": "turn.created", "turn": {"id": "turn_1", "role": "user"}})
+        session._reset_for_reconnect()
+        assert session._create_session_update_event().session.opening is None
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_only_session_started_releases_the_audio_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An update receipt is not a startup acknowledgment, and must not open the audio gate."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            {"type": "session.updated", "event_id": "e1", "session": {"id": "s1"}}
+        )
+        assert not session._session_started_fut.done()
+        assert session._session_id is None
+
+        session._handle_event({"type": "session.started", "session": {"id": "s1"}})
+        assert session._session_started_fut.done()
+        assert session._session_id == "s1"
+    finally:
+        await session.aclose()
+        await model.aclose()
