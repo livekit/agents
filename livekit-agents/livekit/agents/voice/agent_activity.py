@@ -282,7 +282,19 @@ class AgentActivity(RecognitionHooks):
                 "turn detection."
             )
 
-        if self._rt_turn_detection_enabled and not self.allow_interruptions:
+        # the model stops its own output when the user speaks, so its speech-started event
+        # never interrupts playback here
+        self._rt_server_barge_in = (
+            isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.server_barge_in
+        )
+
+        if (
+            self._rt_turn_detection_enabled
+            # a server_barge_in model never interrupts from its speech-started event, so
+            # allow_interruptions=False has nothing to conflict with
+            and not self._rt_server_barge_in
+            and not self.allow_interruptions
+        ):
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "
                 "allow_interruptions cannot be False, disable turn_detection in "
@@ -1503,7 +1515,11 @@ class AgentActivity(RecognitionHooks):
                 "add a TTS model to AgentSession to enable say()"
             )
 
-        if self._rt_turn_detection_enabled and allow_interruptions is False:
+        if (
+            self._rt_turn_detection_enabled
+            and not self._rt_server_barge_in
+            and allow_interruptions is False
+        ):
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1569,7 +1585,11 @@ class AgentActivity(RecognitionHooks):
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
     ) -> SpeechHandle:
-        if self._rt_turn_detection_enabled and allow_interruptions is False:
+        if (
+            self._rt_turn_detection_enabled
+            and not self._rt_server_barge_in
+            and allow_interruptions is False
+        ):
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
                 "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
@@ -1578,6 +1598,18 @@ class AgentActivity(RecognitionHooks):
 
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
+
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and not self.llm.capabilities.manual_response_creation
+        ):
+            # the model speaks when it decides to; asking is a no-op rather than a failure
+            logger.debug("skipping generate_reply, the model cannot be asked to speak")
+            handle = SpeechHandle.create(
+                allow_interruptions=self.allow_interruptions, input_details=input_details
+            )
+            handle._mark_done()
+            return handle
 
         task = asyncio.current_task()
         if not is_given(tool_choice) and task is not None:
@@ -1995,6 +2027,12 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
+        if self._rt_server_barge_in:
+            # the model keeps streaming through user speech and stops on its own, so this event
+            # says nothing about its output; clearing playback here would cut speech still coming.
+            # interruption stays with our VAD / interruption detection.
+            return
+
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
@@ -2096,8 +2134,10 @@ class AgentActivity(RecognitionHooks):
             # disable interruption from audio activity while aec warmup is active
             return
 
-        if self._rt_turn_detection_enabled:
-            # ignore if realtime model has turn detection enabled
+        if self._rt_turn_detection_enabled and not self._rt_server_barge_in:
+            # ignore if realtime model has turn detection enabled: its speech-started event
+            # interrupts for us. a server_barge_in model never interrupts, so this is the only
+            # way for the app to cut the agent off.
             return
 
         interruption_options = self._session.options.interruption
