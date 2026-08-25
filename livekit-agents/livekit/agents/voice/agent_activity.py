@@ -1427,7 +1427,6 @@ class AgentActivity(RecognitionHooks):
                 "input_audio_transcription_completed",
                 self._on_input_audio_transcription_completed,
             )
-            self._rt_session.off("metrics_collected", self._on_metrics_collected)
             self._rt_session.off("remote_item_added", self._on_remote_item_added)
             self._rt_session.off("error", self._on_error)
             if isinstance(self._rt_session, _FallbackRealtimeSession):
@@ -1456,6 +1455,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
+            # after aclose, so a model that reports its final usage while closing is still counted
+            self._rt_session.off("metrics_collected", self._on_metrics_collected)
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()
