@@ -1011,9 +1011,31 @@ class _DialogueConnection(_Connection):
     def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
         super().__init__(opts, session)
         self._closing_contexts: set[str] = set()
+        self._last_context_send: dict[str, float] = {}
 
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
+
+    def _next_keep_alive_delay(self) -> float:
+        eligible = self._active_contexts - self._closing_contexts
+        if not eligible:
+            return _DIALOGUE_KEEP_ALIVE_INTERVAL
+        now = asyncio.get_event_loop().time()
+        next_due = min(
+            self._last_context_send.get(context_id, now) + _DIALOGUE_KEEP_ALIVE_INTERVAL
+            for context_id in eligible
+        )
+        return max(0.0, next_due - now)
+
+    async def _send_due_keep_alives(self) -> None:
+        if not self._ws or self._ws.closed:
+            return
+        now = asyncio.get_event_loop().time()
+        for context_id in self._active_contexts - self._closing_contexts:
+            last = self._last_context_send.get(context_id)
+            if last is None or now - last >= _DIALOGUE_KEEP_ALIVE_INTERVAL:
+                await self._ws.send_json({"context_id": context_id, "keep_alive": True})
+                self._last_context_send[context_id] = now
 
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
@@ -1021,13 +1043,12 @@ class _DialogueConnection(_Connection):
             while not self._closed:
                 try:
                     msg = await asyncio.wait_for(
-                        self._input_queue.recv(), timeout=_DIALOGUE_KEEP_ALIVE_INTERVAL
+                        self._input_queue.recv(), timeout=self._next_keep_alive_delay()
                     )
                 except asyncio.TimeoutError:
                     if not self._ws or self._ws.closed:
                         break
-                    for context_id in self._active_contexts - self._closing_contexts:
-                        await self._ws.send_json({"context_id": context_id, "keep_alive": True})
+                    await self._send_due_keep_alives()
                     continue
                 except utils.aio.ChanClosed:
                     break
@@ -1056,6 +1077,7 @@ class _DialogueConnection(_Connection):
                     self._start_timeout_timer(msg.context_id)
 
                     await self._ws.send_json(pkt)
+                    self._last_context_send[msg.context_id] = asyncio.get_event_loop().time()
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
@@ -1065,6 +1087,8 @@ class _DialogueConnection(_Connection):
                             "close_context": True,
                         }
                         await self._ws.send_json(close_pkt)
+
+                await self._send_due_keep_alives()
 
         except Exception as e:
             logger.warning(
@@ -1190,6 +1214,7 @@ class _DialogueConnection(_Connection):
     def _cleanup_context(self, context_id: str) -> None:
         super()._cleanup_context(context_id)
         self._closing_contexts.discard(context_id)
+        self._last_context_send.pop(context_id, None)
 
 
 def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:

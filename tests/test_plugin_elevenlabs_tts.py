@@ -654,6 +654,37 @@ async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
 
 
 @pytest.mark.asyncio
+async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-idle", "hello ")  # pyright: ignore[reportPrivateUsage]
+        )
+        send_task = asyncio.create_task(connection._send_loop())
+
+        for _ in range(20):
+            connection.send_content(
+                elevenlabs_tts._SynthesizeContent("ctx-busy", "hello ")  # pyright: ignore[reportPrivateUsage]
+            )
+            await asyncio.sleep(0.01)
+
+        assert {"context_id": "ctx-idle", "keep_alive": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
