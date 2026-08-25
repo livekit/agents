@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import warnings
 from enum import Enum
 from typing import Any
 
@@ -33,12 +34,12 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
+from speechmatics.agent_stt import DEFAULT_MODEL, Model
 from speechmatics.rt import ClientMessageType
 from speechmatics.voice import (
     AdditionalVocabEntry,
     AgentServerMessageType,
     AudioEncoding,
-    OperatingPoint,
     SpeakerFocusConfig,
     SpeakerFocusMode,
     SpeakerIdentifier,
@@ -49,6 +50,13 @@ from speechmatics.voice import (
 
 from .log import logger
 from .version import __version__ as lk_version
+
+# Operating points agent-STT accepts on the wire, sourced from the Agent STT SDK's
+# `Model` enum so new models (e.g. `linden-2`) are picked up automatically. The SDK's
+# legacy RT `OperatingPoint` enum (`enhanced`/`standard`) predates agent-STT and is
+# rejected by it, so `Model` — not `OperatingPoint` — is the source of truth here.
+SUPPORTED_OPERATING_POINTS: tuple[str, ...] = tuple(m.value for m in Model)
+DEFAULT_OPERATING_POINT: str = DEFAULT_MODEL.value
 
 
 class TurnDetectionMode(str, Enum):
@@ -105,7 +113,7 @@ class STTOptions:
     # -------------------
 
     # Features
-    operating_point: OperatingPoint | None = None
+    operating_point: str = DEFAULT_OPERATING_POINT
     max_delay: float | None = None
     end_of_utterance_silence_trigger: float | None = None
     end_of_utterance_max_delay: float | None = None
@@ -126,7 +134,8 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
-        operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
+        operating_point: NotGivenOr[str] = NOT_GIVEN,  # deprecated, use `model`
+        model: NotGivenOr[Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -170,6 +179,12 @@ class STT(stt.STT):
 
             operating_point: Operating point for transcription accuracy vs. latency
                 tradeoff. Overrides preset if provided. Optional.
+                Deprecated: use `model` instead.
+
+            model: The model to use, i.e. the operating point for transcription
+                accuracy vs. latency tradeoff. Must be one of
+                `SUPPORTED_OPERATING_POINTS`. Overrides preset if provided.
+                Defaults to `DEFAULT_OPERATING_POINT` (`"linden-1"`).
 
             domain: Domain to use. Optional.
 
@@ -263,6 +278,37 @@ class STT(stt.STT):
                 recognised deprecated name.
         """
 
+        # `operating_point` is the deprecated name for `model`.
+        #   - both given & aligned    -> use `model`, silently disregard `operating_point`
+        #   - both given & different -> error (caller asked for two different options)
+        #   - only `operating_point` -> works, but warn (deprecated name)
+        #   - only `model`           -> use it
+        #   - neither                -> default
+        _op = str(operating_point) if is_given(operating_point) else None
+        _model = (
+            (model.value if isinstance(model, Model) else str(model)) if is_given(model) else None
+        )
+
+        if _op is not None and _model is not None:
+            if _op != _model:
+                raise ValueError(
+                    f"`model` ({_model!r}) and `operating_point` ({_op!r}) name different "
+                    "options. Pass only `model` (`operating_point` is deprecated)."
+                )
+            resolved_model = _model  # aligned: use model, ignore the deprecated field silently
+        elif _op is not None:
+            warnings.warn(
+                "`operating_point` is deprecated and will be removed in a future release; "
+                "use `model` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            resolved_model = _op
+        elif _model is not None:
+            resolved_model = _model
+        else:
+            resolved_model = DEFAULT_OPERATING_POINT
+
         # Resolve final turn_detection_mode — a real `vad` forces EXTERNAL.
         if is_given(vad) and vad is not None and turn_detection_mode != TurnDetectionMode.EXTERNAL:
             logger.info(
@@ -316,7 +362,7 @@ class STT(stt.STT):
             focus_mode=focus_mode,
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
-            operating_point=_set(operating_point),
+            operating_point=resolved_model,
             max_delay=_set(max_delay),
             end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
@@ -369,8 +415,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        op = self._stt_options.operating_point
-        return str(op.value) if op is not None else "enhanced"
+        return self._stt_options.operating_point
 
     async def _recognize_impl(
         self,
@@ -408,6 +453,13 @@ class STT(stt.STT):
         """Validate options in STTOptions."""
         errors: list[str] = []
         opts = self._stt_options
+
+        # agent-STT only accepts a fixed, known set of operating points
+        if opts.operating_point not in SUPPORTED_OPERATING_POINTS:
+            errors.append(
+                f"operating_point must be one of {SUPPORTED_OPERATING_POINTS!r}, "
+                f"got {opts.operating_point!r}"
+            )
 
         # end_of_utterance_silence_trigger must be between 0 and 2
         if opts.end_of_utterance_silence_trigger is not None and not (

@@ -18,12 +18,17 @@ See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more infor
 from speechmatics.voice import (
     AdditionalVocabEntry,
     AudioEncoding,
-    OperatingPoint,
     SpeakerFocusMode,
     SpeakerIdentifier,
 )
 
-from .stt import STT, SpeechStream, TurnDetectionMode
+from .stt import (
+    DEFAULT_OPERATING_POINT,
+    STT,
+    SUPPORTED_OPERATING_POINTS,
+    SpeechStream,
+    TurnDetectionMode,
+)
 from .tts import TTS
 from .version import __version__
 
@@ -34,7 +39,8 @@ __all__ = [
     "SpeechStream",
     "AdditionalVocabEntry",
     "AudioEncoding",
-    "OperatingPoint",
+    "SUPPORTED_OPERATING_POINTS",
+    "DEFAULT_OPERATING_POINT",
     "SpeakerFocusMode",
     "SpeakerIdentifier",
     "logger",
