@@ -811,9 +811,20 @@ class AudioRecognition:
 
     async def _aclose(self) -> None:
         self._closing.set()
+        # WARNING: Suppressing CancelledError for either turn task can also suppress
+        # cancellation of _aclose() itself. Cleanup can therefore continue past the
+        # job runner's 60-second session-close timeout.
         try:
             if self._commit_user_turn_atask is not None:
-                await aio.cancel_and_wait(self._commit_user_turn_atask)
+                try:
+                    await self._commit_user_turn_atask
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "error while committing the final user turn on close: %s",
+                        type(exc).__name__,
+                    )
 
             if self._stt_pipeline is not None:
                 await self._stt_pipeline.aclose()
@@ -831,7 +842,15 @@ class AudioRecognition:
                 await aio.cancel_and_wait(self._interruption_atask)
 
             if self._end_of_turn_task is not None:
-                await aio.cancel_and_wait(self._end_of_turn_task)
+                try:
+                    await self._end_of_turn_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "error while completing the final user turn on close: %s",
+                        type(exc).__name__,
+                    )
 
             if self._turn_detector_stream is not None:
                 await self._turn_detector_stream.aclose()
@@ -1098,7 +1117,7 @@ class AudioRecognition:
                             "final transcript not received after timeout",
                             extra={
                                 "transcript_timeout": transcript_timeout,
-                                "interim_transcript": self._audio_interim_transcript,
+                                "lk.pii.interim_transcript": self._audio_interim_transcript,
                             },
                         )
 
@@ -1242,7 +1261,10 @@ class AudioRecognition:
             if self._session.amd is not None:
                 self._session.amd._on_transcript(transcript)
 
-            extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
+            extra: dict[str, Any] = {
+                "lk.pii.user_transcript": transcript,
+                "language": self._last_language,
+            }
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
@@ -1303,7 +1325,7 @@ class AudioRecognition:
 
             logger.debug(
                 "received user preflight transcript",
-                extra={"user_transcript": transcript, "language": self._last_language},
+                extra={"lk.pii.user_transcript": transcript, "language": self._last_language},
             )
 
             # still need to increment it as it's used for turn detection,
@@ -1337,7 +1359,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
 
             # STT EOT changes user state from speaking to listening without updating VAD internal states
@@ -1379,7 +1401,7 @@ class AudioRecognition:
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
+            with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
@@ -1398,7 +1420,7 @@ class AudioRecognition:
 
             self._cancel_transcription_timeout()
 
-            with trace.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+            with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
@@ -1437,7 +1459,7 @@ class AudioRecognition:
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             vad_speech_started = self._vad_speech_started
-            with trace.use_span(self._ensure_user_turn_span()):
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
             self._vad_speech_started = False
@@ -1540,7 +1562,7 @@ class AudioRecognition:
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
                     with (
-                        trace.use_span(user_turn_span),
+                        tracer.use_span(user_turn_span),
                         tracer.start_as_current_span("eou_detection") as eou_detection_span,
                     ):
                         from_cache = False
@@ -1876,7 +1898,7 @@ class AudioRecognition:
 
             # reset the speaking state to prevent stuck user speaking state during handoff
             if self._speaking:
-                with trace.use_span(self._ensure_user_turn_span()):
+                with tracer.use_span(self._ensure_user_turn_span()):
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
                 self._vad_speech_started = False

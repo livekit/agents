@@ -85,6 +85,7 @@ class _ScriptedTransport:
     ) -> None:
         self.run_behavior = run_behavior  # "idle" | "raise" | "return"
         self.run_exc = run_exc
+        self.session_id: str | None = None
         self.run_calls = 0
         self.stream_ref: Any = None
         self.events: list[tuple[str, Any]] = []

@@ -62,18 +62,24 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3"]
+SarvamSTTModels = Literal["saaras:v3", "saaras:v4"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
+_SUNSET_STT_MODELS = frozenset({"saarika:v2.5", "saaras:v2.5"})
+
+
+def _warn_if_sunset_stt_model(model: str) -> None:
+    if model in _SUNSET_STT_MODELS:
+        logger.warning(
+            f"Sarvam STT model '{model}' is sunset. Please migrate to 'saaras:v3' or 'saaras:v4'."
+        )
+
 
 # Valid mode values (single source of truth)
 ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 
 
 class SpeechToTextLanguage(str, Enum):
-    """Languages supported for STT.
-
-    saarika:v2.5 supports only a subset; saaras:v3 supports all.
-    """
+    """Languages supported for STT."""
 
     UNKNOWN = "unknown"
     HI_IN = "hi-IN"
@@ -87,7 +93,6 @@ class SpeechToTextLanguage(str, Enum):
     TE_IN = "te-IN"
     EN_IN = "en-IN"
     GU_IN = "gu-IN"
-    # saaras:v3-only languages (saarika:v2.5 raises error if requested)
     ASSAMESE = "as-IN"
     URDU = "ur-IN"
     NEPALI = "ne-IN"
@@ -103,20 +108,6 @@ class SpeechToTextLanguage(str, Enum):
 
 
 SAARAS_V3_LANGUAGES = {lang.value for lang in SpeechToTextLanguage}
-SAARIKA_V25_LANGUAGES: set[str] = {
-    SpeechToTextLanguage.UNKNOWN.value,
-    SpeechToTextLanguage.HI_IN.value,
-    SpeechToTextLanguage.BN_IN.value,
-    SpeechToTextLanguage.KN_IN.value,
-    SpeechToTextLanguage.ML_IN.value,
-    SpeechToTextLanguage.MR_IN.value,
-    SpeechToTextLanguage.OD_IN.value,
-    SpeechToTextLanguage.PA_IN.value,
-    SpeechToTextLanguage.TA_IN.value,
-    SpeechToTextLanguage.TE_IN.value,
-    SpeechToTextLanguage.EN_IN.value,
-    SpeechToTextLanguage.GU_IN.value,
-}
 
 
 @dataclass(frozen=True)
@@ -147,29 +138,18 @@ class ModelConfig:
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "saarika:v2.5": ModelConfig(
+    "saaras:v3": ModelConfig(
         supports_prompt=False,
-        supports_mode=False,
+        supports_mode=True,
         supports_language=True,
-        supports_vad_params=False,
-        default_language="unknown",
-        default_mode=None,
+        supports_vad_params=True,
+        default_language="en-IN",
+        default_mode="transcribe",
         use_translate_endpoint=False,
         use_translate_method=False,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
+        allowed_languages=SAARAS_V3_LANGUAGES,
     ),
-    "saaras:v2.5": ModelConfig(
-        supports_prompt=True,
-        supports_mode=False,
-        supports_language=False,
-        supports_vad_params=False,
-        default_language=None,
-        default_mode=None,
-        use_translate_endpoint=True,
-        use_translate_method=True,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
-    ),
-    "saaras:v3": ModelConfig(
+    "saaras:v4": ModelConfig(
         supports_prompt=False,
         supports_mode=True,
         supports_language=True,
@@ -286,7 +266,7 @@ class SarvamSTTOptions:
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
@@ -294,7 +274,7 @@ class SarvamSTTOptions:
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     api_key: str
-    model: SarvamSTTModels | str = "saarika:v2.5"
+    model: SarvamSTTModels | str = "saaras:v4"
     mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
@@ -478,7 +458,7 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
@@ -489,7 +469,7 @@ class STT(stt.STT):
         self,
         *,
         language: str = "en-IN",
-        model: SarvamSTTModels | str = "saarika:v2.5",
+        model: SarvamSTTModels | str = "saaras:v4",
         mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
@@ -551,6 +531,7 @@ class STT(stt.STT):
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
         self._streams = weakref.WeakSet[SpeechStream]()
+        _warn_if_sunset_stt_model(model)
 
     @property
     def model(self) -> str:
@@ -608,6 +589,8 @@ class STT(stt.STT):
             resolved_language = self._opts.language
         if not isinstance(resolved_model, str):
             resolved_model = self._opts.model
+        if is_given(model):
+            _warn_if_sunset_stt_model(resolved_model)
 
         if is_given(mode):
             resolved_mode = str(mode)
@@ -656,9 +639,7 @@ class STT(stt.STT):
         form_data = aiohttp.FormData()
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
 
-        # Add model and language_code to the form data if specified
-        # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
-        # Model is also optional, defaults to saarika:v2.5
+        # Add model and language_code to the form data
         if opts_language:
             form_data.add_field("language_code", opts_language)
         if opts_model:
@@ -694,7 +675,9 @@ class STT(stt.STT):
                     )
 
                 response_json = await res.json()
-                self._logger.debug(f"Sarvam API response: {response_json}")
+                self._logger.debug(
+                    "Sarvam API response received", extra={"lk.pii.response_json": response_json}
+                )
 
                 transcript_text = response_json.get("transcript", "")
                 request_id = response_json.get("request_id", "")
@@ -1136,6 +1119,7 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("LanguageCode cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model cannot be empty")
+        _warn_if_sunset_stt_model(model)
 
         self._opts.language = LanguageCode(language)
         self._opts.model = model
@@ -1149,7 +1133,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Options updated, triggering reconnection",
-            extra={**self._build_log_context(), "prompt": prompt},
+            extra={**self._build_log_context(), "lk.pii.prompt": prompt},
         )
         self._reconnect_event.set()
 
@@ -1160,7 +1144,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.send_str(json.dumps(config_message))
             self._logger.debug(
                 "Sent initial config for saaras model",
-                extra={**self._build_log_context(), "prompt": self._opts.prompt},
+                extra={**self._build_log_context(), "lk.pii.prompt": self._opts.prompt},
             )
         except Exception as e:
             self._logger.error(
@@ -1445,7 +1429,7 @@ class SpeechStream(stt.SpeechStream):
                             "Invalid JSON received from WebSocket",
                             extra={
                                 **self._build_log_context(),
-                                "raw_data": msg.data,
+                                "lk.pii.raw_data": msg.data,
                                 "error": str(e),
                             },
                         )
@@ -1537,7 +1521,7 @@ class SpeechStream(stt.SpeechStream):
             if not msg_type:
                 self._logger.warning(
                     "Received message without type field",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
                 return
 
@@ -1555,13 +1539,13 @@ class SpeechStream(stt.SpeechStream):
             else:
                 self._logger.debug(
                     f"Unknown message type: {msg_type}",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
 
         except KeyError as e:
             self._logger.warning(
                 f"Missing required field in message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
             )
         except (APIStatusError, APIConnectionError):
             # Let API errors propagate without re-wrapping
@@ -1569,7 +1553,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Unexpected error handling message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
                 exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
@@ -1625,7 +1609,7 @@ class SpeechStream(stt.SpeechStream):
                 f"Error processing transcript data: {e}",
                 extra={
                     **self._build_log_context(),
-                    "transcript_data": transcript_data,
+                    "lk.pii.transcript_data": transcript_data,
                 },
                 exc_info=True,
             )
@@ -1640,7 +1624,7 @@ class SpeechStream(stt.SpeechStream):
         if not signal_type:
             self._logger.warning(
                 "VAD event missing signal_type",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
             )
             return
 
@@ -1692,7 +1676,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Error processing VAD event: {e}",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
                 exc_info=True,
             )
             raise
@@ -1716,7 +1700,7 @@ class SpeechStream(stt.SpeechStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_info": error_info,
-                "raw_message": data,
+                "lk.pii.raw_message": data,
             },
         )
 

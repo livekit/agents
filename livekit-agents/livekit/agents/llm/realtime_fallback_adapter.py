@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
@@ -156,7 +156,7 @@ class RealtimeModelFallbackAdapter(
             await model.aclose()
 
 
-class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_changed"]]):
+class _FallbackRealtimeSession(RealtimeSession[str]):
     """Bound once by AgentActivity; swaps the inner child session internally."""
 
     def __init__(
@@ -183,6 +183,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._forwarders: dict[EventTypes, Callable[[object], None]] = {
             event: _make_forwarder(event) for event in _FORWARDED_EVENTS
         }
+        self._extra_forwarders: dict[str, Callable[..., None]] = {}
 
         # per-model availability, with a cooldown after a failure
         self._available = [True] * len(adapter._models)
@@ -197,6 +198,7 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
         self._swapping = False
 
         self._active_index = 0
+        self._active_bound = False
         self._active = adapter._models[0].session(
             turn_detection_disabled=self._turn_detection_disabled
         )
@@ -207,12 +209,37 @@ class _FallbackRealtimeSession(RealtimeSession[Literal["realtime_availability_ch
     def _bind(self, child: RealtimeSession) -> None:
         for event, forwarder in self._forwarders.items():
             child.on(event, forwarder)
+        for extra_event, forwarder in self._extra_forwarders.items():
+            child.on(extra_event, forwarder)
         child.on("error", self._on_child_error)
+        self._active_bound = True
 
     def _unbind(self, child: RealtimeSession) -> None:
+        self._active_bound = False
         for event, forwarder in self._forwarders.items():
             child.off(event, forwarder)
+        for extra_event, forwarder in self._extra_forwarders.items():
+            child.off(extra_event, forwarder)
         child.off("error", self._on_child_error)
+
+    def on(
+        self,
+        event: EventTypes | str,
+        callback: Callable[..., Any] | None = None,
+    ) -> Callable[..., Any]:
+        if event not in _FORWARDED_EVENTS and event != "error":
+            forwarder = self._extra_forwarders.get(event)
+            if forwarder is None:
+
+                def _forward(*args: object) -> None:
+                    self.emit(event, *args)
+
+                forwarder = _forward
+                self._extra_forwarders[event] = forwarder
+                if self._active_bound:
+                    self._active.on(event, forwarder)
+
+        return super().on(event, callback)
 
     def _set_available(self, index: int, available: bool) -> None:
         if self._available[index] == available:

@@ -32,6 +32,11 @@ class RemoteChatContext:
     def get(self, item_id: str) -> _RemoteChatItem | None:
         return self._id_to_item.get(item_id)
 
+    @property
+    def tail_id(self) -> str | None:
+        """Id of the last item, or None when the context is empty."""
+        return self._tail.item.id if self._tail else None
+
     def insert(self, previous_item_id: str | None, message: ChatItem) -> None:
         """
         Insert `message` after the node with ID `previous_item_id`.

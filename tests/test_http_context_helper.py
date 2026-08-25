@@ -67,6 +67,12 @@ async def test_open_isolated_per_task() -> None:
     assert sess_a.closed and sess_b.closed
 
 
+async def test_shared_session_total_timeout_exceeds_aiohttp_default() -> None:
+    async with http_context.open() as session:
+        assert session.timeout.total == 900
+        assert session.timeout.sock_connect == 30
+
+
 async def test_http_session_error_message_points_to_helper() -> None:
     with pytest.raises(RuntimeError) as exc_info:
         http_context.http_session()

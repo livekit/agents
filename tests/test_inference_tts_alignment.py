@@ -9,7 +9,9 @@ from typing import Any
 import aiohttp
 import pytest
 
+import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
+from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import TTS
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
@@ -34,17 +36,19 @@ class _FakeWebSocket:
 
 
 class _FakePool:
-    def __init__(self, websocket: _FakeWebSocket) -> None:
+    def __init__(self, websocket: _FakeWebSocket, *, session_id: str | None = None) -> None:
         self._websocket = websocket
+        self._session_id = session_id
         self.last_acquire_time = 0.0
         self.last_connection_reused = False
 
     def connection(self, *, timeout: float):  # noqa: ANN201, ARG002
         websocket = self._websocket
+        session_id = self._session_id
 
         class _Context:
             async def __aenter__(self):  # noqa: ANN204
-                return websocket
+                return SimpleNamespace(ws=websocket, session_id=session_id)
 
             async def __aexit__(self, *_exc: object) -> bool:  # noqa: ANN204
                 return False
@@ -77,7 +81,7 @@ async def test_cartesia_inference_preserves_word_separators() -> None:
         base_url="https://example.livekit.cloud",
         extra_kwargs={"add_timestamps": True},
     )
-    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+    tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
 
     async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
         stream.push_text("hello world.")
@@ -90,8 +94,42 @@ async def test_cartesia_inference_preserves_word_separators() -> None:
         for timed_text in event.frame.userdata[USERDATA_TIMED_TRANSCRIPT]
     ]
 
+    assert all(event.request_id.startswith("inference_connection_tts_") for event in events)
     assert list(map(str, timed_transcript)) == ["hello ", "world. "]
     assert [(word.start_time, word.end_time) for word in timed_transcript] == [
         (0.0, 0.2),
         (0.2, 0.5),
     ]
+
+
+async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    websocket = _FakeWebSocket([])
+
+    class _FakeHTTPSession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+        async def ws_connect(self, url: str, *, headers: dict[str, str]) -> _FakeWebSocket:
+            self.headers = headers
+            return websocket
+
+    http_session = _FakeHTTPSession()
+    tts = TTS(
+        model="cartesia/sonic-3",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        http_session=http_session,  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        inference_tts,
+        "get_inference_headers",
+        lambda: {HEADER_SESSION_ID: "inference_connection"},
+    )
+    monkeypatch.setattr(inference_tts, "create_access_token", lambda *_args: "token")
+
+    connection = await tts._connect_ws(timeout=1.0)
+
+    assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
+    assert connection.session_id == "inference_connection"
+    assert connection.ws is websocket
