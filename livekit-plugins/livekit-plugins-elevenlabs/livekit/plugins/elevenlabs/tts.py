@@ -95,6 +95,9 @@ DEFAULT_VOICE_ID = "hpp4J3VqNfWAUOO0d1Us"
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 WS_INACTIVITY_TIMEOUT = 180
+_DIALOGUE_VOICE_SETTINGS_FIELDS = frozenset({"stability"})
+# the text-to-dialogue server finalizes a context idle for 20s; keep-alives reset that
+_DIALOGUE_KEEP_ALIVE_INTERVAL = 10.0
 
 
 class TTS(tts.TTS):
@@ -247,6 +250,13 @@ class TTS(tts.TTS):
             )
             if is_set
         ]
+        if is_given(self._opts.voice_settings):
+            settings = _strip_nones(dataclasses.asdict(self._opts.voice_settings))
+            ignored.extend(
+                f"voice_settings.{name}"
+                for name in settings
+                if name not in _DIALOGUE_VOICE_SETTINGS_FIELDS
+            )
         if ignored:
             logger.warning(
                 "model '%s' is synthesized via ElevenLabs' text-to-dialogue API, which "
@@ -615,6 +625,15 @@ def _build_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[st
     return init_pkt
 
 
+def _dialogue_voice_settings_payload(
+    voice_settings: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if voice_settings is None:
+        return None
+    filtered = {k: v for k, v in voice_settings.items() if k in _DIALOGUE_VOICE_SETTINGS_FIELDS}
+    return filtered or None
+
+
 def _build_dialogue_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
     # voices/voice_settings/pronunciation_dictionary_locators are only valid on a
     # context's first message; text is sent separately, after this.
@@ -623,7 +642,11 @@ def _build_dialogue_context_init_packet(opts: _TTSOptions, *, context_id: str) -
         "voices": [opts.voice_id],
     }
     if is_given(opts.voice_settings):
-        init_pkt["voice_settings"] = _strip_nones(dataclasses.asdict(opts.voice_settings))
+        voice_settings = _dialogue_voice_settings_payload(
+            _strip_nones(dataclasses.asdict(opts.voice_settings))
+        )
+        if voice_settings:
+            init_pkt["voice_settings"] = voice_settings
     if is_given(opts.pronunciation_dictionary_locators):
         init_pkt["pronunciation_dictionary_locators"] = _pronunciation_dictionary_locators_payload(
             opts.pronunciation_dictionary_locators
@@ -985,6 +1008,10 @@ class _DialogueConnection(_Connection):
 
     _TIMEOUT_LABEL = "11labs text-to-dialogue"
 
+    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
+        super().__init__(opts, session)
+        self._closing_contexts: set[str] = set()
+
     def _connect_url(self) -> str:
         return _dialogue_multi_stream_url(self._opts)
 
@@ -993,7 +1020,15 @@ class _DialogueConnection(_Connection):
         try:
             while not self._closed:
                 try:
-                    msg = await self._input_queue.recv()
+                    msg = await asyncio.wait_for(
+                        self._input_queue.recv(), timeout=_DIALOGUE_KEEP_ALIVE_INTERVAL
+                    )
+                except asyncio.TimeoutError:
+                    if not self._ws or self._ws.closed:
+                        break
+                    for context_id in self._active_contexts - self._closing_contexts:
+                        await self._ws.send_json({"context_id": context_id, "keep_alive": True})
+                    continue
                 except utils.aio.ChanClosed:
                     break
 
@@ -1024,6 +1059,7 @@ class _DialogueConnection(_Connection):
 
                 elif isinstance(msg, _CloseContext):
                     if msg.context_id in self._active_contexts:
+                        self._closing_contexts.add(msg.context_id)
                         close_pkt = {
                             "context_id": msg.context_id,
                             "close_context": True,
@@ -1104,12 +1140,7 @@ class _DialogueConnection(_Connection):
                 emitter = ctx.emitter
                 stream = ctx.stream
 
-                # text-to-dialogue is plain snake_case, no camelCase fallback needed
-                alignment = (
-                    data.get("normalized_alignment")
-                    if self.preferred_alignment == "normalized"
-                    else data.get("alignment")
-                )
+                alignment = data.get("alignment")
                 if alignment:
                     _accumulate_alignment(
                         stream,
@@ -1155,6 +1186,10 @@ class _DialogueConnection(_Connection):
         finally:
             if not self._closed:
                 await self.aclose()
+
+    def _cleanup_context(self, context_id: str) -> None:
+        super()._cleanup_context(context_id)
+        self._closing_contexts.discard(context_id)
 
 
 def _dict_to_voices_list(data: dict[str, Any]) -> list[Voice]:
@@ -1241,8 +1276,9 @@ def _build_dialogue_synthesize_body(
         "model_id": opts.model,
         "apply_text_normalization": opts.apply_text_normalization,
     }
-    if voice_settings is not None:
-        body["settings"] = voice_settings
+    settings = _dialogue_voice_settings_payload(voice_settings)
+    if settings:
+        body["settings"] = settings
     if is_given(opts.language):
         body["language_code"] = opts.language.language
     return body

@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import logging
 from types import SimpleNamespace
 
 import aiohttp
@@ -399,12 +400,12 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
     assert "settings" not in body
 
 
-def test_build_dialogue_synthesize_body_includes_settings_when_given() -> None:
+def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, "hello there", voice_settings={"stability": 0.5}
+        tts._opts, "hello there", voice_settings={"stability": 0.5, "similarity_boost": 0.75}
     )
 
     assert body["settings"] == {"stability": 0.5}
@@ -421,7 +422,7 @@ def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
     assert packet == {"context_id": "ctx-1", "voices": ["voice-1"]}
 
 
-def test_build_dialogue_context_init_packet_includes_voice_settings_when_given() -> None:
+def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key",
         model="eleven_v3_conversational",
@@ -432,7 +433,20 @@ def test_build_dialogue_context_init_packet_includes_voice_settings_when_given()
         tts._opts, context_id="ctx-1"
     )
 
-    assert packet["voice_settings"] == {"stability": 0.5, "similarity_boost": 0.75}
+    assert packet["voice_settings"] == {"stability": 0.5}
+
+
+def test_dialogue_model_warns_on_unsupported_voice_settings(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        elevenlabs_tts.TTS(
+            api_key="test-key",
+            model="eleven_v3_conversational",
+            voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+        )
+
+    assert any("voice_settings.similarity_boost" in r.getMessage() for r in caplog.records)
 
 
 def test_build_dialogue_context_init_packet_includes_pronunciation_dictionaries() -> None:
@@ -467,7 +481,7 @@ async def test_dialogue_recv_loop_parses_audio_and_alignment() -> None:
                 {
                     "context_id": context_id,
                     "audio": base64.b64encode(audio_chunk).decode("ascii"),
-                    "normalized_alignment": {
+                    "alignment": {
                         "chars": ["h", "i"],
                         "char_start_times_ms": [0, 100],
                         "char_durations_ms": [100, 100],
@@ -611,3 +625,57 @@ async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
             },
             {"context_id": "ctx-1", "close_context": True},
         ]
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.sleep(0.2)
+        assert {"context_id": "ctx-1", "keep_alive": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.sleep(0.2)
+        assert {"context_id": "ctx-1", "keep_alive": True} not in ws.sent
+        assert {"context_id": "ctx-1", "close_context": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
