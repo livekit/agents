@@ -41,7 +41,7 @@ _SILENCE_FLOOR = 1e-4
 _STALLED_TRANSCRIPT_TIMEOUT = 3.0
 
 # how long a requested reply waits for the model to start speaking before it counts as declined
-_REPLY_TIMEOUT = 5.0
+_REPLY_TIMEOUT = 10.0
 
 
 def _frame_rms(frame: rtc.AudioFrame) -> float:
