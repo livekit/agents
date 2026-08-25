@@ -8,6 +8,7 @@ from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, 
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
+    ProviderToolCall,
     ToolChoice,
 )
 from livekit.agents.types import (
@@ -357,6 +358,15 @@ class LLMStream(llm.LLMStream):
 
         if isinstance(data, ToolExecutionStartedEvent):
             self._provider_tool_args[data.id] = data.arguments
+            self._llm.emit(
+                "provider_tool_call",
+                ProviderToolCall(
+                    phase="started",
+                    call_id=data.id,
+                    name=data.name,
+                    arguments=data.arguments,
+                ),
+            )
 
         elif isinstance(data, ToolExecutionDeltaEvent):
             if data.id not in self._provider_tool_args:
@@ -368,6 +378,16 @@ class LLMStream(llm.LLMStream):
             logger.debug(
                 "executed provider tool",
                 extra={"function": data.name, "lk.pii.arguments": args, "lk.pii.info": data.info},
+            )
+            self._llm.emit(
+                "provider_tool_call",
+                ProviderToolCall(
+                    phase="done",
+                    call_id=data.id,
+                    name=data.name,
+                    arguments=args,
+                    result=str(data.info) if data.info is not None else None,
+                ),
             )
 
         return chunks
