@@ -76,6 +76,26 @@ class ChoiceDelta(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
+class ProviderToolCall(BaseModel):
+    """A provider-executed tool call, surfaced by a plugin as it runs.
+
+    These tools run inside the model provider's own stream (e.g. Mistral web search,
+    xAI WebSearch). A plugin emits the ``provider_tool_call`` event on the
+    :class:`LLM` (an ``EventEmitter``, like ``metrics_collected``) with ``phase="started"``
+    when the provider begins the call and ``phase="done"`` when it finishes; the framework
+    bridges these to ``provider_tool_execution_updated`` session events. They are never
+    executed locally.
+    """
+
+    type: Literal["provider_tool_call"] = "provider_tool_call"
+    phase: Literal["started", "done"]
+    call_id: str
+    name: str
+    arguments: str = ""
+    result: str | None = None
+    """Tool result, populated on ``phase="done"`` when the provider returns one."""
+
+
 class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
@@ -105,7 +125,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    rtc.EventEmitter[Literal["metrics_collected", "error", "provider_tool_call"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
