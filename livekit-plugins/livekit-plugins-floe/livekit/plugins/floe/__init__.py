@@ -14,10 +14,10 @@
 
 """Floe plugin for LiveKit Agents
 
-Route LiveKit's LLM through Floe for metered spend and budget-guarded
-inference, either keyless (Floe holds the provider keys) or BYOK (bring your own
-provider key). Includes a usage reconciler that reconciles LiveKit-reported
-token usage against Floe pricing.
+Route LiveKit's LLM, STT, and TTS through Floe for metered spend and
+budget-guarded inference, either keyless (Floe holds the provider keys) or BYOK
+(bring your own provider key). Includes a usage reconciler that reconciles
+LiveKit-reported token usage against Floe pricing.
 
 See https://docs.livekit.io for more information.
 """
@@ -28,9 +28,18 @@ from .log import logger
 from .metering import FloeUsageReconciler
 from .receipt import enable_cost_receipts
 from .services import LLM
+from .stt import STT
+from .tts import TTS
 from .version import __version__
 
-__all__ = ["LLM", "FloeUsageReconciler", "enable_cost_receipts", "__version__"]
+__all__ = [
+    "LLM",
+    "STT",
+    "TTS",
+    "FloeUsageReconciler",
+    "enable_cost_receipts",
+    "__version__",
+]
 
 
 class FloePlugin(Plugin):

@@ -24,9 +24,13 @@ pytestmark = pytest.mark.unit
 
 def test_exports() -> None:
     assert floe.LLM is not None
+    assert floe.STT is not None
+    assert floe.TTS is not None
     assert floe.FloeUsageReconciler is not None
     assert set(floe.__all__) == {
         "LLM",
+        "STT",
+        "TTS",
         "FloeUsageReconciler",
         "enable_cost_receipts",
         "__version__",
@@ -273,3 +277,220 @@ async def test_receipt_reads_budget_with_in_code_api_key(monkeypatch: pytest.Mon
         if "api_key" in seen:
             break
     assert seen["api_key"] == "floe_incode"  # the in-code key was used, not the env
+
+
+# --------------------------------------------------------------------------- #
+# TTS
+# --------------------------------------------------------------------------- #
+
+
+def test_tts_base_url_swap_and_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.delenv("FLOE_PROVIDER_KEY", raising=False)
+    t = floe.TTS()
+    assert str(t._client.base_url).startswith("https://credit-api.floelabs.xyz/v1")
+    assert t.provider == "floe"
+    assert t.model == "openai/tts-1"
+
+
+def test_tts_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLOE_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        floe.TTS()
+
+
+def test_tts_rejects_plaintext_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    with pytest.raises(ValueError):
+        floe.TTS(base_url="http://evil.example.com/v1")
+
+
+def test_tts_allows_https_and_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    floe.TTS(base_url="https://my-floe.example.com/v1")
+    floe.TTS(base_url="http://localhost:8080/v1")
+
+
+def test_tts_byok_sends_provider_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.setenv("FLOE_PROVIDER_KEY", "sk-test")
+    t = floe.TTS()
+    headers = {k.lower(): v for k, v in t._client.default_headers.items()}
+    assert headers.get("x-floe-provider-key") == "sk-test"
+
+
+def test_tts_task_id_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.delenv("FLOE_PROVIDER_KEY", raising=False)
+    t = floe.TTS(task_id="task-123")
+    headers = {k.lower(): v for k, v in t._client.default_headers.items()}
+    assert headers.get("x-floe-task-id") == "task-123"
+
+
+def test_tts_format_selection_by_model_suffix() -> None:
+    from livekit.plugins.floe.tts import _is_audio_stream_model
+
+    assert _is_audio_stream_model("openai/tts-1") is True
+    assert _is_audio_stream_model("openai/tts-1-hd") is True
+    assert _is_audio_stream_model("openai/gpt-4o-mini-tts") is False
+
+
+# --------------------------------------------------------------------------- #
+# STT
+# --------------------------------------------------------------------------- #
+
+
+def test_stt_construct_and_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    s = floe.STT()
+    assert s.model == "deepgram/nova-3"
+    assert s.provider == "floe"
+    assert s.capabilities.streaming is True
+    assert s.capabilities.interim_results is True
+
+
+def test_stt_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLOE_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        floe.STT()
+
+
+def test_stt_rejects_developer_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Streaming STT is agent-scoped; a floe_live_ developer key is refused.
+    monkeypatch.delenv("FLOE_API_KEY", raising=False)
+    with pytest.raises(ValueError):
+        floe.STT(api_key="floe_live_deadbeef")
+
+
+def test_stt_rejects_plaintext_ws_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    with pytest.raises(ValueError):
+        floe.STT(base_url="ws://evil.example.com/v1/audio/transcriptions/stream")
+
+
+def test_stt_allows_wss_and_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    floe.STT(base_url="wss://my-floe.example.com/v1/audio/transcriptions/stream")
+    floe.STT(base_url="ws://localhost:8080/v1/audio/transcriptions/stream")
+
+
+def test_stt_rejects_out_of_range_sample_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    with pytest.raises(ValueError):
+        floe.STT(sample_rate=192000)
+
+
+def test_stt_auth_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_agentkey")
+    s = floe.STT(task_id="t-9")
+    headers = s._auth_headers()
+    assert headers["Authorization"] == "Bearer floe_agentkey"
+    assert headers["X-Floe-Task-Id"] == "t-9"
+
+
+def test_stt_build_ws_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.floe.stt import _build_ws_url
+
+    url = _build_ws_url(
+        "wss://credit-api.floelabs.xyz/v1/audio/transcriptions/stream",
+        model="deepgram/nova-3",
+        sample_rate=16000,
+        language="en",
+    )
+    parsed = urlparse(url)
+    assert parsed.scheme == "wss"
+    q = parse_qs(parsed.query)
+    assert q["model"] == ["deepgram/nova-3"]
+    assert q["encoding"] == ["linear16"]
+    assert q["sample_rate"] == ["16000"]
+    assert q["language"] == ["en"]
+
+
+def test_stt_speech_events_interim_then_final() -> None:
+    from livekit.agents import stt as lk_stt
+    from livekit.plugins.floe.stt import _speech_events
+
+    # first non-empty interim -> START_OF_SPEECH + INTERIM
+    events, speaking = _speech_events(
+        {"type": "transcript", "text": "hel", "is_final": False, "speech_final": False},
+        "en",
+        False,
+    )
+    assert [e.type for e in events] == [
+        lk_stt.SpeechEventType.START_OF_SPEECH,
+        lk_stt.SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+    assert speaking is True
+    assert events[1].alternatives[0].text == "hel"
+
+    # final with speech_final -> FINAL + END_OF_SPEECH, speaking cleared
+    events, speaking = _speech_events(
+        {"type": "transcript", "text": "hello", "is_final": True, "speech_final": True},
+        "en",
+        True,
+    )
+    assert [e.type for e in events] == [
+        lk_stt.SpeechEventType.FINAL_TRANSCRIPT,
+        lk_stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert speaking is False
+    assert events[0].alternatives[0].text == "hello"
+
+
+def test_stt_speech_events_empty_text_ignored() -> None:
+    from livekit.plugins.floe.stt import _speech_events
+
+    events, speaking = _speech_events(
+        {"type": "transcript", "text": "", "is_final": True, "speech_final": True},
+        "en",
+        False,
+    )
+    assert events == []
+    assert speaking is False
+
+
+async def test_stt_batch_recognize_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit import rtc
+    from livekit.agents import stt as lk_stt
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_agentkey")
+    s = floe.STT()
+
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        status = 200
+        headers = {"X-Floe-Cost-USDC": "0.0012"}
+
+        async def read(self) -> bytes:
+            return b'{"text": "hello world"}'
+
+        async def __aenter__(self) -> _FakeResp:
+            return self
+
+        async def __aexit__(self, *a: object) -> None:
+            return None
+
+    class _FakeSession:
+        def post(self, url: str, *, data: object, headers: dict, timeout: object) -> _FakeResp:
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["data"] = data
+            return _FakeResp()
+
+    monkeypatch.setattr(s, "_ensure_session", lambda: _FakeSession())
+
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 160,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=160,
+    )
+    event = await s.recognize([frame])
+
+    assert captured["url"] == "https://credit-api.floelabs.xyz/v1/audio/transcriptions"
+    assert captured["headers"]["Authorization"] == "Bearer floe_agentkey"  # type: ignore[index]
+    assert event.type == lk_stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert event.alternatives[0].text == "hello world"

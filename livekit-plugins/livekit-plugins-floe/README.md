@@ -1,18 +1,17 @@
 # Floe plugin for LiveKit Agents
 
-Route LiveKit's LLM through [Floe](https://floelabs.xyz/) so agent inference is
-metered against a spend budget. Drop-in OpenAI-compatible `LLM` plus a usage
-reconciler that checks LiveKit-reported token usage against Floe pricing.
+Route LiveKit's `LLM`, `STT`, and `TTS` through [Floe](https://floelabs.xyz/)
+so the whole voice pipeline is metered against one spend budget. Drop-in
+OpenAI-compatible `LLM` and `TTS`, a streaming `STT`, plus a usage reconciler
+that checks LiveKit-reported token usage against Floe pricing.
 
 Two ways to connect:
 
 - **Keyless gateway (default)** — Floe holds the upstream provider keys and
   bills your Floe balance. You only need a Floe API key.
 - **Bring your own key (BYOK)** — you supply an upstream provider key; Floe
-  forwards it and meters spend against your budget.
-
-STT/TTS are intentionally not included — Floe's voice surfaces are not yet GA.
-This plugin covers the LLM only.
+  forwards it and meters spend against your budget. Available on `LLM` and
+  `TTS`; streaming `STT` is keyless (Floe fronts the upstream STT key).
 
 ## Installation
 
@@ -71,6 +70,40 @@ llm = floe.LLM(
     api_key="floe_...",
     provider_key="sk-...",
 )
+```
+
+## Voice: STT and TTS
+
+The same Floe key powers the STT and TTS legs, so one budget meters the whole
+voice pipeline. Model ids are `provider/model`.
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import floe
+
+session = AgentSession(
+    stt=floe.STT(model="deepgram/nova-3"),
+    llm=floe.LLM(model="openai/gpt-4o"),
+    tts=floe.TTS(model="openai/tts-1", voice="alloy"),
+    # ... vad
+)
+```
+
+**`floe.STT`** streams live audio to Floe over a WebSocket
+(`/v1/audio/transcriptions/stream`) and receives interim/final transcripts back
+— keyless, with Floe fronting the upstream (Deepgram) key and metering per
+audio-second on your balance. It requires a Floe **agent** key (`floe_...`);
+developer keys (`floe_live_...`) are rejected. A non-streaming `recognize()`
+fallback hits the batch `/v1/audio/transcriptions` endpoint. LiveKit delivers
+16-bit PCM, so frames pushed at another rate are resampled to `sample_rate`
+(default 16 kHz) before streaming.
+
+**`floe.TTS`** is an OpenAI-compatible base-URL swap over `/v1/audio/speech`.
+It supports keyless and BYOK (via `provider_key` / `FLOE_PROVIDER_KEY`), and an
+optional `task_id` to bound one conversation to a per-task budget:
+
+```python
+tts = floe.TTS(model="openai/tts-1", voice="alloy", task_id="call-42")
 ```
 
 ## Usage reconciliation

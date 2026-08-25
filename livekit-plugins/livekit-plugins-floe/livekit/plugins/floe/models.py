@@ -26,3 +26,35 @@ LLMModels = (
     ]
     | str
 )
+
+# Common streaming/batch STT model ids routed through Floe. Free-form strings
+# are also accepted.
+STTModels = (
+    Literal[
+        "deepgram/nova-3",
+        "deepgram/nova-2",
+    ]
+    | str
+)
+
+# Common TTS model ids and voices routed through Floe. Free-form strings are
+# also accepted.
+TTSModels = (
+    Literal[
+        "openai/tts-1",
+        "openai/tts-1-hd",
+    ]
+    | str
+)
+
+TTSVoices = (
+    Literal[
+        "alloy",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "shimmer",
+    ]
+    | str
+)
