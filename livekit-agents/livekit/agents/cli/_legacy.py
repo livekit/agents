@@ -47,7 +47,7 @@ from livekit import api, rtc
 from .. import llm
 from .._exceptions import CLIError
 from ..job import JobExecutorType
-from ..log import logger
+from ..log import _add_global_log_fields, logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
@@ -991,9 +991,11 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
 
     root = logging.getLogger()
     if c:
+        _add_global_log_fields(c._log_handler)
         root.addHandler(c._log_handler)
     else:
         handler = logging.StreamHandler(sys.stdout)
+        _add_global_log_fields(handler)
         root.addHandler(handler)
         handler.setFormatter(JsonFormatter())
 
