@@ -327,14 +327,6 @@ def test_tts_task_id_header(monkeypatch: pytest.MonkeyPatch) -> None:
     assert headers.get("x-floe-task-id") == "task-123"
 
 
-def test_tts_format_selection_by_model_suffix() -> None:
-    from livekit.plugins.floe.tts import _is_audio_stream_model
-
-    assert _is_audio_stream_model("openai/tts-1") is True
-    assert _is_audio_stream_model("openai/tts-1-hd") is True
-    assert _is_audio_stream_model("openai/gpt-4o-mini-tts") is False
-
-
 # --------------------------------------------------------------------------- #
 # STT
 # --------------------------------------------------------------------------- #

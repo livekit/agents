@@ -77,9 +77,7 @@ _MIN_SAMPLE_RATE = 8000
 _MAX_SAMPLE_RATE = 48000
 
 
-def _speech_events(
-    data: dict, language: str, speaking: bool
-) -> tuple[list[stt.SpeechEvent], bool]:
+def _speech_events(data: dict, language: str, speaking: bool) -> tuple[list[stt.SpeechEvent], bool]:
     """Map one Floe ``transcript`` frame to LiveKit speech events.
 
     Pure so the wire-protocol translation is unit-testable without a socket.
@@ -102,9 +100,7 @@ def _speech_events(
 
     sd = stt.SpeechData(language=lang, text=text)
     if is_final:
-        events.append(
-            stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[sd])
-        )
+        events.append(stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[sd]))
         if speech_final:
             speaking = False
             events.append(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
@@ -299,9 +295,7 @@ class SpeechStream(stt.SpeechStream):
             send = asyncio.create_task(self._send_task(ws))
             recv = asyncio.create_task(self._recv_task(ws))
             try:
-                done, _ = await asyncio.wait(
-                    (send, recv), return_when=asyncio.FIRST_COMPLETED
-                )
+                done, _ = await asyncio.wait((send, recv), return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()  # surface send/recv errors (drives retry)
             finally:
@@ -334,7 +328,14 @@ class SpeechStream(stt.SpeechStream):
             try:
                 data = json.loads(msg.data)
             except json.JSONDecodeError:
-                logger.warning("floe STT: non-JSON message: %s", msg.data)
+                # Content-free body (REVIEW.md): a non-JSON transcript frame may
+                # carry speech text, so the raw payload rides a pii-tagged
+                # structured attribute the collector can redact.
+                logger.warning(
+                    "floe STT: ignoring non-JSON message (%d chars)",
+                    len(msg.data),
+                    extra={"lk.pii.stt_message": msg.data},
+                )
                 continue
 
             mtype = data.get("type")

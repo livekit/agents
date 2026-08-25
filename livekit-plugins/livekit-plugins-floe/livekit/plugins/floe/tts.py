@@ -20,8 +20,7 @@ from urllib.parse import urlparse
 import httpx
 import openai
 
-from livekit.agents import APIConnectOptions, tts
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai import TTS as OpenAITTS
 
@@ -35,20 +34,6 @@ FLOE_GATEWAY_URL = "https://credit-api.floelabs.xyz/v1"
 # Usage tag stamped on emitted metrics so a mixed session can tell Floe-routed
 # speech apart from other providers. Mirrors the LLM leg's provider tag.
 FLOE_PROVIDER = "floe"
-
-# The OpenAI TTS picks its wire format by bare model name: tts-1 / tts-1-hd
-# return raw binary audio, newer token-billed models stream SSE. Floe model ids
-# are `provider/model`, so we match on the suffix to keep that selection correct.
-_AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
-
-
-def _is_audio_stream_model(model: str) -> bool:
-    """Whether a Floe `provider/model` id maps to the binary-audio TTS format.
-
-    Pure so the format selection is unit-testable. tts-1 / tts-1-hd return raw
-    binary audio; newer token-billed models stream SSE.
-    """
-    return model.split("/")[-1] in _AUDIO_STREAM_MODELS
 
 
 class TTS(OpenAITTS):
@@ -154,20 +139,10 @@ class TTS(OpenAITTS):
         # self-hosted Floe on a custom domain).
         return FLOE_PROVIDER
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> tts.ChunkedStream:
-        # Floe model ids are `provider/model`; the parent selects binary vs SSE
-        # by bare model name, so decide on the suffix. Falling back to the
-        # parent keeps us correct if its internals move.
-        try:
-            from livekit.plugins.openai.tts import AudioChunkedStream, SSEChunkedStream
-
-            if _is_audio_stream_model(str(self._opts.model)):
-                return AudioChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-            return SSEChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-        except ImportError:
-            return super().synthesize(text, conn_options=conn_options)
+    # synthesize() is inherited from the OpenAI TTS: it returns a ChunkedStream
+    # that reads the body by the response Content-Type, so Floe's binary
+    # /v1/audio/speech response is decoded correctly regardless of the
+    # OpenAI-specific `stream_format` hint the parent sends.
 
 
 def _require_secure_url(url: str) -> None:
