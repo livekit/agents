@@ -37,7 +37,12 @@ from .utils import DEFAULT_REGION
 
 try:
     from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-    from aws_sdk_transcribe_streaming.config import Config
+
+    try:
+        from aws_sdk_transcribe_streaming.config import Config
+    except ImportError:
+        # aws-sdk-transcribe-streaming 0.10 renamed the exported class to lowercase.
+        from aws_sdk_transcribe_streaming.config import config as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
