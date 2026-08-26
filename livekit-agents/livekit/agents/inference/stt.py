@@ -70,6 +70,7 @@ SpeechmaticsModels = Literal[
     "speechmatics/standard",
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
+GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -184,6 +185,14 @@ class InworldOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
     prompts: list[str]
     vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class GoogleOptions(TypedDict, total=False):
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -379,6 +388,7 @@ STTModels = (
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
+    | GoogleModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -543,6 +553,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: GoogleModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -578,6 +605,7 @@ class STT(stt.STT):
             | XaiOptions
             | SpeechmaticsOptions
             | InworldOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
