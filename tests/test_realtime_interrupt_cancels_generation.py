@@ -102,6 +102,37 @@ async def test_forced_speech_interrupt_cancels_the_response() -> None:
         await asyncio.wait_for(handle.wait_for_playout(), timeout=5)
 
 
+async def test_interrupting_an_overlapped_response_spares_the_newer_reply() -> None:
+    # A provider can announce a successor before the older response closes both streams. Since
+    # interrupt() is session-wide, the older handle must not cancel that newer response.
+    async with _speaking_reply() as (session, rt_session, handle, _, function_ch):
+        newer_message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        newer_function_ch = utils.aio.Chan[llm.FunctionCall]()
+        newer_message_ch.close()
+        newer_function_ch.close()
+        newer_generation = llm.GenerationCreatedEvent(
+            message_stream=newer_message_ch,
+            function_stream=newer_function_ch,
+            user_initiated=False,
+            response_id="response-newer",
+        )
+
+        rt_session.emit("generation_created", newer_generation)
+        await asyncio.sleep(0.1)
+
+        assert session._activity is not None
+        assert session._activity._active_realtime_generation is newer_generation
+
+        handle.interrupt(force=True)
+        await asyncio.sleep(0.1)
+
+        assert handle.interrupted
+        assert not rt_session.interrupted
+
+        function_ch.close()
+        await asyncio.wait_for(handle.wait_for_playout(), timeout=5)
+
+
 async def test_interrupting_a_played_out_response_spares_the_newer_reply() -> None:
     # the model finishes the response long before the buffered audio does, so from here on a
     # cancel would land on whichever response the model started next

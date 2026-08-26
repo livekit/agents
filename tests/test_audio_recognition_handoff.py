@@ -214,6 +214,7 @@ def _stub_recognition() -> AudioRecognition:
     ar = object.__new__(AudioRecognition)
     ar._stt_consumer_atask = None  # type: ignore[attr-defined]
     ar._stt_pipeline = None  # type: ignore[attr-defined]
+    ar._stt_pipeline_epoch = 0  # type: ignore[attr-defined]
     ar._transcript_buffer = MagicMock()  # type: ignore[attr-defined]
     ar._ignore_user_transcript_until = NOT_GIVEN  # type: ignore[attr-defined]
     return ar

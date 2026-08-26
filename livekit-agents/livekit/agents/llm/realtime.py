@@ -5,6 +5,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
+from enum import Enum
 from types import TracebackType
 from typing import Generic, Literal, TypeVar
 
@@ -102,6 +103,18 @@ class RealtimeError(Exception):
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _UserMessageSyncStatus(str, Enum):
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class _UserMessageSyncResult:
+    status: _UserMessageSyncStatus
+    error: RealtimeError | None = None
 
 
 class RealtimeModel:
@@ -249,6 +262,23 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     async def update_chat_ctx(
         self, chat_ctx: ChatContext
     ) -> None: ...  # can raise RealtimeError on Timeout
+
+    async def _sync_user_message(
+        self, chat_ctx: ChatContext, message_id: str
+    ) -> _UserMessageSyncResult:
+        """Synchronize one finalized user item without changing the public provider API."""
+
+        del message_id  # the compatibility implementation updates the complete context
+        try:
+            await self.update_chat_ctx(chat_ctx)
+        except RealtimeError as error:
+            return _UserMessageSyncResult(_UserMessageSyncStatus.UNKNOWN, error)
+        return _UserMessageSyncResult(_UserMessageSyncStatus.ACCEPTED)
+
+    def _exclude_chat_ctx_item_from_replay(self, item_id: str) -> None:
+        """Keep a locally observable item out of adapter-driven provider replay."""
+
+        del item_id  # only session wrappers that rebuild provider state need to track this
 
     @abstractmethod
     async def update_tools(self, tools: list[Tool]) -> None: ...

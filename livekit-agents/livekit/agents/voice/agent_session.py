@@ -81,6 +81,7 @@ from .turn import (
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
+    RealtimeInputMode,
     TurnDetectionMode,
     TurnHandlingOptions,
     _migrate_turn_handling,
@@ -310,6 +311,10 @@ class AgentSessionOptions:
     def preemptive_generation(self) -> PreemptiveGenerationOptions:
         return self.turn_handling["preemptive_generation"]
 
+    @property
+    def realtime_input_mode(self) -> RealtimeInputMode:
+        return self.turn_handling["realtime_input_mode"]
+
 
 Userdata_T = TypeVar("Userdata_T")
 Run_T = TypeVar("Run_T")
@@ -492,7 +497,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 it to prompt the user to repeat themselves. A non-empty final transcript
                 satisfies the timeout for the current turn even if adaptive interruption
                 detection later discards it as part of a backchannel. Requires both VAD
-                and STT. Disabled by default.
+                and STT. The event is disabled by default.
+                For a realtime model using client-side turn detection, an unset timeout
+                still uses ``turn_handling.endpointing.max_delay`` internally to finalize a
+                turn for which STT produced no usable text, without emitting the event.
+                Native-audio mode settles the provider's buffered audio turn; explicit
+                text-input mode gives ``on_user_turn_completed`` an opportunity to supply
+                text and otherwise drops the empty turn.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -538,6 +549,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else turn_handling
         )
 
+        realtime_input_mode = turn_handling.get("realtime_input_mode", "audio")
+        if realtime_input_mode not in ("audio", "text"):
+            raise ValueError("turn_handling.realtime_input_mode must be either 'audio' or 'text'")
+
         raw_turn_detection: TurnDetectionMode | None = turn_handling.get(
             "turn_detection", inference.TurnDetector()
         )
@@ -563,6 +578,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._chat_ctx = ChatContext.empty()
         self._opts = AgentSessionOptions(
             turn_handling=TurnHandlingOptions(
+                realtime_input_mode=realtime_input_mode,
                 endpointing=endpointing,
                 interruption=interruption,
                 turn_detection=raw_turn_detection,
@@ -1366,31 +1382,54 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if is_given(max_endpointing_delay):
                 endpointing_opts["max_delay"] = max_endpointing_delay
 
+        prospective_endpointing: EndpointingOptions | None = None
+        prospective_endpointing_overrides: EndpointingOptions | None = None
         if is_given(endpointing_opts):
+            prospective_endpointing = EndpointingOptions(**self._opts.endpointing)
+            prospective_endpointing_overrides = EndpointingOptions(
+                **self._opts.endpointing_overrides
+            )
             if (mode := endpointing_opts.get("mode")) is not None:
-                self._opts.endpointing["mode"] = mode
-                self._opts.endpointing_overrides["mode"] = mode
+                prospective_endpointing["mode"] = mode
+                prospective_endpointing_overrides["mode"] = mode
             if (min_delay := endpointing_opts.get("min_delay")) is not None:
-                self._opts.endpointing["min_delay"] = min_delay
-                self._opts.endpointing_overrides["min_delay"] = min_delay
+                prospective_endpointing["min_delay"] = min_delay
+                prospective_endpointing_overrides["min_delay"] = min_delay
             if (max_delay := endpointing_opts.get("max_delay")) is not None:
-                self._opts.endpointing["max_delay"] = max_delay
-                self._opts.endpointing_overrides["max_delay"] = max_delay
+                prospective_endpointing["max_delay"] = max_delay
+                prospective_endpointing_overrides["max_delay"] = max_delay
             if (alpha := endpointing_opts.get("alpha")) is not None:
-                self._opts.endpointing["alpha"] = alpha
-                self._opts.endpointing_overrides["alpha"] = alpha
-
-        if is_given(turn_detection):
-            self._turn_detection = turn_detection
-            self._turn_detection_explicit = turn_detection is not None
+                prospective_endpointing["alpha"] = alpha
+                prospective_endpointing_overrides["alpha"] = alpha
 
         if self._activity is not None:
             self._activity.update_options(
                 endpointing_opts=(
-                    self._opts.endpointing if is_given(endpointing_opts) else NOT_GIVEN
+                    prospective_endpointing if prospective_endpointing is not None else NOT_GIVEN
                 ),
-                turn_detection=turn_detection,
+                turn_detection=(
+                    turn_detection
+                    if not is_given(self._activity.agent.turn_detection)
+                    else NOT_GIVEN
+                ),
+                session_turn_detection_explicit=(
+                    (turn_detection is not None if is_given(turn_detection) else NOT_GIVEN)
+                    if not is_given(self._activity.agent.turn_detection)
+                    else NOT_GIVEN
+                ),
             )
+
+        if prospective_endpointing is not None:
+            assert prospective_endpointing_overrides is not None
+            self._opts.endpointing.update(prospective_endpointing)
+            self._opts.endpointing_overrides.update(prospective_endpointing_overrides)
+
+        # Activity validates and applies the prospective detector before the session records the
+        # public setting. An unsupported runtime update therefore cannot leave these two layers
+        # describing different turn boundaries.
+        if is_given(turn_detection):
+            self._turn_detection = turn_detection
+            self._turn_detection_explicit = turn_detection is not None
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection on this session.
@@ -1599,6 +1638,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         Raises:
             RuntimeError: If the AgentSession isn't running.
+            UserTurnCommitAbortedError: If the commit is abandoned by a new user turn,
+                ``clear_user_turn()``, or a turn-detection mode change before STT settles.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")

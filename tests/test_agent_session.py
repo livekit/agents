@@ -149,6 +149,7 @@ def test_interim_transcript_interrupts_only_without_local_vad(
         _user_input_transcribed=captured_events.append,
     )
     activity._turn_detection = None
+    activity._realtime_input_mode = "audio"
     activity._paused_speech = None
     activity._interrupt_by_audio_activity = Mock()
 

@@ -3,9 +3,11 @@ import types
 from unittest.mock import Mock
 
 import pytest
+from openai.types.realtime import ConversationItemCreateEvent
 
 from livekit.agents import llm
 from livekit.agents.llm import remote_chat_context
+from livekit.agents.llm.realtime import _UserMessageSyncStatus
 from livekit.plugins.openai.realtime import realtime_model
 from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
 
@@ -22,12 +24,69 @@ def _create_session() -> RealtimeSession:
 
     def send_event(self: RealtimeSession, event: object) -> None:
         self._sent_events.append(event)
-        item = getattr(event, "item", None)
-        if item is not None and item.id in self._item_create_future:
-            self._item_create_future[item.id].set_result(None)
+        if (
+            isinstance(event, ConversationItemCreateEvent)
+            and event.item.id in self._item_create_future
+        ):
+            self._item_create_future[event.item.id].set_result(None)
 
     session.send_event = types.MethodType(send_event, session)
     return session
+
+
+async def test_sync_user_message_accepts_the_target_create_ack() -> None:
+    session = _create_session()
+    chat_ctx = llm.ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="accepted", id="target-message")
+
+    result = await session._sync_user_message(chat_ctx, message.id)
+
+    assert result.status == _UserMessageSyncStatus.ACCEPTED
+    assert result.error is None
+
+
+async def test_sync_user_message_rejects_the_target_create_error() -> None:
+    session = _create_session()
+
+    def reject_event(self: RealtimeSession, event: object) -> None:
+        self._sent_events.append(event)
+        if (
+            isinstance(event, ConversationItemCreateEvent)
+            and event.item.id in self._item_create_future
+        ):
+            self._item_create_future[event.item.id].set_exception(
+                llm.RealtimeError("provider rejected target item")
+            )
+
+    session.send_event = types.MethodType(reject_event, session)
+    chat_ctx = llm.ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="rejected", id="target-message")
+
+    result = await session._sync_user_message(chat_ctx, message.id)
+
+    assert result.status == _UserMessageSyncStatus.REJECTED
+    assert isinstance(result.error, llm.RealtimeError)
+
+
+async def test_sync_user_message_propagates_unexpected_target_failure() -> None:
+    session = _create_session()
+
+    def fail_event(self: RealtimeSession, event: object) -> None:
+        self._sent_events.append(event)
+        if (
+            isinstance(event, ConversationItemCreateEvent)
+            and event.item.id in self._item_create_future
+        ):
+            self._item_create_future[event.item.id].set_exception(
+                RuntimeError("internal ack failure")
+            )
+
+    session.send_event = types.MethodType(fail_event, session)
+    chat_ctx = llm.ChatContext.empty()
+    message = chat_ctx.add_message(role="user", content="unexpected", id="target-message")
+
+    with pytest.raises(RuntimeError, match="internal ack failure"):
+        await session._sync_user_message(chat_ctx, message.id)
 
 
 async def test_update_chat_ctx_filters_new_empty_messages() -> None:
