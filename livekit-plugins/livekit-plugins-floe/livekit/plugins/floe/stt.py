@@ -283,9 +283,20 @@ class SpeechStream(stt.SpeechStream):
         self._stt: STT = stt
         self._language = language
         self._speaking = False
+        # Set to True once WE initiate the close (input EOF / teardown). It tells
+        # the recv loop that a following socket close is expected, not a drop.
+        self._closing_ws = False
+
+    def _session_closed(self) -> bool:
+        """Whether the STT's shared HTTP session is gone (aclose / teardown)."""
+        session = self._stt._session
+        return session is None or session.closed
 
     async def _run(self) -> None:
         stt_impl = self._stt
+        # Reset per connection so a reconnect after a drop doesn't inherit the
+        # previous run's "we're closing" state.
+        self._closing_ws = False
         url = _build_ws_url(
             stt_impl._base_url,
             model=str(stt_impl._model),
@@ -313,25 +324,46 @@ class SpeechStream(stt.SpeechStream):
             await ws.close()
 
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
-                # Floe endpoints server-side (Deepgram); no explicit flush frame.
-                continue
-            await ws.send_bytes(data.data.tobytes())
-        # Input ended: close so the recv loop unwinds cleanly.
-        await ws.close()
+        try:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    # Floe endpoints server-side (Deepgram); no explicit flush frame.
+                    continue
+                await ws.send_bytes(data.data.tobytes())
+            # Input ended: mark the close expected, then close so recv unwinds cleanly.
+            self._closing_ws = True
+            await ws.close()
+        except (aiohttp.ClientError, ConnectionError) as e:
+            # A mid-write socket drop. If the close is expected (teardown), just
+            # return; otherwise raise a retryable error so the base loop
+            # reconnects — symmetric with _recv_task.
+            if self._closing_ws or self._session_closed():
+                return
+            raise APIConnectionError("Floe STT connection closed unexpectedly") from e
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        async for msg in ws:
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                continue  # transcripts-only downstream
+        # aiohttp's `async for ws` stops silently on a close, which the base retry
+        # loop would read as a clean end — so drive receive() explicitly and turn
+        # an UNEXPECTED close into a retryable error that triggers a reconnect.
+        while True:
+            msg = await ws.receive()
             if msg.type in (
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.ERROR,
             ):
-                return
+                # Expected teardown (we closed after EOF, or the session is gone)
+                # ends cleanly; an unexpected mid-session drop reconnects.
+                if self._closing_ws or self._session_closed():
+                    return
+                # Content-free message (REVIEW.md): carry only the close code.
+                raise APIStatusError(
+                    message="Floe STT connection closed unexpectedly",
+                    status_code=ws.close_code or -1,
+                )
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                continue  # transcripts-only downstream
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:

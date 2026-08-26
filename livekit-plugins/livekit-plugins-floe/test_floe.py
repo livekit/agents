@@ -567,3 +567,53 @@ async def test_stt_batch_error_body_not_in_exception(monkeypatch: pytest.MonkeyP
     rendered = str(ei.value)
     assert "SENSITIVE" not in rendered  # raw body kept out of the message
     assert "400" in rendered  # content-free status is fine
+
+
+def _recv_stream_with_state(*, closing_ws: bool, session_closed: bool):  # type: ignore[no-untyped-def]
+    """A SpeechStream built without its base __init__ (no network _run task),
+    carrying only the state _recv_task's close branch reads."""
+    import types
+
+    from livekit.plugins.floe.stt import SpeechStream
+
+    s = object.__new__(SpeechStream)
+    s._stt = types.SimpleNamespace(_session=types.SimpleNamespace(closed=session_closed))
+    s._closing_ws = closing_ws
+    return s
+
+
+class _ClosedWS:
+    close_code = 1006  # abnormal closure
+
+    def __init__(self, msg_type: object) -> None:
+        import types
+
+        self._msg = types.SimpleNamespace(type=msg_type)
+
+    async def receive(self) -> object:
+        return self._msg
+
+
+async def test_stt_recv_unexpected_close_raises_retryable() -> None:
+    import aiohttp
+
+    from livekit.agents import APIStatusError
+
+    s = _recv_stream_with_state(closing_ws=False, session_closed=False)
+    ws = _ClosedWS(aiohttp.WSMsgType.CLOSED)
+    with pytest.raises(APIStatusError) as ei:
+        await s._recv_task(ws)  # type: ignore[arg-type]
+    assert ei.value.retryable is True  # base loop will reconnect
+
+
+async def test_stt_recv_expected_close_returns_cleanly() -> None:
+    import aiohttp
+
+    # we initiated the close (input EOF) -> clean end, no reconnect
+    s = _recv_stream_with_state(closing_ws=True, session_closed=False)
+    ws = _ClosedWS(aiohttp.WSMsgType.CLOSED)
+    assert await s._recv_task(ws) is None  # type: ignore[arg-type]
+
+    # session torn down (aclose) -> also a clean, expected end
+    s2 = _recv_stream_with_state(closing_ws=False, session_closed=True)
+    assert await s2._recv_task(ws) is None  # type: ignore[arg-type]
