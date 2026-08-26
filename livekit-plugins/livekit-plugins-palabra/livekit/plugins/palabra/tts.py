@@ -491,9 +491,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         except AuthError as e:
             await _teardown()
             raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
-        except (SessionError, TaskError, PalabraError) as e:
+        except TaskError as e:
             await _teardown()
-            raise APIConnectionError(str(e)) from e
+            # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
+            # server text, so only the code is surfaced.
+            raise APIConnectionError(f"palabra tts error: {e.code}") from None
+        except (SessionError, PalabraError) as e:
+            await _teardown()
+            # The SDK interpolates the underlying websockets error into its message, and the
+            # connect URL carries the API key as a ?token= query parameter -- so neither
+            # str(e) nor the __cause__ chain is safe to surface.
+            raise APIConnectionError(type(e).__name__) from None
         except Exception as e:
             await _teardown()
             logger.exception("palabra tts error")
