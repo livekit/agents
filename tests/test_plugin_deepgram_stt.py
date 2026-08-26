@@ -32,6 +32,7 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         eager_eot_threshold=opts_kwargs.get("eager_eot_threshold", NOT_GIVEN),
         eot_timeout_ms=opts_kwargs.get("eot_timeout_ms", NOT_GIVEN),
         language_hint=opts_kwargs.get("language_hint", []),
+        numerals=opts_kwargs.get("numerals", False),
     )
     opts.keyterm = opts_kwargs.get("keyterm", [])
     stream = SimpleNamespace(
@@ -103,6 +104,27 @@ async def test_flux_reconnect_fields_skip_inband_configure():
     assert stream._reconnect_event.is_set()
     assert stream._reconfigure_atask is None
     assert ws.sent == []
+
+
+async def test_flux_numerals_triggers_reconnect_not_configure():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    ws = _FakeWS()
+    stream = _make_flux_stream(ws=ws)
+    SpeechStreamv2.update_options(stream, numerals=True)
+
+    # Flux can't toggle numerals via Configure, only at connection time
+    assert stream._opts.numerals is True
+    assert stream._reconnect_event.is_set()
+    assert stream._reconfigure_atask is None
+    assert ws.sent == []
+
+
+async def test_flux_numerals_in_connection_config():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    assert SpeechStreamv2._live_config(_make_flux_stream(numerals=True))["numerals"] is True
+    assert "numerals" not in SpeechStreamv2._live_config(_make_flux_stream())
 
 
 async def test_flux_configure_sends_only_changed_fields():
