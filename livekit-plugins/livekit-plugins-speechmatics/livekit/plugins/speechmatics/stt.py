@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
-import warnings
 from enum import Enum
 from typing import Any
 
@@ -34,29 +33,34 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from speechmatics.agent_stt import DEFAULT_MODEL, Model
-from speechmatics.rt import ClientMessageType
+
+# Session driver: the Agent STT SDK. Only the transport/config/message shapes come from
+# here — the plugin's public API (below) is unchanged and still speaks the voice-SDK types.
+from speechmatics.agent_stt import (
+    DEFAULT_CHUNK_SIZE,
+    REMOVE,
+    AgentSttAsyncClient,
+    AudioFormat,
+    ClientMessageType,
+    Segment,
+    ServerMessageType,
+    TranscriptionConfig,
+)
+from speechmatics.agent_stt import (
+    TurnDetectionMode as AgentTurnDetectionMode,
+)
+
+# Public-API types — unchanged from the voice-SDK plugin surface.
 from speechmatics.voice import (
     AdditionalVocabEntry,
-    AgentServerMessageType,
     AudioEncoding,
-    SpeakerFocusConfig,
+    OperatingPoint,
     SpeakerFocusMode,
     SpeakerIdentifier,
-    VoiceAgentClient,
-    VoiceAgentConfig,
-    VoiceAgentConfigPreset,
 )
 
 from .log import logger
 from .version import __version__ as lk_version
-
-# Operating points agent-STT accepts on the wire, sourced from the Agent STT SDK's
-# `Model` enum so new models (e.g. `linden-2`) are picked up automatically. The SDK's
-# legacy RT `OperatingPoint` enum (`enhanced`/`standard`) predates agent-STT and is
-# rejected by it, so `Model` — not `OperatingPoint` — is the source of truth here.
-SUPPORTED_OPERATING_POINTS: tuple[str, ...] = tuple(m.value for m in Model)
-DEFAULT_OPERATING_POINT: str = DEFAULT_MODEL.value
 
 
 class TurnDetectionMode(str, Enum):
@@ -113,7 +117,7 @@ class STTOptions:
     # -------------------
 
     # Features
-    operating_point: str = DEFAULT_OPERATING_POINT
+    operating_point: OperatingPoint | None = None
     max_delay: float | None = None
     end_of_utterance_silence_trigger: float | None = None
     end_of_utterance_max_delay: float | None = None
@@ -134,8 +138,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
-        operating_point: NotGivenOr[str] = NOT_GIVEN,  # deprecated, use `model`
-        model: NotGivenOr[Model | str] = NOT_GIVEN,
+        operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -160,7 +163,7 @@ class STT(stt.STT):
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         **kwargs: Any,
     ):
-        """Create a new instance of Speechmatics STT using the Voice SDK.
+        """Create a new instance of Speechmatics STT.
 
         Args:
             api_key: Speechmatics API key. Can be set via `api_key` argument
@@ -179,12 +182,6 @@ class STT(stt.STT):
 
             operating_point: Operating point for transcription accuracy vs. latency
                 tradeoff. Overrides preset if provided. Optional.
-                Deprecated: use `model` instead.
-
-            model: The model to use, i.e. the operating point for transcription
-                accuracy vs. latency tradeoff. Must be one of
-                `SUPPORTED_OPERATING_POINTS`. Overrides preset if provided.
-                Defaults to `DEFAULT_OPERATING_POINT` (`"linden-1"`).
 
             domain: Domain to use. Optional.
 
@@ -278,37 +275,6 @@ class STT(stt.STT):
                 recognised deprecated name.
         """
 
-        # `operating_point` is the deprecated name for `model`.
-        #   - both given & aligned    -> use `model`, silently disregard `operating_point`
-        #   - both given & different -> error (caller asked for two different options)
-        #   - only `operating_point` -> works, but warn (deprecated name)
-        #   - only `model`           -> use it
-        #   - neither                -> default
-        _op = str(operating_point) if is_given(operating_point) else None
-        _model = (
-            (model.value if isinstance(model, Model) else str(model)) if is_given(model) else None
-        )
-
-        if _op is not None and _model is not None:
-            if _op != _model:
-                raise ValueError(
-                    f"`model` ({_model!r}) and `operating_point` ({_op!r}) name different "
-                    "options. Pass only `model` (`operating_point` is deprecated)."
-                )
-            resolved_model = _model  # aligned: use model, ignore the deprecated field silently
-        elif _op is not None:
-            warnings.warn(
-                "`operating_point` is deprecated and will be removed in a future release; "
-                "use `model` instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            resolved_model = _op
-        elif _model is not None:
-            resolved_model = _model
-        else:
-            resolved_model = DEFAULT_OPERATING_POINT
-
         # Resolve final turn_detection_mode — a real `vad` forces EXTERNAL.
         if is_given(vad) and vad is not None and turn_detection_mode != TurnDetectionMode.EXTERNAL:
             logger.info(
@@ -362,7 +328,7 @@ class STT(stt.STT):
             focus_mode=focus_mode,
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
-            operating_point=resolved_model,
+            operating_point=_set(operating_point),
             max_delay=_set(max_delay),
             end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
@@ -415,7 +381,8 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return self._stt_options.operating_point
+        op = self._stt_options.operating_point
+        return str(op.value) if op is not None else "enhanced"
 
     async def _recognize_impl(
         self,
@@ -454,13 +421,6 @@ class STT(stt.STT):
         errors: list[str] = []
         opts = self._stt_options
 
-        # agent-STT only accepts a fixed, known set of operating points
-        if opts.operating_point not in SUPPORTED_OPERATING_POINTS:
-            errors.append(
-                f"operating_point must be one of {SUPPORTED_OPERATING_POINTS!r}, "
-                f"got {opts.operating_point!r}"
-            )
-
         # end_of_utterance_silence_trigger must be between 0 and 2
         if opts.end_of_utterance_silence_trigger is not None and not (
             0 < opts.end_of_utterance_silence_trigger < 2
@@ -491,56 +451,44 @@ class STT(stt.STT):
 
         return errors
 
-    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> VoiceAgentConfig:
-        """Prepare VoiceAgentConfig from STTOptions."""
+    def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> TranscriptionConfig:
+        """Prepare an Agent STT TranscriptionConfig from STTOptions.
+
+        This is the only place the config crosses from the plugin's (voice-SDK-shaped)
+        public options into the Agent STT session driver. Only the fields agent-STT
+        accepts on the wire are set; the voice-only / unsupported knobs (max_delay,
+        punctuation_overrides, end_of_utterance_*, speaker focus, operating_point,
+        speaker sensitivity, max_speakers, prefer_current_speaker) are silently dropped.
+        """
 
         # Reference to STT options
         opts = self._stt_options
 
-        # Preset taken from `FIXED`, `EXTERNAL`, `ADAPTIVE` or `SMART_TURN`
-        config = VoiceAgentConfigPreset.load(opts.turn_detection_mode.value)
-
-        # Set sample rate and encoding
-        config.sample_rate = self._sample_rate
-        config.audio_encoding = self._audio_encoding
-
-        # LanguageCode and domain
-        config.language = LanguageCode(language) if is_given(language) else opts.language
-        config.domain = opts.domain
-        config.output_locale = opts.output_locale
-
-        # Speaker configuration
-        config.speaker_config = SpeakerFocusConfig(
-            focus_speakers=opts.focus_speakers,
-            ignore_speakers=opts.ignore_speakers,
-            focus_mode=opts.focus_mode,
+        # The plugin's 4-value TurnDetectionMode collapses to the driver's two: only
+        # EXTERNAL is external; every server-side mode maps to the service's own VAD.
+        turn_detection = (
+            AgentTurnDetectionMode.EXTERNAL
+            if opts.turn_detection_mode == TurnDetectionMode.EXTERNAL
+            else AgentTurnDetectionMode.VAD
         )
-        config.known_speakers = opts.known_speakers
 
-        # Additional vocabulary
-        config.additional_vocab = opts.additional_vocab
+        config = TranscriptionConfig(
+            language=language if is_given(language) else opts.language,
+            turn_detection_mode=turn_detection,
+            diarization="speaker" if opts.enable_diarization else None,
+            additional_vocab=opts.additional_vocab or None,
+            output_locale=opts.output_locale,
+            domain=opts.domain,
+            enable_partials=opts.include_partials,
+        )
 
-        # Override preset parameters if provided
-        advanced_params = [
-            "enable_diarization",
-            "end_of_utterance_max_delay",
-            "end_of_utterance_silence_trigger",
-            "include_partials",
-            "max_delay",
-            "max_speakers",
-            "operating_point",
-            "prefer_current_speaker",
-            "punctuation_overrides",
-            "speaker_sensitivity",
-        ]
+        # TEMPORARY (spec↔SDK drift): the SDK's to_dict() always emits
+        # `transcription_config.vad_config`, but the deployed agent-STT input spec has
+        # additionalProperties=false and rejects it (StartRecognition fails, socket closes
+        # 1003). Strip it via the SDK override hook; turn_detection_mode still drives
+        # server-side VAD. Remove once the spec-vs-SDK question is resolved.
+        config.override_config({"vad_config": REMOVE})
 
-        # Override preset parameters if provided
-        for param in advanced_params:
-            value = getattr(opts, param)
-            if value is not None:
-                setattr(config, param, value)
-
-        # Return the config
         return config
 
     def update_speakers(
@@ -551,36 +499,18 @@ class STT(stt.STT):
     ) -> None:
         """Updates the speaker configuration.
 
-        This can update the speakers to listen to or ignore during an in-flight
-        transcription. Only available if diarization is enabled.
-
-        This will be applied to *all* streams (typically only one).
-
-        Args:
-            focus_speakers: List of speakers to focus on.
-            ignore_speakers: List of speakers to ignore.
-            focus_mode: Focus mode to use.
+        Records the new speaker focus configuration on the options. Note that
+        speaker focus is a voice-SDK concept with no agent-STT wire equivalent yet,
+        so the update is not pushed to an in-flight session.
         """
-        # Do this for each stream
-        for stream in self._streams:
-            # Check if diarization is enabled
-            if not stream._config.enable_diarization:
-                raise ValueError("Diarization is not enabled")
+        if is_given(focus_speakers):
+            self._stt_options.focus_speakers = focus_speakers
+        if is_given(ignore_speakers):
+            self._stt_options.ignore_speakers = ignore_speakers
+        if is_given(focus_mode):
+            self._stt_options.focus_mode = focus_mode
 
-            # Update the configuration
-            if is_given(focus_speakers):
-                self._stt_options.focus_speakers = focus_speakers
-                stream._config.speaker_config.focus_speakers = focus_speakers
-            if is_given(ignore_speakers):
-                self._stt_options.ignore_speakers = ignore_speakers
-                stream._config.speaker_config.ignore_speakers = ignore_speakers
-            if is_given(focus_mode):
-                self._stt_options.focus_mode = focus_mode
-                stream._config.speaker_config.focus_mode = focus_mode
-
-            # Send update to client if stream is active
-            if stream._client and stream._client._is_connected:
-                stream._client.update_diarization_config(stream._config.speaker_config)
+        logger.info("update_speakers has no agent-STT equivalent; not pushed to the session")
 
     def finalize(self) -> None:
         """Finalize the turn (from external VAD).
@@ -594,11 +524,12 @@ class STT(stt.STT):
         # Iterate over the streams
         for stream in self._streams:
             # Do not finalize if being handled by a client
-            if not stream._client or not stream._client._is_connected:
+            if not stream._client or not stream._client.is_connected:
                 continue
 
-            # Check that VAD is not being handled by the client
-            if stream._config.vad_config is None or not stream._config.vad_config.enabled:
+            # Only finalize when turn detection is external — the service closes
+            # turns itself otherwise.
+            if stream._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
                 stream._client.finalize()
 
     async def get_speaker_ids(
@@ -620,13 +551,13 @@ class STT(stt.STT):
         # Iterate over all streams
         for idx, stream in enumerate(self._streams):
             # Skip streams that aren't actively connected
-            if stream._client is None or not stream._client._is_connected:
+            if stream._client is None or not stream._client.is_connected:
                 logger.warning(f"Not connected in stream {idx}")
                 results.append([])
                 continue
 
             # Return if diarization is not enabled
-            if not stream._config.enable_diarization:
+            if not stream._config.diarization:
                 logger.warning(f"Diarization is not enabled in stream {idx}")
                 results.append([])
                 continue
@@ -662,7 +593,7 @@ class SpeechStream(stt.RecognizeStream):
         self,
         stt: STT,
         conn_options: APIConnectOptions,
-        config: VoiceAgentConfig,
+        config: TranscriptionConfig,
         id: int,
         vad_instance: vad.VAD | None = None,
     ) -> None:
@@ -674,8 +605,8 @@ class SpeechStream(stt.RecognizeStream):
 
         self._stt: STT = stt
         self._id: int = id
-        self._config: VoiceAgentConfig = config
-        self._client: VoiceAgentClient | None = None
+        self._config: TranscriptionConfig = config
+        self._client: AgentSttAsyncClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._speech_duration: float = 0
 
@@ -696,12 +627,17 @@ class SpeechStream(stt.RecognizeStream):
         if not self._config:
             raise ValueError("Config is required")
 
-        # Create the Voice Agent client
-        self._client = VoiceAgentClient(
+        # Create the Agent STT client
+        self._client = AgentSttAsyncClient(
             api_key=self._stt._api_key,
             url=self._stt._base_url,
             app=f"livekit/{lk_version}",
             config=self._config,
+            audio_format=AudioFormat(
+                encoding=self._stt._audio_encoding,
+                sample_rate=self._stt._sample_rate,
+                chunk_size=DEFAULT_CHUNK_SIZE,
+            ),
         )
 
         # Add message handlers
@@ -709,25 +645,20 @@ class SpeechStream(stt.RecognizeStream):
             self._msg_queue.put_nowait(message)
 
         # Default messages to listen to
-        messages: list[AgentServerMessageType] = [
-            AgentServerMessageType.RECOGNITION_STARTED,
-            AgentServerMessageType.INFO,
-            AgentServerMessageType.ERROR,
-            AgentServerMessageType.WARNING,
-            AgentServerMessageType.ADD_PARTIAL_SEGMENT,
-            AgentServerMessageType.ADD_SEGMENT,
-            AgentServerMessageType.START_OF_TURN,
-            AgentServerMessageType.END_OF_TURN,
+        messages: list[ServerMessageType] = [
+            ServerMessageType.RECOGNITION_STARTED,
+            ServerMessageType.INFO,
+            ServerMessageType.ERROR,
+            ServerMessageType.WARNING,
+            ServerMessageType.ADD_PARTIAL_SEGMENT,
+            ServerMessageType.ADD_SEGMENT,
+            ServerMessageType.START_OF_TURN,
+            ServerMessageType.END_OF_TURN,
         ]
 
         # Speaker IDs message handler
-        if self._config.enable_diarization:
-            messages.append(AgentServerMessageType.SPEAKERS_RESULT)
-
-        # Optional debug messages to log
-        # messages.append(AgentServerMessageType.END_OF_UTTERANCE)
-        # messages.append(AgentServerMessageType.END_OF_TURN_PREDICTION)
-        # messages.append(AgentServerMessageType.DIAGNOSTICS)
+        if self._config.diarization:
+            messages.append(ServerMessageType.SPEAKERS_RESULT)
 
         # Add message handlers
         for event in messages:
@@ -829,7 +760,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             async for ev in vad_stream:
                 if ev.type == vad.VADEventType.END_OF_SPEECH:
-                    if self._client and self._client._is_connected:
+                    if self._client and self._client.is_connected:
                         self._client.finalize()
         except asyncio.CancelledError:
             pass
@@ -855,44 +786,68 @@ class SpeechStream(stt.RecognizeStream):
 
         # Log info, error and warning messages
         elif event in [
-            AgentServerMessageType.RECOGNITION_STARTED,
-            AgentServerMessageType.INFO,
+            ServerMessageType.RECOGNITION_STARTED,
+            ServerMessageType.INFO,
         ]:
             logger.info(f"{event} -> {message}")
-        elif event == AgentServerMessageType.WARNING:
+        elif event == ServerMessageType.WARNING:
             logger.warning(f"{event} -> {message}")
-        elif event == AgentServerMessageType.ERROR:
+        elif event == ServerMessageType.ERROR:
             logger.error(f"{event} -> {message}")
 
         # Handle the messages
-        elif event == AgentServerMessageType.ADD_PARTIAL_SEGMENT:
-            self._handle_partial_segment(message)
-        elif event == AgentServerMessageType.ADD_SEGMENT:
-            self._handle_segment(message)
-        elif event == AgentServerMessageType.START_OF_TURN:
+        elif event == ServerMessageType.ADD_PARTIAL_SEGMENT:
+            self._handle_segment(message, is_final=False)
+        elif event == ServerMessageType.ADD_SEGMENT:
+            self._handle_segment(message, is_final=True)
+        elif event == ServerMessageType.START_OF_TURN:
             self._handle_start_of_turn(message)
-        elif event == AgentServerMessageType.END_OF_TURN:
+        elif event == ServerMessageType.END_OF_TURN:
             self._handle_end_of_turn(message)
 
         # Handle the speaker result message
-        elif event == AgentServerMessageType.SPEAKERS_RESULT:
+        elif event == ServerMessageType.SPEAKERS_RESULT:
             self._handle_speakers_result(message)
 
         # Log all other messages
         else:
             logger.debug(f"{event} -> {message}")
 
-    def _handle_partial_segment(self, message: dict[str, Any]) -> None:
-        """Handle AddPartialSegment events."""
-        segments: list[dict[str, Any]] = message.get("segments", [])
-        if segments:
-            self._send_frames(segments, is_final=False)
+    def _handle_segment(self, message: dict[str, Any], is_final: bool) -> None:
+        """Handle AddSegment / AddPartialSegment events.
 
-    def _handle_segment(self, message: dict[str, Any]) -> None:
-        """Handle AddSegment events."""
-        segments: list[dict[str, Any]] = message.get("segments", [])
-        if segments:
-            self._send_frames(segments, is_final=True)
+        agent-STT sends a singular `segment` (`transcript`/`speaker`) plus message-level
+        `metadata`, unlike the voice SDK's `segments` list — `Segment.from_message`
+        bridges that shape.
+        """
+        opts = self._stt._stt_options
+
+        # Parse the singular agent-STT segment
+        seg = Segment.from_message(message)
+
+        # Format the text (active formatter only — agent-STT has no passive/active split)
+        speaker_id = seg.speaker or "UU"
+        format_str = opts.speaker_active_format or "{text}"
+        text = format_str.format(speaker_id=speaker_id, text=seg.transcript)
+
+        # Create speech event
+        speech_data = stt.SpeechData(
+            language=LanguageCode(opts.language),
+            text=text,
+            speaker_id=speaker_id,
+            start_time=seg.start_time + self.start_time_offset,
+            end_time=seg.end_time + self.start_time_offset,
+        )
+
+        # Determine the event type
+        event_type = (
+            stt.SpeechEventType.FINAL_TRANSCRIPT
+            if is_final
+            else stt.SpeechEventType.INTERIM_TRANSCRIPT
+        )
+
+        # Send the event
+        self._event_ch.send_nowait(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
     def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
@@ -919,54 +874,6 @@ class SpeechStream(stt.RecognizeStream):
         self._speaker_result = message.get("speakers", [])
         self._speaker_result_event.set()
 
-    def _send_frames(self, segments: list[dict[str, Any]], is_final: bool) -> None:
-        """Send frames to the pipeline."""
-
-        # Check for empty segments
-        if not segments:
-            return
-
-        # Get the options
-        opts = self._stt._stt_options
-
-        # Determine the event type
-        event_type = (
-            stt.SpeechEventType.FINAL_TRANSCRIPT
-            if is_final
-            else stt.SpeechEventType.INTERIM_TRANSCRIPT
-        )
-
-        # Process each segment
-        for segment in segments:
-            # Format the text based on speaker activity
-            is_active = segment.get("is_active", True)
-            format_str = (
-                opts.speaker_active_format if is_active else opts.speaker_passive_format
-            ) or "{text}"
-            text = format_str.format(
-                speaker_id=segment.get("speaker_id", "UU"),
-                text=segment.get("text", ""),
-            )
-
-            # Create speech event
-            speech_data = stt.SpeechData(
-                language=LanguageCode(segment.get("language", opts.language)),
-                text=text,
-                speaker_id=segment.get("speaker_id", "UU"),
-                start_time=segment.get("metadata", {}).get("start_time", 0)
-                + self.start_time_offset,
-                end_time=segment.get("metadata", {}).get("end_time", 0) + self.start_time_offset,
-            )
-
-            # Create speech event
-            event = stt.SpeechEvent(
-                type=event_type,
-                alternatives=[speech_data],
-            )
-
-            # Send the event
-            self._event_ch.send_nowait(event)
-
     async def aclose(self) -> None:
         """Close the STT stream."""
         await super().aclose()
@@ -986,7 +893,7 @@ class SpeechStream(stt.RecognizeStream):
             self._vad_stream = None
 
         # Close the client
-        if self._client and self._client._is_connected:
+        if self._client and self._client.is_connected:
             await self._client.disconnect()
         self._client = None
 
