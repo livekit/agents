@@ -764,14 +764,14 @@ class ChatContext:
         return 0
 
     def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise append it."""
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
         idx = self.index_by_id(item.id)
         if idx is not None:
             if not allow_type_mismatch and item.type != self._items[idx].type:
                 raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
             self._items[idx] = item
         else:
-            self._items.append(item)
+            self.insert(item)
 
     async def _summarize(
         self,

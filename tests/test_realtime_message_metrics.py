@@ -128,3 +128,31 @@ async def test_realtime_user_message_falls_back_to_delivery_time() -> None:
     assert len(messages) == 1
     assert before <= messages[0].created_at <= time.time()
     assert "started_speaking_at" not in messages[0].metrics
+
+
+async def test_realtime_user_turn_is_ordered_before_the_reply_it_prompted() -> None:
+    """A duplex model answers over the caller, so the transcript arrives after its own reply."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+
+    async with AgentSession(llm=model) as session:
+        agent = Agent(instructions="test")
+        await session.start(agent)
+
+        reply = agent.chat_ctx.add_message(
+            role="assistant", content="answering", id="reply", created_at=1_000_500.0
+        )
+        agent._chat_ctx.insert(reply)
+
+        model.active_session.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id="user_turn",
+                transcript="what is my name?",
+                is_final=True,
+                turn_started_at=1_000_000.0,
+            ),
+        )
+        await asyncio.sleep(0)
+
+        ids = [item.id for item in agent.chat_ctx.items if item.type == "message"]
+        assert ids.index("user_turn") < ids.index("reply")
