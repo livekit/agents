@@ -385,11 +385,22 @@ class _AudioSinkProxy(AudioOutput):
             # progress only observes, so the clear is still the sink's last word
             old.off("playback_progressed", self._forward_next_playback_progressed)
 
-            if self._capturing:
-                # it cannot be asked once detached, so all it was given counts as played
-                if not self._sink_reported:
-                    self._report_run(self._pushed_duration - self._offset_base)
+            # it cannot be asked once detached: what it was given counts as played, capped by
+            # how long it played, unless the recorder has the whole segment to place
+            if (
+                self._pending_playback_count > 0
+                and not self._sink_reported
+                and (self._capturing or self._offset_base)
+                and self._sink_started_at is not None
+            ):
+                self._report_run(
+                    min(
+                        self._pushed_duration - self._offset_base,
+                        time.time() - self._sink_started_at,
+                    )
+                )
 
+            if self._capturing:
                 # the new sink counts from its own zero, this far into the segment
                 self._offset_base = self._pushed_duration
                 self._sink_reported = False
@@ -412,16 +423,15 @@ class _AudioSinkProxy(AudioOutput):
             self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
 
     def _report_run(self, duration: float) -> None:
-        """Report a run the current sink played but never reported itself."""
-        if duration <= 0:
+        """Report a run the current sink played but never reported itself.
+
+        A sink that never said playback started has nothing to place: nothing reached it.
+        """
+        if duration <= 0 or self._sink_started_at is None:
             return
 
         self.on_playback_progressed(
-            started_at=self._sink_started_at
-            if self._sink_started_at is not None
-            else time.time() - duration,
-            offset=self._offset_base,
-            duration=duration,
+            started_at=self._sink_started_at, offset=self._offset_base, duration=duration
         )
 
     def _forward_next_playback_started(self, ev: PlaybackStartedEvent) -> None:
@@ -456,8 +466,9 @@ class _AudioSinkProxy(AudioOutput):
             self._sink_started_at = None
 
         await super().capture_frame(frame)
-        await self.next_in_chain.capture_frame(frame)
+        # counted before the handover, so a swap during it keeps the frame on the old sink
         self._pushed_duration += frame.duration
+        await self.next_in_chain.capture_frame(frame)
 
     def flush(self) -> None:
         super().flush()
