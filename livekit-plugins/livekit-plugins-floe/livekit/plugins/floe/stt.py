@@ -238,8 +238,17 @@ class STT(stt.STT):
             ) as resp:
                 body = await resp.read()
                 if resp.status != 200:
+                    # Content-free exception message (REVIEW.md): the raw body can
+                    # carry provider/customer content, so surface it only via a
+                    # redactable pii attribute, never in the message the framework
+                    # logs.
+                    logger.warning(
+                        "floe batch STT request failed (status %d)",
+                        resp.status,
+                        extra={"lk.pii.stt_error_body": body.decode("utf-8", "replace")},
+                    )
                     raise APIStatusError(
-                        message=body.decode("utf-8", "replace") or "batch STT request failed",
+                        message=f"batch STT request failed (status {resp.status})",
                         status_code=resp.status,
                     )
                 cost = resp.headers.get("X-Floe-Cost-USDC")

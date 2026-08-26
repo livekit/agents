@@ -123,6 +123,11 @@ class TTS(OpenAITTS):
                 instructions=instructions,
                 client=client,
             )
+            # The parent marks a passed-in client as not-owned, so its aclose()
+            # would never close it — leaking the httpx client + its connection
+            # pool. We built this client, so we own its lifecycle (mirrors the
+            # parent's own with_azure()).
+            self._owns_client = True
         else:
             super().__init__(
                 model=model,

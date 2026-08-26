@@ -129,7 +129,9 @@ reconciler.attach(session)
 report = reconciler.summary()
 print("Floe-estimated USD:", report.total_estimated_usd)
 for m in report.per_model:
-    print(f"  {m.provider}/{m.model}: {m.input_tokens} in + {m.output_tokens} out -> ${m.estimated_usd}")
+    print(
+        f"  {m.provider}/{m.model}: {m.input_tokens} in + {m.output_tokens} out -> ${m.estimated_usd}"
+    )
 if report.unpriced_models:
     print("unpriced (excluded from total):", report.unpriced_models)
 ```

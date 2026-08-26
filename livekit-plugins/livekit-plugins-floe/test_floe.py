@@ -327,6 +327,31 @@ def test_tts_task_id_header(monkeypatch: pytest.MonkeyPatch) -> None:
     assert headers.get("x-floe-task-id") == "task-123"
 
 
+def test_tts_byok_owns_internal_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When we build the client (BYOK/task_id), we must own it so aclose() closes
+    # it — otherwise the httpx client + its connection pool leak per instance.
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.setenv("FLOE_PROVIDER_KEY", "sk-test")
+    t = floe.TTS()
+    assert t._owns_client is True
+
+
+async def test_tts_byok_aclose_closes_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    monkeypatch.setenv("FLOE_PROVIDER_KEY", "sk-test")
+    t = floe.TTS()
+
+    closed = {"n": 0}
+
+    class _FakeClient:
+        async def close(self) -> None:
+            closed["n"] += 1
+
+    t._client = _FakeClient()  # type: ignore[assignment]
+    await t.aclose()
+    assert closed["n"] == 1  # owned client is closed on aclose
+
+
 # --------------------------------------------------------------------------- #
 # STT
 # --------------------------------------------------------------------------- #
@@ -500,3 +525,45 @@ async def test_stt_batch_recognize_request_shape(monkeypatch: pytest.MonkeyPatch
     assert captured["headers"]["Authorization"] == "Bearer floe_agentkey"  # type: ignore[index]
     assert event.type == lk_stt.SpeechEventType.FINAL_TRANSCRIPT
     assert event.alternatives[0].text == "hello world"
+
+
+async def test_stt_batch_error_body_not_in_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The raw error body can carry customer content; it must not land in the
+    # exception message (which the framework logs). Only the status code does.
+    from livekit import rtc
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_agentkey")
+    s = floe.STT()
+
+    class _FakeResp:
+        status = 400
+        headers: dict[str, str] = {}
+
+        async def read(self) -> bytes:
+            return b'{"error": "SENSITIVE customer transcript"}'
+
+        async def __aenter__(self) -> _FakeResp:
+            return self
+
+        async def __aexit__(self, *a: object) -> None:
+            return None
+
+    class _FakeSession:
+        def post(self, url: str, *, data: object, headers: dict, timeout: object) -> _FakeResp:
+            return _FakeResp()
+
+    monkeypatch.setattr(s, "_ensure_session", lambda: _FakeSession())
+
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 160,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=160,
+    )
+    with pytest.raises(APIStatusError) as ei:
+        await s._recognize_impl([frame], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    rendered = str(ei.value)
+    assert "SENSITIVE" not in rendered  # raw body kept out of the message
+    assert "400" in rendered  # content-free status is fine
