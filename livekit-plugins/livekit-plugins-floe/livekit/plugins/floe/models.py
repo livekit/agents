@@ -1,0 +1,60 @@
+# Copyright 2023 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+from typing import Literal
+
+# Common model ids routed through Floe. Free-form strings are also accepted so
+# any model Floe can price and proxy works without a plugin release.
+LLMModels = (
+    Literal[
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "anthropic/claude-sonnet-5",
+    ]
+    | str
+)
+
+# Common streaming/batch STT model ids routed through Floe. Free-form strings
+# are also accepted.
+STTModels = (
+    Literal[
+        "deepgram/nova-3",
+        "deepgram/nova-2",
+    ]
+    | str
+)
+
+# Common TTS model ids and voices routed through Floe. Free-form strings are
+# also accepted.
+TTSModels = (
+    Literal[
+        "openai/tts-1",
+        "openai/tts-1-hd",
+    ]
+    | str
+)
+
+TTSVoices = (
+    Literal[
+        "alloy",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "shimmer",
+    ]
+    | str
+)
