@@ -291,6 +291,7 @@ EventTypes = Literal[
     "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
+    "agent_backchannel_opportunity",
     "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
@@ -352,25 +353,42 @@ class EotPredictionEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class _AgentBackchannelOpportunityEvent(BaseModel):
-    """Internal: a window in which the agent could backchannel (a short
-    acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
-    ``AgentActivity`` only — not surfaced as a public ``AgentSession`` event yet.
+class AgentBackchannelOpportunityEvent(BaseModel):
+    """Emitted when the turn detector predicts a natural mid-turn pause where the
+    agent could insert a short acknowledgment (a *backchannel*) such as
+    "mm-hmm", "I see", "right", or "okay".
 
-    ``AgentActivity`` owns the decision of what to do with it. The end-of-turn margin
-    (``end_of_turn_threshold - end_of_turn_probability``) gives a progressive risk axis:
-    a large positive margin means the user is clearly still going, so riskier
-    backchannels (yeah/okay/right) are safe; a small margin (or a negative one, where
-    ``end_of_turn_probability >= end_of_turn_threshold`` and a reply is imminent) calls
-    for safe, less ambiguous ones (hmm/uh-huh) that won't collide with the reply."""
+    The ``end_of_turn_margin`` property gives a progressive risk axis for choosing
+    an appropriate phrase:
+
+    * **Large positive margin** (user is clearly still mid-turn): riskier, more
+      affirmative phrases ("yeah", "okay", "right") are safe.
+    * **Small or negative margin** (reply may be imminent): prefer safer,
+      less-committal sounds ("hmm", "uh-huh") that won't semantically conflict
+      with the upcoming reply.
+
+    Subscribe via ``session.on("agent_backchannel_opportunity", handler)`` or
+    override ``Agent.on_backchannel_opportunity()``.
+    """
 
     type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
     probability: float
+    """Backchannel probability predicted by the turn detector (0–1)."""
     threshold: float
+    """Minimum probability required before this event is fired."""
     end_of_turn_probability: float
+    """Probability that the user is *ending* their turn right now (0–1)."""
     end_of_turn_threshold: float
+    """Threshold above which the agent would start replying instead."""
     language: str | None = None
+    """BCP-47 language tag detected for the current utterance, if available."""
     created_at: float = Field(default_factory=time.time)
+
+    @property
+    def end_of_turn_margin(self) -> float:
+        """Positive margin → user is mid-turn (safe to backchannel).
+        Negative margin → reply may be imminent (use cautious phrases)."""
+        return self.end_of_turn_threshold - self.end_of_turn_probability
 
 
 class AgentFalseInterruptionEvent(BaseModel):
@@ -585,6 +603,7 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
+    | AgentBackchannelOpportunityEvent
     | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent

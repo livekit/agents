@@ -35,9 +35,9 @@ from . import io
 from ._utils import _set_participant_attributes
 from .endpointing import BaseEndpointing
 from .events import (
+    AgentBackchannelOpportunityEvent,
     EotPredictionEvent,
     UserTurnExceededEvent,
-    _AgentBackchannelOpportunityEvent,
 )
 from .turn import (
     TurnDetectionEvent,
@@ -143,7 +143,7 @@ class RecognitionHooks(Protocol):
     def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
     def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
-    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
+    def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
@@ -286,6 +286,7 @@ class AudioRecognition:
         self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_stream: VADStream | None = None
+        self._vad_generation = 0
 
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -943,19 +944,23 @@ class AudioRecognition:
     def _update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
         self._check_vad_silence_requirement()
-        if vad:
-            self._vad_stream = None
-            self._vad_ch = aio.Chan[rtc.AudioFrame]()
-            self._vad_atask = asyncio.create_task(
-                self._vad_task(vad, self._vad_ch, self._vad_atask)
-            )
-        elif self._vad_atask is not None:
+
+        self._vad_generation += 1
+        current_generation = self._vad_generation
+
+        if self._vad_atask is not None:
             task = asyncio.create_task(aio.cancel_and_wait(self._vad_atask))
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
             self._vad_stream = None
+
+        if vad:
+            self._vad_ch = aio.Chan[rtc.AudioFrame]()
+            self._vad_atask = asyncio.create_task(
+                self._vad_task(vad, self._vad_ch, current_generation)
+            )
 
         self._interruption_enabled = (
             self._interruption_detection is not None and self._vad is not None
@@ -1700,7 +1705,7 @@ class AudioRecognition:
                                 and backchannel_probability >= backchannel_threshold
                             ):
                                 self._hooks.on_agent_backchannel_opportunity(
-                                    _AgentBackchannelOpportunityEvent(
+                                    AgentBackchannelOpportunityEvent(
                                         probability=backchannel_probability,
                                         threshold=backchannel_threshold,
                                         end_of_turn_probability=end_of_turn_probability,
@@ -1872,11 +1877,8 @@ class AudioRecognition:
         self,
         vad: vad.VAD,
         audio_input: AsyncIterable[rtc.AudioFrame],
-        task: asyncio.Task[None] | None,
+        generation: int,
     ) -> None:
-        if task is not None:
-            await aio.cancel_and_wait(task)
-
         stream = vad.stream()
         self._vad_stream = stream
 
@@ -1889,6 +1891,8 @@ class AudioRecognition:
 
         try:
             async for ev in stream:
+                if generation != self._vad_generation:
+                    break
                 await self._on_vad_event(ev)
         finally:
             await aio.cancel_and_wait(forward_task)
@@ -1897,11 +1901,12 @@ class AudioRecognition:
                 self._vad_stream = None
 
             # reset the speaking state to prevent stuck user speaking state during handoff
-            if self._speaking:
-                with tracer.use_span(self._ensure_user_turn_span()):
-                    self._hooks.on_end_of_speech(None)
-                self._speaking = False
-                self._vad_speech_started = False
+            if generation == self._vad_generation:
+                if self._speaking:
+                    with tracer.use_span(self._ensure_user_turn_span()):
+                        self._hooks.on_end_of_speech(None)
+                    self._speaking = False
+                    self._vad_speech_started = False
 
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
