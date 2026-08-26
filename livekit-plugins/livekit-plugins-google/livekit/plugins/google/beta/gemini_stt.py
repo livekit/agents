@@ -40,7 +40,9 @@ from livekit.agents.utils import is_given
 
 from ..log import logger
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Must be a Live-capable model: the plain chat models (e.g. gemini-2.5-flash) are
+# rejected by the Live endpoint with "not supported for bidiGenerateContent".
+DEFAULT_MODEL = "gemini-3.5-transcribe-live"
 DEFAULT_SAMPLE_RATE = 16000
 
 # Gemini only marks a transcript complete via `finished`/`turn_complete`, which can land
@@ -53,6 +55,7 @@ class _STTOptions:
     model: str
     language: LanguageCode | str | None
     language_hints: list[str] | None
+    adaptation_phrases: list[str] | None
     sample_rate: int
     vertexai: bool | None
     project: str | None
@@ -66,6 +69,7 @@ class STT(stt.STT):
         model: str = DEFAULT_MODEL,
         language: LanguageCode | str | None = "en-US",
         language_hints: list[str] | None = None,
+        adaptation_phrases: list[str] | None = None,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
@@ -78,9 +82,14 @@ class STT(stt.STT):
         """Create a new instance of Gemini STT.
 
         Args:
-            model: Gemini model identifier for STT. Defaults to "gemini-2.5-flash".
+            model: Live-capable Gemini model identifier. Defaults to
+                "gemini-3.5-transcribe-live". Plain chat models are not accepted by the
+                Live endpoint.
             language: Target language BCP-47 code or LanguageCode. Defaults to "en-US".
-            language_hints: List of language code hints for recognition.
+            language_hints: List of language code hints for recognition. Omit to let the
+                model detect the language.
+            adaptation_phrases: Phrases that bias recognition, for names and jargon the
+                model would otherwise mishear.
             sample_rate: Sample rate in Hz. Defaults to 16000.
             api_key: Optional Gemini API key. If not set, uses environment variables.
             vertexai: Whether to use Vertex AI backend.
@@ -106,6 +115,7 @@ class STT(stt.STT):
             model=model,
             language=lang_code,
             language_hints=language_hints,
+            adaptation_phrases=adaptation_phrases,
             sample_rate=sample_rate,
             vertexai=vertexai if is_given(vertexai) else None,
             project=project if is_given(project) else None,
@@ -137,6 +147,7 @@ class STT(stt.STT):
                 model=self._opts.model,
                 language=LanguageCode(language) if isinstance(language, str) else language,
                 language_hints=self._opts.language_hints,
+                adaptation_phrases=self._opts.adaptation_phrases,
                 sample_rate=self._opts.sample_rate,
                 vertexai=self._opts.vertexai,
                 project=self._opts.project,
@@ -234,22 +245,14 @@ class RecognizeStream(stt.RecognizeStream):
         if not lang_hints and self._opts.language:
             lang_hints = [str(self._opts.language)]
 
-        if getattr(client._api_client, "vertexai", False):
-            if lang_hints:
-                input_audio_transcription = types.AudioTranscriptionConfig(
-                    language_hints={"language_codes": lang_hints},
-                )
-            else:
-                input_audio_transcription = types.AudioTranscriptionConfig(
-                    language_auto={},
-                )
-        else:
-            if lang_hints:
-                logger.warning(
-                    "language_hints/language is only supported on Vertex AI (enterprise=True). "
-                    "Ignoring language configuration for Gemini Developer API."
-                )
-            input_audio_transcription = types.AudioTranscriptionConfig()
+        # Both backends accept these -- verified against gemini-3.5-transcribe-live on the
+        # Gemini Developer API, which takes language_hints and adaptation_phrases the same
+        # as Vertex. language_auto and language_hints are mutually exclusive.
+        input_audio_transcription = types.AudioTranscriptionConfig(
+            language_hints=types.LanguageHints(language_codes=lang_hints) if lang_hints else None,
+            language_auto=None if lang_hints else types.LanguageAuto(),
+            adaptation_phrases=self._opts.adaptation_phrases or None,
+        )
 
         config = types.LiveConnectConfig(
             response_modalities=["TEXT"],
