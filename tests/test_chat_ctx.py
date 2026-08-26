@@ -5,7 +5,14 @@ from typing import Any
 import pytest
 
 from livekit.agents import inference
-from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
+from livekit.agents.llm import (
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -738,3 +745,40 @@ def test_resolve_template_identical_variants_collapse():
     assert instr.text is None
     assert instr.render() == "You are a helpful assistant.\n\nshared note"
     assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
+
+
+def test_upsert_places_a_backdated_item_where_it_happened():
+    """A realtime user turn is stamped when it began, which can predate what is already there."""
+    ctx = ChatContext.empty()
+    first = ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+    reply = ctx.add_message(role="assistant", content="reply", id="b", created_at=200.0)
+
+    backdated = ChatMessage(role="user", content=["spoken over the reply"], id="c")
+    backdated.created_at = 150.0
+    ctx._upsert_item(backdated)
+
+    assert [item.id for item in ctx.items] == [first.id, backdated.id, reply.id]
+
+
+def test_upsert_appends_an_item_stamped_now():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+
+    fresh = ChatMessage(role="assistant", content=["later"], id="b")
+    ctx._upsert_item(fresh)
+
+    assert [item.id for item in ctx.items] == ["a", "b"]
+
+
+def test_upsert_still_replaces_an_item_in_place():
+    """A corrected transcript re-delivers the same id, and must not become a second item."""
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+    ctx.add_message(role="assistant", content="reply", id="b", created_at=200.0)
+
+    corrected = ChatMessage(role="user", content=["first, corrected"], id="a")
+    corrected.created_at = 100.0
+    ctx._upsert_item(corrected)
+
+    assert [item.id for item in ctx.items] == ["a", "b"]
+    assert ctx.items[0].text_content == "first, corrected"

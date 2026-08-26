@@ -1,11 +1,14 @@
 import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
+import numpy as np
 import pytest
 
 from livekit.agents import vad
 from livekit.agents.inference import VAD as InferenceVAD
+from livekit.local_inference import VAD as NativeVAD, VAD_WINDOW_SAMPLES
+from livekit.plugins.silero import onnx_model
 
 from . import utils
 
@@ -81,17 +84,34 @@ async def test_chunks_vad(sample_rate) -> None:
 async def test_vad_uses_configured_executor() -> None:
     frames, *_ = await utils.make_test_speech(chunk_duration_ms=10, sample_rate=16000)
     executor = _RecordingExecutor()
-    stream = InferenceVAD(model="silero", executor=executor).stream()
     try:
-        for frame in frames:
-            stream.push_frame(frame)
-        stream.end_input()
-        _ = [event async for event in stream]
+        stream = InferenceVAD(model="silero", executor=executor).stream()
+        try:
+            for frame in frames:
+                stream.push_frame(frame)
+            stream.end_input()
+            _ = [event async for event in stream]
+        finally:
+            await stream.aclose()
+
+        assert executor.submissions > 0
+        assert not executor._shutdown
     finally:
-        await stream.aclose()
         executor.shutdown()
 
-    assert executor.submissions > 0
+
+async def test_vad_uses_owned_single_thread_executor_by_default() -> None:
+    stream = InferenceVAD(model="silero").stream()
+    executor = cast(Any, stream)._executor
+
+    assert isinstance(executor, ThreadPoolExecutor)
+    assert executor._max_workers == 1
+    assert executor._thread_name_prefix == "inference.vad"
+    assert not executor._shutdown
+
+    await stream.aclose()
+
+    assert executor._shutdown
 
 
 async def _drain_speech_segment(
@@ -174,3 +194,29 @@ async def test_file_vad(sample_rate):
 
     assert start_of_speech_i > 0, "no start of speech detected"
     assert start_of_speech_i == end_of_speech_i, "start and end of speech mismatch"
+
+
+async def test_plugin_checkpoint_matches_inference_vad() -> None:
+    """The silero plugin and inference.VAD must run the same underlying checkpoint.
+
+    They ship the model separately -- an onnx file in the plugin, baked-in weights in
+    livekit-local-inference -- so nothing but this test keeps the two from drifting apart.
+    """
+    frames, *_ = await utils.make_test_speech(sample_rate=16000)
+    pcm = frames[0].data
+
+    plugin_model = onnx_model.OnnxModel(
+        onnx_session=onnx_model.new_inference_session(force_cpu=True), sample_rate=16000
+    )
+    native_model = NativeVAD()
+
+    windows = 0
+    for i in range(0, len(pcm) - VAD_WINDOW_SAMPLES + 1, VAD_WINDOW_SAMPLES):
+        window = np.ascontiguousarray(pcm[i : i + VAD_WINDOW_SAMPLES], dtype=np.int16)
+        plugin_p = plugin_model(np.divide(window, np.iinfo(np.int16).max, dtype=np.float32))
+        assert plugin_p == pytest.approx(native_model.predict(window), abs=1e-3), (
+            f"checkpoints diverge at window {i // VAD_WINDOW_SAMPLES}"
+        )
+        windows += 1
+
+    assert windows > 100, "test audio too short to be meaningful"

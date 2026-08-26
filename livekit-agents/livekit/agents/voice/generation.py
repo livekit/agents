@@ -238,20 +238,21 @@ async def _llm_inference_task(
     last_content_at = 0.0
     try:
         async for chunk in llm_node:
-            if data.ttft is None:
-                data.ttft = time.perf_counter() - start_time
-
             # extract text content from either str or ChatChunk
             content: str | None = None
+            generated = False
 
             if isinstance(chunk, str):
                 content = chunk
+                generated = bool(chunk)
 
             elif isinstance(chunk, ChatChunk):
                 if chunk.usage is not None:
                     usage = chunk.usage
                 if not chunk.delta:
                     continue
+
+                generated = chunk.has_response()
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
@@ -288,6 +289,9 @@ async def _llm_inference_task(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
                 content = None
+
+            if generated and data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
 
             # route text content to output channels
             if content:
@@ -484,25 +488,48 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    captured_segments_before: int
+    """Output segment count before this segment starts forwarding.
+
+    With serialized forwarding, an increase proves this segment reached
+    ``AudioOutput.capture_frame``.
+    """
+
     started_forwarding_at: float | None = None
 
-    def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
-        if not self.first_frame_fut.done():
-            self.first_frame_fut.set_result(ev.created_at)
+    has_captured_own_frame: bool = False
+    """Set before ``capture_frame`` so synchronous events are attributed to this segment."""
 
 
 def perform_audio_forwarding(
     *,
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
+    reconcile_playout_pause: Callable[[], None],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
-    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
-    # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
-    audio_output.on("playback_started", out._resolve_first_frame_fut)
-    out.first_frame_fut.add_done_callback(
-        lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
+    out = _AudioOutput(
+        audio=[],
+        first_frame_fut=asyncio.Future(),
+        captured_segments_before=audio_output.captured_playout_segments,
     )
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if out.has_captured_own_frame and not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
+    # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
+    audio_output.on("playback_started", _on_playback_started)
+    out.first_frame_fut.add_done_callback(
+        lambda _: audio_output.off("playback_started", _on_playback_started)
+    )
+    task = asyncio.create_task(
+        _audio_forwarding_task(
+            audio_output,
+            tts_output,
+            out,
+            reconcile_playout_pause=reconcile_playout_pause,
+        )
+    )
     return task, out
 
 
@@ -511,12 +538,15 @@ async def _audio_forwarding_task(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    *,
+    reconcile_playout_pause: Callable[[], None],
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
     cancelled = False
     try:
-        audio_output.resume()
+        # reconcile any SOS pause before forwarding audio.
+        reconcile_playout_pause()
 
         async for frame in tts_output:
             out.audio.append(frame)
@@ -534,6 +564,8 @@ async def _audio_forwarding_task(
                     output_rate=audio_output.sample_rate,
                     num_channels=frame.num_channels,
                 )
+
+            out.has_captured_own_frame = True
 
             if resampler:
                 for f in resampler.push(frame):
@@ -588,6 +620,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    reconcile_playout_pause: Callable[[], None],
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -602,7 +635,9 @@ async def forward_generation(
         audio_out: _AudioOutput | None = None
         if audio_output is not None and audio_source is not None:
             forward_audio_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=audio_source
+                audio_output=audio_output,
+                tts_output=audio_source,
+                reconcile_playout_pause=reconcile_playout_pause,
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
@@ -630,10 +665,20 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
+                played_own_frame = (
+                    audio_out is not None
+                    and audio_output.captured_playout_segments > audio_out.captured_segments_before
+                )
                 if (
                     audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
+                    and played_own_frame
+                    and (
+                        (
+                            audio_out.first_frame_fut.done()
+                            and not audio_out.first_frame_fut.cancelled()
+                        )
+                        or playback_ev.playback_position > 0
+                    )
                 ):
                     out.played = "partial"
                     out.playback_position = playback_ev.playback_position
@@ -792,10 +837,11 @@ async def _execute_tools_task(
                 raw_args = llm_utils.parse_function_arguments(json_args)
             except ValueError as e:
                 logger.warning(
-                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
+                    f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
+                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -836,7 +882,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -884,13 +930,12 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-                    if fnc_call_out := output.fnc_call_out:
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
-                        )
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error
-                        )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
+                    )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
@@ -944,11 +989,10 @@ async def _execute_tools_task(
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
-    fnc_call_out: llm.FunctionCallOutput | None
+    fnc_call_out: llm.FunctionCallOutput
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
-    reply_required: bool = field(default=True)
 
 
 def make_tool_output(
@@ -985,11 +1029,16 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "output": output},
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
-                fnc_call_out=None,
+                fnc_call_out=llm.FunctionCallOutput(
+                    name=fnc_call.name,
+                    call_id=fnc_call.call_id,
+                    output="the tool returned more than one agent",
+                    is_error=True,
+                ),
                 agent_task=None,
                 raw_output=output,
                 raw_exception=exception,
@@ -1013,15 +1062,30 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
+    # a tool with nothing to say, such as a bare handoff, expects no reply
+    base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,
         raw_exception=exception,
     )
+
+
+def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
+    """The output to record for a tool that finished on an interrupted turn.
+
+    A handoff answers as a failure, since the interruption left it unapplied.
+    """
+    fnc_call_out = out.fnc_call_out
+    if out.agent_task is not None:
+        fnc_call_out.output = "the agent handoff was interrupted and did not happen"
+        fnc_call_out.is_error = True
+
+    fnc_call_out.reply_required = False
+    return fnc_call_out
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change

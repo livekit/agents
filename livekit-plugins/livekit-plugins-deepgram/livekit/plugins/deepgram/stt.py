@@ -871,7 +871,7 @@ class SpeechStream(stt.SpeechStream):
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:
-            logger.warning("received unexpected message from deepgram %s", data)
+            logger.warning("received unexpected message from deepgram", extra={"lk.pii.data": data})
 
 
 def _word_text(word: dict, *, use_punctuated_word: bool) -> str:

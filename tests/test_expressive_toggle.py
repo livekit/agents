@@ -4,8 +4,10 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent
+from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference
 from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.utils import is_given
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import (
     EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
     _strip_assistant_markup,
@@ -73,6 +75,70 @@ def test_update_and_remove_expressive_instructions() -> None:
     assert all(item.id != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in ctx.items)
 
 
+def test_expressive_param_defaults_off() -> None:
+    assert AgentSession()._expressive is False
+    assert AgentSession(expressive=True)._expressive is True
+
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    assert AgentSession(expressive=opts)._expressive == opts
+
+
+def test_update_options_expressive() -> None:
+    session = AgentSession(expressive=True)
+    assert session._expressive is True
+
+    # turn off
+    session.update_options(expressive=False)
+    assert session._expressive is False
+
+    # turn back on with options
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    session.update_options(expressive=opts)
+    assert session._expressive == opts
+
+    # untouched when not given
+    session.update_options()
+    assert session._expressive == opts
+
+
+def test_agent_expressive() -> None:
+    # unset by default: falls back to the session value at runtime
+    assert not is_given(Agent(instructions="test").expressive)
+
+    agent = Agent(instructions="test", expressive=True)
+    assert agent.expressive is True
+
+    agent.update_options(expressive=False)
+    assert agent.expressive is False
+
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    agent.update_options(expressive=opts)
+    assert agent.expressive == opts
+
+    # untouched when not given
+    agent.update_options()
+    assert agent.expressive == opts
+
+
+def test_agent_expressive_overrides_session() -> None:
+    # constructed hermetically; fishaudio declares a markup dialect, which expressive requires
+    tts = inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake")
+
+    session_on = AgentSession(expressive=True, tts=tts)
+    session_off = AgentSession(tts=tts)
+
+    def resolves(agent: Agent, session: AgentSession) -> bool:
+        return AgentActivity(agent, session)._resolve_expressive_options() is not None
+
+    # agent unset: the session value applies
+    assert resolves(Agent(instructions="test"), session_on)
+    assert not resolves(Agent(instructions="test"), session_off)
+
+    # agent value wins over the session in both directions
+    assert not resolves(Agent(instructions="test", expressive=False), session_on)
+    assert resolves(Agent(instructions="test", expressive=True), session_off)
+
+
 async def test_expressive_off_turn_scrubs_history() -> None:
     """A turn that runs with expressive off removes the injected markup guide and
     scrubs markup from past assistant turns."""
@@ -83,8 +149,10 @@ async def test_expressive_off_turn_scrubs_history() -> None:
 
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
-    session = create_session(actions)
-    session._expressive = {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}
+    session = create_session(
+        actions,
+        extra_kwargs={"expressive": {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}},
+    )
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide

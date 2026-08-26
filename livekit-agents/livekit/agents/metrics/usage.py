@@ -37,6 +37,8 @@ class LLMModelUsage(_BaseModelUsage):
     """Total input tokens."""
     input_cached_tokens: int = 0
     """Input tokens served from cache."""
+    input_cache_creation_tokens: int = 0
+    """Input tokens used to write to the prompt cache (e.g. Anthropic cache writes)."""
     input_audio_tokens: int = 0
     """Input audio tokens (for multimodal models)."""
     input_cached_audio_tokens: int = 0
@@ -201,6 +203,7 @@ class ModelUsageCollector:
             usage = self._get_llm_usage(provider, model)
             usage.input_tokens += metrics.prompt_tokens
             usage.input_cached_tokens += metrics.prompt_cached_tokens
+            usage.input_cache_creation_tokens += metrics.cache_creation_tokens
             usage.output_tokens += metrics.completion_tokens
 
         elif isinstance(metrics, RealtimeModelMetrics):

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from collections import deque
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -71,6 +73,8 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._turn_detector_flushed = False
     ar._turn_detector_late_prediction_warned = False
     ar._agent_speaking = False
+    ar._transcript_buffer = deque()
+    ar._transcript_gate_active = False
     ar._interruption_enabled = False
     ar._interruption_ch = None
     ar._vad_base_turn_detection = True
@@ -298,8 +302,9 @@ async def test_server_side_turn_detection_keeps_the_resume_armed(
     assert activity._paused_speech is None
 
 
-async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    # the pipeline paths that report it are gated on a speaking state the pause already left
+async def test_interrupting_paused_speech_does_not_end_agent_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
 
@@ -312,7 +317,33 @@ async def test_interrupting_the_pause_ends_the_agent_turn(monkeypatch: pytest.Mo
     await session.aclose()
 
     handle.interrupt.assert_called_once()
-    activity._audio_recognition._on_end_of_agent_speech.assert_called_once()
+    activity._audio_recognition._on_end_of_agent_speech.assert_not_called()
+
+
+async def test_interruption_event_does_not_end_agent_again_after_pausing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, handle = _paused_activity(session)
+    handle._generations = []
+    activity._paused_speech = None
+    activity._audio_recognition = MagicMock()
+    event = OverlappingSpeechEvent(
+        is_interruption=True,
+        overlap_started_at=1.0,
+        detected_at=2.0,
+    )
+
+    activity.on_overlap_speech(event)
+    assert activity._paused_speech is not None
+    await session.aclose()
+
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(ended_at=ANY)
 
 
 async def test_handing_over_a_paused_speech_does_not_end_the_agent_turn(

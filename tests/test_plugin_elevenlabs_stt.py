@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 from multidict import CIMultiDict
+from yarl import URL
 
 from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
@@ -186,6 +187,88 @@ async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected
     await stream._connect_ws()
 
     assert f"enable_logging={expected}" in captured["url"]
+
+
+async def _connect_ws_url(stream: elevenlabs_stt.SpeechStream) -> str:
+    """Run _connect_ws against a fake session and return the realtime connect URL."""
+
+    class _ConnOptions:
+        timeout = 5.0
+
+    stream._conn_options = _ConnOptions()
+
+    captured: dict[str, str] = {}
+
+    class _FakeSession:
+        async def ws_connect(self, url: str, **kwargs: object) -> object:
+            captured["url"] = url
+            return object()
+
+    stream._session = _FakeSession()
+
+    await stream._connect_ws()
+    return captured["url"]
+
+
+async def test_connect_ws_includes_keyterms() -> None:
+    # keyterms bias the realtime model and are sent as repeated query params on
+    # the connect URL.
+    stream = _new_stream()
+    stream._opts.keyterms = ["nginx", "Grafana Loki", "Ærø"]
+
+    url = await _connect_ws_url(stream)
+
+    assert "keyterms=nginx" in url
+    assert "keyterms=Grafana%20Loki" in url
+    assert "keyterms=%C3%86r%C3%B8" in url
+
+
+async def test_connect_ws_escapes_query_delimiters_in_keyterms() -> None:
+    # Keyterms are free-form text. Unescaped, "&" would split the term and inject
+    # a bogus query param and "#" would truncate it, so both must be encoded and
+    # must survive a round trip through the URL parser aiohttp uses.
+    stream = _new_stream()
+    stream._opts.keyterms = ["Smith & Sons", "C#"]
+
+    url = await _connect_ws_url(stream)
+
+    assert "keyterms=Smith%20%26%20Sons" in url
+    assert "keyterms=C%23" in url
+    assert URL(url).query.getall("keyterms") == ["Smith & Sons", "C#"]
+
+
+async def test_connect_ws_omits_keyterms_when_not_given() -> None:
+    url = await _connect_ws_url(_new_stream())
+
+    assert "keyterms=" not in url
+
+
+def test_update_options_forwards_keyterms_to_active_streams() -> None:
+    # keyterms are a WebSocket query param applied at connect time, so a live
+    # realtime stream must be told to reconnect. Verify STT.update_options
+    # forwards them to active streams (which trigger a reconnect).
+    instance = _stt()
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def update_options(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    # _streams is a WeakSet: keep a strong reference so the fake survives.
+    fake = _FakeStream()
+    instance._streams.add(fake)
+    instance.update_options(keyterms=["nginx"])
+    assert captured.get("keyterms") == ["nginx"]
+
+
+def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
+    stream = _new_stream()
+    stream._reconnect_event = asyncio.Event()
+
+    stream.update_options(keyterms=["nginx"])
+
+    assert stream._opts.keyterms == ["nginx"]
+    assert stream._reconnect_event.is_set()
 
 
 class _FakeWS:

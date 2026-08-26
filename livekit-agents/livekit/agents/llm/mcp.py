@@ -250,7 +250,7 @@ class MCPServer(ABC):
                             "tool_name": name,
                             "progress": progress,
                             "total": total,
-                            "progress_message": message,
+                            "lk.pii.progress_message": message,
                         },
                     )
                     await ctx.update(message)

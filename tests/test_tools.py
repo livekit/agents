@@ -739,6 +739,10 @@ class _DefaultedFieldsModel(BaseModel):
     child: _SentinelChildModel = _SentinelChildModel()
 
 
+class _DefaultedConstModel(BaseModel):
+    tag: Literal["only"] = "only"
+
+
 class TestNullSentinelForDefaults:
     """Tool schemas advertise null for defaulted fields — the tool-args pipeline
     resolves the sentinel in _prepare_function_arguments. Without the flag,
@@ -750,6 +754,14 @@ class TestNullSentinelForDefaults:
             prop = schema["properties"][field]
             assert _json_schema_allows_null(prop, root=schema), f"{field}: {prop}"
             assert "default" not in prop
+
+    def test_const_field_gets_no_sentinel(self):
+        # a const has one legal value, which the model can always produce; a null branch
+        # would contradict it and lose the only information the field carries
+        schema = to_strict_json_schema(_DefaultedConstModel, null_sentinel_for_defaults=True)
+        prop = schema["properties"]["tag"]
+        assert prop == {"const": "only", "type": "string"}
+        assert not _json_schema_allows_null(prop, root=schema)
 
     def test_no_flag_keeps_defaulted_fields_required_and_non_nullable(self):
         schema = to_strict_json_schema(_DefaultedFieldsModel)
@@ -817,6 +829,17 @@ class _NestedDiscriminatedUnionModel(BaseModel):
     items: list[Annotated[_CarModel | _BikeModel, Field(discriminator="vehicle")]]
 
 
+# tags carrying a default, i.e. how discriminated unions are usually written
+class _DefaultedTagCelsius(BaseModel):
+    unit: Literal["celsius"] = "celsius"
+    value: float
+
+
+class _DefaultedTagFahrenheit(BaseModel):
+    unit: Literal["fahrenheit"] = "fahrenheit"
+    value: float
+
+
 def _has_one_of(schema: object) -> bool:
     """Recursively check if any dict in the schema tree contains 'oneOf'."""
     if isinstance(schema, dict):
@@ -865,6 +888,36 @@ class TestDiscriminatedUnionSchema:
         assert '"oneOf"' not in schema_str, (
             f"strict openai schema should not contain oneOf: {json.dumps(schema, indent=2)}"
         )
+
+    def test_defaulted_tag_stays_pinned_and_resolves_to_its_variant(self):
+        """`discriminator` is unsupported by strict mode, so the per-variant tag const is
+        all that resolves the variant. A nulled tag makes variants that differ only in
+        their tag collide, and the first one silently wins."""
+
+        @function_tool
+        async def set_thermostat(
+            temp: Annotated[
+                _DefaultedTagCelsius | _DefaultedTagFahrenheit, Field(discriminator="unit")
+            ],
+        ) -> str:
+            """Set the thermostat."""
+            return str(temp)
+
+        schema = build_strict_openai_schema(set_thermostat)["function"]["parameters"]
+        for name, tag in (
+            ("_DefaultedTagCelsius", "celsius"),
+            ("_DefaultedTagFahrenheit", "fahrenheit"),
+        ):
+            unit = schema["$defs"][name]["properties"]["unit"]
+            assert unit == {"const": tag, "type": "string"}
+            assert not _json_schema_allows_null(unit, root=schema)
+            assert "unit" in schema["$defs"][name]["required"]
+
+        args, _ = prepare_function_arguments(
+            fnc=set_thermostat,
+            json_arguments=json.dumps({"temp": {"unit": "fahrenheit", "value": 70.0}}),
+        )
+        assert isinstance(args[0], _DefaultedTagFahrenheit)
 
 
 class _OpenEnumModel(BaseModel):
@@ -1911,15 +1964,14 @@ class TestAgentSessionWaitForIdle:
 
 
 def _emitted_items(session: Any) -> list[Any]:
-    """Updates carried by tool_execution_updated events emitted on a mocked session."""
+    """Updates carried by tool_execution_updated events reported on a mocked session."""
     from livekit.agents.voice.events import ToolExecutionUpdatedEvent
 
     items = []
-    for call in session.emit.call_args_list:
-        name, ev = call.args
-        if name == "tool_execution_updated":
-            assert isinstance(ev, ToolExecutionUpdatedEvent)
-            items.append(ev.update)
+    for call in session._tool_execution_updated.call_args_list:
+        (ev,) = call.args
+        assert isinstance(ev, ToolExecutionUpdatedEvent)
+        items.append(ev.update)
     return items
 
 

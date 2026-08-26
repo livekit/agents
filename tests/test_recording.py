@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import ssl
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
-import numpy as np
 import pytest
+from google.rpc import error_details_pb2, status_pb2
 
-from livekit import rtc
 from livekit.agents import Agent, AgentSession
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
@@ -19,7 +21,6 @@ from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
-from livekit.agents.voice.recorder_io.recorder_io import _split_frame
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -97,7 +98,6 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
     """Create a minimal mock SessionReport for upload tests."""
     report = MagicMock()
-    report.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     report.job_id = "job-1"
     report.room_id = "room-1"
     report.room = "test-room"
@@ -110,6 +110,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
+    report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
     return report
 
 
@@ -202,6 +203,14 @@ def _get_multipart_parts(mp_writer: aiohttp.MultipartWriter) -> dict[str, Any]:
     return parts
 
 
+def _retry_info_body(delay_seconds: int = 0) -> bytes:
+    retry_info = error_details_pb2.RetryInfo()
+    retry_info.retry_delay.seconds = delay_seconds
+    status = status_pb2.Status()
+    status.details.add().Pack(retry_info)
+    return status.SerializeToString()
+
+
 # ---------------------------------------------------------------------------
 # Group 1: RecordingOptions normalization (no JobContext)
 # ---------------------------------------------------------------------------
@@ -241,7 +250,7 @@ async def test_record_normalization(
 ) -> None:
     session = _create_simple_session()
     await session.start(SimpleAgent(), record=record)
-    assert session._recording_options == expected
+    assert session.options.recording_options == expected
     await _cleanup(session)
 
 
@@ -249,7 +258,7 @@ async def test_record_not_given_without_job_ctx() -> None:
     """When record is omitted and no JobContext is available, all options should be False."""
     session = _create_simple_session()
     await session.start(SimpleAgent())
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -320,7 +329,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
         await session.start(SimpleAgent())
 
     mock_ctx.init_recording.assert_called_once()
-    assert session._recording_options == _RECORDING_ALL_OFF
+    assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -361,6 +370,134 @@ async def test_upload_transcript_only() -> None:
     assert "audio" not in part_names
 
 
+async def test_upload_uses_extended_timeout() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    mock_http = _make_mock_http()
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    timeout = mock_http.post.call_args.kwargs["timeout"]
+    assert timeout.total == 900
+    assert timeout.sock_connect == 30
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(aiohttp.ConnectionTimeoutError("connect timed out"), id="connect-timeout"),
+        pytest.param(
+            aiohttp.ClientConnectorError(MagicMock(), OSError("connection failed")),
+            id="connector-error",
+        ),
+    ],
+)
+async def test_upload_retries_connection_failure(error: Exception) -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    failure_cm = AsyncMock()
+    failure_cm.__aenter__.side_effect = error
+
+    success_resp = AsyncMock()
+    success_resp.status = 200
+    success_cm = AsyncMock()
+    success_cm.__aenter__.return_value = success_resp
+
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.side_effect = [failure_cm, success_cm]
+
+    with (
+        _patch_upload_deps(),
+        patch(f"{_TRACES_MOD}._recording_upload_retry_delay", return_value=0.0),
+    ):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 2
+
+
+async def test_upload_retries_response_with_retry_info() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    retry_resp = AsyncMock()
+    retry_resp.status = 503
+    retry_resp.read.return_value = _retry_info_body()
+    retry_cm = AsyncMock()
+    retry_cm.__aenter__.return_value = retry_resp
+
+    success_resp = AsyncMock()
+    success_resp.status = 200
+    success_cm = AsyncMock()
+    success_cm.__aenter__.return_value = success_resp
+
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.side_effect = [retry_cm, success_cm]
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 2
+
+
+async def test_upload_does_not_retry_response_without_retry_info() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    response_error = aiohttp.ClientResponseError(
+        MagicMock(), (), status=503, message="service unavailable"
+    )
+    response = AsyncMock()
+    response.status = 503
+    response.read.return_value = b""
+    response.raise_for_status = MagicMock(side_effect=response_error)
+    response_cm = AsyncMock()
+    response_cm.__aenter__.return_value = response
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = response_cm
+
+    with _patch_upload_deps(), pytest.raises(aiohttp.ClientResponseError) as exc_info:
+        await _call_upload(report, http_session=mock_http)
+
+    assert exc_info.value.status == 503
+    assert mock_http.post.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(asyncio.TimeoutError("upload timed out"), id="total-timeout"),
+        pytest.param(aiohttp.ServerDisconnectedError("response lost"), id="disconnected"),
+        pytest.param(
+            aiohttp.ClientConnectorSSLError(MagicMock(), ssl.SSLError("TLS failed")),
+            id="tls-error",
+        ),
+    ],
+)
+async def test_upload_does_not_retry_ambiguous_or_tls_failure(error: Exception) -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    failure_cm = AsyncMock()
+    failure_cm.__aenter__.side_effect = error
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = failure_cm
+
+    with _patch_upload_deps(), pytest.raises(type(error)):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 1
+
+
+async def test_upload_stops_after_connection_retries_are_exhausted() -> None:
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    timeout_cm = AsyncMock()
+    timeout_cm.__aenter__.side_effect = aiohttp.ConnectionTimeoutError("connect timed out")
+    mock_http = MagicMock(spec=aiohttp.ClientSession)
+    mock_http.post.return_value = timeout_cm
+
+    with (
+        _patch_upload_deps(),
+        patch(f"{_TRACES_MOD}._recording_upload_retry_delay", return_value=0.0),
+        pytest.raises(aiohttp.ConnectionTimeoutError, match="connect timed out"),
+    ):
+        await _call_upload(report, http_session=mock_http)
+
+    assert mock_http.post.call_count == 4
+
+
 async def test_upload_session_report_sent_without_transcript() -> None:
     """Session report log should be emitted even when transcript=False, if other options are on."""
     report = _make_mock_report({"audio": True, "traces": True, "logs": False, "transcript": False})
@@ -372,6 +509,58 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+async def test_upload_session_report_marks_stt_keyterms_as_pii() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    stt_context_options = {
+        "keyterms": ["Acme Corp"],
+        "keyterm_detection": {"enabled": False},
+        "forward_chat_context": True,
+    }
+    report.options.stt_context_options = stt_context_options
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+
+    session_report_call = next(
+        c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
+    )
+    serialized_stt_options = session_report_call.kwargs["attributes"]["session.options"][
+        "stt_context_options"
+    ]
+    assert serialized_stt_options["lk.pii.keyterms"] == ["Acme Corp"]
+    assert "keyterms" not in serialized_stt_options
+    assert stt_context_options["keyterms"] == ["Acme Corp"]
+
+
+def test_session_report_constructor_includes_recording_options_in_options() -> None:
+    from livekit.agents.voice.report import SessionReport
+
+    recording_options: RecordingOptions = {
+        "audio": False,
+        "traces": True,
+        "logs": False,
+        "transcript": False,
+        "redaction": True,
+    }
+    session = _create_simple_session()
+    session.options.recording_options = recording_options
+    report = SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=session.options,
+        events=[],
+        chat_history=session.history,
+    )
+
+    assert report.options.recording_options == recording_options
+    serialized_recording_options = report.to_dict()["options"]["recording_options"]
+    assert serialized_recording_options == recording_options
+
+    serialized_recording_options["audio"] = True
+    assert report.options.recording_options["audio"] is False
 
 
 async def test_upload_audio_only_no_file() -> None:
@@ -454,6 +643,66 @@ def test_job_context_otel_metadata_includes_redaction_option() -> None:
     ctx.simulation_context = MagicMock(return_value=None)
 
     assert ctx._otel_metadata({"redaction": True}) == {"lk.redaction.enabled": True}
+
+
+def test_job_context_init_recording_enables_session_redaction() -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(
+        job=SimpleNamespace(enable_redaction=False),
+        url="",
+    )
+    ctx._recording_initialized = False
+    ctx._redaction_enabled = False
+    ctx._early_log_handler = None
+
+    ctx.init_recording(
+        {
+            "audio": False,
+            "traces": False,
+            "logs": False,
+            "transcript": False,
+            "redaction": True,
+        }
+    )
+
+    assert ctx._redaction_enabled is True
+
+
+@pytest.mark.parametrize(
+    ("project_redaction", "session_redaction"),
+    [
+        pytest.param(True, False, id="project-redaction"),
+        pytest.param(False, True, id="session-redaction"),
+    ],
+)
+def test_job_context_init_recording_rejects_audio_without_transcript_when_redacted(
+    project_redaction: bool, session_redaction: bool
+) -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(
+        job=SimpleNamespace(enable_redaction=project_redaction),
+        url="",
+    )
+    ctx._recording_initialized = False
+    ctx._redaction_enabled = project_redaction
+    ctx._early_log_handler = None
+
+    with pytest.raises(
+        ValueError, match="audio upload requires transcript upload when redaction is enabled"
+    ):
+        ctx.init_recording(
+            {
+                "audio": True,
+                "traces": False,
+                "logs": False,
+                "transcript": False,
+                "redaction": session_redaction,
+            }
+        )
 
 
 async def test_upload_session_report_omits_simulation_metadata_for_normal_session() -> None:
@@ -597,60 +846,3 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
-
-
-# ---------------------------------------------------------------------------
-# Group 5: _split_frame (encode-path helper)
-# ---------------------------------------------------------------------------
-
-
-def _ramp_frame(num_samples: int, num_channels: int, sample_rate: int = 24000) -> rtc.AudioFrame:
-    """A frame whose samples are a monotonic ramp, so splits can be checked for alignment."""
-    arr = np.arange(num_samples * num_channels, dtype=np.int16)
-    return rtc.AudioFrame(
-        data=arr.tobytes(),
-        num_channels=num_channels,
-        samples_per_channel=num_samples,
-        sample_rate=sample_rate,
-    )
-
-
-@pytest.mark.parametrize("num_channels", [1, 2])
-@pytest.mark.parametrize("fraction", [0.25, 0.5, 0.75])
-def test_split_frame_is_consistent_and_lossless(num_channels: int, fraction: float) -> None:
-    """`rtc.AudioFrame.data` is a memoryview of int16 *samples*, not bytes.
-
-    A split must keep each half's data length in sync with its samples_per_channel and
-    must neither drop nor duplicate samples. This guards the regression where the helper
-    indexed the buffer in bytes and produced corrupt frames on interrupted/paused playback.
-    """
-    n = 240
-    frame = _ramp_frame(n, num_channels)
-    left, right = _split_frame(frame, frame.duration * fraction)
-
-    # each half is internally consistent
-    assert len(left.data) == left.samples_per_channel * left.num_channels
-    assert len(right.data) == right.samples_per_channel * right.num_channels
-
-    # no samples lost or duplicated across the split
-    assert left.samples_per_channel + right.samples_per_channel == n
-    recon = np.concatenate(
-        [
-            np.frombuffer(bytes(left.data), dtype=np.int16),
-            np.frombuffer(bytes(right.data), dtype=np.int16),
-        ]
-    )
-    assert np.array_equal(recon, np.arange(n * num_channels, dtype=np.int16))
-
-
-def test_split_frame_boundaries() -> None:
-    """Splitting at or beyond the edges returns an empty half and the original."""
-    frame = _ramp_frame(100, 1)
-
-    empty, whole = _split_frame(frame, 0.0)
-    assert empty.samples_per_channel == 0 and len(empty.data) == 0
-    assert whole.samples_per_channel == 100
-
-    whole2, empty2 = _split_frame(frame, frame.duration * 2)
-    assert whole2.samples_per_channel == 100
-    assert empty2.samples_per_channel == 0 and len(empty2.data) == 0

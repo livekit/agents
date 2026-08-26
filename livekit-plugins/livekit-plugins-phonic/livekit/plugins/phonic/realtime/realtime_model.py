@@ -56,6 +56,13 @@ WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
 
+# Phonic's built-in tools, referenced by name in ``phonic_tools``. A configs_for_tools entry for one of
+# these carries its built-in config (below) so it is sent to Phonic as an inline object rather than a name.
+_BUILT_IN_TOOL_NAMES = frozenset(
+    {"choose_not_to_respond", "keypad_input", "natural_conversation_ending"}
+)
+
+
 class PhonicToolConfig(TypedDict, total=False):
     """Per-tool behavior overrides for ``configs_for_tools`` (see README). ``name`` is required;
     every other field is optional and falls back to the plugin default when omitted."""
@@ -64,6 +71,11 @@ class PhonicToolConfig(TypedDict, total=False):
     require_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
+    # Built-in tools only (set on the matching ``phonic_tools`` entry):
+    respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
+    speech_before_tool_call: (
+        str  # keypad_input / natural_conversation_ending: required|optional|suppressed
+    )
 
 
 IntelligenceLevel = Literal["standard", "high"]
@@ -486,15 +498,21 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
-                    if self._configs_for_tools.get(item.name or "", {}).get(
-                        "forbid_speech_after_tool_call", False
+                    # the tool forbids speech after its call, or the result wants no reply
+                    if (
+                        self._configs_for_tools.get(item.name or "", {}).get(
+                            "forbid_speech_after_tool_call", False
+                        )
+                        or not item.reply_required
                     ):
                         forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.raw_text_content
                 if text:
-                    logger.debug(f"Sending add system message: {text}")
+                    logger.debug(
+                        "Sending add system message", extra={"lk.pii.system_message": text}
+                    )
                     if self._socket:
                         await self._socket.send_add_system_message(
                             AddSystemMessagePayload(system_message=text)
@@ -509,7 +527,7 @@ class RealtimeSession(llm.RealtimeSession):
             ):
                 text = item.raw_text_content
                 if text:
-                    logger.info(f"Received user text input: {text}")
+                    logger.info("Received user text input", extra={"lk.pii.text": text})
                     self._pending_user_text = text
                     buffered_user_text = True
 
@@ -631,10 +649,29 @@ class RealtimeSession(llm.RealtimeSession):
             )
             await self._socket.send_reset(ResetPayload(config=config_options))
 
+    def _serialize_phonic_tool(self, name: str) -> dict | str:
+        """A phonic_tools entry: an inline built-in object when it's a built-in with a config in
+        configs_for_tools (so respond_after_sec / speech_before_tool_call reach Phonic), else the bare
+        name (which uses the tool's default config)."""
+        if name not in _BUILT_IN_TOOL_NAMES:
+            return name
+        cfg = self._configs_for_tools.get(name, {})
+        if name == "choose_not_to_respond":
+            if "respond_after_sec" not in cfg:
+                return name
+            tool_config: dict = {"respond_after_sec": cfg["respond_after_sec"]}
+        else:  # keypad_input, natural_conversation_ending
+            if "speech_before_tool_call" not in cfg:
+                return name
+            tool_config = {"speech_before_tool_call": cfg["speech_before_tool_call"]}
+        return {"type": "built_in", "name": name, "tool_config": tool_config}
+
     def _build_tools_payload(self) -> list[dict | str]:
         tools_payload: list[dict | str] = []
         if is_given(self._opts.phonic_tools) and self._opts.phonic_tools:
-            tools_payload.extend(self._opts.phonic_tools)
+            tools_payload.extend(
+                self._serialize_phonic_tool(name) for name in self._opts.phonic_tools
+            )
         tools_payload.extend(self._tool_definitions)
         return tools_payload
 

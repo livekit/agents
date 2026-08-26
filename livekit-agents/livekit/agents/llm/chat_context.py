@@ -26,6 +26,7 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
+from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -376,6 +377,11 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    Only realtime models read it, since they answer a result on their own.
+    """
 
 
 class AgentHandoff(BaseModel):
@@ -758,14 +764,14 @@ class ChatContext:
         return 0
 
     def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise append it."""
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
         idx = self.index_by_id(item.id)
         if idx is not None:
             if not allow_type_mismatch and item.type != self._items[idx].type:
                 raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
             self._items[idx] = item
         else:
-            self._items.append(item)
+            self.insert(item)
 
     async def _summarize(
         self,
@@ -900,9 +906,7 @@ class ChatContext:
         return cls(items)
 
     def to_proto(self) -> agent_pb.ChatContext:
-        from ..voice.remote_session import _chat_item_to_proto
-
-        return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
+        return agent_pb.ChatContext(items=[encode_chat_item(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:

@@ -62,6 +62,7 @@ class _UltravoxOptions:
 
     model_id: str
     voice: str
+    external_voice: NotGivenOr[dict[str, Any]]
     api_key: str
     base_url: str
     system_prompt: str
@@ -117,6 +118,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: UltravoxModel | str = DEFAULT_MODEL,
         voice: UltravoxVoice | str = DEFAULT_VOICE,
+        external_voice: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         system_prompt: str = "You are a helpful assistant.",
@@ -139,6 +141,8 @@ class RealtimeModel(llm.RealtimeModel):
             The Ultravox model to use.
         voice : str | UltravoxVoice
             The voice to use for TTS.
+        external_voice : dict[str, Any], optional
+            The Ultravox configuration for an external TTS provider. Mutually exclusive with ``voice``.
         api_key : str, optional
             The Ultravox API key. If None, will try to use environment variables.
         base_url : str, optional
@@ -187,9 +191,22 @@ class RealtimeModel(llm.RealtimeModel):
                 "Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
             )
 
+        if is_given(external_voice):
+            if not external_voice:
+                raise ValueError(
+                    "external_voice must be a non-empty dict. "
+                    "Omit it to use the built-in `voice` instead."
+                )
+            if voice != DEFAULT_VOICE:
+                logger.warning(
+                    "both `voice` and `external_voice` were provided; "
+                    "`external_voice` takes precedence and `voice` will be ignored."
+                )
+
         self._opts = _UltravoxOptions(
             model_id=model,
             voice=voice,
+            external_voice=external_voice,
             api_key=ultravox_api_key,
             base_url=base_url or ULTRAVOX_BASE_URL,
             system_prompt=system_prompt,
@@ -401,7 +418,8 @@ class RealtimeSession(
 
                 tool_result = ClientToolResultEvent(
                     invocationId=item.call_id,
-                    agent_reaction="speaks",
+                    # a result that wants no reply is recorded without speech
+                    agent_reaction="speaks" if item.reply_required else "listens",
                 )
 
                 if getattr(item, "is_error", False):
@@ -623,7 +641,6 @@ class RealtimeSession(
                 payload: dict[str, Any] = {
                     "systemPrompt": self._realtime_model._opts.system_prompt,
                     "model": self._realtime_model._opts.model_id,
-                    "voice": self._realtime_model._opts.voice,
                     "medium": {
                         "serverWebSocket": {
                             "inputSampleRate": self._realtime_model._opts.input_sample_rate,
@@ -633,6 +650,11 @@ class RealtimeSession(
                     },
                     "selectedTools": parse_tools(list(self._tools.function_tools.values())),
                 }
+
+                if is_given(self._realtime_model._opts.external_voice):
+                    payload["externalVoice"] = self._realtime_model._opts.external_voice
+                else:
+                    payload["voice"] = self._realtime_model._opts.voice
 
                 # Add optional parameters only if specified
                 if is_given(self._realtime_model._opts.temperature):
@@ -752,13 +774,13 @@ class RealtimeSession(
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.debug(f">>> {msg_dict}")
+                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
                 else:
                     msg_dict = msg.model_dump(by_alias=True, exclude_none=True, mode="json")
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.debug(f">>> {msg_dict}")
+                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
             except Exception as e:
                 logger.error(f"Error sending message: {e}", exc_info=True)
                 break
@@ -781,7 +803,7 @@ class RealtimeSession(
                     data = json.loads(msg.data)
                     self.emit("ultravox_server_event_received", data)
                     if lk_ultravox_debug:
-                        logger.debug(f"<<< {data}")
+                        logger.debug("<<<", extra={"lk.pii.event": data})
                     event = parse_ultravox_event(data)
                     self._handle_ultravox_event(event)
 
@@ -884,7 +906,7 @@ class RealtimeSession(
         elif isinstance(event, DebugEvent):
             self._handle_debug_event(event)
         else:
-            logger.warning(f"Unhandled Ultravox event: {event}")
+            logger.warning("Unhandled Ultravox event", extra={"lk.pii.event": event})
 
     def _handle_transcript_event(self, event: TranscriptEvent) -> None:
         """Handle transcript events from Ultravox."""
@@ -1128,7 +1150,7 @@ class RealtimeSession(
     def _handle_debug_event(self, event: DebugEvent) -> None:
         """Handle debug events from Ultravox."""
         if lk_ultravox_debug:
-            logger.debug(f"[ultravox] Debug: {event.message}")
+            logger.debug("[ultravox] Debug", extra={"lk.pii.message": event.message})
 
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
@@ -1189,7 +1211,9 @@ class RealtimeSession(
             preview = (
                 (result[:200] + "...") if isinstance(result, str) and len(result) > 200 else result
             )
-            logger.debug(f"[ultravox] send_tool_result: call_id={call_id} preview={preview!r}")
+            logger.debug(
+                f"[ultravox] send_tool_result: call_id={call_id}", extra={"lk.pii.result": preview}
+            )
 
         event = ClientToolResultEvent(
             invocationId=call_id,
