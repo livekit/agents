@@ -278,6 +278,11 @@ class AudioOutput(
         return self.__playback_segments_count - self.__playback_finished_count
 
     @property
+    def captured_playout_segments(self) -> int:
+        """Number of playback segments accepted by ``capture_frame``."""
+        return self.__playback_segments_count
+
+    @property
     def sample_rate(self) -> int | None:
         """The sample rate required by the audio sink, if None, any sample rate is accepted"""
         return self._sample_rate

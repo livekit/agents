@@ -488,11 +488,17 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    captured_segments_before: int
+    """Output segment count before this segment starts forwarding.
+
+    With serialized forwarding, an increase proves this segment reached
+    ``AudioOutput.capture_frame``.
+    """
+
     started_forwarding_at: float | None = None
 
-    def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
-        if not self.first_frame_fut.done():
-            self.first_frame_fut.set_result(ev.created_at)
+    has_captured_own_frame: bool = False
+    """Set before ``capture_frame`` so synchronous events are attributed to this segment."""
 
 
 def perform_audio_forwarding(
@@ -501,11 +507,20 @@ def perform_audio_forwarding(
     tts_output: AsyncIterable[rtc.AudioFrame],
     reconcile_playout_pause: Callable[[], None],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
-    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
+    out = _AudioOutput(
+        audio=[],
+        first_frame_fut=asyncio.Future(),
+        captured_segments_before=audio_output.captured_playout_segments,
+    )
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if out.has_captured_own_frame and not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
     # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
-    audio_output.on("playback_started", out._resolve_first_frame_fut)
+    audio_output.on("playback_started", _on_playback_started)
     out.first_frame_fut.add_done_callback(
-        lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
+        lambda _: audio_output.off("playback_started", _on_playback_started)
     )
     task = asyncio.create_task(
         _audio_forwarding_task(
@@ -549,6 +564,8 @@ async def _audio_forwarding_task(
                     output_rate=audio_output.sample_rate,
                     num_channels=frame.num_channels,
                 )
+
+            out.has_captured_own_frame = True
 
             if resampler:
                 for f in resampler.push(frame):
@@ -648,10 +665,20 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
+                played_own_frame = (
+                    audio_out is not None
+                    and audio_output.captured_playout_segments > audio_out.captured_segments_before
+                )
                 if (
                     audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
+                    and played_own_frame
+                    and (
+                        (
+                            audio_out.first_frame_fut.done()
+                            and not audio_out.first_frame_fut.cancelled()
+                        )
+                        or playback_ev.playback_position > 0
+                    )
                 ):
                     out.played = "partial"
                     out.playback_position = playback_ev.playback_position
