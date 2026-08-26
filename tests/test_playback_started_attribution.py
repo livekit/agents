@@ -1,11 +1,3 @@
-"""Tests for playback_started attribution and interrupted position evidence.
-
-Mirrors agents-js#1966: the shared AudioOutput emits playback_started with no
-segment identity, so the per-segment listener only resolves after this segment
-has captured its own frame; interrupted commits also accept playback_position > 0
-when this segment bumped the output's segment counter.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -37,12 +29,7 @@ def _make_frame(duration: float = 0.1) -> rtc.AudioFrame:
 
 
 class _ForwardFirstWrapper(AudioOutput):
-    """Mimics _SyncedAudioOutput / recorder ordering.
-
-    Forwards to the leaf (which emits playback_started synchronously inside the
-    first capture) BEFORE counting its own segment, so the forwarded event fires
-    while this output's counter still reads the pre-capture snapshot.
-    """
+    """Count each segment after forwarding its first frame."""
 
     def __init__(self, next_in_chain: AudioOutput) -> None:
         super().__init__(
@@ -67,19 +54,13 @@ class _ForwardFirstWrapper(AudioOutput):
 
 
 class _NoStartNotifyOutput(FakeAudioOutput):
-    """A sink whose playback-started notification is delayed/lost.
-
-    Simulates a remote (avatar) output that delivers playback_started via RPC:
-    frames are accepted and counted, playback genuinely progresses (so the
-    playback-finished event reports a real position), but no playback_started
-    is emitted locally.
-    """
+    """Play audio without emitting ``playback_started``."""
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        await AudioOutput.capture_frame(self, frame)  # count the playout segment
+        await AudioOutput.capture_frame(self, frame)
         self._pushed_duration += frame.duration
         if self._started_at is None:
-            self._started_at = time.time()  # playing, but never notifies
+            self._started_at = time.time()
 
 
 async def _drive_forwarding(
@@ -114,9 +95,6 @@ async def test_own_playback_started_resolves_first_frame_fut() -> None:
 
 
 async def test_own_event_forwarded_before_wrapper_counts_still_resolves() -> None:
-    # Chained outputs (transcript sync, recorder) forward the leaf's synchronous
-    # playback_started before counting their own segment: the event must still be
-    # attributed once has_captured_own_frame is set.
     audio_output = _ForwardFirstWrapper(FakeAudioOutput())
     frames_ch: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
     task, out = await _drive_forwarding(audio_output, frames_ch)
@@ -133,10 +111,9 @@ async def test_stale_event_before_own_capture_is_ignored() -> None:
     audio_output = FakeAudioOutput()
     frames_ch: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
     task, out = await _drive_forwarding(audio_output, frames_ch)
-    await asyncio.sleep(0)  # let the forwarding task attach the listener
+    await asyncio.sleep(0)  # Allow the forwarding task to attach its listener.
 
-    # a stale event (e.g. an avatar RPC from a previous, interrupted segment)
-    # arrives before this segment captured anything
+    # Simulate a delayed RPC from an interrupted segment.
     audio_output.on_playback_started(created_at=time.time())
 
     assert not out.first_frame_fut.done()
@@ -147,10 +124,7 @@ async def test_stale_event_before_own_capture_is_ignored() -> None:
 
 
 async def test_interrupted_commit_uses_position_evidence_without_started_event() -> None:
-    # Avatar-style race: frames genuinely played, but the started notification
-    # never arrived before the interruption. The playback position reported by
-    # the finished event is proof of partial playback when this segment bumped
-    # the output's segment count.
+    # A remote avatar can report playback progress before its start RPC arrives.
     audio_output = _NoStartNotifyOutput()
     speech_handle = SpeechHandle.create()
 
@@ -159,7 +133,7 @@ async def test_interrupted_commit_uses_position_evidence_without_started_event()
     async def _audio_source() -> AsyncIterable[rtc.AudioFrame]:
         yield _make_frame()
         frame_captured.set()
-        await asyncio.Event().wait()  # keep the TTS stream open until interrupted
+        await asyncio.Event().wait()  # Keep the stream open until interruption.
 
     forward_task = asyncio.create_task(
         forward_generation(
@@ -174,7 +148,7 @@ async def test_interrupted_commit_uses_position_evidence_without_started_event()
     )
 
     await asyncio.wait_for(frame_captured.wait(), timeout=5)
-    await asyncio.sleep(0.05)  # accrue some playback position
+    await asyncio.sleep(0.05)  # Accrue playback progress.
     speech_handle.interrupt()
     out = await asyncio.wait_for(forward_task, timeout=5)
 
@@ -186,13 +160,11 @@ async def test_interrupted_commit_uses_position_evidence_without_started_event()
 
 
 async def test_interrupted_commit_stays_skipped_without_any_capture() -> None:
-    # Interrupted before any frame was counted: no started event, no segment bump
-    # — the segment must stay "skipped" (nothing reached the user).
     audio_output = FakeAudioOutput()
     speech_handle = SpeechHandle.create()
 
     async def _audio_source() -> AsyncIterable[rtc.AudioFrame]:
-        await asyncio.Event().wait()  # never yields
+        await asyncio.Event().wait()
         yield _make_frame()  # pragma: no cover
 
     forward_task = asyncio.create_task(

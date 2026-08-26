@@ -279,13 +279,7 @@ class AudioOutput(
 
     @property
     def captured_playout_segments(self) -> int:
-        """Count of playback segments captured so far.
-
-        Increments when the first frame of a new segment is accepted by
-        ``capture_frame`` (segments are delimited by ``flush``/``clear_buffer``).
-        Lets callers detect — free of races with concurrent finishes — whether a
-        frame they forwarded was actually accepted into a counted playout segment.
-        """
+        """Number of playback segments accepted by ``capture_frame``."""
         return self.__playback_segments_count
 
     @property

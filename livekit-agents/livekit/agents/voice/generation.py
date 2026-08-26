@@ -489,24 +489,16 @@ class _AudioOutput:
     """Future that will be set with the timestamp of the first frame's capture"""
 
     captured_segments_before: int
-    """`AudioOutput.captured_playout_segments` snapshot taken when forwarding was set up.
+    """Output segment count before this segment starts forwarding.
 
-    The interrupted-commit gate compares the current count against this baseline: a
-    bump proves a frame of THIS segment made it through `AudioOutput.capture_frame`
-    — the same condition under which `wait_for_playout()` waits for this segment's
-    playback event instead of returning a stale one — so the reported playback
-    position can be trusted as evidence of partial playback.
+    With serialized forwarding, an increase proves this segment reached
+    ``AudioOutput.capture_frame``.
     """
 
     started_forwarding_at: float | None = None
 
     has_captured_own_frame: bool = False
-    """Whether this segment has pushed at least one of its own frames to `capture_frame`.
-
-    Set *before* the first `capture_frame` await: sinks emit `playback_started`
-    synchronously inside the first counted capture, so a flag set after the await
-    would miss the segment's own event.
-    """
+    """Set before ``capture_frame`` so synchronous events are attributed to this segment."""
 
 
 def perform_audio_forwarding(
@@ -522,9 +514,6 @@ def perform_audio_forwarding(
     )
 
     def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
-        # The audio output is shared across overlapping segments. Only honor the
-        # event once this segment has captured its own first frame, so a stray event
-        # from another segment can't resolve our first_frame_fut prematurely.
         if out.has_captured_own_frame and not out.first_frame_fut.done():
             out.first_frame_fut.set_result(ev.created_at)
 
@@ -676,13 +665,6 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
-                # A reported playback position is proof of partial playback even when
-                # the playback-started notification hasn't arrived yet (remote avatar
-                # outputs deliver it via RPC, which can race with the interruption).
-                # It only counts as evidence when THIS segment bumped the output's
-                # segment count — the same condition under which wait_for_playout waits
-                # for this segment's playback event instead of returning a stale one
-                # from a previous segment (see _AudioOutput.captured_segments_before).
                 played_own_frame = (
                     audio_out is not None
                     and audio_output.captured_playout_segments > audio_out.captured_segments_before

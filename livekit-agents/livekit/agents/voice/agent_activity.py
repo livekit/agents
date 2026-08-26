@@ -3038,11 +3038,6 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted and audio_output is not None:
             playback_ev = await audio_output.wait_for_playout()
 
-            # A reported playback position is proof of partial playback even when
-            # the playback-started notification hasn't arrived yet (remote avatar
-            # outputs deliver it via RPC, which can race with the interruption).
-            # It only counts as evidence when THIS segment bumped the output's
-            # segment count (see _AudioOutput.captured_segments_before).
             played_own_frame = (
                 audio_out is not None
                 and audio_output.captured_playout_segments > audio_out.captured_segments_before
