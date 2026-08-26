@@ -26,7 +26,6 @@ import asyncio
 import contextlib
 import os
 import weakref
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from palabra_ai import (
@@ -83,7 +82,7 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         language: str | None = None,
-        translate_languages: str | Sequence[str] | None = None,
+        translate_languages: str | list[str] | None = None,
         filler_filter: bool | None = None,
         sample_rate: int = DEFAULT_STT_SAMPLE_RATE,
         region: str | None = None,
@@ -153,7 +152,7 @@ class STT(stt.STT):
         self,
         *,
         language: NotGivenOr[str | None] = NOT_GIVEN,
-        translate_languages: NotGivenOr[str | Sequence[str] | None] = NOT_GIVEN,
+        translate_languages: NotGivenOr[str | list[str] | None] = NOT_GIVEN,
         filler_filter: NotGivenOr[bool | None] = NOT_GIVEN,
     ) -> None:
         """Update recognition options. Changes apply to new streams only."""
