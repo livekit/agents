@@ -709,6 +709,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_events: list[AgentEvent] = []
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
+        self._redaction_enabled = False
+        self._warned_realtime_audio_redaction = False
 
         # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
@@ -922,6 +924,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             self._opts.recording_options = _resolve_recording_options(False)
 
                 job_ctx.init_recording(self._opts.recording_options)
+
+            self._redaction_enabled = bool(
+                self._opts.recording_options["redaction"]
+                or (job_ctx and job_ctx.job.enable_redaction)
+            )
 
             # hosting needs the primary designation as before, and the caller's consent
             hosting = is_primary and (session_host if is_given(session_host) else True)
