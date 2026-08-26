@@ -122,6 +122,9 @@ class SpeechEvent:
     speech_start_time: float | None = None
     """server-reported wall-clock time of speech onset, when the provider sends
     a separate speech-start signal carrying onset timing."""
+    speech_end_time: float | None = None
+    """server-reported wall-clock time of speech end, when the provider sends
+    a separate speech-end signal carrying end timing."""
 
 
 @dataclass

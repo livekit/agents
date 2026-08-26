@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -429,6 +430,7 @@ class SpeechStreamv2(stt.SpeechStream):
             nonlocal closing_ws
 
             # forward audio to deepgram in chunks of 50ms
+            anchored = False
             samples_50ms = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -447,6 +449,11 @@ class SpeechStreamv2(stt.SpeechStream):
                         has_ended = True
 
                     for frame in frames:
+                        if not anchored:
+                            # Flux reports speech timing relative to the start of the first
+                            # audio frame, which has already elapsed when it reaches this loop.
+                            self.start_time = time.time() - frame.duration
+                            anchored = True
                         self._audio_duration_collector.push(frame.duration)
                         await ws.send_bytes(frame.data.tobytes())
 
@@ -649,7 +656,21 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
 
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                speech_end_offset: float | None = None
+                for word in data.get("words") or []:
+                    word_end = word.get("end")
+                    if isinstance(word_end, (int, float)):
+                        word_end = float(word_end)
+                        if speech_end_offset is None or word_end > speech_end_offset:
+                            speech_end_offset = word_end
+
+                speech_end_time = (
+                    self.start_time + speech_end_offset if speech_end_offset is not None else None
+                )
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    speech_end_time=speech_end_time,
+                )
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "ConfigureSuccess":

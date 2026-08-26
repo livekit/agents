@@ -44,6 +44,46 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
     return stream
 
 
+def test_flux_end_of_turn_emits_server_speech_end_time():
+    from livekit.agents import stt
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    events: list[stt.SpeechEvent] = []
+    stream = _make_flux_stream()
+    stream._speaking = True
+    stream._request_id = "request-id"
+    stream.start_time = 100.0
+    stream.start_time_offset = 0.0
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
+
+    SpeechStreamv2._process_stream_event(
+        stream,
+        {
+            "type": "TurnInfo",
+            "event": "EndOfTurn",
+            "request_id": "request-id",
+            "transcript": "hello",
+            "audio_window_start": 1.0,
+            "audio_window_end": 3.0,
+            "words": [
+                {
+                    "word": "hello",
+                    "start": 1.0,
+                    "end": 2.5,
+                    "confidence": 0.9,
+                }
+            ],
+        },
+    )
+
+    assert [event.type for event in events] == [
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert events[-1].speech_end_time == pytest.approx(102.5)
+
+
 async def test_update_options_uses_stored_language_for_model_validation():
     from livekit.plugins.deepgram import STT
 
@@ -208,6 +248,31 @@ def _live_stream(ws: _LiveWS):
     return stream
 
 
+def _live_flux_stream(ws: _LiveWS):
+    """A real Flux SpeechStream running its send loop against a fake socket."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2, STTv2
+
+    instance = STTv2(api_key="test-key", sample_rate=16000)
+    stream = SpeechStreamv2(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v2/listen",
+    )
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    stream._connect_ws = _fake_connect
+    return stream
+
+
 def _frame(ms: int, sample_rate: int = 16000):
     from livekit import rtc
 
@@ -227,6 +292,54 @@ async def _wait_until(predicate, *, timeout: float = 5.0) -> None:
     while not predicate():
         assert time.monotonic() < deadline, "timed out waiting for the stream to send"
         await asyncio.sleep(0.01)
+
+
+async def test_flux_anchors_server_timestamps_to_first_audio_frame():
+    import time
+
+    ws = _LiveWS()
+    stream = _live_flux_stream(ws)
+    try:
+        await asyncio.sleep(0.01)
+        before_send = time.time()
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: ws.sent() == ["audio"])
+        after_send = time.time()
+
+        assert before_send - 0.05 <= stream.start_time <= after_send - 0.05
+    finally:
+        await stream.aclose()
+
+
+async def test_flux_reanchors_server_timestamps_after_reconnect():
+    import time
+
+    first_ws = _LiveWS()
+    second_ws = _LiveWS()
+    connections = iter([first_ws, second_ws])
+    stream = _live_flux_stream(first_ws)
+
+    async def _next_connection():
+        return next(connections)
+
+    stream._connect_ws = _next_connection
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: first_ws.sent() == ["audio"])
+        first_anchor = stream.start_time
+
+        await asyncio.sleep(0.01)
+        stream._reconnect_event.set()
+        await _wait_until(lambda: stream._ws is second_ws)
+
+        before_second_send = time.time()
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: second_ws.sent() == ["audio"])
+
+        assert stream.start_time > first_anchor
+        assert before_second_send - 0.05 <= stream.start_time <= time.time() - 0.05
+    finally:
+        await stream.aclose()
 
 
 async def test_flush_finalizes_the_turn_when_no_audio_is_left_to_send():
