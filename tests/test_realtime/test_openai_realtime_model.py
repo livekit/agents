@@ -425,6 +425,19 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     assert [e.recoverable for e in errors] == [True], "swallowed by a retired waiter"
 
 
+async def test_a_duplicate_item_id_settles_its_waiter_as_a_no_op() -> None:
+    # the item is already on the conversation, which is all the create asked for; failing the
+    # waiter would report a rejection for an update that got what it wanted
+    session = _chat_ctx_update_session()
+    waiter = session._item_create_future["item_1"]
+
+    RealtimeSession._handle_error(
+        session, _rejection("chat_ctx_create_abc", code="item_create_duplicate_item_id")
+    )
+
+    assert waiter.done() and waiter.exception() is None
+
+
 async def test_a_rejection_leaves_its_sibling_event_alone() -> None:
     # an updated item is deleted and created under one id, and the create can still land
     session = _chat_ctx_update_session()
