@@ -81,25 +81,20 @@ def _texts(events: list[stt.SpeechEvent], event_type: stt.SpeechEventType) -> li
 
 
 @pytest.mark.asyncio
-async def test_transcribe_live_turn_commits_on_generation_complete() -> None:
-    """The gemini-3.5-transcribe-live shape, captured from a live session.
+async def test_finalized_transcript_is_emitted_on_arrival() -> None:
+    """The message shapes captured from a live gemini-3.5-transcribe-live session.
 
-    `interim_input_transcription` resends the whole turn each update, the authoritative
-    `input_transcription` lands once at the end, and neither `finished` nor
-    `turn_complete` is ever populated -- `generation_complete` is the only signal that
-    the turn is done. Gating the final on `finished`/`turn_complete` emitted no final
-    at all, so no turn was ever committed.
+    Both streams carry a complete hypothesis rather than deltas: the interims are
+    resent in full while the user speaks, and `input_transcription` is the finalized,
+    authoritative transcript for the turn (re-transcribed, so its wording can differ
+    from the interims). It is the final -- no accumulation, and no waiting on a
+    completion flag.
     """
     events = await _drain(
         [
             _Message(_ServerContent(interim_input_transcription=_Transcription("Greetings."))),
             _Message(
                 _ServerContent(interim_input_transcription=_Transcription("Greetings, welcome"))
-            ),
-            _Message(
-                _ServerContent(
-                    interim_input_transcription=_Transcription("Greetings, welcome to the age")
-                )
             ),
             _Message(
                 _ServerContent(
@@ -110,16 +105,51 @@ async def test_transcribe_live_turn_commits_on_generation_complete() -> None:
         ]
     )
 
-    # the authoritative transcript wins, not the accumulated interim text
     assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == [
         "Greetings, welcome to the age of AI."
     ]
-    # `input_transcription` must not add an interim of its own: the interim stream
-    # already covers live text, so it would just duplicate the final
+    # the finalized transcript must not also surface as an interim
     assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == [
         "Greetings.",
         "Greetings, welcome",
-        "Greetings, welcome to the age",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_each_turn_finalizes_separately() -> None:
+    """A session yields one `input_transcription` per speech turn.
+
+    Captured live by splitting the sample audio with 3s of silence: two turns, two
+    complete transcripts. Accumulating them would concatenate separate utterances.
+    """
+    events = await _drain(
+        [
+            _Message(_ServerContent(input_transcription=_Transcription("First utterance."))),
+            _Message(_ServerContent(generation_complete=True)),
+            _Message(_ServerContent(input_transcription=_Transcription("Second utterance."))),
+            _Message(_ServerContent(generation_complete=True)),
+        ]
+    )
+
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == [
+        "First utterance.",
+        "Second utterance.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_back_to_back_finals_without_completion_between_them() -> None:
+    """Two finalized transcripts must stay separate even with no completion signal."""
+    events = await _drain(
+        [
+            _Message(_ServerContent(input_transcription=_Transcription("First utterance."))),
+            _Message(_ServerContent(input_transcription=_Transcription("Second utterance."))),
+        ]
+    )
+
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == [
+        "First utterance.",
+        "Second utterance.",
     ]
 
 
@@ -137,36 +167,8 @@ async def test_cumulative_interims_are_not_concatenated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delta_input_transcription_accumulates() -> None:
-    """The older live models stream `input_transcription` in deltas; both shapes must work."""
-    events = await _drain(
-        [
-            _Message(_ServerContent(input_transcription=_Transcription(" hello"))),
-            _Message(_ServerContent(input_transcription=_Transcription(" world"))),
-            _Message(_ServerContent(turn_complete=True)),
-        ]
-    )
-
-    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["hello world"]
-    assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == ["hello", "hello world"]
-
-
-@pytest.mark.asyncio
-async def test_finished_flag_finalizes_when_a_model_sets_it() -> None:
-    events = await _drain(
-        [
-            _Message(
-                _ServerContent(input_transcription=_Transcription(" hello", finished=True)),
-            ),
-        ]
-    )
-
-    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["hello"]
-
-
-@pytest.mark.asyncio
 async def test_interim_only_turn_still_commits() -> None:
-    """If a model never sends `input_transcription`, the turn must not be dropped."""
+    """If no finalized transcript arrives, the turn must not be dropped."""
     events = await _drain(
         [
             _Message(_ServerContent(interim_input_transcription=_Transcription("hello there"))),
@@ -178,17 +180,16 @@ async def test_interim_only_turn_still_commits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_consecutive_turns_do_not_leak_into_each_other() -> None:
+async def test_completion_after_a_final_does_not_duplicate_it() -> None:
     events = await _drain(
         [
-            _Message(_ServerContent(input_transcription=_Transcription(" first"))),
-            _Message(_ServerContent(generation_complete=True)),
-            _Message(_ServerContent(input_transcription=_Transcription(" second"))),
+            _Message(_ServerContent(interim_input_transcription=_Transcription("hello"))),
+            _Message(_ServerContent(input_transcription=_Transcription("Hello."))),
             _Message(_ServerContent(generation_complete=True)),
         ]
     )
 
-    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["first", "second"]
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["Hello."]
 
 
 @pytest.mark.asyncio
@@ -204,11 +205,8 @@ async def test_detected_language_is_reported() -> None:
     events = await _drain(
         [
             _Message(
-                _ServerContent(
-                    input_transcription=_Transcription(" bonjour", language_code="fr-FR")
-                )
+                _ServerContent(input_transcription=_Transcription("bonjour", language_code="fr-FR"))
             ),
-            _Message(_ServerContent(generation_complete=True)),
         ]
     )
 
@@ -219,12 +217,7 @@ async def test_detected_language_is_reported() -> None:
 
 @pytest.mark.asyncio
 async def test_configured_language_is_used_when_none_is_detected() -> None:
-    events = await _drain(
-        [
-            _Message(_ServerContent(input_transcription=_Transcription(" hi"))),
-            _Message(_ServerContent(generation_complete=True)),
-        ]
-    )
+    events = await _drain([_Message(_ServerContent(input_transcription=_Transcription("hi")))])
 
     finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
     assert finals[0].alternatives[0].language == "en-US"
