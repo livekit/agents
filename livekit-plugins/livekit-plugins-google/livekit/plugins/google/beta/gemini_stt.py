@@ -43,6 +43,10 @@ from ..log import logger
 DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_SAMPLE_RATE = 16000
 
+# Gemini only marks a transcript complete via `finished`/`turn_complete`, which can land
+# after the input channel closes. Bounded so teardown can't hang on a silent session.
+FINALIZE_TIMEOUT = 2.0
+
 
 @dataclass
 class _STTOptions:
@@ -256,18 +260,23 @@ class RecognizeStream(stt.RecognizeStream):
             async with client.aio.live.connect(model=self._opts.model, config=config) as session:
                 send_task = asyncio.create_task(self._send_loop(session))
                 receive_task = asyncio.create_task(self._receive_loop(session))
+                tasks = [send_task, receive_task]
 
-                done, pending = await asyncio.wait(
-                    [send_task, receive_task], return_when=asyncio.FIRST_COMPLETED
-                )
+                try:
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-                for task in pending:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                    # A closed input channel doesn't mean Gemini is done: the tail of the
+                    # transcript is only emitted once `finished`/`turn_complete` arrives.
+                    # Give the receive loop a bounded grace period instead of cancelling
+                    # it the moment _send_loop returns, which would drop that final.
+                    if send_task.done() and not receive_task.done():
+                        await asyncio.wait([receive_task], timeout=FINALIZE_TIMEOUT)
+                finally:
+                    await utils.aio.cancel_and_wait(*tasks)
 
-                for task in done:
-                    task.result()
+                for task in tasks:
+                    if not task.cancelled():
+                        task.result()
 
         except (ClientError, ServerError, APIError) as e:
             raise APIStatusError(
@@ -296,12 +305,33 @@ class RecognizeStream(stt.RecognizeStream):
             elif isinstance(data, self._FlushSentinel):
                 pass
 
+        # Tell Gemini the audio stream ended so it finalizes the pending transcript
+        # rather than waiting for more frames that will never arrive.
+        with contextlib.suppress(Exception):
+            await session.send_realtime_input(audio_stream_end=True)
+
+    def _speech_event(
+        self,
+        event_type: stt.SpeechEventType,
+        text: str,
+        language: LanguageCode,
+    ) -> stt.SpeechEvent:
+        return stt.SpeechEvent(
+            type=event_type,
+            alternatives=[stt.SpeechData(language=language, text=text, confidence=1.0)],
+        )
+
     async def _receive_loop(self, session: Any) -> None:
-        lang = (
+        default_lang = (
             self._opts.language
             if isinstance(self._opts.language, LanguageCode)
             else LanguageCode(str(self._opts.language or "en-US"))
         )
+        # `input_transcription` streams deltas, not whole utterances, so accumulate them
+        # and only emit a FINAL_TRANSCRIPT once Gemini marks the turn done. Emitting each
+        # delta as its own final splits one utterance into many user turns downstream.
+        committed = ""
+        lang = default_lang
 
         try:
             turn = session.receive()
@@ -310,43 +340,56 @@ class RecognizeStream(stt.RecognizeStream):
                 if not sc:
                     continue
 
-                if getattr(sc, "input_transcription", None):
-                    text = sc.input_transcription.text
-                    if text:
+                if transcription := getattr(sc, "input_transcription", None):
+                    if code := getattr(transcription, "language_code", None):
+                        # the model detects the language when no hints are configured
+                        lang = LanguageCode(code)
+
+                    if text := transcription.text:
+                        if not committed:
+                            # Gemini opens a transcript with a leading space
+                            text = text.lstrip()
+                        committed += text
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                alternatives=[
-                                    stt.SpeechData(
-                                        language=lang,
-                                        text=text,
-                                        confidence=1.0,
-                                    )
-                                ],
+                            self._speech_event(
+                                stt.SpeechEventType.INTERIM_TRANSCRIPT, committed, lang
                             )
                         )
 
-                if getattr(sc, "interim_input_transcription", None):
-                    text = sc.interim_input_transcription.text
-                    if text:
+                    if getattr(transcription, "finished", False) and committed:
                         self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                alternatives=[
-                                    stt.SpeechData(
-                                        language=lang,
-                                        text=text,
-                                        confidence=1.0,
-                                    )
-                                ],
+                            self._speech_event(
+                                stt.SpeechEventType.FINAL_TRANSCRIPT, committed, lang
                             )
                         )
+                        committed = ""
+                        lang = default_lang
+
+                if interim := getattr(sc, "interim_input_transcription", None):
+                    # a low-latency preview of the tail that `input_transcription` has not
+                    # committed yet, so it extends the accumulated text rather than replacing it
+                    if text := interim.text:
+                        self._event_ch.send_nowait(
+                            self._speech_event(
+                                stt.SpeechEventType.INTERIM_TRANSCRIPT, committed + text, lang
+                            )
+                        )
+
+                # `finished` is not guaranteed on every turn; turn_complete closes it out
+                if getattr(sc, "turn_complete", False) and committed:
+                    self._event_ch.send_nowait(
+                        self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, committed, lang)
+                    )
+                    committed = ""
+                    lang = default_lang
         except APIError as e:
+            # Provider errors can quote the audio payload or transcript, so the text stays
+            # out of the message body (see REVIEW.md).
             if getattr(e, "code", None) == 1000 or "1000" in str(e):
-                logger.debug(f"Gemini ASR session closed normally: {e}")
+                logger.debug("Gemini ASR session closed normally", extra={"lk.pii.error": str(e)})
             else:
-                logger.warning(f"Gemini ASR receive error: {e}")
+                logger.warning("Gemini ASR receive error", extra={"lk.pii.error": str(e)})
                 raise
         except Exception as e:
-            logger.debug(f"Gemini ASR receive loop ended: {e}")
+            logger.debug("Gemini ASR receive loop ended", extra={"lk.pii.error": str(e)})
             raise
