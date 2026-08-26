@@ -278,16 +278,27 @@ class RecognizeStream(stt.RecognizeStream):
                     if not task.cancelled():
                         task.result()
 
+        # Provider errors can quote the audio payload or transcript, so the text is logged
+        # as a redactable attribute and kept out of the raised message, whose body the
+        # framework interpolates into its retry log (see REVIEW.md).
         except (ClientError, ServerError, APIError) as e:
+            logger.warning(
+                "Gemini STT request failed",
+                extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
+            )
             raise APIStatusError(
-                message=str(e),
+                message=f"Gemini STT request failed ({type(e).__name__})",
                 status_code=getattr(e, "code", -1),
                 body=None,
-            ) from e
+            ) from None
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            raise APIConnectionError(f"Gemini STT connection failed: {e}") from e
+            logger.warning(
+                "Gemini STT connection failed",
+                extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
+            )
+            raise APIConnectionError(f"Gemini STT connection failed ({type(e).__name__})") from None
 
     async def _send_loop(self, session: Any) -> None:
         sample_rate = self._opts.sample_rate
