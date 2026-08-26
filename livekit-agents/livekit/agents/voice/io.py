@@ -377,7 +377,10 @@ class _AudioSinkProxy(AudioOutput):
             old.off("playback_finished", self._forward_next_playback_finished)
             old.off("playback_started", self._forward_next_playback_started)
             if self._pending_playback_count > 0:
-                # stop audio still playing on the old sink
+                # a sink ends a segment when it is flushed, and nothing flushes this one
+                # once it is detached, so a clear alone leaves it open and holding audio
+                if self._capturing:
+                    old.flush()
                 old.clear_buffer()
             # progress only observes, so the clear is still the sink's last word
             old.off("playback_progressed", self._forward_next_playback_progressed)

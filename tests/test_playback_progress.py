@@ -246,6 +246,28 @@ async def test_an_interruption_ends_the_run_at_the_playhead() -> None:
     assert h.progress[0].duration == pytest.approx(pushed - 0.15)
 
 
+async def test_the_playout_wait_reports_what_plays_after_a_clear() -> None:
+    """The clear reports the playhead, and the queue plays on until the wait drops it."""
+    async with _Harness() as h:
+        await h.push(0.5)
+        pushed = h.sink._source_pushed_duration
+        h.source.queued_duration = 0.2
+
+        h.sink.flush()
+        h.sink.clear_buffer()
+        h.now += 0.05
+        h.source.queued_duration = 0.15  # the device played on while the wait was scheduled
+
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+    played = round(pushed - 0.2, 3)
+    assert [(round(ev.offset, 3), round(ev.duration, 3)) for ev in h.progress] == [
+        (0.0, played),
+        (played, 0.05),
+    ]
+
+
 async def test_offsets_restart_with_each_segment() -> None:
     async with _Harness() as h:
         for _ in range(2):

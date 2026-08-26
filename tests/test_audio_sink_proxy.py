@@ -361,10 +361,42 @@ class _ClearCountingSink(FakeAudioOutput):
     def __init__(self) -> None:
         super().__init__()
         self.clear_calls = 0
+        self.flush_calls = 0
+
+    def flush(self) -> None:
+        self.flush_calls += 1
+        super().flush()
 
     def clear_buffer(self) -> None:
         self.clear_calls += 1
         super().clear_buffer()
+
+
+async def test_a_mid_capture_swap_interrupts_the_old_sink() -> None:
+    """It sees a flush and a clear, the shape every other interruption gives it."""
+    leaf_a, leaf_b = _ClearCountingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    proxy.set_next_in_chain(leaf_b)
+
+    assert (leaf_a.flush_calls, leaf_a.clear_calls) == (1, 1)
+
+
+async def test_a_swap_after_a_flush_does_not_flush_again() -> None:
+    """A second flush cancels the playout wait that is already draining the sink."""
+    leaf_a, leaf_b = _ClearCountingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    wrapper.flush()
+    proxy.set_next_in_chain(leaf_b)
+
+    assert (leaf_a.flush_calls, leaf_a.clear_calls) == (1, 1)
 
 
 @pytest.mark.asyncio
