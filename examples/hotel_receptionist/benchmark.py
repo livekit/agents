@@ -64,6 +64,7 @@ DENY_COLUMNS = frozenset(
         "late_arrival_note",
         "message",
         "situation",
+        "delivery_instructions",
     }
 )
 
