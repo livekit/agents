@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import logging
 from types import SimpleNamespace
 
 import aiohttp
@@ -339,3 +340,384 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     assert calls.index("unregister_stream") < calls.index("end_segment")
     assert "close_context" in calls
+
+
+# -- eleven_v3 / eleven_v3_conversational (text-to-dialogue) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("eleven_v3", True),
+        ("eleven_v3_conversational", True),
+        ("eleven_turbo_v2_5", False),
+        ("eleven_flash_v2_5", False),
+    ],
+)
+def test_is_dialogue_model(model: str, expected: bool) -> None:
+    assert elevenlabs_tts.is_dialogue_model(model) is expected
+
+
+def test_dialogue_synthesize_url_targets_text_to_dialogue_endpoint() -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v3_conversational")
+    url = elevenlabs_tts._dialogue_synthesize_url(tts._opts)  # pyright: ignore[reportPrivateUsage]
+
+    assert url.startswith(f"{elevenlabs_tts.API_BASE_URL_V1}/text-to-dialogue/stream?")
+    assert "voice_id" not in url
+
+
+def test_dialogue_multi_stream_url_omits_regular_tts_only_params() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        enable_ssml_parsing=True,
+        chunk_length_schedule=[80, 120],
+    )
+    url = elevenlabs_tts._dialogue_multi_stream_url(  # pyright: ignore[reportPrivateUsage]
+        tts._opts
+    )
+
+    assert url.startswith("wss://")
+    assert "/text-to-dialogue/multi-stream-input?" in url
+    assert "voice-1" not in url
+    assert "model_id=eleven_v3_conversational" in url
+    assert "enable_ssml_parsing" not in url
+    assert "inactivity_timeout" not in url
+    assert "auto_mode" not in url
+
+
+def test_build_dialogue_synthesize_body_single_turn() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        pronunciation_dictionary_locators=[
+            elevenlabs_tts.PronunciationDictionaryLocator(
+                pronunciation_dictionary_id="dict-1",
+                version_id="v1",
+            )
+        ],
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there", voice_settings=None
+    )
+
+    assert body["inputs"] == [{"text": "hello there", "voice_id": "voice-1"}]
+    assert body["model_id"] == "eleven_v3_conversational"
+    assert "settings" not in body
+    assert body["pronunciation_dictionary_locators"] == [
+        {"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}
+    ]
+
+
+def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there", voice_settings={"stability": 0.5, "similarity_boost": 0.75}
+    )
+
+    assert body["settings"] == {"stability": 0.5}
+
+
+def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert packet == {"context_id": "ctx-1", "voices": ["voice-1"]}
+
+
+def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert packet["voice_settings"] == {"stability": 0.5}
+
+
+def test_dialogue_model_warns_on_unsupported_voice_settings(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        elevenlabs_tts.TTS(
+            api_key="test-key",
+            model="eleven_v3_conversational",
+            voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+        )
+
+    assert any("voice_settings.similarity_boost" in r.getMessage() for r in caplog.records)
+
+
+def test_build_dialogue_context_init_packet_includes_pronunciation_dictionaries() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        pronunciation_dictionary_locators=[
+            elevenlabs_tts.PronunciationDictionaryLocator(
+                pronunciation_dictionary_id="dict-1",
+                version_id="v1",
+            )
+        ],
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert packet["pronunciation_dictionary_locators"] == [
+        {"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_parses_audio_and_alignment() -> None:
+    context_id = "ctx_123"
+    audio_chunk = b"hello-audio"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(audio_chunk).decode("ascii"),
+                    "alignment": {
+                        "chars": ["h", "i"],
+                        "char_start_times_ms": [0, 100],
+                        "char_durations_ms": [100, 100],
+                    },
+                    "is_final": True,
+                }
+            ),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert connection.emitter.audio_chunks == [audio_chunk]
+    assert connection.emitter.timed_transcript_pushes >= 1
+    assert connection.waiter.done()
+    assert connection.waiter.result() is None
+    assert connection._context_data == {}
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_turn_boundary_does_not_resolve_waiter() -> None:
+    context_id = "ctx_123"
+    audio_chunk = b"hello-audio"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(audio_chunk).decode("ascii"),
+                    "is_final_audio_for_turn": True,
+                }
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "is_final": True,
+                }
+            ),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert connection.emitter.audio_chunks == [audio_chunk]
+    assert connection.waiter.done()
+    assert connection.waiter.result() is None
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_reports_error() -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "error": "something went wrong",
+                }
+            ),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert connection.waiter.done()
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIError)
+    assert connection._context_data == {}
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_drops_audio_for_unregistered_context() -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"late-audio").decode("ascii"),
+                    "is_final": True,
+                }
+            ),
+        ],
+    )
+    connection.unregister_stream(context_id)
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert connection.emitter.audio_chunks == []
+    assert connection._active_contexts == set()
+
+
+class _RecordingWs:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+        self.closed = False
+
+    async def send_json(self, data: dict[str, object]) -> None:
+        self.sent.append(data)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_sends_close_context_without_waiting() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        connection._input_queue.close()
+
+        await asyncio.wait_for(connection._send_loop(), timeout=1.0)
+
+        assert ws.sent == [
+            {"context_id": "ctx-1", "voices": ["voice-1"]},
+            {
+                "context_id": "ctx-1",
+                "inputs": [{"text": "hello ", "voice_id": "voice-1"}],
+                "flush": True,
+            },
+            {"context_id": "ctx-1", "close_context": True},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_sends_keep_alive_for_idle_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.sleep(0.2)
+        assert {"context_id": "ctx-1", "keep_alive": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_keeps_idle_context_alive_during_other_traffic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-idle", "hello ")  # pyright: ignore[reportPrivateUsage]
+        )
+        send_task = asyncio.create_task(connection._send_loop())
+
+        for _ in range(20):
+            connection.send_content(
+                elevenlabs_tts._SynthesizeContent("ctx-busy", "hello ")  # pyright: ignore[reportPrivateUsage]
+            )
+            await asyncio.sleep(0.01)
+
+        assert {"context_id": "ctx-idle", "keep_alive": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_KEEP_ALIVE_INTERVAL", 0.05)
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+    )
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.sleep(0.2)
+        assert {"context_id": "ctx-1", "keep_alive": True} not in ws.sent
+        assert {"context_id": "ctx-1", "close_context": True} in ws.sent
+
+        connection._input_queue.close()
+        await asyncio.wait_for(send_task, timeout=1.0)
