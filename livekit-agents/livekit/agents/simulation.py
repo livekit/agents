@@ -77,6 +77,17 @@ class SimulationContext:
         return self._dispatch.mode
 
     @property
+    def simulation_run_id(self) -> str:
+        """The run this session belongs to. Available as soon as the entrypoint runs,
+        unlike :attr:`simulation_run`, which the framework only fills in at the end."""
+        return self._dispatch.simulation_run_id
+
+    @property
+    def simulation_job_id(self) -> str:
+        """The run job (one scenario) behind this session, likewise available up front."""
+        return self._dispatch.job_id
+
+    @property
     def simulation_run(self) -> proto.SimulationRun | None:
         return self._run
 
