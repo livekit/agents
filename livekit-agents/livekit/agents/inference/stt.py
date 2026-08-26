@@ -188,10 +188,11 @@ class InworldOptions(TypedDict, total=False):
 
 
 class GoogleOptions(TypedDict, total=False):
-    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_hints to let
-    # the model detect the language itself (the gateway's default).
-    language_hints: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
-    adaptation_phrases: list[str]  # biases recognition toward these terms
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across

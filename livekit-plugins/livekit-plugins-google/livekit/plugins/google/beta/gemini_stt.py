@@ -66,8 +66,8 @@ def _is_session_duration_close(e: BaseException) -> bool:
 class _STTOptions:
     model: str
     language: LanguageCode | str | None
-    language_hints: list[str] | None
-    adaptation_phrases: list[str] | None
+    language_codes: list[str] | None
+    custom_vocabulary: list[str] | None
     sample_rate: int
     vertexai: bool | None
     project: str | None
@@ -80,8 +80,8 @@ class STT(stt.STT):
         *,
         model: str = DEFAULT_MODEL,
         language: LanguageCode | str | None = "en-US",
-        language_hints: list[str] | None = None,
-        adaptation_phrases: list[str] | None = None,
+        language_codes: list[str] | None = None,
+        custom_vocabulary: list[str] | None = None,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
@@ -98,10 +98,10 @@ class STT(stt.STT):
                 "gemini-3.5-transcribe-live". Plain chat models are not accepted by the
                 Live endpoint.
             language: Target language BCP-47 code or LanguageCode. Defaults to "en-US".
-            language_hints: List of language code hints for recognition. Omit to let the
-                model detect the language.
-            adaptation_phrases: Phrases that bias recognition, for names and jargon the
-                model would otherwise mishear.
+            language_codes: BCP-47 codes for the languages in the audio. Omit, or pass an
+                empty list, to let the model detect the language.
+            custom_vocabulary: Up to 1000 terms that bias recognition -- names, acronyms
+                and jargon the model would otherwise mishear.
             sample_rate: Sample rate in Hz. Defaults to 16000.
             api_key: Optional Gemini API key. If not set, uses environment variables.
             vertexai: Whether to use Vertex AI backend.
@@ -126,8 +126,8 @@ class STT(stt.STT):
         self._opts = _STTOptions(
             model=model,
             language=lang_code,
-            language_hints=language_hints,
-            adaptation_phrases=adaptation_phrases,
+            language_codes=language_codes,
+            custom_vocabulary=custom_vocabulary,
             sample_rate=sample_rate,
             vertexai=vertexai if is_given(vertexai) else None,
             project=project if is_given(project) else None,
@@ -158,8 +158,8 @@ class STT(stt.STT):
             opts = _STTOptions(
                 model=self._opts.model,
                 language=LanguageCode(language) if isinstance(language, str) else language,
-                language_hints=self._opts.language_hints,
-                adaptation_phrases=self._opts.adaptation_phrases,
+                language_codes=self._opts.language_codes,
+                custom_vocabulary=self._opts.custom_vocabulary,
                 sample_rate=self._opts.sample_rate,
                 vertexai=self._opts.vertexai,
                 project=self._opts.project,
@@ -253,17 +253,17 @@ class RecognizeStream(stt.RecognizeStream):
 
         client = Client(**client_kwargs)
 
-        lang_hints = self._opts.language_hints
-        if not lang_hints and self._opts.language:
-            lang_hints = [str(self._opts.language)]
+        lang_codes = self._opts.language_codes
+        if lang_codes is None and self._opts.language:
+            lang_codes = [str(self._opts.language)]
 
+        # An empty list means "detect the language", per
+        # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
         # Both backends accept these -- verified against gemini-3.5-transcribe-live on the
-        # Gemini Developer API, which takes language_hints and adaptation_phrases the same
-        # as Vertex. language_auto and language_hints are mutually exclusive.
+        # Gemini Developer API, which takes them the same as Vertex.
         input_audio_transcription = types.AudioTranscriptionConfig(
-            language_hints=types.LanguageHints(language_codes=lang_hints) if lang_hints else None,
-            language_auto=None if lang_hints else types.LanguageAuto(),
-            adaptation_phrases=self._opts.adaptation_phrases or None,
+            language_codes=lang_codes or [],
+            custom_vocabulary=self._opts.custom_vocabulary or None,
         )
 
         config = types.LiveConnectConfig(
