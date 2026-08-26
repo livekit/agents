@@ -50,6 +50,18 @@ DEFAULT_SAMPLE_RATE = 16000
 FINALIZE_TIMEOUT = 2.0
 
 
+def _is_session_duration_close(e: BaseException) -> bool:
+    """True when the socket closed because a session hit its duration cap.
+
+    Live transcription sessions stream for up to 10 minutes, then the server sends a
+    GoAway and closes with 1008. The retry layer above reconnects within ~0.1s and
+    events keep flowing until the actual close, so this is routine rather than a
+    failure and shouldn't be logged as one every ten minutes.
+    """
+    text = str(e)
+    return "GoAway" in text or "session duration" in text
+
+
 @dataclass
 class _STTOptions:
     model: str
@@ -285,7 +297,8 @@ class RecognizeStream(stt.RecognizeStream):
         # as a redactable attribute and kept out of the raised message, whose body the
         # framework interpolates into its retry log (see REVIEW.md).
         except (ClientError, ServerError, APIError) as e:
-            logger.warning(
+            log = logger.debug if _is_session_duration_close(e) else logger.warning
+            log(
                 "Gemini STT request failed",
                 extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
             )
@@ -297,7 +310,8 @@ class RecognizeStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(
+            log = logger.debug if _is_session_duration_close(e) else logger.warning
+            log(
                 "Gemini STT connection failed",
                 extra={"error_type": type(e).__name__, "lk.pii.error": str(e)},
             )
@@ -393,6 +407,12 @@ class RecognizeStream(stt.RecognizeStream):
             # out of the message body (see REVIEW.md).
             if getattr(e, "code", None) == 1000 or "1000" in str(e):
                 logger.debug("Gemini ASR session closed normally", extra={"lk.pii.error": str(e)})
+            elif _is_session_duration_close(e):
+                logger.debug(
+                    "Gemini ASR session reached its duration limit, reconnecting",
+                    extra={"lk.pii.error": str(e)},
+                )
+                raise
             else:
                 logger.warning("Gemini ASR receive error", extra={"lk.pii.error": str(e)})
                 raise

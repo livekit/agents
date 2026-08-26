@@ -221,3 +221,31 @@ async def test_configured_language_is_used_when_none_is_detected() -> None:
 
     finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
     assert finals[0].alternatives[0].language == "en-US"
+
+
+# The message text Gemini closes a duration-capped session with, from a live session log.
+_GOAWAY = (
+    "received 1008 (policy violation) Connection aborted because the client failed to "
+    "close the connection after receiving a GoAway signal once the session duration "
+    "limit was reached"
+)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (Exception(_GOAWAY), True),
+        (Exception("1008 None. ... after receiving a GoAway signal once the session durat"), True),
+        (
+            Exception("1007 The requested combination of response modalities is not supported"),
+            False,
+        ),
+        (Exception("429 RESOURCE_EXHAUSTED"), False),
+    ],
+)
+def test_session_duration_close_is_classified(error: Exception, expected: bool) -> None:
+    """A duration rollover is routine -- the retry layer reconnects -- so it must not be
+    logged as a failure every ten minutes."""
+    from livekit.plugins.google.beta.gemini_stt import _is_session_duration_close
+
+    assert _is_session_duration_close(error) is expected
