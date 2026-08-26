@@ -12,7 +12,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import WorkflowInstructions
+from .utils import ReadBack, WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -60,6 +60,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
+        self._read_back = ReadBack()
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -118,9 +119,13 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = self._read_back.instruction(
+            natural="Repeat the email back to the user.",
+            spelled=f"Repeat the email character by character: {separated_email}",
+        )
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 

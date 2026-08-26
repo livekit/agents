@@ -11,6 +11,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import ReadBack
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -91,6 +92,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         self._require_explicit_ask = require_explicit_ask
         self._current_dob: date | None = None
         self._current_time: time | None = None
+        self._read_back = ReadBack()
 
         super().__init__(
             instructions=Instructions(
@@ -195,9 +197,15 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             formatted_time = self._current_time.strftime("%I:%M %p")
             response += f" at {formatted_time}"
 
+        read_back = self._read_back.instruction(
+            natural="Repeat the date back to the user in a natural spoken format.",
+            spelled=(
+                f"Repeat the date back one part at a time, the month, the day, then the year: "
+                f"{dob.strftime('%B')}, {dob.day}, {dob.year}"
+            ),
+        )
         response += (
-            "\nRepeat the date back to the user in a natural spoken format.\n"
-            "Prompt the user for confirmation, do not call `confirm_dob` directly"
+            f"\n{read_back}\nPrompt the user for confirmation, do not call `confirm_dob` directly"
         )
 
         return response

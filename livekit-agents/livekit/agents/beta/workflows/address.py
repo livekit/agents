@@ -11,7 +11,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import WorkflowInstructions
+from .utils import ReadBack, WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -59,6 +59,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_address = ""
+        self._read_back = ReadBack()
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -135,9 +136,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = self._read_back.instruction(
+            natural="Repeat the address back to the user.",
+            spelled=(
+                f"Repeat the address field by field, spelling the street name letter by "
+                f"letter: {address_fields}"
+            ),
+        )
         return (
             f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 

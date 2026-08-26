@@ -10,6 +10,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import ReadBack
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -130,6 +131,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._first_name: str = ""
         self._middle_name: str = ""
         self._last_name: str = ""
+        self._read_back = ReadBack()
 
         super().__init__(
             instructions=Instructions(
@@ -268,17 +270,18 @@ class GetNameTask(AgentTask[GetNameResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
-        if self._verify_spelling:
-            return (
-                f"The name has been updated to {full_name}\n"
-                f"Spell out the name letter by letter for verification: {full_name}\n"
-                f"Prompt the user for confirmation, do not call `confirm_name` directly"
+        spelled = f"Spell out the name letter by letter for verification: {full_name}"
+        read_back = (
+            spelled
+            if self._verify_spelling
+            else self._read_back.instruction(
+                natural="Repeat the name back to the user.", spelled=spelled
             )
-
+        )
         return (
             f"The name has been updated to {full_name}\n"
-            f"Repeat the name back to the user and prompt for confirmation, "
-            f"do not call `confirm_name` directly"
+            f"{read_back}\n"
+            f"Prompt the user for confirmation, do not call `confirm_name` directly"
         )
 
     def _build_confirm_tool(
