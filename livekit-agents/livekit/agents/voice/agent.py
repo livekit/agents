@@ -14,7 +14,7 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
-from .events import UserTurnExceededEvent
+from .events import AgentBackchannelOpportunityEvent, UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
@@ -351,6 +351,31 @@ class Agent:
             allow_interruptions=False,
             tool_choice="none",
         )
+
+    async def on_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None:
+        """Called when the turn detector predicts a natural mid-turn pause where
+        the agent could insert a short acknowledgment (*backchannel*) such as
+        "mm-hmm", "I see", "right", or "uh-huh".
+
+        Override this method to emit a backchannel phrase. The default
+        implementation does nothing so that agents that don't need backchannels
+        are unaffected.
+
+        Use ``ev.end_of_turn_margin`` to pick an appropriate phrase:
+        a large positive margin means the user is clearly still mid-turn
+        (affirmative words like "right" or "okay" are safe); a small or
+        negative margin means a reply is imminent, so prefer neutral sounds
+        like "hmm" or "uh-huh" that won't conflict with the upcoming reply.
+
+        Example::
+
+            async def on_backchannel_opportunity(
+                self, ev: AgentBackchannelOpportunityEvent
+            ) -> None:
+                phrase = "right" if ev.end_of_turn_margin > 0.3 else "mm-hmm"
+                await self.session.say(phrase, allow_interruptions=True)
+        """
+        pass
 
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
