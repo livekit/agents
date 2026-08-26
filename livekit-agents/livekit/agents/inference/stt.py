@@ -68,6 +68,7 @@ XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
+    "speechmatics/linden-1",
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
 
@@ -152,19 +153,19 @@ class ElevenlabsOptions(TypedDict, total=False):
 class SpeechmaticsOptions(TypedDict, total=False):
     domain: str  # e.g. "finance"
     output_locale: str  # BCP-47 locale for output formatting
-    max_delay: float  # 0.7-4.0 seconds, default 1.0
-    max_delay_mode: str  # "flexible" | "fixed"
+    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: str  # "flexible" | "fixed"; RT only
     diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
     speaker_sensitivity: float  # 0.0-1.0
     max_speakers: int
     prefer_current_speaker: bool
     enable_partials: bool  # default True (overridden by gateway)
-    enable_entities: bool
+    enable_entities: bool  # RT only
     punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]
-    end_of_utterance_silence_trigger: float  # seconds of silence before final
-    audio_filtering_config: dict[str, Any]
-    transcript_filtering_config: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]  # RT only
+    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    audio_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
@@ -229,6 +230,9 @@ def _keyterms_extra_for_model(
 
     extra_kwargs = extra_kwargs or {}
     session_keyterms = session_keyterms or []
+
+    if model == "speechmatics/linden-1":
+        return None
 
     if model.startswith("speechmatics/"):
         # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
@@ -339,16 +343,19 @@ def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics = (
-        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    is_speechmatics_rt = (
+        is_given(model)
+        and isinstance(model, str)
+        and model.startswith("speechmatics/")
+        and model != "speechmatics/linden-1"
     )
-    if vad_instance is not None and not is_speechmatics:
+    if vad_instance is not None and not is_speechmatics_rt:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics and vad_instance is None:
+    if is_speechmatics_rt and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -600,7 +607,8 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to Speechmatics models.
+                gateway on end of speech. Only applicable to the Speechmatics RT models
+                (enhanced/standard); linden-1 detects turns server-side.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
