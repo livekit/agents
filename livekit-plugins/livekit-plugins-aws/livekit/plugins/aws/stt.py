@@ -405,6 +405,10 @@ class SpeechStream(stt.SpeechStream):
                         await asyncio.wait_for(tasks[1], timeout=3.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
+                    except BadRequestException:
+                        # Already handled above (e.g. idle-timeout retry). Swallow so
+                        # re-awaiting the failed task here cannot override `continue`.
+                        pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):

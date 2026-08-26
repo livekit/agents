@@ -282,6 +282,18 @@ class AgentActivity(RecognitionHooks):
                 "turn detection."
             )
 
+        if (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self._session.options.recording_options["audio"]
+            and self._session._redaction_enabled
+            and not self._session._warned_realtime_audio_redaction
+        ):
+            logger.warning(
+                "RealtimeModel user turns lack complete speech timestamps, so audio redaction "
+                "may be inaccurate; disable audio recording to prevent redaction leak."
+            )
+            self._session._warned_realtime_audio_redaction = True
+
         if self._rt_turn_detection_enabled and not self.allow_interruptions:
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "
