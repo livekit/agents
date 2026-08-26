@@ -338,11 +338,32 @@ class RecognizeStream(stt.RecognizeStream):
             if isinstance(self._opts.language, LanguageCode)
             else LanguageCode(str(self._opts.language or "en-US"))
         )
-        # `input_transcription` streams deltas, not whole utterances, so accumulate them
-        # and only emit a FINAL_TRANSCRIPT once Gemini marks the turn done. Emitting each
-        # delta as its own final splits one utterance into many user turns downstream.
+        # Two transcription streams, and their shape differs by model:
+        #   interim_input_transcription - a cumulative snapshot of the turn so far, resent
+        #     in full on every update. Verified against gemini-3.5-transcribe-live.
+        #   input_transcription - the authoritative transcript. transcribe-live sends it
+        #     once, whole, at the end of the turn (re-transcribed, so its wording can
+        #     differ from the interims); the older live models stream it in deltas.
+        #     Accumulating covers both: for a single whole message the buffer is empty.
+        # Neither `finished` nor `turn_complete` is populated by transcribe-live, so the
+        # only reliable completion signal is generation/turn completion -- the same
+        # conclusion realtime_api.py reached for this API.
         committed = ""
+        last_interim = ""
         lang = default_lang
+
+        def flush() -> None:
+            nonlocal committed, last_interim, lang
+            # fall back to the interim stream so a turn is never dropped outright if a
+            # model only ever populates that one
+            text = committed or last_interim
+            if text:
+                self._event_ch.send_nowait(
+                    self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, text, lang)
+                )
+            committed = ""
+            last_interim = ""
+            lang = default_lang
 
         try:
             turn = session.receive()
@@ -351,7 +372,10 @@ class RecognizeStream(stt.RecognizeStream):
                 if not sc:
                     continue
 
-                if transcription := getattr(sc, "input_transcription", None):
+                transcription = getattr(sc, "input_transcription", None)
+                interim = getattr(sc, "interim_input_transcription", None)
+
+                if transcription is not None:
                     if code := getattr(transcription, "language_code", None):
                         # the model detects the language when no hints are configured
                         lang = LanguageCode(code)
@@ -367,32 +391,24 @@ class RecognizeStream(stt.RecognizeStream):
                             )
                         )
 
-                    if getattr(transcription, "finished", False) and committed:
-                        self._event_ch.send_nowait(
-                            self._speech_event(
-                                stt.SpeechEventType.FINAL_TRANSCRIPT, committed, lang
-                            )
-                        )
-                        committed = ""
-                        lang = default_lang
+                if interim is not None:
+                    if code := getattr(interim, "language_code", None):
+                        lang = LanguageCode(code)
 
-                if interim := getattr(sc, "interim_input_transcription", None):
-                    # a low-latency preview of the tail that `input_transcription` has not
-                    # committed yet, so it extends the accumulated text rather than replacing it
-                    if text := interim.text:
+                    if text := (interim.text or "").lstrip():
+                        # already cumulative, so it replaces rather than extends
+                        last_interim = text
                         self._event_ch.send_nowait(
-                            self._speech_event(
-                                stt.SpeechEventType.INTERIM_TRANSCRIPT, committed + text, lang
-                            )
+                            self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, lang)
                         )
 
-                # `finished` is not guaranteed on every turn; turn_complete closes it out
-                if getattr(sc, "turn_complete", False) and committed:
-                    self._event_ch.send_nowait(
-                        self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, committed, lang)
-                    )
-                    committed = ""
-                    lang = default_lang
+                if (
+                    getattr(transcription, "finished", False)
+                    or getattr(sc, "turn_complete", False)
+                    or getattr(sc, "generation_complete", False)
+                ):
+                    flush()
+
         except APIError as e:
             # Provider errors can quote the audio payload or transcript, so the text stays
             # out of the message body (see REVIEW.md).
