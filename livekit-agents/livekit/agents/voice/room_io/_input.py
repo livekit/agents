@@ -48,6 +48,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._closed = False
 
         self._forward_atask: asyncio.Task[None] | None = None
+        self._forward_tasks: set[asyncio.Task[None]] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
@@ -134,8 +135,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         if self._processor:
             self._processor._close()
             self._processor = None
-        if self._forward_atask:
-            await aio.cancel_and_wait(self._forward_atask)
+        if self._forward_tasks:
+            await aio.cancel_and_wait(*self._forward_tasks)
+        self._forward_atask = None
 
         self._room.off("track_subscribed", self._on_track_available)
         self._room.off("track_unsubscribed", self._on_track_unsubscribed)
@@ -221,9 +223,12 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream = self._create_stream(track, participant)
         self._track = track
         self._publication = publication
-        self._forward_atask = asyncio.create_task(
+        forward_task = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, track, publication, participant)
         )
+        self._forward_atask = forward_task
+        self._forward_tasks.add(forward_task)
+        forward_task.add_done_callback(self._forward_tasks.discard)
         return True
 
     def _on_track_unsubscribed(
@@ -242,7 +247,7 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._close_stream()
 
-        # subscribe to the first available track
+        # Same-publication replacements arrive through track_subscribed.
         for candidate in participant.track_publications.values():
             if candidate.sid == publication.sid or candidate.track is None:
                 continue
@@ -348,7 +353,6 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             and AudioTrackFeature.TF_PRECONNECT_BUFFER in publication.audio_features
             and pre_connect_key not in self._pre_connect_audio_publications
         ):
-            self._pre_connect_audio_publications.add(pre_connect_key)
             logging_extra = {
                 "track_id": track.sid,
                 "participant": participant.identity,
@@ -358,6 +362,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 frames = await self._pre_connect_audio_handler.wait_for_data(
                     logging_extra["track_id"]
                 )
+                self._pre_connect_audio_publications.add(pre_connect_key)
                 for frame in self._resample_frames(self._apply_audio_processor(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
@@ -380,15 +385,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 )
 
         await super()._forward_task(None, stream, track, publication, participant)
-        silent_samples = int(self._sample_rate * 0.5)
-        await self._data_ch.send(
-            rtc.AudioFrame(
-                b"\x00\x00" * silent_samples,
-                sample_rate=self._sample_rate,
-                num_channels=self._num_channels,
-                samples_per_channel=silent_samples,
+        if self._attached:
+            silent_samples = int(self._sample_rate * 0.5)
+            await self._data_ch.send(
+                rtc.AudioFrame(
+                    b"\x00\x00" * silent_samples,
+                    sample_rate=self._sample_rate,
+                    num_channels=self._num_channels,
+                    samples_per_channel=silent_samples,
+                )
             )
-        )
 
     def _resample_frames(self, frames: Iterable[rtc.AudioFrame]) -> Iterable[rtc.AudioFrame]:
         resampler: rtc.AudioResampler | None = None
