@@ -617,3 +617,151 @@ async def test_stt_recv_expected_close_returns_cleanly() -> None:
     # session torn down (aclose) -> also a clean, expected end
     s2 = _recv_stream_with_state(closing_ws=False, session_closed=True)
     assert await s2._recv_task(ws) is None  # type: ignore[arg-type]
+
+
+class _TextWS:
+    """A ws whose receive() yields one TEXT frame carrying `data`."""
+
+    def __init__(self, data: str) -> None:
+        import types
+
+        import aiohttp
+
+        self._msg = types.SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=data)
+
+    async def receive(self) -> object:
+        return self._msg
+
+
+async def test_stt_error_frame_non_retryable_and_message_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import json
+    import logging
+
+    from livekit.agents import APIError
+
+    s = _recv_stream_with_state(closing_ws=False, session_closed=False)
+    ws = _TextWS(
+        json.dumps(
+            {"type": "error", "code": "insufficient_balance", "message": "SENSITIVE acct detail"}
+        )
+    )
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.floe"):
+        with pytest.raises(APIError) as ei:
+            await s._recv_task(ws)  # type: ignore[arg-type]
+
+    assert ei.value.retryable is False  # policy refusal doesn't reconnect
+    rendered = str(ei.value)
+    assert "SENSITIVE" not in rendered  # raw message kept out of the exception
+    assert "insufficient_balance" in rendered  # stable code is fine
+    # the raw message is surfaced only via the redactable pii attribute
+    assert not any("SENSITIVE" in r.getMessage() for r in caplog.records)
+    assert any(
+        getattr(r, "lk.pii.stt_error_message", None) == "SENSITIVE acct detail"
+        for r in caplog.records
+    )
+
+
+def _connect_stream(stt_obj, session):  # type: ignore[no-untyped-def]
+    """A SpeechStream whose _run connects through the given fake session."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.floe.stt import SpeechStream
+
+    stt_obj._ensure_session = lambda: session  # type: ignore[method-assign]
+    s = object.__new__(SpeechStream)
+    s._stt = stt_obj
+    s._language = "en"
+    s._conn_options = DEFAULT_API_CONNECT_OPTIONS
+    s._closing_ws = False
+    return s
+
+
+class _RaisingConnectSession:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def ws_connect(self, url: str, *, headers: dict | None = None) -> object:
+        raise self._exc
+
+
+async def test_stt_connect_timeout_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from livekit.agents import APIConnectionError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    # asyncio.TimeoutError is what wait_for raises (a distinct class from the
+    # builtin on 3.10), so mirror that here.
+    s = _connect_stream(floe.STT(), _RaisingConnectSession(asyncio.TimeoutError()))
+    with pytest.raises(APIConnectionError):  # retryable -> base loop reconnects
+        await s._run()
+
+
+async def test_stt_connect_transport_error_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aiohttp
+
+    from livekit.agents import APIConnectionError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    s = _connect_stream(floe.STT(), _RaisingConnectSession(aiohttp.ClientError()))
+    with pytest.raises(APIConnectionError):
+        await s._run()
+
+
+def _handshake_error(status: int) -> Exception:
+    """A real aiohttp.WSServerHandshakeError subclass carrying only `status`
+    (bypasses the parent's RequestInfo/history constructor)."""
+    import aiohttp
+
+    class _E(aiohttp.WSServerHandshakeError):
+        def __init__(self) -> None:
+            self.status = status
+
+    return _E()
+
+
+async def test_stt_connect_handshake_4xx_not_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents import APIStatusError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    s = _connect_stream(floe.STT(), _RaisingConnectSession(_handshake_error(401)))
+    with pytest.raises(APIStatusError) as ei:
+        await s._run()
+    assert ei.value.status_code == 401
+    assert ei.value.retryable is False  # bad key won't succeed on retry
+
+
+async def test_stt_connect_handshake_5xx_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents import APIStatusError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_test")
+    s = _connect_stream(floe.STT(), _RaisingConnectSession(_handshake_error(503)))
+    with pytest.raises(APIStatusError) as ei:
+        await s._run()
+    assert ei.value.status_code == 503
+    assert ei.value.retryable is True  # transient upstream -> reconnect
+
+
+async def test_stt_batch_timeout_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit import rtc
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError
+
+    monkeypatch.setenv("FLOE_API_KEY", "floe_agentkey")
+    s = floe.STT()
+
+    class _TimeoutSession:
+        def post(self, url: str, *, data: object, headers: dict, timeout: object) -> object:
+            import asyncio
+
+            raise asyncio.TimeoutError()  # what aiohttp's ClientTimeout raises
+
+    monkeypatch.setattr(s, "_ensure_session", lambda: _TimeoutSession())
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 160,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=160,
+    )
+    with pytest.raises(APIConnectionError):
+        await s._recognize_impl([frame], conn_options=DEFAULT_API_CONNECT_OPTIONS)

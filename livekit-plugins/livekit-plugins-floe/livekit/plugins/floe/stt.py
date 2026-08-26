@@ -234,7 +234,9 @@ class STT(stt.STT):
                 self._batch_url,
                 data=form,
                 headers=self._auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=30),
+                # Bound connection setup by conn_options like the reference
+                # plugins; total read stays capped at 30s for a batch transcript.
+                timeout=aiohttp.ClientTimeout(total=30, connect=conn_options.timeout),
             ) as resp:
                 body = await resp.read()
                 if resp.status != 200:
@@ -262,7 +264,9 @@ class STT(stt.STT):
                 )
         except APIError:
             raise
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # A request timeout (asyncio.TimeoutError from ClientTimeout) or
+            # transport error — retryable so recognize()'s retry loop reconnects.
             raise APIConnectionError() from e
 
     async def aclose(self) -> None:
@@ -308,18 +312,40 @@ class SpeechStream(stt.SpeechStream):
                 self._stt._ensure_session().ws_connect(url, headers=stt_impl._auth_headers()),
                 self._conn_options.timeout,
             )
-        except aiohttp.ClientError as e:
+        except aiohttp.WSServerHandshakeError as e:
+            # Non-101 handshake. Map the status so the base loop can decide: a 4xx
+            # (bad/expired agent key, refused) won't succeed on retry, a 5xx /
+            # 408 / 429 is transient — APIStatusError derives `retryable` from the
+            # status. `from None` keeps the response headers/body out of the
+            # chained cause (REVIEW.md).
+            raise APIStatusError(
+                message=f"Floe STT handshake failed (status {e.status})",
+                status_code=e.status,
+            ) from None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # A connect timeout (asyncio.TimeoutError from wait_for) or transport
+            # error — both retryable so the base loop reconnects.
             raise APIConnectionError("failed to connect to Floe STT") from e
 
         try:
             send = asyncio.create_task(self._send_task(ws))
             recv = asyncio.create_task(self._recv_task(ws))
             try:
-                done, _ = await asyncio.wait((send, recv), return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    task.result()  # surface send/recv errors (drives retry)
+                await asyncio.wait((send, recv), return_when=asyncio.FIRST_COMPLETED)
             finally:
                 await utils.aio.gracefully_cancel(send, recv)
+            # Retrieve BOTH results (even the cancelled one is checked) so no task
+            # exception goes unretrieved, then surface the first real failure to
+            # drive a reconnect.
+            to_raise: BaseException | None = None
+            for task in (send, recv):
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None and to_raise is None:
+                    to_raise = exc
+            if to_raise is not None:
+                raise to_raise
         finally:
             await ws.close()
 
@@ -386,10 +412,17 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(ev)
             elif mtype == "error":
                 code = data.get("code", "unknown")
-                message = data.get("message", code)
-                # Server closes the socket after an error (e.g. insufficient
-                # balance); surface it and don't retry a policy refusal.
-                raise APIError(f"Floe STT error [{code}]: {message}", retryable=False)
+                # Content-free exception (REVIEW.md): the server `message` is a
+                # provider payload, so keep only the stable `code` in the
+                # exception text and surface the message via a redactable pii
+                # attribute. The server closes the socket after an error (e.g.
+                # insufficient balance) — a policy refusal is non-retryable.
+                logger.warning(
+                    "floe STT error frame [%s]",
+                    code,
+                    extra={"lk.pii.stt_error_message": data.get("message", "")},
+                )
+                raise APIError(f"Floe STT error [{code}]", retryable=False)
 
 
 def _require_secure_ws_url(url: str) -> None:
