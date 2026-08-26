@@ -119,9 +119,7 @@ class STT(stt.STT):
             )
         )
 
-        lang_code: LanguageCode | None = None
-        if language is not None:
-            lang_code = LanguageCode(language) if isinstance(language, str) else language
+        lang_code = LanguageCode(language) if language is not None else None
 
         self._opts = _STTOptions(
             model=model,
@@ -157,7 +155,7 @@ class STT(stt.STT):
         if is_given(language):
             opts = _STTOptions(
                 model=self._opts.model,
-                language=LanguageCode(language) if isinstance(language, str) else language,
+                language=LanguageCode(language),
                 language_codes=self._opts.language_codes,
                 custom_vocabulary=self._opts.custom_vocabulary,
                 sample_rate=self._opts.sample_rate,
