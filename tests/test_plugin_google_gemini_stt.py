@@ -114,6 +114,13 @@ async def test_transcribe_live_turn_commits_on_generation_complete() -> None:
     assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == [
         "Greetings, welcome to the age of AI."
     ]
+    # `input_transcription` must not add an interim of its own: the interim stream
+    # already covers live text, so it would just duplicate the final
+    assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == [
+        "Greetings.",
+        "Greetings, welcome",
+        "Greetings, welcome to the age",
+    ]
 
 
 @pytest.mark.asyncio

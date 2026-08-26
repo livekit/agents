@@ -353,6 +353,10 @@ class RecognizeStream(stt.RecognizeStream):
         # conclusion realtime_api.py reached for this API.
         committed = ""
         last_interim = ""
+        # transcribe-live sends interim_input_transcription, so deriving interims from
+        # the authoritative stream too would just duplicate it. The older models send no
+        # interim stream at all, and there the accumulating deltas are the only live text.
+        has_interim_stream = False
         lang = default_lang
 
         def flush() -> None:
@@ -388,11 +392,12 @@ class RecognizeStream(stt.RecognizeStream):
                             # Gemini opens a transcript with a leading space
                             text = text.lstrip()
                         committed += text
-                        self._event_ch.send_nowait(
-                            self._speech_event(
-                                stt.SpeechEventType.INTERIM_TRANSCRIPT, committed, lang
+                        if not has_interim_stream:
+                            self._event_ch.send_nowait(
+                                self._speech_event(
+                                    stt.SpeechEventType.INTERIM_TRANSCRIPT, committed, lang
+                                )
                             )
-                        )
 
                 if interim is not None:
                     if code := getattr(interim, "language_code", None):
@@ -400,6 +405,7 @@ class RecognizeStream(stt.RecognizeStream):
 
                     if text := (interim.text or "").lstrip():
                         # already cumulative, so it replaces rather than extends
+                        has_interim_stream = True
                         last_interim = text
                         self._event_ch.send_nowait(
                             self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, lang)
