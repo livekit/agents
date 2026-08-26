@@ -11,7 +11,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import ReadBack
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -81,7 +80,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         extra = extra_instructions if extra_instructions else ""
 
         self._current_phone_number = ""
-        self._read_back = ReadBack()
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -154,10 +153,12 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
-        read_back = self._read_back.instruction(
-            natural="Read the number back to the user in groups.",
-            spelled=f"Read the number back digit by digit: {' '.join(cleaned)}",
+        read_back = (
+            f"Read the number back digit by digit: {' '.join(cleaned)}"
+            if self._spell_read_back
+            else "Read the number back to the user in groups."
         )
+        self._spell_read_back = True
         return (
             f"The phone number has been updated to {cleaned}\n"
             f"{read_back}\n"

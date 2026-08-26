@@ -10,7 +10,6 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import ReadBack
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -96,7 +95,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._collect_first_name = first_name
         self._collect_last_name = last_name
         self._collect_middle_name = middle_name
-        self._verify_spelling = verify_spelling
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -131,7 +130,6 @@ class GetNameTask(AgentTask[GetNameResult]):
         self._first_name: str = ""
         self._middle_name: str = ""
         self._last_name: str = ""
-        self._read_back = ReadBack()
 
         super().__init__(
             instructions=Instructions(
@@ -270,14 +268,12 @@ class GetNameTask(AgentTask[GetNameResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
-        spelled = f"Spell out the name letter by letter for verification: {full_name}"
         read_back = (
-            spelled
-            if self._verify_spelling
-            else self._read_back.instruction(
-                natural="Repeat the name back to the user.", spelled=spelled
-            )
+            f"Spell out the name letter by letter for verification: {full_name}"
+            if self._spell_read_back
+            else "Repeat the name back to the user."
         )
+        self._spell_read_back = True
         return (
             f"The name has been updated to {full_name}\n"
             f"{read_back}\n"

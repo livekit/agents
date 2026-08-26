@@ -82,19 +82,3 @@ class WorkflowInstructions(Instructions):
             extra=self.extra,
             **format_kwargs,
         )
-
-
-class ReadBack:
-    """Escalates a value's confirmation read-back once the first one is not accepted.
-
-    A task records the value again only when the caller did not confirm it, so the
-    second and later read-backs spell the value out instead of saying it naturally:
-    a value that sounds like another cannot be told apart by hearing it again.
-    """
-
-    def __init__(self) -> None:
-        self._attempts = 0
-
-    def instruction(self, *, natural: str, spelled: str) -> str:
-        self._attempts += 1
-        return natural if self._attempts == 1 else spelled
