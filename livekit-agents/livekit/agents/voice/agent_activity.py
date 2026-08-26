@@ -52,6 +52,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .backchannel import is_backchannel_only
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -2112,6 +2113,23 @@ class AgentActivity(RecognitionHooks):
             if len(split_words(text, split_character=True)) < interruption_options["min_words"]:
                 return
 
+        if (
+            self.stt is not None
+            and (backchannel_filter := interruption_options.get("backchannel_filter"))
+            and self._audio_recognition is not None
+        ):
+            text = self._audio_recognition._current_transcript
+            # the overlapping speech transcribed so far is only acknowledgments
+            # ("okay", "thank you") — keep talking. partial=True: interims arrive
+            # word by word, so a trailing prefix of a phrase ("thank") defers the
+            # cut; the next interim re-judges the full text
+            if text and is_backchannel_only(text, backchannel_filter, partial=True):
+                logger.debug(
+                    "skipping interruption, backchannel-only transcript",
+                    extra={"transcript": text},
+                )
+                return
+
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
 
@@ -2305,7 +2323,13 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
-    def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
+    def on_final_transcript(
+        self,
+        ev: stt.SpeechEvent,
+        *,
+        speaking: bool | None = None,
+        backchannel_discarded: bool = False,
+    ) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
             return
@@ -2318,6 +2342,13 @@ class AgentActivity(RecognitionHooks):
                 speaker_id=ev.alternatives[0].speaker_id,
             ),
         )
+
+        if backchannel_discarded:
+            # the final was discarded as a backchannel over the agent's turn:
+            # the transcription event above still finalizes the utterance so
+            # live captions flush their open segment, but no interruption is
+            # attempted — the agent keeps talking
+            return
         # agent speech might not be interrupted if VAD failed and a final transcript is received
         # we call _interrupt_by_audio_activity (idempotent) to pause the speech, if possible
         # which will also be immediately interrupted
