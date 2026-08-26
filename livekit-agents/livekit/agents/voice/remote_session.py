@@ -5,7 +5,7 @@ import contextlib
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from google.protobuf.duration_pb2 import Duration
@@ -15,6 +15,7 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import llm, utils
+from .._proto import encode_chat_item, encode_session_usage
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -27,14 +28,6 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import (
-    AgentSessionUsage,
-    EOTModelUsage,
-    InterruptionModelUsage,
-    LLMModelUsage,
-    STTModelUsage,
-    TTSModelUsage,
-)
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
@@ -295,17 +288,6 @@ _USER_STATE_MAP: dict[UserState, agent_pb.UserState] = {
     "away": agent_pb.US_AWAY,
 }
 
-_METRICS_FIELDS = (
-    "transcription_delay",
-    "end_of_turn_delay",
-    "on_user_turn_completed_delay",
-    "llm_node_ttft",
-    "tts_node_ttfb",
-    "e2e_latency",
-    "llm_node_tps",
-    "llm_node_ttfs",
-)
-
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
     "done": agent_pb.TC_DONE,
     "error": agent_pb.TC_ERROR,
@@ -336,71 +318,6 @@ def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
         elif isinstance(tool, Toolset):
             result.extend(_tool_names(tool.tools))
     return result
-
-
-def _metrics_to_proto(metrics: Mapping[str, Any] | None) -> agent_pb.MetricsReport:
-    if not metrics:
-        return agent_pb.MetricsReport()
-    kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
-    return agent_pb.MetricsReport(**kwargs)
-
-
-def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
-    if isinstance(item, ChatMessage):
-        role_map = {
-            "developer": agent_pb.DEVELOPER,
-            "system": agent_pb.SYSTEM,
-            "user": agent_pb.USER,
-            "assistant": agent_pb.ASSISTANT,
-        }
-        pb_role = role_map.get(item.role, agent_pb.ASSISTANT)
-        content = []
-        if item.raw_text_content:
-            content.append(agent_pb.ChatMessage.ChatContent(text=item.raw_text_content))
-        pb_msg = agent_pb.ChatMessage(
-            id=item.id,
-            role=pb_role,
-            content=content,
-            interrupted=item.interrupted,
-            metrics=_metrics_to_proto(item.metrics),
-        )
-        return agent_pb.ChatContext.ChatItem(message=pb_msg)
-    elif isinstance(item, FunctionCall):
-        return agent_pb.ChatContext.ChatItem(
-            function_call=agent_pb.FunctionCall(
-                id=item.id,
-                call_id=item.call_id,
-                name=item.name,
-                arguments=item.arguments,
-            )
-        )
-    elif isinstance(item, FunctionCallOutput):
-        return agent_pb.ChatContext.ChatItem(
-            function_call_output=agent_pb.FunctionCallOutput(
-                call_id=item.call_id,
-                name=item.name,
-                output=item.output,
-                is_error=item.is_error,
-            )
-        )
-    elif isinstance(item, AgentHandoff):
-        return agent_pb.ChatContext.ChatItem(
-            agent_handoff=agent_pb.AgentHandoff(
-                id=item.id,
-                old_agent_id=item.old_agent_id,
-                new_agent_id=item.new_agent_id,
-            )
-        )
-    elif isinstance(item, AgentConfigUpdate):
-        return agent_pb.ChatContext.ChatItem(
-            agent_config_update=agent_pb.AgentConfigUpdate(
-                id=item.id,
-                instructions=str(item.instructions) if item.instructions is not None else None,
-                tools_added=item.tools_added or [],
-                tools_removed=item.tools_removed or [],
-            )
-        )
-    return agent_pb.ChatContext.ChatItem()
 
 
 def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
@@ -603,7 +520,7 @@ class SessionHost:
             ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
         ):
             return
-        chat_item = _chat_item_to_proto(event.item)
+        chat_item = encode_chat_item(event.item)
         self._send_event(
             agent_pb.AgentSessionEvent(
                 conversation_item_added=agent_pb.AgentSessionEvent.ConversationItemAdded(
@@ -629,7 +546,6 @@ class SessionHost:
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
-            if fco is not None
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -697,6 +613,7 @@ class SessionHost:
             overlap_started_at = Timestamp()
             overlap_started_at.FromNanoseconds(int(event.overlap_started_at * 1e9))
 
+        # TODO(AGT-3180): Forward agent_ended when the remote-session protocol supports it.
         pb = agent_pb.AgentSessionEvent.OverlappingSpeech(
             is_interruption=event.is_interruption,
             detection_delay=event.detection_delay,
@@ -758,7 +675,7 @@ class SessionHost:
         self._send_event(
             agent_pb.AgentSessionEvent(
                 session_usage_updated=agent_pb.AgentSessionEvent.SessionUsageUpdated(
-                    usage=_session_usage_to_proto(event.usage),
+                    usage=encode_session_usage(event.usage),
                 )
             )
         )
@@ -808,7 +725,7 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_chat_history"):
-            items = [_chat_item_to_proto(item) for item in self._session.history.items]
+            items = [encode_chat_item(item) for item in self._session.history.items]
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
@@ -821,7 +738,7 @@ class SessionHost:
 
         elif req.HasField("get_agent_info"):
             agent = self._session.current_agent
-            items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
+            items = [encode_chat_item(item) for item in agent.chat_ctx.items]
             # collapse modality variants for the report; audio-first matches the
             # update_instructions default for voice sessions
             agent_instructions = (
@@ -861,7 +778,7 @@ class SessionHost:
                     # failure: a tool may have told it to say nothing (a close-the-call
                     # tool that already delivered its goodbye is the common case). Report
                     # the silence and let the caller decide what it means.
-                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                    items_list = [encode_chat_item(ev.item) for ev in result.events]
                 except Exception as e:
                     error = str(e)
 
@@ -945,7 +862,7 @@ class SessionHost:
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
-                        usage=_session_usage_to_proto(self._session.usage),
+                        usage=encode_session_usage(self._session.usage),
                         created_at=created_at,
                     ),
                 )
@@ -1042,78 +959,6 @@ class SessionHost:
                 )
             )
             await self._transport.send_message(resp)
-
-
-def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
-    model_usages: list[agent_pb.ModelUsage] = []
-    for mu in usage.model_usage:
-        if isinstance(mu, LLMModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    llm=agent_pb.LLMModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        input_cached_tokens=mu.input_cached_tokens,
-                        input_audio_tokens=mu.input_audio_tokens,
-                        input_cached_audio_tokens=mu.input_cached_audio_tokens,
-                        input_text_tokens=mu.input_text_tokens,
-                        input_cached_text_tokens=mu.input_cached_text_tokens,
-                        input_image_tokens=mu.input_image_tokens,
-                        input_cached_image_tokens=mu.input_cached_image_tokens,
-                        output_tokens=mu.output_tokens,
-                        output_audio_tokens=mu.output_audio_tokens,
-                        output_text_tokens=mu.output_text_tokens,
-                        session_duration=mu.session_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, TTSModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    tts=agent_pb.TTSModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        output_tokens=mu.output_tokens,
-                        characters_count=mu.characters_count,
-                        audio_duration=mu.audio_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, STTModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    stt=agent_pb.STTModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        output_tokens=mu.output_tokens,
-                        audio_duration=mu.audio_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, InterruptionModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    interruption=agent_pb.InterruptionModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        total_requests=mu.total_requests,
-                    )
-                )
-            )
-        elif isinstance(mu, EOTModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    eot=agent_pb.EotModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        total_requests=mu.total_requests,
-                    )
-                )
-            )
-    return agent_pb.AgentSessionUsage(model_usage=model_usages)
 
 
 RemoteSessionEventTypes = Literal[

@@ -1,19 +1,75 @@
-"""Unit tests for LiveKit Inference quota telemetry."""
+"""Unit tests for shared LiveKit Inference request metadata."""
 
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import httpx
 import openai
 import pytest
 
+import livekit.agents.inference._utils as inference_utils
+import livekit.agents.job as job_module
 from livekit.agents.inference._utils import (
+    HEADER_SESSION_ID,
+    create_inference_request_id,
     extract_quota_usage,
+    get_inference_headers,
 )
 from livekit.agents.inference.llm import LLMStream
 
 pytestmark = pytest.mark.unit
+
+
+def test_inference_session_id_is_omitted_without_job_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _no_job_context() -> None:
+        raise RuntimeError("no job context")
+
+    monkeypatch.setattr(job_module, "get_job_context", _no_job_context)
+
+    assert HEADER_SESSION_ID not in get_inference_headers()
+
+
+def test_inference_session_id_is_fresh_and_sdk_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = SimpleNamespace(sid="RM_test", isconnected=lambda: False)
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(id="job_test", room=room),
+        room=room,
+        inference_headers={HEADER_SESSION_ID: "caller_value"},
+    )
+    suffixes = iter(("first", "second"))
+
+    monkeypatch.setattr(job_module, "get_job_context", lambda: ctx)
+    monkeypatch.setattr(
+        inference_utils,
+        "shortuuid",
+        lambda prefix="": prefix + next(suffixes),
+    )
+
+    first = get_inference_headers()
+    second = get_inference_headers()
+
+    assert first[HEADER_SESSION_ID] == "inference_first"
+    assert second[HEADER_SESSION_ID] == "inference_second"
+
+
+def test_inference_request_id_links_to_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        inference_utils,
+        "shortuuid",
+        lambda prefix="": prefix + "suffix",
+    )
+
+    assert create_inference_request_id("inference_parent", "tts") == "inference_parent_tts_suffix"
+    assert (
+        create_inference_request_id(None, "eot", fallback_prefix="turn_request_")
+        == "turn_request_suffix"
+    )
 
 
 def test_extract_quota_usage_returns_all_stamped_dimensions() -> None:

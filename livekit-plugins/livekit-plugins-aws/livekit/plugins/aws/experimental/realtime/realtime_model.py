@@ -792,7 +792,7 @@ class RealtimeSession(  # noqa: F811
 
         # Log the full JSON being sent (skip audio events to avoid log spam)
         if '"audioInput"' not in event_json:
-            logger.debug(f"[SEND] {event_json}")
+            logger.debug("[SEND] sending event", extra={"lk.pii.event_json": event_json})
 
         event = InvokeModelWithBidirectionalStreamInputChunk(
             value=BidirectionalInputPayloadPart(bytes_=event_json.encode("utf-8"))
@@ -976,8 +976,8 @@ class RealtimeSession(  # noqa: F811
                     restart_ctx = restart_ctx.copy()
                     restart_ctx.items.pop()
                     logger.debug(
-                        f"[SESSION] Popped last user message for interactive send: "
-                        f"{interactive_user_text[:60]}..."
+                        "[SESSION] Popped last user message for interactive send",
+                        extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
                     )
 
             init_events, history_events = self._event_builder.create_prompt_start_block(
@@ -1026,7 +1026,8 @@ class RealtimeSession(  # noqa: F811
             if interactive_user_text:
                 await self._stream_ready.wait()
                 logger.debug(
-                    f"[SESSION] Sending interactive user text: {interactive_user_text[:60]}..."
+                    "[SESSION] Sending interactive user text",
+                    extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
                 )
                 await self._send_text_message(interactive_user_text, interactive=True)
 
@@ -1229,7 +1230,7 @@ class RealtimeSession(  # noqa: F811
         content_type = self._current_generation.content_id_map.get(content_id)
 
         if content_type == "USER_ASR":
-            logger.debug(f"INPUT TRANSCRIPTION UPDATED: {text_content}")
+            logger.debug("input transcription updated", extra={"lk.pii.text_content": text_content})
             self._update_chat_ctx(role="user", text_content=text_content, content_id=content_id)
 
         elif content_type == "ASSISTANT_TEXT":
@@ -1250,7 +1251,9 @@ class RealtimeSession(  # noqa: F811
             a) 40 total messages limit
             b) 1kB message size limit
         """
-        logger.debug(f"Updating chat context with role: {role} and text_content: {text_content}")
+        logger.debug(
+            "Updating chat context", extra={"role": role, "lk.pii.text_content": text_content}
+        )
 
         # Start a new message when the user contentId changes (new utterance)
         force_new = False
@@ -1528,7 +1531,10 @@ class RealtimeSession(  # noqa: F811
                             # logger.debug(f"Received event: {json_data}")
                             await self._handle_event(json_data)
                         except json.JSONDecodeError:
-                            logger.warning(f"JSON decode error: {response_data}")
+                            logger.warning(
+                                "JSON decode error",
+                                extra={"lk.pii.response_data": f"{response_data}"},
+                            )
                     else:
                         logger.warning("No response received")
                 except concurrent.futures.InvalidStateError:
@@ -1723,7 +1729,7 @@ class RealtimeSession(  # noqa: F811
             self._instructions_ready = asyncio.get_running_loop().create_future()
         if not self._instructions_ready.done():
             self._instructions_ready.set_result(True)
-        logger.debug(f"Instructions updated: {instructions}")
+        logger.debug("Instructions updated", extra={"lk.pii.instructions": instructions})
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         """Inject chat history and handle incremental user messages."""
@@ -1757,7 +1763,9 @@ class RealtimeSession(  # noqa: F811
             for item in chat_ctx.items:
                 if item.type == "message":
                     self._sent_message_ids.add(item.id)
-            logger.debug(f"Chat context updated: {self._chat_ctx.items}")
+            logger.debug(
+                "Chat context updated", extra={"lk.pii.chat_ctx_items": self._chat_ctx.items}
+            )
             self._chat_ctx_ready.set_result(True)
 
         # Process items in context
@@ -1767,8 +1775,15 @@ class RealtimeSession(  # noqa: F811
                 if item.call_id not in self._pending_tools:
                     continue
 
-                logger.debug(f"function call output: {item}")
+                logger.debug("function call output received", extra={"lk.pii.item": item})
                 self._pending_tools.discard(item.call_id)
+
+                if not item.reply_required:
+                    logger.warning(
+                        "a tool result wants no reply, but Nova Sonic will answer it anyway. "
+                        "Sending it regardless, since an unanswered tool use keeps the turn open.",
+                        extra={"function": item.name, "call_id": item.call_id},
+                    )
 
                 # Format tool result as proper JSON
                 if item.is_error:
@@ -1795,7 +1810,8 @@ class RealtimeSession(  # noqa: F811
                 if item.id not in self._audio_message_ids:
                     if item.raw_text_content and item.raw_text_content.strip():
                         logger.debug(
-                            f"Sending user message as interactive text: {item.raw_text_content}"
+                            "Sending user message as interactive text",
+                            extra={"lk.pii.text_content": item.raw_text_content},
                         )
                         # Send interactive text to Nova Sonic (triggers generation)
                         # This is the flow for generate_reply(user_input=...) from the framework
@@ -1823,8 +1839,8 @@ class RealtimeSession(  # noqa: F811
                     self._chat_ctx.items.append(item)
                 else:
                     logger.debug(
-                        "Skipping user message (already in context from audio): "
-                        f"{item.raw_text_content}"
+                        "Skipping user message (already in context from audio)",
+                        extra={"lk.pii.text_content": item.raw_text_content},
                     )
                     self._sent_message_ids.add(item.id)
 
@@ -1999,7 +2015,9 @@ class RealtimeSession(  # noqa: F811
                                     except Exception:
                                         logger.exception("Failed to parse tool result")
 
-                            logger.debug(f"Sending tool result: {tool_result}")
+                            logger.debug(
+                                "Sending tool result", extra={"lk.pii.tool_result": tool_result}
+                            )
                             await self._send_tool_events(tool_use_id, tool_result)
                             # Create new task for next tool result
                             tool_task = asyncio.create_task(self._tool_results_ch.recv())
@@ -2125,7 +2143,10 @@ class RealtimeSession(  # noqa: F811
 
         # Nova 2.0: Only send if instructions provided
         if is_given(instructions):
-            logger.info(f"generate_reply: sending instructions='{instructions}'")
+            logger.info(
+                "generate_reply: sending instructions",
+                extra={"lk.pii.instructions": instructions},
+            )
 
             # Create future that will be resolved when generation starts
             fut = asyncio.Future[llm.GenerationCreatedEvent]()
@@ -2236,7 +2257,8 @@ class RealtimeSession(  # noqa: F811
                 raise
 
         logger.info(
-            f"Sent text message (interactive={interactive}): {text[:50]}{'...' if len(text) > 50 else ''}"
+            "Sent text message",
+            extra={"interactive": interactive, "lk.pii.text": text[:50]},
         )
 
     def commit_audio(self) -> None:
@@ -2338,5 +2360,7 @@ class RealtimeSession(  # noqa: F811
             tasks.append(self._main_atask)
 
         await asyncio.gather(*tasks, return_exceptions=True)
-        logger.debug(f"CHAT CONTEXT: {self._chat_ctx.items}")
+        logger.debug(
+            "chat context at session end", extra={"lk.pii.chat_ctx_items": self._chat_ctx.items}
+        )
         logger.info("Session end")

@@ -1101,7 +1101,7 @@ class RealtimeSession(
                     await ws_conn.send_str(json.dumps(msg))
 
                     if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
-                        logger.debug(f">>> {msg}")
+                        logger.debug(">>>", extra={"lk.pii.event": msg})
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1153,7 +1153,7 @@ class RealtimeSession(
                         if event_copy["type"] == "response.output_audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
 
-                        logger.debug(f"<<< {event_copy}")
+                        logger.debug("<<<", extra={"lk.pii.event": event_copy})
 
                     if event["type"] == "input_audio_buffer.speech_started":
                         self._handle_input_audio_buffer_speech_started(
@@ -1212,7 +1212,9 @@ class RealtimeSession(
                     elif event["type"] == "error":
                         self._handle_error(RealtimeErrorEvent.construct(**event))
                     elif lk_oai_debug:
-                        logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
+                        logger.debug(
+                            f"unhandled event: {event['type']}", extra={"lk.pii.event": event}
+                        )
                 except Exception as e:
                     # terminal server errors (e.g. insufficient_quota) must break the recv
                     # loop so _main_task stops reconnecting; every other handler failure is
@@ -1221,7 +1223,7 @@ class RealtimeSession(
                         raise
                     if event["type"] == "response.output_audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
-                    logger.exception("failed to handle event", extra={"event": event})
+                    logger.exception("failed to handle event", extra={"lk.pii.event": event})
 
         tasks = [
             asyncio.create_task(_recv_task(), name="_recv_task"),
@@ -2271,16 +2273,20 @@ class RealtimeSession(
             logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
-        # a rejected item event gets no deleted/added reply, so fail its future rather than
-        # leave update_chat_ctx to stall inside the speech that awaits it
-        if (event_id := event.error.event_id) and (
-            fut := self._chat_ctx_event_futures.pop(event_id, None)
-        ):
-            if not fut.done():
-                fut.set_exception(llm.RealtimeError(event.error.message))
-            # a terminal one still has to end the session, whatever it came in reply to
-            if not _is_fatal_error(event.error):
-                return
+        if event_id := event.error.event_id:
+            # a rejected item event gets no deleted/added reply, so fail its future rather than
+            # leave update_chat_ctx to stall inside the speech that awaits it
+            if fut := self._chat_ctx_event_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message))
+                # a terminal one still has to end the session, whatever it came in reply to
+                if not _is_fatal_error(event.error):
+                    return
+            # a rejected response.create gets no response.created; fail its future now
+            # instead of orphaning it until the 10s timeout (still emitted/raised below)
+            elif fut := self._response_created_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message, code=event.error.code))
 
         if event.error.message.startswith("Cancellation failed"):
             return

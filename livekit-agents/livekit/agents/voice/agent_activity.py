@@ -5,7 +5,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncIterable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -71,6 +71,7 @@ from .generation import (
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
+    _interrupted_tool_output,
     _strip_assistant_markup,
     _strip_running_tool_calls,
     _TextOutput,
@@ -106,6 +107,29 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+
+
+async def _aligned_transcript_or_text(
+    timed_texts: AsyncIterable[str], text: AsyncIterable[str]
+) -> AsyncGenerator[str, None]:
+    """Forward the TTS-aligned transcript, falling back to the spoken text.
+
+    ``aligned_transcript`` says the TTS was asked for word timings, not that this
+    model/language pair returns any. When none arrive the aligned stream is simply
+    empty, and forwarding it alone would leave the turn with no transcript.
+    """
+    aligned = False
+    async for timed_text in timed_texts:
+        aligned = True
+        yield timed_text
+
+    if not aligned:
+        logger.warning(
+            "no aligned transcript was returned from tts, "
+            "forwarding the generated text without word timings"
+        )
+        async for chunk in text:
+            yield chunk
 
 
 def _transcripts_equivalent(first: str, second: str | None) -> bool:
@@ -809,7 +833,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 self._agent._activity = self
 
-                with trace.use_span(start_span, end_on_exit=False):
+                with tracer.use_span(start_span, end_on_exit=False):
                     if isinstance(self.llm, llm.LLM):
                         self.llm.prewarm()
 
@@ -1794,11 +1818,11 @@ class AgentActivity(RecognitionHooks):
                 and not eou_task.done()
             ):
                 user_active = True
-                await eou_task
+                await asyncio.shield(eou_task)
 
-            if self._user_turn_completed_atask and not self._user_turn_completed_atask.done():
+            if (user_turn_task := self._user_turn_completed_atask) and not user_turn_task.done():
                 user_active = True
-                await self._user_turn_completed_atask
+                await asyncio.shield(user_turn_task)
 
         while (wait_for_agent and agent_active) or (wait_for_user and user_active):
             if self._closed or self._session._closing:
@@ -2066,8 +2090,7 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 if self._audio_recognition:
                     self._audio_recognition._on_end_of_agent_speech(
-                        ignore_user_transcript_until=ignore_user_transcript_until or time.time(),
-                        paused=True,
+                        ignore_user_transcript_until=ignore_user_transcript_until or time.time()
                     )
                 if self.interruption_enabled:
                     self._restore_interruption_by_audio_activity()
@@ -2191,8 +2214,7 @@ class AgentActivity(RecognitionHooks):
         # flush held transcripts again if possible
         if self._audio_recognition:
             self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at,
-                paused=self._paused_speech is not None,
+                ignore_user_transcript_until=ev.overlap_started_at or ev.detected_at
             )
 
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None:
@@ -2338,7 +2360,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
 
             if self._session._closing:
@@ -2408,7 +2430,9 @@ class AgentActivity(RecognitionHooks):
             # So we wait for the old execution of on_user_turn_completed to finish.
             # In practice this is OK because most speeches will be interrupted if a new turn
             # is detected. So the previous execution should complete quickly.
-            await old_task
+            await asyncio.wait({old_task})
+            if not old_task.cancelled():
+                old_task.result()
 
         self._preemptive_generation_count = 0
 
@@ -2456,7 +2480,7 @@ class AgentActivity(RecognitionHooks):
             if not current_speech.allow_interruptions:
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
-                    extra={"user_input": info.new_transcript},
+                    extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
@@ -2469,7 +2493,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
@@ -2503,7 +2527,7 @@ class AgentActivity(RecognitionHooks):
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
-                extra={"user_input": info.new_transcript},
+                extra={"lk.pii.user_input": info.new_transcript},
             )
             if user_message and self._session._closing:
                 self._agent._chat_ctx.items.append(user_message)
@@ -2671,7 +2695,10 @@ class AgentActivity(RecognitionHooks):
         return instructions
 
     def _resolve_expressive_options(self) -> ExpressiveOptions | None:
-        """Resolve the session's expressive setting. Returns None if disabled.
+        """Resolve the effective expressive setting. Returns None if disabled.
+
+        The agent's ``expressive`` overrides the session's when set, matching how the
+        agent's ``llm``/``tts`` override the session models.
 
         Expressive mode requires two things:
         - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
@@ -2688,7 +2715,11 @@ class AgentActivity(RecognitionHooks):
         if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
             return None
 
-        expr = self._session._expressive
+        expr = (
+            self._agent.expressive
+            if is_given(self._agent.expressive)
+            else self._session._expressive
+        )
         if not expr and not isinstance(expr, dict):
             return None
         # speech_steering renders per-provider delivery guidelines on top of the
@@ -2871,7 +2902,7 @@ class AgentActivity(RecognitionHooks):
                     and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                     and (timed_texts := await tts_gen_data.timed_texts_fut)
                 ):
-                    text_source = timed_texts
+                    text_source = _aligned_transcript_or_text(timed_texts, text_source)
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output,
@@ -3326,8 +3357,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         # start to execute tools (only after play())
         exe_task, tool_output = perform_tool_executions(
@@ -3377,7 +3407,10 @@ class AgentActivity(RecognitionHooks):
                 and use_aligned_transcript
                 and (timed_texts := await segment.tts.timed_texts_fut)
             ):
-                transcript = timed_texts
+                # the channel exists as soon as the node streams, before any timed
+                # word has arrived, so a TTS that advertises alignment it doesn't
+                # deliver would leave the segment with no transcript at all
+                transcript = _aligned_transcript_or_text(timed_texts, segment.text)
                 read_transcript_from_tts = True
 
             tr_node = self._agent.transcription_node(transcript, model_settings)
@@ -3466,6 +3499,12 @@ class AgentActivity(RecognitionHooks):
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
+            if self._audio_recognition:
+                self._audio_recognition._on_end_of_agent_speech(
+                    ignore_user_transcript_until=time.time()
+                )
+            if self.interruption_enabled:
+                self._restore_interruption_by_audio_activity()
         elif self._session.agent_state == "speaking":
             self._session._update_agent_state("listening")
             if self._audio_recognition:
@@ -3484,14 +3523,13 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
 
-            # commit results of tools that finished despite the interruption (#3702);
-            # handoffs excluded: not applied when interrupted, must stay retryable
+            # commit results of tools that finished despite the interruption (#3702), so
+            # the next inference doesn't run them again
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None and sanitized_out.agent_task is None:
-                    interrupted_calls.append(sanitized_out.fnc_call)
-                    interrupted_fnc_outputs.append(sanitized_out.fnc_call_out)
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
             if interrupted_tool_messages := interrupted_calls + interrupted_fnc_outputs:
                 self._session.emit(
@@ -3534,13 +3572,9 @@ class AgentActivity(RecognitionHooks):
                 function_calls=[], function_call_outputs=[]
             )
             for sanitized_out in tool_output.output:
-                if sanitized_out.fnc_call_out is not None:
-                    new_calls.append(sanitized_out.fnc_call)
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        fnc_executed_ev._reply_required = True
+                new_calls.append(sanitized_out.fnc_call)
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
@@ -3567,7 +3601,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
-            if fnc_executed_ev._reply_required and not speech_handle.interrupted:
+            if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
@@ -3910,7 +3944,7 @@ class AgentActivity(RecognitionHooks):
                         and (tts.capabilities.aligned_transcript or not tts.capabilities.streaming)
                         and (timed_texts := await tts_gen_data.timed_texts_fut)
                     ):
-                        tr_text_input = timed_texts
+                        tr_text_input = _aligned_transcript_or_text(timed_texts, tr_text_input)
                         read_transcript_from_tts = True
 
                     tasks.append(tts_task)
@@ -3994,8 +4028,7 @@ class AgentActivity(RecognitionHooks):
             self._session._tool_items_added([fnc_call])
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
-            if out.fnc_call_out:
-                speech_handle._item_added([out.fnc_call_out])
+            speech_handle._item_added([out.fnc_call_out])
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -4130,6 +4163,36 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(exe_task)
+
+            # commit results of tools that finished despite the interruption, as the pipeline
+            # task does. the calls are already recorded, so each one answers or the model waits
+            interrupted_calls: list[llm.FunctionCall] = []
+            interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
+            for sanitized_out in tool_output.output:
+                interrupted_calls.append(sanitized_out.fnc_call)
+                interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
+
+            if interrupted_fnc_outputs:
+                self._session.emit(
+                    "function_tools_executed",
+                    FunctionToolsExecutedEvent(
+                        function_calls=interrupted_calls,
+                        function_call_outputs=interrupted_fnc_outputs,
+                    ),
+                )
+                self._agent._chat_ctx.insert(interrupted_fnc_outputs)
+                self._session._tool_items_added(interrupted_fnc_outputs)
+
+                # unlike the pipeline, a realtime model holds the call open server-side
+                chat_ctx = self._rt_session.chat_ctx.copy()
+                chat_ctx.items.extend(interrupted_fnc_outputs)
+                try:
+                    await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync the tool results of an interrupted generation",
+                        extra={"error": str(e)},
+                    )
             return
 
         # wait for the tool execution to complete
@@ -4149,7 +4212,6 @@ class AgentActivity(RecognitionHooks):
             speech_handle._num_steps += 1
 
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            generate_tool_reply: bool = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
@@ -4157,19 +4219,14 @@ class AgentActivity(RecognitionHooks):
             ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
-                # add the function call and output to the event, including the None outputs
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
-                if sanitized_out.fnc_call_out is not None:
-                    new_fnc_outputs.append(sanitized_out.fnc_call_out)
-                    if sanitized_out.reply_required:
-                        generate_tool_reply = True
-                        fnc_executed_ev._reply_required = True
+                new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                    # add tool output to the chat context
-                    self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                    self._session._tool_items_added([sanitized_out.fnc_call_out])
+                # add tool output to the chat context
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -4207,7 +4264,7 @@ class AgentActivity(RecognitionHooks):
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev._reply_required
+                    and fnc_executed_ev.has_tool_reply
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -4246,7 +4303,7 @@ class AgentActivity(RecognitionHooks):
                         auto_reply_fut.set_result(None)
 
             if (
-                fnc_executed_ev._reply_required
+                fnc_executed_ev.has_tool_reply
                 and not self._rt_session.capabilities.auto_tool_reply_generation
             ):
                 self._rt_session.interrupt()
@@ -4268,14 +4325,6 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
-                )
-            elif (
-                self._rt_session.capabilities.auto_tool_reply_generation
-                and not fnc_executed_ev._reply_required
-                and generate_tool_reply
-            ):
-                logger.warning(
-                    f"Tool reply cannot be prevented when using {self.llm._label}, it generates reply automatically."
                 )
 
     def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
@@ -4370,9 +4419,7 @@ class AgentActivity(RecognitionHooks):
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
                 if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(
-                        started_at=time.time(), resumed=True
-                    )
+                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()
@@ -4442,13 +4489,6 @@ class AgentActivity(RecognitionHooks):
 
         if not self._paused_speech:
             return
-
-        # the pause withheld end-of-agent-speech for a resume; interrupting ends the turn
-        # instead. the audio stopped when it was paused, so no playout is left to wait for
-        if interrupt and self._audio_recognition:
-            self._audio_recognition._on_end_of_agent_speech(
-                ignore_user_transcript_until=time.time()
-            )
 
         if (
             interrupt

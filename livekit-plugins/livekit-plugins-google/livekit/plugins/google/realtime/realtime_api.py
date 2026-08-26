@@ -90,6 +90,13 @@ def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
         )
 
 
+def _warn_vertex_scheduling_unsupported() -> None:
+    logger.warning(
+        "tool_response_scheduling is not supported by Vertex AI and will be ignored; "
+        "tool responses use the default scheduling there."
+    )
+
+
 def _get_1008_error_hint(error_message: str) -> str | None:
     """
     Generate a hint for WebSocket 1008 policy violation errors.
@@ -296,6 +303,8 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(vertexai)
             else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
         )
+        if use_vertexai and is_given(tool_response_scheduling):
+            _warn_vertex_scheduling_unsupported()
         if not is_given(model):
             model = (
                 "gemini-live-2.5-flash-native-audio"
@@ -542,7 +551,7 @@ class RealtimeSession(llm.RealtimeSession):
                     if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
                         logger.warning(
                             "discarding client content for turn completion, may cause generate_reply timeout",
-                            extra={"content": str(msg)},
+                            extra={"lk.pii.content": str(msg)},
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
@@ -574,6 +583,8 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
+            if self._opts.vertexai:
+                _warn_vertex_scheduling_unsupported()
             # no need to restart
 
         if is_given(tool_choice):
@@ -659,10 +670,29 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
+            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
+            supports_silent_scheduling = (
+                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+            )
+            if not supports_silent_scheduling and (
+                silenced := [
+                    item.name
+                    for item in append_ctx.items
+                    if item.type == "function_call_output" and not item.reply_required
+                ]
+            ):
+                logger.warning(
+                    "a tool result wants no reply, but Gemini will answer it anyway; declare "
+                    "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
+                    "regardless, since an unanswered call blocks the session.",
+                    extra={"functions": silenced},
+                )
+
             tool_results = get_tool_results_for_realtime(
                 append_ctx,
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
+                supports_silent_scheduling=supports_silent_scheduling,
             )
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
@@ -1051,7 +1081,7 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         logger.debug(
                             f">>> sent {type(msg).__name__}",
-                            extra={"content": msg.model_dump(exclude_defaults=True)},
+                            extra={"lk.pii.content": msg.model_dump(exclude_defaults=True)},
                         )
 
         except Exception as e:
@@ -1084,7 +1114,7 @@ class RealtimeSession(llm.RealtimeSession):
                             for part in parts:
                                 if part and part.get("inline_data"):
                                     part["inline_data"] = "<audio>"
-                        logger.debug("<<< received response", extra={"response": resp_copy})
+                        logger.debug("<<< received response", extra={"lk.pii.response": resp_copy})
 
                     if response.tool_call and self._opts.tool_choice == "none":
                         # reject without opening a generation, so the pending generate_reply
@@ -1266,7 +1296,9 @@ class RealtimeSession(llm.RealtimeSession):
             if self._rejected_tool_calls:
                 logger.debug(
                     "ignoring server content from a rejected tool call turn",
-                    extra={"server_content": server_content.model_dump_json(exclude_none=True)},
+                    extra={
+                        "lk.pii.server_content": server_content.model_dump_json(exclude_none=True)
+                    },
                 )
             else:
                 logger.warning("received server content but no active generation.")
@@ -1319,6 +1351,7 @@ class RealtimeSession(llm.RealtimeSession):
                         item_id=current_gen.input_id,
                         transcript=current_gen.input_transcription,
                         is_final=False,
+                        turn_started_at=current_gen._created_timestamp,
                     ),
                 )
 
@@ -1360,6 +1393,7 @@ class RealtimeSession(llm.RealtimeSession):
                     item_id=gen.input_id,
                     transcript=gen.input_transcription,
                     is_final=True,
+                    turn_started_at=gen._created_timestamp,
                 ),
             )
 
@@ -1384,7 +1418,7 @@ class RealtimeSession(llm.RealtimeSession):
         gen.message_ch.close()
         gen._done = True
         if lk_google_debug:
-            logger.debug(f"generation done {gen}")
+            logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
 
     def _close_output_streams(self, gen: _ResponseGeneration) -> None:
         # ends the audio segment and finalizes the output transcript. called on

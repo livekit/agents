@@ -16,6 +16,7 @@ from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.speech_handle import SpeechHandle
 
+from .fake_realtime import run_realtime_tool_turn
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -171,9 +172,11 @@ async def test_tool_results_preserved_when_tool_in_flight_at_interruption() -> N
     _assert_weather_tool_preserved(agent, session)
 
 
-async def test_handoff_tool_not_recorded_when_interrupted() -> None:
-    """Handoffs aren't applied on interrupted speech, so their calls must not be
-    recorded as completed — the LLM needs to retry them."""
+async def test_handoff_tool_reports_its_cancellation_when_interrupted() -> None:
+    """An interrupted handoff is recorded as failed, and the agent does not switch.
+
+    The tool ran, so dropping its call would let the next inference run it again.
+    """
 
     class TransferAgent(Agent):
         def __init__(self) -> None:
@@ -202,6 +205,96 @@ async def test_handoff_tool_not_recorded_when_interrupted() -> None:
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
-    assert not tool_executed_events
-    for items in (agent.chat_ctx.items, session.history.items):
-        assert not any(i.type in ("function_call", "function_call_output") for i in items)
+    assert session.current_agent is agent, "the handoff must not be applied"
+
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].function_calls[0].name == "transfer_to_billing"
+    assert tool_executed_events[0].function_call_outputs[0].is_error
+
+    for label, items in (
+        ("agent chat_ctx", agent.chat_ctx.items),
+        ("session history", session.history.items),
+    ):
+        calls = [i for i in items if i.type == "function_call"]
+        outs = [i for i in items if i.type == "function_call_output"]
+        assert len(calls) == 1, f"{label}: the attempted transfer must be recorded"
+        assert len(outs) == 1, f"{label}: the interrupted handoff must be answered once"
+        assert outs[0].call_id == calls[0].call_id
+        assert outs[0].is_error
+        assert not outs[0].reply_required
+
+
+# --- realtime models -------------------------------------------------------------------
+# A realtime model also holds the tool call open server-side. Gemini blocks the session until
+# it is answered and offers no way to cancel, so the preserved result is synced to the session
+# as well as to the local context (issue #6569).
+
+
+async def test_realtime_tool_results_preserved_and_synced_when_interrupted() -> None:
+    """The result reaches both the local context and the realtime session, wanting no reply."""
+
+    class RealtimeWeatherAgent(WeatherAgent):
+        @function_tool
+        async def get_weather(self) -> str:
+            """Called when the user asks about the weather."""
+            self.tool_executed.set()
+            return "The weather in Tokyo is sunny today."
+
+    agent = RealtimeWeatherAgent()
+    tool_executed_events: list[FunctionToolsExecutedEvent] = []
+    session, model = await run_realtime_tool_turn(
+        agent,
+        tool_executed=agent.tool_executed,
+        interrupt=True,
+        on_session=lambda s: s.on("function_tools_executed", tool_executed_events.append),
+    )
+
+    _assert_weather_tool_preserved(agent, session)
+    assert len(tool_executed_events) == 1
+    assert tool_executed_events[0].function_calls[0].name == "get_weather"
+    assert (
+        tool_executed_events[0].function_call_outputs[0].output
+        == "The weather in Tokyo is sunny today."
+    )
+
+    synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
+    assert len(synced) == 1, "the tool output was never synced to the realtime session"
+    assert synced[0].call_id == "1"
+    assert not synced[0].reply_required
+
+
+async def test_realtime_handoff_tool_reports_its_cancellation_when_interrupted() -> None:
+    """An interrupted handoff is answered as failed, and the agent does not switch.
+
+    The session holds the call open until it is answered, and an empty success would claim a
+    transfer that never happened.
+    """
+
+    class RealtimeTransferAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def transfer_to_billing(self) -> Agent:
+            """Transfer the user to the billing department."""
+            self.tool_executed.set()
+            return Agent(instructions="You are the billing agent.")
+
+    agent = RealtimeTransferAgent()
+    session, model = await run_realtime_tool_turn(
+        agent, tool_executed=agent.tool_executed, interrupt=True
+    )
+
+    assert session.current_agent is agent, "the handoff must not be applied"
+
+    for label, items in (
+        ("agent chat_ctx", agent.chat_ctx.items),
+        ("session history", session.history.items),
+        ("realtime session", model.active_session.chat_ctx.items),
+    ):
+        outs = [i for i in items if i.type == "function_call_output"]
+        assert len(outs) == 1, f"{label}: the interrupted handoff must be answered once"
+        assert outs[0].call_id == "1"
+        assert outs[0].is_error
+        assert not outs[0].reply_required

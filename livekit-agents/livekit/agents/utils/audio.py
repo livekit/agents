@@ -292,11 +292,8 @@ class AudioArrayBuffer:
             The number of samples written to the buffer.
 
         Raises:
-            ValueError: If the frame samples are greater than the buffer size.
+            ValueError: If the frame samples, after resampling, are greater than the buffer size.
         """
-        if frame.samples_per_channel > self._buffer_size:
-            raise ValueError("frame samples are greater than the buffer size")
-
         frames: list[rtc.AudioFrame] = []
         if self._resampler is None and frame.sample_rate != self._sample_rate:
             self._resampler = rtc.AudioResampler(
@@ -312,6 +309,21 @@ class AudioArrayBuffer:
             frames.extend(self._resampler.push(frame))
         else:
             frames.append(frame)
+
+        if not frames:
+            # the resampler holds short frames back until it can emit a full output frame
+            return 0
+
+        if (samples := sum(f.samples_per_channel for f in frames)) > self._buffer_size:
+            detail = (
+                f" after resampling {frame.sample_rate}Hz to {self._sample_rate}Hz"
+                if self._resampler
+                else ""
+            )
+            raise ValueError(
+                f"frame samples ({samples}{detail}) are greater than "
+                f"the buffer size ({self._buffer_size})"
+            )
 
         frame = merge_frames(frames)
 
