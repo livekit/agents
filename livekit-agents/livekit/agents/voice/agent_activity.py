@@ -3042,9 +3042,13 @@ class AgentActivity(RecognitionHooks):
                 audio_out is not None
                 and audio_output.captured_playout_segments > audio_out.captured_segments_before
             )
-            if audio_out is not None and (
-                (audio_out.first_frame_fut.done() and not audio_out.first_frame_fut.cancelled())
-                or (played_own_frame and playback_ev.playback_position > 0)
+            if (
+                audio_out is not None
+                and played_own_frame
+                and (
+                    (audio_out.first_frame_fut.done() and not audio_out.first_frame_fut.cancelled())
+                    or playback_ev.playback_position > 0
+                )
             ):
                 if playback_ev.synchronized_transcript is not None:
                     forwarded_text = playback_ev.synchronized_transcript

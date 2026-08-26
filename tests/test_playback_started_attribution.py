@@ -63,6 +63,17 @@ class _NoStartNotifyOutput(FakeAudioOutput):
             self._started_at = time.time()
 
 
+class _BlockingBeforeCaptureOutput(FakeAudioOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.capture_entered = asyncio.Event()
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.capture_entered.set()
+        await asyncio.Event().wait()
+        await super().capture_frame(frame)
+
+
 async def _drive_forwarding(
     audio_output: AudioOutput, frames_ch: asyncio.Queue[rtc.AudioFrame | None]
 ):
@@ -157,6 +168,36 @@ async def test_interrupted_commit_uses_position_evidence_without_started_event()
     assert audio_output.captured_playout_segments > out.audio_out.captured_segments_before
     assert out.played == "partial"
     assert out.playback_position > 0
+
+
+async def test_stale_event_during_unaccepted_capture_stays_skipped() -> None:
+    audio_output = _BlockingBeforeCaptureOutput()
+    speech_handle = SpeechHandle.create()
+
+    async def _audio_source() -> AsyncIterable[rtc.AudioFrame]:
+        yield _make_frame()
+
+    forward_task = asyncio.create_task(
+        forward_generation(
+            speech_handle=speech_handle,
+            audio_output=audio_output,
+            text_output=None,
+            audio_source=_audio_source(),
+            text_source=None,
+            on_first_frame=lambda _fut, _out: None,
+            reconcile_playout_pause=lambda: None,
+        )
+    )
+
+    await asyncio.wait_for(audio_output.capture_entered.wait(), timeout=5)
+    audio_output.on_playback_started(created_at=time.time())
+    speech_handle.interrupt()
+    out = await asyncio.wait_for(forward_task, timeout=5)
+
+    assert out.audio_out is not None
+    assert out.audio_out.first_frame_fut.done()
+    assert audio_output.captured_playout_segments == out.audio_out.captured_segments_before
+    assert out.played == "skipped"
 
 
 async def test_interrupted_commit_stays_skipped_without_any_capture() -> None:
