@@ -12,7 +12,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import AsyncIterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -181,6 +181,7 @@ class RealtimeModel(llm.RealtimeModel):
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
                 per_response_tool_choice=False,
+                supports_say=True,
             )
         )
 
@@ -549,6 +550,77 @@ class RealtimeSession(
         fut.add_done_callback(_on_fut_done)
 
         return fut
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Speak verbatim text via Ultravox ``ForcedAgentMessage``.
+
+        The server speaks the exact text without LLM processing and enforces
+        ``uninterruptible: true`` so user speech cannot barge in.
+        """
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by say()")
+
+        self._pending_generation_epoch = time.perf_counter()
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generation_fut = fut
+
+        if isinstance(text, str):
+            self._send_forced_agent_message(text)
+        else:
+            asyncio.create_task(
+                self._collect_and_send_forced_message(text),
+                name="ultravox-say-collect",
+            )
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError(
+                        "say() timed out waiting for generation_created event."
+                    )
+                )
+                if self._pending_generation_fut is fut:
+                    self._pending_generation_fut = None
+                    self._pending_generation_epoch = None
+
+        timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if f.cancelled() and is_current:
+                self._send_client_event(
+                    UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+                )
+
+        fut.add_done_callback(_on_fut_done)
+
+        return fut
+
+    def _send_forced_agent_message(self, text: str) -> None:
+        self._send_client_event({
+            "type": "forced_agent_message",
+            "content": text,
+            "uninterruptible": True,
+        })
+
+    async def _collect_and_send_forced_message(
+        self,
+        text_iter: AsyncIterable[str],
+    ) -> None:
+        chunks: list[str] = []
+        async for chunk in text_iter:
+            chunks.append(chunk)
+        self._send_forced_agent_message("".join(chunks))
 
     def interrupt(self) -> None:
         """Interrupt the current generation."""
