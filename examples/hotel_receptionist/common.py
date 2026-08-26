@@ -22,6 +22,11 @@ class Userdata:
     # instead of re-verifying into a confusing "already cancelled" dead end.
     last_cancel_message: str = ""
     caller_turns_at_last_cancel: int = -1
+    # The last document re-send and the caller-turn count when it went out - so a
+    # re-invoked resend with no caller input since relays that it's sent instead of
+    # emailing the same document twice.
+    last_resend_message: str = ""
+    caller_turns_at_last_resend: int = -1
     verified_booking: RoomBooking | None = None
     # The most recent completed room booking, and the caller-turn count at the moment
     # it completed - together they catch a model that re-runs the booking flow with no

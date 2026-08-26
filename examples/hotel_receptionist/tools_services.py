@@ -4,11 +4,12 @@ import logging
 import os
 import sys
 from datetime import date, time
+from enum import StrEnum
 from typing import Annotated, Literal
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from common import Userdata, _speak_code
+from common import Userdata, _count_caller_turns, _speak_code
 from hotel_db import (
     MAX_PARTY_SIZE,
     FollowupKind,
@@ -79,6 +80,23 @@ def room_to_id(room: NumberedRoom | PenthouseSuite) -> str:
     return "RM_PH" if room.type == "penthouse" else f"RM_{room.number}"
 
 
+class DeliveryPreference(StrEnum):
+    """The handling notes the florist actually acts on. A closed set: free text let the
+    agent write the destination back as an instruction, or invent a delivery guarantee."""
+
+    AS_EARLY_AS_POSSIBLE = "as_early_as_possible"
+    BEFORE_NOON_IF_POSSIBLE = "before_noon_if_possible"
+    LEAVE_WITH_FRONT_DESK = "leave_with_front_desk"
+
+
+def _speak_delivery_instruction(instruction: DeliveryPreference) -> str:
+    return {
+        DeliveryPreference.AS_EARLY_AS_POSSIBLE: "as early as possible",
+        DeliveryPreference.BEFORE_NOON_IF_POSSIBLE: "before noon if possible",
+        DeliveryPreference.LEAVE_WITH_FRONT_DESK: "leave with the front desk",
+    }[instruction]
+
+
 class ServicesToolsMixin:
     @function_tool
     async def flag_late_arrival(self, ctx: RunContext[Userdata], note: str) -> str:
@@ -100,12 +118,12 @@ class ServicesToolsMixin:
         caller_phone: str,
         summary: str,
     ) -> str:
-        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
+        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes. Florist delivery notes are the one exception - they belong on the order itself via amend_florist_order, never here.
 
         Args:
             kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
-            caller_name: Caller's name (ask if you don't already have it).
-            caller_phone: Caller's callback number - for an in-house guest, the room number works.
+            caller_name: The caller's actual name - ask for it if you don't already have it, for every kind of followup. Never a placeholder or a description standing in for one: a followup is a note for a human about a person, and a room number identifies the room, not the person.
+            caller_phone: Caller's callback number - for an in-house guest, the room number works (as the number, never as the name).
             summary: One sentence describing what they want, with enough detail for a human to act on it.
         """
         code = await ctx.userdata.db.record_followup(
@@ -153,7 +171,10 @@ class ServicesToolsMixin:
         return (
             f"group inquiry recorded; reference {_speak_code(code)} | nothing is confirmed yet: "
             "tell the caller the group desk will call them back within two business days, "
-            "after credit review, to confirm the block."
+            "after credit review, to confirm the block. Then go back and answer whatever the "
+            "caller asked while you were collecting these arguments - you deferred those to "
+            "record the inquiry first, and nothing being confirmed yet doesn't make the "
+            "group_bookings terms unquotable."
         )
 
     @function_tool
@@ -297,7 +318,7 @@ class ServicesToolsMixin:
         guest_name: str,
         guest_phone: str,
     ) -> str:
-        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
+        """Book a spa or health-club service (massage, facial, personal training, yoga). The catalog (services, prices, durations, hours) is in lookup_policy topic "spa" - look it up first and narrow with the caller (which service, date, time, party size) before booking. The options are for the CALLER to pick from, never pick for them. Quote the chosen service's price and duration from the catalog BEFORE booking, not only after. Once they pick and agree, THIS CALL is the booking - saying "I'll get that set up" books nothing; nothing exists until this returns a reference.
 
         Args:
             service: The spa service the caller picked.
@@ -321,8 +342,9 @@ class ServicesToolsMixin:
         return (
             f"{s.name} booked for {party_size} on {on_date.strftime('%A, %B %-d')} at "
             f"{speak_time(at_time)}; reference {_speak_code(code)}. {s.duration_min} minutes, "
-            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, and "
-            "total to the caller; no further tool call is needed for this appointment."
+            f"total {speak_usd(total)} ({s.description}) | confirm the service, date, time, "
+            "duration, total, and reference to the caller; no further tool call is needed for "
+            "this appointment."
         )
 
     @function_tool
@@ -375,7 +397,7 @@ class ServicesToolsMixin:
         guest_phone: str,
         room: Room | None = None,
         recipient: str | None = None,
-        delivery_instruction: str = "",
+        delivery_instruction: DeliveryPreference | None = None,
     ) -> str:
         """Order a flower arrangement from the hotel florist, delivered to a room or suite here, or to an arriving guest by name if their room isn't assigned yet. The catalog (arrangements, prices, delivery cutoff) is in lookup_policy topic "florist" - look it up first and let the caller pick the arrangement, never pick for them. Collect the delivery date, where it goes, and the gift-card message, and read the card message back so it's right. Once they pick and agree, THIS CALL places the order - saying "I'll get that arranged" orders nothing; nothing exists until this returns a reference. Delivery handling requests ("as early as possible") go in delivery_instruction here, or via amend_florist_order after placing - never in a followup.
 
@@ -387,7 +409,7 @@ class ServicesToolsMixin:
             guest_phone: The caller's phone number, in case the florist needs to reach them.
             room: The destination room, ONLY if the caller named one. A numbered room or suite is {"type": "room", "number": <number>}; the penthouse suite is {"type": "penthouse"}. Omit when no room was named - never guess; if you don't know where it goes, ask.
             recipient: The recipient's name, ONLY when no room is known yet (an arriving guest whose room isn't assigned). Leave unset when you pass room.
-            delivery_instruction: How the delivery should be handled ("before the guest arrives", "leave with the concierge") if the caller says. Empty otherwise.
+            delivery_instruction: A handling constraint ADDITIONAL to the destination, never a restatement of it - if the destination already implies it, the florist has it and this stays unset. Match the caller's actual constraint: a deadline is "before_noon_if_possible"; "as_early_as_possible" is for the earliest slot with no deadline. These are requests to the florist, not guaranteed delivery times. Omit if the caller adds none.
         """
         room_id = room_to_id(room) if room else None
         try:
@@ -399,7 +421,9 @@ class ServicesToolsMixin:
                 recipient_name=recipient,
                 on_date=on_date,
                 card_message=card_message,
-                delivery_instructions=delivery_instruction,
+                delivery_instructions=(
+                    delivery_instruction.value if delivery_instruction is not None else ""
+                ),
             )
         except (NotFound, Unavailable) as e:
             raise ToolError(str(e)) from None
@@ -407,31 +431,37 @@ class ServicesToolsMixin:
         return (
             f"{a.name} ordered for delivery to {destination} on "
             f"{on_date.strftime('%A, %B %-d')}; reference {_speak_code(code)}; total "
-            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, and the "
-            "total to the caller - no further tool call is needed for this order."
+            f"{speak_usd(total)} | confirm the arrangement, where it's going, the date, the total, "
+            "and the reference to the caller - the reference is part of the confirmation, not "
+            "optional. No further tool call is needed for this order."
         )
 
     @function_tool
     async def amend_florist_order(
-        self, ctx: RunContext[Userdata], order_code: str, delivery_instruction: str
+        self,
+        ctx: RunContext[Userdata],
+        order_code: str,
+        delivery_instruction: DeliveryPreference,
     ) -> str:
         """Attach or replace the delivery handling note on a florist order already placed. Use it when the caller adds a handling request after the order ("make sure it's there before she arrives") - the note belongs on the order the florist reads, not in a followup nobody routes.
 
         Args:
             order_code: The florist order reference from order_flowers (e.g. "FLR-...").
-            delivery_instruction: How the delivery should be handled, in one line.
+            delivery_instruction: The handling constraint the caller added. Match what they actually said: a deadline is "before_noon_if_possible"; "as_early_as_possible" is for the earliest slot with no deadline. These are requests to the florist, not guaranteed delivery times.
         """
         try:
             await ctx.userdata.db.amend_florist_order(
-                code=order_code, delivery_instructions=delivery_instruction
+                code=order_code, delivery_instructions=delivery_instruction.value
             )
         except NotFound:
             raise ToolError(
                 f"no florist order {order_code} - re-confirm the reference with the caller"
             ) from None
         return (
-            f'noted on the order: "{delivery_instruction}" | confirm to the caller that the '
-            "florist has it; no further tool call is needed."
+            f"noted on order {_speak_code(order_code)}: "
+            f'"{_speak_delivery_instruction(delivery_instruction)}" | read the note back to the '
+            "caller in those words - it goes to the florist with the order; no further tool call "
+            "is needed."
         )
 
     @function_tool
@@ -445,9 +475,25 @@ class ServicesToolsMixin:
         Args:
             kind: Which document to re-send.
         """
+        # Idempotency: the first call can suspend into booking verification and resume,
+        # and the model then sometimes re-issues it in the same turn - a second email row
+        # for one ask. With no caller turn since the last send there is no new ask, so
+        # relay the outcome it already produced instead of sending again.
+        if (
+            ctx.userdata.caller_turns_at_last_resend >= 0
+            and _count_caller_turns(self.session.history)
+            <= ctx.userdata.caller_turns_at_last_resend
+        ):
+            return (
+                "that document already went out moments ago - do NOT send it again. "
+                f"Relay the outcome to the caller: {ctx.userdata.last_resend_message}"
+            )
         booking = await self._verified_booking(ctx)
         await ctx.userdata.db.send_email(recipient=booking.email, kind=kind)
-        return f"Sent to the address on file, {booking.email.strip().lower()}."
+        msg = f"Sent to the address on file, {booking.email.strip().lower()}."
+        ctx.userdata.last_resend_message = msg
+        ctx.userdata.caller_turns_at_last_resend = _count_caller_turns(self.session.history)
+        return msg
 
     @function_tool
     async def transfer_call(
@@ -497,7 +543,7 @@ class ServicesToolsMixin:
         flight_date: date,
         booking_reference: str,
         seat_check: bool,
-        departure_time: time | None = None,
+        departure_time: time | None,
     ) -> str:
         """Log a flight-reconfirmation request for an in-house guest: the concierge calls the carrier and rings the guest's room with the result. Collect ALL the flight details first and read the booking reference back before calling - a wrong reference makes the whole request useless.
 
@@ -508,16 +554,19 @@ class ServicesToolsMixin:
             flight_date: Flight date in ISO YYYY-MM-DD format. When the caller says a weekday ("Thursday"), resolve it against today and say the concrete date back ("Thursday - that's June eleventh?") BEFORE calling; a one-day slip sends the whole request to the wrong flight.
             booking_reference: The airline booking reference, letters and digits only.
             seat_check: True if the guest also wants their seat assignment checked - it's handled in the same carrier call.
-            departure_time: Scheduled departure in 24-hour HH:MM format if the caller mentions or knows it - it's what any airport-car pickup gets sanity-checked against. Omit if they don't know it.
+            departure_time: Scheduled departure in 24-hour HH:MM format. ASK the caller for it before logging - it's what any airport-car pickup gets sanity-checked against, and nothing else on this call collects it. Pass null only when they say they don't know it.
         """
         room_id = room_to_id(room)
+        # The carrier only takes the reference itself; spacing and case are how the caller
+        # said it, not part of it.
+        stored_reference = "".join(c for c in booking_reference if c.isalnum()).upper()
         try:
             code = await ctx.userdata.db.request_flight_reconfirmation(
                 room=room_id,
                 airline=airline,
                 flight_number=flight_number,
                 flight_date=flight_date,
-                booking_reference=booking_reference,
+                booking_reference=stored_reference,
                 seat_check=seat_check,
                 departure_time=departure_time,
             )
@@ -526,8 +575,11 @@ class ServicesToolsMixin:
                 f"{speak_room(room_id)} doesn't exist here - re-confirm the room"
             ) from None
         return (
-            f"reconfirmation request logged; reference {_speak_code(code)} | tell the caller the "
-            "concierge will call the carrier and ring their room with the result within the hour"
+            f"reconfirmation request logged; request reference {_speak_code(code)}. The airline "
+            f"booking reference on file is {_speak_code(stored_reference)} - read that one back "
+            "too, labeled as the airline booking reference, so the caller doesn't take it for the "
+            "request reference. Tell them the concierge will call the carrier and ring their room "
+            "with the result within the hour"
             + (", including the seat check" if seat_check else "")
             + ". The flight is NOT confirmed yet - never say it is; promise the callback instead."
         )
@@ -632,8 +684,11 @@ class ServicesToolsMixin:
                 "invent past preferences."
             )
         return (
-            f"On file: {prefs} | proactively offer to set these up again for the new stay, and "
-            "apply or note the ones the guest confirms. Don't add any preference beyond these."
+            f"On file: {prefs} | proactively offer to set these up again for the new stay. Saying "
+            "you'll note them notes nothing: the ones the guest confirms exist only once "
+            'record_followup (kind="other") has carried them, and that call has to happen before '
+            "a booking flow starts - it isn't reachable from inside one. Don't add any preference "
+            "beyond these."
         )
 
     @function_tool
