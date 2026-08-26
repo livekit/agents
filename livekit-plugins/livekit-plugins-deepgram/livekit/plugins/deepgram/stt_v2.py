@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 
@@ -45,6 +45,8 @@ from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import V2Models
 
+FluxRedaction = Literal["numbers", "aggressive_numbers"]
+
 
 @dataclass
 class STTOptions:
@@ -58,6 +60,8 @@ class STTOptions:
     eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN
     mip_opt_out: bool = False
     numerals: bool = False
+    profanity_filter: bool = False
+    redact: NotGivenOr[FluxRedaction] = NOT_GIVEN
     tags: NotGivenOr[list[str]] = NOT_GIVEN
     language_hint: NotGivenOr[list[str]] = NOT_GIVEN
 
@@ -79,6 +83,8 @@ class STTv2(stt.STT):
         base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
         numerals: bool = False,
+        profanity_filter: bool = False,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -98,6 +104,8 @@ class STTv2(stt.STT):
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             mip_opt_out: Whether to take part in the model improvement program
             numerals: Whether to convert spoken numbers into numerical formats. Applied at connection time; Flux does not support toggling it mid-stream. Defaults to False.
+            profanity_filter: Whether to filter profanity from the transcription. Applied at connection time. Defaults to False.
+            redact: Redact numbers from the transcription, "numbers" or "aggressive_numbers". Flux does not support entity redaction (pci, pii, ...). Applied at connection time. Defaults to NOT_GIVEN.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -149,6 +157,8 @@ class STTv2(stt.STT):
             else [],
             mip_opt_out=mip_opt_out,
             numerals=numerals,
+            profanity_filter=profanity_filter,
+            redact=redact,
             tags=_validate_tags(tags) if is_given(tags) else [],
             language_hint=language_hint if is_given(language_hint) else [],
             eager_eot_threshold=eager_eot_threshold,
@@ -215,6 +225,8 @@ class STTv2(stt.STT):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
@@ -254,6 +266,10 @@ class STTv2(stt.STT):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(numerals):
             self._opts.numerals = numerals
+        if is_given(profanity_filter):
+            self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
@@ -277,6 +293,8 @@ class STTv2(stt.STT):
                 keyterm=keyterm,
                 mip_opt_out=mip_opt_out,
                 numerals=numerals,
+                profanity_filter=profanity_filter,
+                redact=redact,
                 endpoint_url=endpoint_url,
                 tags=tags,
                 language_hint=language_hint,
@@ -336,6 +354,8 @@ class SpeechStreamv2(stt.SpeechStream):
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
@@ -362,6 +382,10 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.mip_opt_out = mip_opt_out
         if is_given(numerals):
             self._opts.numerals = numerals
+        if is_given(profanity_filter):
+            self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
@@ -371,11 +395,21 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(eager_eot_threshold):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
-        # these only take effect on a fresh connection
-        # numerals included: Flux does not support toggling it through Configure
+        # these only take effect on a fresh connection: Flux does not support
+        # toggling numerals, profanity_filter, or redact through Configure
         # https://developers.deepgram.com/docs/numerals
         needs_reconnect = any(
-            is_given(opt) for opt in (model, sample_rate, mip_opt_out, numerals, tags, endpoint_url)
+            is_given(opt)
+            for opt in (
+                model,
+                sample_rate,
+                mip_opt_out,
+                numerals,
+                profanity_filter,
+                redact,
+                tags,
+                endpoint_url,
+            )
         )
         if needs_reconnect:
             # reconnect carries the latest options
@@ -579,6 +613,12 @@ class SpeechStreamv2(stt.SpeechStream):
 
         if self._opts.numerals:
             live_config["numerals"] = self._opts.numerals
+
+        if self._opts.profanity_filter:
+            live_config["profanity_filter"] = self._opts.profanity_filter
+
+        if is_given(self._opts.redact):
+            live_config["redact"] = self._opts.redact
 
         return live_config
 
