@@ -645,6 +645,40 @@ def test_job_context_otel_metadata_includes_redaction_option() -> None:
     assert ctx._otel_metadata({"redaction": True}) == {"lk.redaction.enabled": True}
 
 
+def _make_simulation_context(*, run_id: str, job_id: str) -> object:
+    from livekit.agents.simulation import SimulationContext
+    from livekit.protocol import agent_simulation as sim_pb
+
+    dispatch = sim_pb.SimulationDispatch(simulation_run_id=run_id, job_id=job_id)
+    return SimulationContext(dispatch, MagicMock())
+
+
+def test_job_context_otel_metadata_includes_simulation_identity() -> None:
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    sim = _make_simulation_context(run_id="run_abc", job_id="job_def")
+    ctx.simulation_context = MagicMock(return_value=sim)
+
+    assert ctx._otel_metadata() == {
+        "lk.simulation.enabled": True,
+        "lk.simulation.run_id": "run_abc",
+        "lk.simulation.job_id": "job_def",
+    }
+
+
+def test_job_context_otel_metadata_omits_blank_simulation_ids() -> None:
+    """A dispatch with no ids must not stamp empty ones: downstream reads an absent
+    attribute as "not a simulation" and an empty one as a run named ""."""
+    from livekit.agents.job import JobContext
+
+    ctx = object.__new__(JobContext)
+    sim = _make_simulation_context(run_id="", job_id="")
+    ctx.simulation_context = MagicMock(return_value=sim)
+
+    assert ctx._otel_metadata() == {"lk.simulation.enabled": True}
+
+
 def test_job_context_init_recording_enables_session_redaction() -> None:
     from livekit.agents.job import JobContext
 

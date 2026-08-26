@@ -932,7 +932,6 @@ class SessionHost:
                             reason=req.finalize_simulation.provisional_reason,
                         ),
                         run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
-                        job=None,
                     )
                     fnc = jc._simulation_end_fnc if jc is not None else None
                     if fnc is not None:
