@@ -584,6 +584,8 @@ class RealtimeSession(
 
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
         self._pending_generation_fut = fut
+        # Without this, a leftover timestamp from the generation we just superseded would let say() resolve before its text goes out.
+        self._pending_generation_epoch = None
 
         task = asyncio.create_task(self._say_task(text, fut), name="ultravox-say")
         self._say_tasks.add(task)
@@ -598,8 +600,7 @@ class RealtimeSession(
         """Collect the text, send the ForcedAgentMessage, then wait for the response."""
         try:
             collected = text if isinstance(text, str) else "".join([c async for c in text])
-            # Superseded or cancelled while draining? Never speak stale (and
-            # uninterruptible) text.
+            # Superseded or cancelled while draining? Never speak stale (and uninterruptible) text.
             if self._pending_generation_fut is not fut or fut.cancelled():
                 return
             self._pending_generation_epoch = time.perf_counter()
