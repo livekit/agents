@@ -46,7 +46,9 @@ DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 _MODELS_REJECTING_SAMPLING_PARAMS = (
     "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-opus-5",
     "claude-sonnet-5",
+    "claude-fable-5",
 )
 
 
@@ -108,7 +110,7 @@ class LLM(llm.LLM):
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
                 Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
-                Opus 4.7/4.8 and Sonnet 5.
+                Opus 4.7/4.8, Opus 5, Sonnet 5 and Fable 5.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
