@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
 
 
-def _supports_temperature(model: str) -> bool:
-    """Return whether the Bedrock model accepts the common temperature field."""
+def _supports_inference_config(model: str) -> bool:
+    """Return whether the Bedrock model accepts the common sampling fields."""
     # Claude Opus 4.7 removed temperature, top_p, and top_k from its request
     # schema. Keep this check substring-based so inference profile ARNs work too.
     return "claude-opus-4-7" not in model.lower()
@@ -204,9 +204,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
         temperature = temperature if is_given(temperature) else self._opts.temperature
-        if is_given(temperature) and _supports_temperature(self._opts.model):
+        if is_given(temperature) and _supports_inference_config(self._opts.model):
             inference_config["temperature"] = temperature
-        if is_given(self._opts.top_p):
+        if is_given(self._opts.top_p) and _supports_inference_config(self._opts.model):
             inference_config["topP"] = self._opts.top_p
 
         opts["inferenceConfig"] = inference_config
