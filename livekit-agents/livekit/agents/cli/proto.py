@@ -14,7 +14,8 @@ class CliArgs:
     url: str | None = None
     api_key: str | None = field(repr=False, default=None)
     api_secret: str | None = field(repr=False, default=None)
-    reload_addr: str | None = None
+    # address of the driving `lk` CLI's dev channel (hot-reload IPC + ServerInfo).
+    cli_addr: str | None = None
     log_format: str = "json"
     dev: bool = False
     # set by `lk simulate` when launching the agent under test; disables the

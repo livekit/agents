@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    UnexpectedModelBehavior,
     create_api_error_from_http,
 )
 from .job import (
@@ -83,17 +84,22 @@ from .voice import (
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
+    AudioRecognition,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    ExpressiveOptions,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    NonverbalOptions,
     RecordingOptions,
     RunContext,
+    RunOutputOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    SpeechSteeringOptions,
     ToolCallEnded,
     ToolCallStarted,
     ToolCallUpdated,
@@ -101,6 +107,7 @@ from .voice import (
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     avatar,
     io,
@@ -113,7 +120,11 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
-from .voice.keyterm_detection import KeytermDetectionOptions, KeytermsOptions
+from .voice.keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -186,6 +197,7 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "SpeechCreatedEvent",
     "ToolExecutionUpdatedEvent",
     "ToolCallStarted",
@@ -212,13 +224,19 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "AgentSession",
+    "AudioRecognition",
+    "ExpressiveOptions",
+    "NonverbalOptions",
+    "SpeechSteeringOptions",
     "RecordingOptions",
+    "RunOutputOptions",
     "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
@@ -269,6 +287,7 @@ __all__ = [
     "UserTurnLimitOptions",
     "KeytermsOptions",
     "KeytermDetectionOptions",
+    "STTContextOptions",
     "UserTurnExceededEvent",
 ]
 

@@ -79,7 +79,7 @@ class AnamAPI:
         Returns:
             The created session token (a JWT string).
         """
-        persona_config_payload = {
+        persona_config_payload: dict[str, Any] = {
             "type": "ephemeral",
             "name": persona_config.name,
             "avatarId": persona_config.avatarId,
@@ -88,6 +88,14 @@ class AnamAPI:
 
         if persona_config.avatarModel:
             persona_config_payload["avatarModel"] = persona_config.avatarModel
+
+        if persona_config.directorNotes is not None:
+            # drop unset (None) ones so Anam falls back to its model/cue defaults.
+            director_notes = {
+                k: v for k, v in vars(persona_config.directorNotes).items() if v is not None
+            }
+            if director_notes:
+                persona_config_payload["directorNotes"] = director_notes
 
         payload: dict[str, Any] = {
             "personaConfig": persona_config_payload,
@@ -113,6 +121,13 @@ class AnamAPI:
                 "videoWidth": session_options.video_width,
                 "videoHeight": session_options.video_height,
             }
+
+        if session_options is not None and session_options.show_ai_avatar_disclosure is not None:
+            if "sessionOptions" not in payload:
+                payload["sessionOptions"] = {}
+            payload["sessionOptions"]["showAIAvatarDisclosure"] = (
+                session_options.show_ai_avatar_disclosure
+            )
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here

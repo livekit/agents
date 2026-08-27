@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 import aiohttp
+from PIL import Image
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -40,6 +41,7 @@ class AvatarSession(BaseAvatarSession):
         *,
         agent_id: NotGivenOr[str] = NOT_GIVEN,
         agent_image_url: NotGivenOr[str] = NOT_GIVEN,
+        agent_image: NotGivenOr[Image.Image] = NOT_GIVEN,
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
@@ -53,6 +55,7 @@ class AvatarSession(BaseAvatarSession):
         super().__init__()
         self._agent_id = agent_id
         self._agent_image_url = agent_image_url
+        self._agent_image = agent_image
         self._agent_prompt = agent_prompt
         self._agent_idle_prompt = agent_idle_prompt
         self._idle_timeout = idle_timeout
@@ -154,6 +157,7 @@ class AvatarSession(BaseAvatarSession):
             session_id = await lemonslice_api.start_agent_session(
                 agent_id=self._agent_id,
                 agent_image_url=self._agent_image_url,
+                agent_image=self._agent_image,
                 agent_prompt=self._agent_prompt,
                 agent_idle_prompt=self._agent_idle_prompt,
                 idle_timeout=self._idle_timeout,

@@ -1,6 +1,6 @@
 # LiveKit Plugins: Phonic
 
-Realtime voice AI integration for [Phonic](https://phonic.co/) with LiveKit Agents.
+Realtime voice AI integration for [Phonic](https://phonic.ai/) with LiveKit Agents.
 
 ## Installation
 
@@ -93,15 +93,70 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `additional_languages` | `list[str]` | Further ISO 639-1 codes (must not repeat `default_language`) |
 | `multilingual_mode` | `"auto"` \| `"request"` | Per-utterance language detection vs. change on user request (recommended: `request`) |
 | `audio_speed` | `float` | Audio playback speed |
-| `phonic_tools` | `list[str]` | [Phonic Webhook tool](https://docs.phonic.co/docs/using-tools/tools_overview#webhook-tools) names available to the assistant |
+| `phonic_tools` | `list[str]` | Names of Phonic-side tools available to the assistant: [Webhook tools](https://docs.phonic.ai/docs/using-tools/tools_overview#webhook-tools) and [built-in tools](#built-in-tools) (`choose_not_to_respond`, `keypad_input`, `natural_conversation_ending`) |
 | `boosted_keywords` | `list[str]` | Keywords to boost in speech recognition |
 | `min_words_to_interrupt` | `int` | Minimum number of user words required to interrupt the assistant |
 | `generate_no_input_poke_text` | `bool` | Auto-generate poke text when user is silent |
 | `no_input_poke_sec` | `float` | Seconds of silence before sending poke message |
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
-| `forbid_speech_after_tool_call` | `list[str]` | Tool names after which Phonic should NOT auto-generate a spoken reply. Use for tools that always hand off/trigger an agent switch |
+| `websocket_timeout_sec` | `int` | Seconds of inactivity before the Phonic websocket is closed |
+| `intelligence_level` | `"standard"` \| `"high"` | LLM intelligence level |
+| `is_welcome_message_interruptible` | `bool` | When False, the welcome message cannot be interrupted |
+| `vad_prebuffer_duration_ms` | `int` | Voice-activity-detection prebuffer duration (ms) |
+| `vad_min_speech_duration_ms` | `int` | Minimum speech duration for VAD (ms) |
+| `vad_min_silence_duration_ms` | `int` | Minimum silence duration for VAD (ms) |
+| `vad_threshold` | `float` | Voice-activity-detection threshold |
+| `enable_assistant_backchannel` | `bool` | When True, the assistant backchannels (e.g. "mm-hmm") while the user speaks |
+| `assistant_backchannel_aggressiveness` | `float` | How aggressively the assistant backchannels (needs `enable_assistant_backchannel`) |
+| `pronunciation_dictionary` | `list[PronunciationEntry]` | `{ word, pronunciation }` entries; words must be unique |
+| `template_variables` | `dict[str, str]` | Variables substituted into the system prompt and welcome message |
+| `enable_redaction` | `bool` | Redact PII/PHI from transcripts and bleep it from audio after the conversation |
+| `mcp_servers` | `list[str]` | Names of pre-configured MCP servers to make available (must be unique) |
+| `observability_integrations` | `list["braintrust"]` | Observability integrations to forward traces to |
+| `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
+| `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
+| `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
+
+### Per-tool configuration
+
+`configs_for_tools` takes one entry per tool you want to customize. Each entry is keyed by the tool `name`; every other field is optional and falls back to the plugin default when omitted. Tools with no entry keep the defaults.
+
+```python
+RealtimeModel(
+    configs_for_tools=[
+        {"name": "transfer_call", "forbid_speech_after_tool_call": True},
+        {"name": "submit_form", "forbid_tool_call_after_speech": True},
+    ],
+)
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `str` | — | Tool this config applies to (required) |
+| `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
+| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
+| `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
+| `respond_after_sec` | `float` | — | **`choose_not_to_respond` only.** Seconds to wait after the tool fires; if the user stays silent, the agent speaks a follow-up. Omit to keep the default (stay silent). |
+| `speech_before_tool_call` | `str` | — | **`keypad_input` / `natural_conversation_ending` only.** `required` \| `optional` \| `suppressed`. |
+
+The plugin always sends tool calls with `wait_for_speech_before_tool_call` on and `allow_tool_chaining` off; these are not configurable per tool.
+
+> **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
+
+### Built-in tools
+
+Phonic's built-in tools — `choose_not_to_respond`, `keypad_input`, `natural_conversation_ending` — are enabled by listing their names in `phonic_tools`, alongside any Webhook tools. To configure one, add a `configs_for_tools` entry keyed by the same name (`respond_after_sec` for `choose_not_to_respond`; `speech_before_tool_call` for the other two). A built-in listed without a config uses its Phonic-side defaults.
+
+```python
+RealtimeModel(
+    phonic_tools=["choose_not_to_respond", "keypad_input"],
+    configs_for_tools=[
+        {"name": "choose_not_to_respond", "respond_after_sec": 5},
+    ],
+)
+```
 
 If you already have an agent set up on the Phonic platform, you can use the `phonic_agent` option to specify the agent name. As a note, configuration options you set in the LiveKit Agents SDK will override the agent settings set on the Phonic platform. This means the system prompt you have set on the Phonic platform will be ignored in favor of the `instructions` field set on the LiveKit `Agent`. Likewise, options explicitly set in the `RealtimeModel` constructor will override the Phonic agent's settings.
 
-If you have Webhook tools set up on the Phonic platform, you can use `phonic_tools` to make them available to your agent. Only [Phonic Webhook tools](https://docs.phonic.co/docs/using-tools/tools_overview#webhook-tools) are supported with LiveKit Agents.
+If you have Webhook tools set up on the Phonic platform, you can use `phonic_tools` to make them available to your agent, together with Phonic's [built-in tools](#built-in-tools). Custom function tools you define on the LiveKit `Agent` are also supported and run over the websocket.

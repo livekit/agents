@@ -24,6 +24,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -216,6 +217,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         ws_base_url: str,
         session: aiohttp.ClientSession,
         language: LanguageCode,
+        turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._encoding = encoding
@@ -226,6 +232,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._ws_base_url = ws_base_url
         self._session = session
         self._language = language
+        self._turn_start_threshold = turn_start_threshold
+        self._turn_eager_end_threshold = turn_eager_end_threshold
+        self._turn_end_threshold = turn_end_threshold
+        self._turn_end_timeout_ms = turn_end_timeout_ms
+        self._keyterm = keyterm
         self._request_id = ""
         self._speaking = False
         self._speech_duration: float = 0.0
@@ -254,23 +265,31 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, rtc.AudioFrame):
-                    for frame in audio_bstream.write(data.data.tobytes()):
-                        self._speech_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
-                    if not self._input_ch.closed:
-                        logger.warning(
-                            "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
-                        )
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, rtc.AudioFrame):
+                        for frame in audio_bstream.write(data.data.tobytes()):
+                            self._speech_duration += frame.duration
+                            await ws.send_bytes(frame.data.tobytes())
+                    elif isinstance(data, self._FlushSentinel):
+                        if not self._input_ch.closed:
+                            logger.warning(
+                                "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
+                            )
 
-            for frame in audio_bstream.flush():
-                self._speech_duration += frame.duration
-                await ws.send_bytes(frame.data.tobytes())
+                for frame in audio_bstream.flush():
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
 
-            self._closing_ws = True
-            await ws.send_str('{"type":"close"}')
+                self._closing_ws = True
+                await ws.send_str('{"type":"close"}')
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if self._closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError(
+                    message="Cartesia STT connection closed unexpectedly",
+                    retryable=True,
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -351,11 +370,22 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        params = {
-            "model": self._model,
-            "sample_rate": str(self._sample_rate),
-            "encoding": self._encoding,
-        }
+        # keyterm may repeat, so params is a list of pairs rather than a dict
+        params: list[tuple[str, str]] = [
+            ("model", str(self._model)),
+            ("sample_rate", str(self._sample_rate)),
+            ("encoding", str(self._encoding)),
+        ]
+        if utils.is_given(self._turn_start_threshold):
+            params.append(("turn_start_threshold", str(self._turn_start_threshold)))
+        if utils.is_given(self._turn_eager_end_threshold):
+            params.append(("turn_eager_end_threshold", str(self._turn_eager_end_threshold)))
+        if utils.is_given(self._turn_end_threshold):
+            params.append(("turn_end_threshold", str(self._turn_end_threshold)))
+        if utils.is_given(self._turn_end_timeout_ms):
+            params.append(("turn_end_timeout_ms", str(self._turn_end_timeout_ms)))
+        if utils.is_given(self._keyterm):
+            params.extend(("keyterm", term) for term in self._keyterm)
 
         ws_url = f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}"
 
@@ -376,8 +406,19 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": c_request_id},
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to cartesia", retryable=True) from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to cartesia", retryable=True) from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(
+                f"failed to connect to cartesia ({type(e).__name__})",
+                retryable=True,
+            ) from None
         return ws
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:

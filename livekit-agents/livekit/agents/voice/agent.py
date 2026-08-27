@@ -24,7 +24,8 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
-    from .agent_session import AgentSession
+    from .agent_session import AgentSession, ExpressiveOptions
+    from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
 
@@ -49,6 +50,7 @@ class Agent:
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
@@ -93,6 +95,7 @@ class Agent:
         self._llm = llm
         self._tts = tts
         self._vad = vad
+        self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
 
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
         self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
@@ -165,6 +168,20 @@ class Agent:
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
+
+    @property
+    def audio_recognition(self) -> AudioRecognition:
+        """Access the audio recognition system for this agent.
+
+        The only public member is ``stt_context`` — live speaker metadata from the
+        STT stream.
+
+        Raises:
+            RuntimeError: If the agent is not running.
+        """
+        activity = self._get_activity_or_raise()
+        assert activity._audio_recognition is not None
+        return activity._audio_recognition
 
     async def update_instructions(self, instructions: str) -> None:
         """
@@ -244,6 +261,55 @@ class Agent:
         await self._activity.update_chat_ctx(
             chat_ctx, exclude_invalid_function_calls=exclude_invalid_function_calls
         )
+
+    def update_options(
+        self,
+        *,
+        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
+    ) -> None:
+        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting.
+        Only the options passed are changed.
+
+        Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
+        Strings resolve to inference models like the constructor. Pass ``None`` to disable a
+        model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
+        the swap applies to the live pipeline. ``expressive`` overrides the session value and
+        takes effect on the next reply; pass ``False`` to force it off for this agent.
+
+        Raises:
+            RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
+                running; use ``AgentSession.update_agent`` instead.
+        """
+        if isinstance(stt, str):
+            stt = inference.STT.from_model_string(stt)
+        if isinstance(llm, str):
+            llm = inference.LLM.from_model_string(llm)
+        if isinstance(tts, str):
+            tts = inference.TTS.from_model_string(tts)
+
+        if self._activity is None:
+            # not running: replace stored config, applied on the next start
+            if is_given(stt):
+                self._stt = stt
+            if is_given(vad):
+                self._vad = vad
+            if is_given(llm):
+                self._llm = llm
+            if is_given(tts):
+                self._tts = tts
+            if is_given(expressive):
+                self._expressive = expressive
+            return
+
+        self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
+        if is_given(expressive):
+            # after _update_models so a rejected model swap leaves expressive untouched;
+            # resolved per turn (agent value over session), no live plumbing needed
+            self._expressive = expressive
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -491,7 +557,9 @@ class Agent:
 
         @staticmethod
         async def tts_node(
-            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+            agent: Agent,
+            text: AsyncIterable[str],
+            model_settings: ModelSettings,
         ) -> AsyncGenerator[rtc.AudioFrame, None]:
             """Default implementation for `Agent.tts_node`"""
             activity = agent._get_activity_or_raise()
@@ -501,13 +569,25 @@ class Agent:
                     "`session.output.set_audio_enabled(False)`."
                 )
 
+            expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
 
             if not activity.tts.capabilities.streaming:
                 wrapped_tts = tts.StreamAdapter(
                     tts=wrapped_tts,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
+                        retain_format=True,
+                        # markup only exists in the stream when expressive is active
+                        xml_aware=expressive_active,
+                    ),
                 )
+
+            # Mark whether expressive is active for this synthesis, synchronously
+            # just before stream() snapshots it. Doing it here (the single synthesis
+            # choke point for both generate_reply and say()) scopes it to this turn
+            # rather than leaving stale state on the instance. The provider's chunk
+            # defaults then drive the TTS's input tokenizer.
+            activity.tts._set_expressive(expressive_active)
 
             conn_options = activity.session.conn_options.tts_conn_options
             async with wrapped_tts.stream(conn_options=conn_options) as stream:
@@ -617,6 +697,21 @@ class Agent:
             NotGivenOr[tts.TTS | None]: An optional TTS component for generating audio output.
         """  # noqa: E501
         return self._tts
+
+    @property
+    def expressive(self) -> NotGivenOr[bool | ExpressiveOptions]:
+        """
+        Retrieves the expressive TTS delivery setting for the agent.
+
+        If this property was not set at Agent creation, the ``AgentSession``'s ``expressive``
+        value will be used at runtime instead. When set, it overrides the session value for
+        this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
+
+        Returns:
+            NotGivenOr[bool | ExpressiveOptions]: Whether expressive delivery is enabled,
+                or its configuration.
+        """
+        return self._expressive
 
     @property
     def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
@@ -873,6 +968,12 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         # won't wait for tasks blocked on this handoff
         old_activity._add_drain_blocked_tasks(blocked_tasks)
 
+        # watch the blocked tasks so an active run won't complete mid-handoff
+        # (the parent speech may predate the run, e.g. created in on_enter)
+        if (run_state := session._global_run_state) and not run_state.done():
+            for task in blocked_tasks:
+                run_state._watch_handle(task)
+
         if (
             task_info.function_call
             and isinstance(old_activity.llm, RealtimeModel)
@@ -885,7 +986,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         # TODO(theomonnom): could the RunResult watcher & the blocked_tasks share the same logic?
         self.__inactive_ev.clear()
-        suspended_handles: list[SpeechHandle | asyncio.Task[Any]] = []
+        suspended_handles: list[SpeechHandle | asyncio.Future[Any]] = []
         pending_on_enter_task: asyncio.Task[None] | None = None
         try:
             # use wait_on_enter=False to avoid deadlock: on_enter may spawn nested
@@ -916,13 +1017,14 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
             # now unwatch the parent speech handle and blocked tasks that belong to the
             # old activity — they can't complete while this AgentTask is running, and
-            # keeping them watched would block RunResult from completing.
+            # keeping them watched would block RunResult from completing. A foreground
+            # hold waiting on this task is in the same position, so its guard suspends too.
             if run_state and not run_state.done():
                 if speech_handle and run_state._unwatch_handle(speech_handle):
                     suspended_handles.append(speech_handle)
-                for task in blocked_tasks:
-                    if run_state._unwatch_handle(task):
-                        suspended_handles.append(task)
+                for blocked in [*blocked_tasks, *session._foreground_guards]:
+                    if run_state._unwatch_handle(blocked):
+                        suspended_handles.append(blocked)
                 if suspended_handles:
                     run_state._mark_done_if_needed(None)
         except Exception:

@@ -41,7 +41,6 @@ from ..utils import (
     aio,
     http_context,
     is_given,
-    shortuuid,
 )
 from ._utils import (
     create_access_token,
@@ -136,6 +135,13 @@ class OverlappingSpeechEvent(BaseModel):
     is_interruption: bool = False
     """Whether interruption is detected."""
 
+    agent_ended: bool = False
+    """True when the overlap ended because the agent finished speaking rather than the user.
+
+    The user may still be talking, so ``is_interruption`` (always ``False`` here) is inconclusive
+    and must not be treated as a confirmed backchannel verdict.
+    """
+
     total_duration: float = 0.0
     """RTT (Round Trip Time) time taken to perform the inference, in seconds."""
 
@@ -180,6 +186,7 @@ class OverlappingSpeechEvent(BaseModel):
         is_interruption: bool,
         started_at: float | None = None,
         ended_at: float | None = None,
+        agent_ended: bool = False,
     ) -> OverlappingSpeechEvent:
         """Initialize the event from a cache entry.
 
@@ -188,6 +195,7 @@ class OverlappingSpeechEvent(BaseModel):
             is_interruption: Whether the interruption is detected.
             started_at: The timestamp when the overlap speech started.
             ended_at: The timestamp when the overlap speech ended.
+            agent_ended: Whether the overlap ended because the agent finished speaking.
 
         Returns:
             The initialized event.
@@ -196,6 +204,7 @@ class OverlappingSpeechEvent(BaseModel):
             type="overlapping_speech",
             detected_at=ended_at or time.time(),
             is_interruption=is_interruption,
+            agent_ended=agent_ended,
             overlap_started_at=started_at,
             speech_input=entry.speech_input,
             probabilities=entry.probabilities,
@@ -232,8 +241,9 @@ class _OverlapSpeechStartedSentinel:
 
 
 class _OverlapSpeechEndedSentinel:
-    def __init__(self, ended_at: float) -> None:
+    def __init__(self, ended_at: float, agent_ended: bool = False) -> None:
         self._ended_at = ended_at
+        self._agent_ended = agent_ended
 
 
 class _FlushSentinel:
@@ -623,6 +633,7 @@ class InterruptionStreamBase(ABC):
                             is_interruption=False,
                             started_at=self._overlap_started_at,
                             ended_at=input_frame._ended_at,
+                            agent_ended=input_frame._agent_ended,
                         )
                         ev.num_requests = await self._num_requests.get_and_reset()
                         self.send(ev)
@@ -655,7 +666,7 @@ class InterruptionStreamBase(ABC):
                 prediction_duration=ev.prediction_duration,
                 detection_delay=ev.detection_delay,
                 num_interruptions=1 if ev.is_interruption else 0,
-                num_backchannels=1 if not ev.is_interruption else 0,
+                num_backchannels=1 if not ev.is_interruption and not ev.agent_ended else 0,
                 num_requests=ev.num_requests,
                 metadata=Metadata(
                     model_name=self._model.model, model_provider=self._model.provider
@@ -757,7 +768,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(model=model, conn_options=conn_options)
-        self._request_id = str(shortuuid("interruption_request_"))
         self._reconnect_event = asyncio.Event()
 
     def update_options(

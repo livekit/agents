@@ -58,6 +58,10 @@ class STTOptions:
     enable_diarization: bool
     language: STTLanguages | str
     endpointing: int
+    vad_threshold: NotGivenOr[float] = NOT_GIVEN
+    smart_turn: NotGivenOr[float] = NOT_GIVEN
+    smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN
+    keyterm: NotGivenOr[list[str]] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -69,6 +73,10 @@ class STT(stt.STT):
         enable_diarization: bool = False,
         language: STTLanguages | str = "en",
         endpointing: int = 100,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -80,6 +88,10 @@ class STT(stt.STT):
             enable_diarization: Whether to enable speaker diarization. Words will include a speaker field. Defaults to False.
             language: BCP-47 language code for transcription (e.g. "en", "fr", "de"). Defaults to "en".
             endpointing: Silence duration in milliseconds before an utterance-final event is fired. xAI's default is 10ms, but we default to 100ms for better compatibility with LK EOT models.
+            vad_threshold: Voice-activity detection threshold, range 0.0-1.0. Lower values capture quieter/noisier speech. When unset, xAI's websocket default (0.08) applies.
+            smart_turn: Confidence threshold (0.0-1.0) for xAI's ML end-of-turn ("Smart Turn") prediction at silence boundaries. When unset, Smart Turn is left at xAI's default behavior.
+            smart_turn_timeout: Maximum silence in milliseconds (1-5000) before an utterance-final event is forced even when Smart Turn predicts the speaker is continuing.
+            keyterm: Key terms/phrases (max 100, 50 chars each) to bias transcription accuracy toward.
             api_key: Your xAI API key. If not provided, will look for XAI_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
 
@@ -111,6 +123,10 @@ class STT(stt.STT):
             enable_diarization=enable_diarization,
             language=language,
             endpointing=endpointing,
+            vad_threshold=vad_threshold,
+            smart_turn=smart_turn,
+            smart_turn_timeout=smart_turn_timeout,
+            keyterm=keyterm,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -198,6 +214,10 @@ class STT(stt.STT):
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         endpointing: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(interim_results):
             self._opts.enable_interim_results = interim_results
@@ -214,6 +234,18 @@ class STT(stt.STT):
         if is_given(endpointing):
             self._opts.endpointing = endpointing
 
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
+
+        if is_given(smart_turn):
+            self._opts.smart_turn = smart_turn
+
+        if is_given(smart_turn_timeout):
+            self._opts.smart_turn_timeout = smart_turn_timeout
+
+        if is_given(keyterm):
+            self._opts.keyterm = keyterm
+
         for stream in self._streams:
             stream.update_options(
                 enable_interim_results=interim_results,
@@ -221,6 +253,10 @@ class STT(stt.STT):
                 enable_diarization=enable_diarization,
                 language=language,
                 endpointing=endpointing,
+                vad_threshold=vad_threshold,
+                smart_turn=smart_turn,
+                smart_turn_timeout=smart_turn_timeout,
+                keyterm=keyterm,
             )
 
 
@@ -257,6 +293,10 @@ class SpeechStream(stt.RecognizeStream):
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         endpointing: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn: NotGivenOr[float] = NOT_GIVEN,
+        smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(enable_interim_results):
             self._opts.enable_interim_results = enable_interim_results
@@ -272,6 +312,18 @@ class SpeechStream(stt.RecognizeStream):
 
         if is_given(endpointing):
             self._opts.endpointing = endpointing
+
+        if is_given(vad_threshold):
+            self._opts.vad_threshold = vad_threshold
+
+        if is_given(smart_turn):
+            self._opts.smart_turn = smart_turn
+
+        if is_given(smart_turn_timeout):
+            self._opts.smart_turn_timeout = smart_turn_timeout
+
+        if is_given(keyterm):
+            self._opts.keyterm = keyterm
 
         self._reconnect_event.set()
 
@@ -366,14 +418,23 @@ class SpeechStream(stt.RecognizeStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        params = {
-            "encoding": "pcm",
-            "sample_rate": str(self._opts.sample_rate),
-            "interim_results": str(self._opts.enable_interim_results).lower(),
-            "diarize": str(self._opts.enable_diarization).lower(),
-            "language": str(self._opts.language),
-            "endpointing": str(self._opts.endpointing),
-        }
+        # keyterm may repeat, so params is a list of pairs rather than a dict
+        params = [
+            ("encoding", "pcm"),
+            ("sample_rate", str(self._opts.sample_rate)),
+            ("interim_results", str(self._opts.enable_interim_results).lower()),
+            ("diarize", str(self._opts.enable_diarization).lower()),
+            ("language", str(self._opts.language)),
+            ("endpointing", str(self._opts.endpointing)),
+        ]
+        if is_given(self._opts.vad_threshold):
+            params.append(("vad_threshold", str(self._opts.vad_threshold)))
+        if is_given(self._opts.smart_turn):
+            params.append(("smart_turn", str(self._opts.smart_turn)))
+        if is_given(self._opts.smart_turn_timeout):
+            params.append(("smart_turn_timeout", str(self._opts.smart_turn_timeout)))
+        if is_given(self._opts.keyterm):
+            params.extend(("keyterm", term) for term in self._opts.keyterm)
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(

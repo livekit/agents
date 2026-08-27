@@ -7,7 +7,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,7 @@ from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 
@@ -191,6 +192,11 @@ class STT(
         return "unknown"
 
     @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this STT instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
 
@@ -334,6 +340,18 @@ class STT(
         pass
 
 
+@runtime_checkable
+class SpeakerContext(Protocol):
+    """Protocol for STT context models that can generate LLM instructions.
+
+    STT plugins that provide speaker metadata should implement this protocol
+    on their context model so the expressive system can auto-inject
+    speaker context into the LLM.
+    """
+
+    def to_instructions(self) -> str: ...
+
+
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
@@ -376,6 +394,21 @@ class RecognizeStream(ABC):
 
         self._start_time_offset: float = 0.0
         self._start_time: float = time.time()
+        self._context: BaseModel | None = None
+
+    @property
+    def context(self) -> BaseModel | None:
+        """Persistent speaker metadata updated by the STT plugin during recognition.
+
+        STT plugins set this to a ``BaseModel`` instance (e.g. a voice profile with
+        emotion, gender, etc.) as they learn about the speaker over the life of the
+        stream.  Accessible via ``agent.audio_recognition.stt_context``.
+        """
+        return self._context
+
+    @context.setter
+    def context(self, value: BaseModel | None) -> None:
+        self._context = value
 
     @property
     def start_time_offset(self) -> float:
@@ -438,7 +471,7 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
-                if max_retries == 0:
+                if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif self._num_retries == max_retries:

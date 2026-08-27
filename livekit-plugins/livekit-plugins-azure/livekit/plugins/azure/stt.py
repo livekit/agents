@@ -233,6 +233,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
+        self._cancellation_error: speechsdk.CancellationDetails | None = None
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
 
@@ -257,6 +258,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         while True:
             self._session_stopped_event.clear()
+            self._cancellation_error = None
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -305,6 +307,12 @@ class SpeechStream(stt.SpeechStream):
                             task.result()
 
                     if wait_stopped_task in done:
+                        if self._cancellation_error is not None:
+                            details = self._cancellation_error
+                            raise APIConnectionError(
+                                f"Azure STT canceled: "
+                                f"{details.error_details or details.reason} ({details.code})"
+                            )
                         raise APIConnectionError("SpeechRecognition session stopped")
 
                     # session-stopped is handled above, so the wait unblocked
@@ -448,6 +456,11 @@ class SpeechStream(stt.SpeechStream):
                     "error_details": evt.cancellation_details.error_details,
                 },
             )
+            # Azure does not always emit session_stopped after an error cancellation, so
+            # surface it here to wake _run; the base class then retries and can fall back.
+            self._cancellation_error = evt.cancellation_details
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._session_stopped_event.set)
 
 
 def _create_speech_recognizer(

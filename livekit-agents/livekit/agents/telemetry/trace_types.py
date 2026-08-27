@@ -18,6 +18,8 @@ ATTR_PARTICIPANT_KIND = "lk.participant_kind"
 # session start
 ATTR_JOB_ID = "lk.job_id"
 ATTR_AGENT_NAME = "lk.agent_name"
+ATTR_CLOUD_AGENT_ID = "lk.cloud_agent_id"
+ATTR_DEPLOYMENT_ID = "lk.deployment_id"
 ATTR_ROOM_NAME = "lk.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
@@ -77,6 +79,7 @@ ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 
 # Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse
