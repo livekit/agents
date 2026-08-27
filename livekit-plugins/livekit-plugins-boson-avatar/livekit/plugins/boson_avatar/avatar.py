@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import timedelta
 from typing import Any
@@ -36,6 +37,7 @@ from .errors import BosonAvatarException
 from .log import logger
 
 SAMPLE_RATE = 24000
+MAX_DURATION_SECONDS = 14_400
 _AVATAR_AGENT_IDENTITY = "boson-avatar-agent"
 _AVATAR_AGENT_NAME = "Boson Avatar"
 
@@ -87,7 +89,9 @@ class AvatarSession(BaseAvatarSession[Any]):
         if (self._width is None) != (self._height is None):
             raise BosonAvatarException("width and height must be provided together")
         self._max_duration_seconds = _resolve_optional_positive_int(
-            max_duration_seconds, "max_duration_seconds"
+            max_duration_seconds,
+            "max_duration_seconds",
+            maximum=MAX_DURATION_SECONDS,
         )
 
         self._avatar_identity = _resolve_optional_string(
@@ -102,6 +106,13 @@ class AvatarSession(BaseAvatarSession[Any]):
         self._session_info: AvatarSessionInfo | None = None
         self._start_called = False
         self._closed = False
+        self._close_requested = False
+        self._lifecycle_lock = asyncio.Lock()
+        self._create_task: asyncio.Task[AvatarSessionInfo] | None = None
+        self._startup_cleanup_task: asyncio.Task[None] | None = None
+        self._shutdown_task: asyncio.Task[None] | None = None
+        self._agent_close_task: asyncio.Task[None] | None = None
+        self._tracked_agent_session: AgentSession[Any] | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -147,52 +158,72 @@ class AvatarSession(BaseAvatarSession[Any]):
             livekit_api_secret=livekit_api_secret_value,
         )
 
-        await super().start(agent_session, room)
-        started_info: AvatarSessionInfo | None = None
-        try:
-            started_info = await self._api.start_session(
-                avatar_id=self._avatar_id,
-                livekit_url=livekit_url_value,
-                livekit_room=room.name,
-                livekit_token=livekit_token,
-                avatar_identity=self._avatar_identity,
-                publisher_identity=publisher_identity,
-                width=self._width,
-                height=self._height,
-                max_duration_seconds=self._max_duration_seconds,
-            )
-            self._session_info = started_info
+        async with self._lifecycle_lock:
+            if self._close_requested or self._closed:
+                raise RuntimeError("AvatarSession was closed before start() completed")
 
-            audio_output = DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_identity,
-                sample_rate=SAMPLE_RATE,
-                # Higgs publishes audio before its first generated video frame.
-                # Waiting on audio avoids a first-frame dependency cycle while
-                # still buffering speech until the Avatar is ready.
-                wait_remote_track=rtc.TrackKind.KIND_AUDIO,
-            )
-            replace_audio_tail = getattr(agent_session.output, "replace_audio_tail", None)
-            if callable(replace_audio_tail):
-                replace_audio_tail(audio_output)
-            else:  # livekit-agents 1.5 compatibility for the experiment image
-                agent_session.output.audio = audio_output
-        except BaseException:
-            if started_info is not None:
-                try:
-                    await self._api.end_session(started_info.id)
-                except Exception:  # noqa: BLE001 - startup compensation is best-effort
-                    logger.warning(
-                        "failed to compensate boson avatar session after startup error",
-                        extra={"session_id": started_info.id},
-                        exc_info=True,
-                    )
-                self._session_info = None
+            await super().start(agent_session, room)
+            self._tracked_agent_session = agent_session
+            agent_session.on("close", self._on_agent_session_close)
+            started_info: AvatarSessionInfo | None = None
             try:
-                await super().aclose()
+                self._create_task = asyncio.create_task(
+                    self._api.start_session(
+                        avatar_id=self._avatar_id,
+                        livekit_url=livekit_url_value,
+                        livekit_room=room.name,
+                        livekit_token=livekit_token,
+                        avatar_identity=self._avatar_identity,
+                        publisher_identity=publisher_identity,
+                        width=self._width,
+                        height=self._height,
+                        max_duration_seconds=self._max_duration_seconds,
+                    ),
+                    name="boson_avatar_create_session",
+                )
+                # The provider create is shielded so cancellation cannot discard a
+                # successful response before its session ID can be compensated.
+                started_info = await asyncio.shield(self._create_task)
+                self._session_info = started_info
+
+                if self._close_requested:
+                    raise RuntimeError("AvatarSession was closed while start() was in progress")
+
+                audio_output = DataStreamAudioOutput(
+                    room=room,
+                    destination_identity=self._avatar_identity,
+                    sample_rate=SAMPLE_RATE,
+                    # Higgs publishes audio before its first generated video frame.
+                    # Waiting on audio avoids a first-frame dependency cycle while
+                    # still buffering speech until the Avatar is ready.
+                    wait_remote_track=rtc.TrackKind.KIND_AUDIO,
+                )
+                replace_audio_tail = getattr(agent_session.output, "replace_audio_tail", None)
+                if callable(replace_audio_tail):
+                    replace_audio_tail(audio_output)
+                else:  # livekit-agents 1.5 compatibility for the experiment image
+                    agent_session.output.audio = audio_output
+            except BaseException:
+                # Move all startup cleanup into an independent task. It owns both
+                # the provider result and DELETE, so repeated caller cancellation
+                # cannot interrupt compensation or base-session cleanup.
+                self._startup_cleanup_task = asyncio.create_task(
+                    self._cleanup_failed_start(
+                        create_task=self._create_task if started_info is None else None,
+                        session_info=started_info,
+                    ),
+                    name="boson_avatar_startup_cleanup",
+                )
+                self._startup_cleanup_task.add_done_callback(self._consume_startup_cleanup_result)
+                try:
+                    await asyncio.shield(self._startup_cleanup_task)
+                except BaseException:
+                    # The owned task remains alive and completes independently.
+                    pass
+                raise
             finally:
-                self._closed = True
-            raise
+                if self._startup_cleanup_task is None:
+                    self._create_task = None
 
         logger.debug(
             "boson avatar session started",
@@ -202,23 +233,133 @@ class AvatarSession(BaseAvatarSession[Any]):
 
     async def aclose(self) -> None:
         """End the hosted Avatar session and remove its LiveKit participant."""
-        if self._closed:
-            return
-        self._closed = True
-        session_info = self._session_info
-        self._session_info = None
-        try:
-            if session_info is not None:
-                try:
-                    await self._api.end_session(session_info.id)
-                except Exception:  # noqa: BLE001 - shutdown cleanup is best-effort
-                    logger.warning(
-                        "failed to end boson avatar session",
-                        extra={"session_id": session_info.id},
-                        exc_info=True,
+        # Set this before acquiring the lock so an in-flight start knows that
+        # close won the race and compensates the provider session it just created.
+        self._close_requested = True
+        while True:
+            owned_task: asyncio.Task[None] | None
+            is_startup_cleanup = False
+            async with self._lifecycle_lock:
+                if self._startup_cleanup_task is not None:
+                    owned_task = self._startup_cleanup_task
+                    is_startup_cleanup = True
+                elif self._shutdown_task is not None:
+                    owned_task = self._shutdown_task
+                elif self._closed and self._session_info is None:
+                    return
+                else:
+                    self._shutdown_task = asyncio.create_task(
+                        self._run_shutdown(), name="boson_avatar_shutdown"
                     )
+                    self._shutdown_task.add_done_callback(self._consume_shutdown_result)
+                    owned_task = self._shutdown_task
+
+            await asyncio.shield(owned_task)
+            if not is_startup_cleanup:
+                return
+            # Startup cleanup can retain a session ID when provider DELETE
+            # exhausts its retries. Re-evaluate once so this close call can retry.
+
+    async def _cleanup_failed_start(
+        self,
+        *,
+        create_task: asyncio.Task[AvatarSessionInfo] | None,
+        session_info: AvatarSessionInfo | None,
+    ) -> None:
+        try:
+            if session_info is None and create_task is not None:
+                try:
+                    session_info = await create_task
+                except Exception:
+                    session_info = None
+            if session_info is not None:
+                self._session_info = session_info
+                await self._compensate_start(session_info)
         finally:
-            await super().aclose()
+            if create_task is not None and self._create_task is create_task:
+                self._create_task = None
+            self._detach_agent_close_listener()
+            try:
+                await super().aclose()
+            finally:
+                self._closed = True
+
+    async def _run_shutdown(self) -> None:
+        session_info = self._session_info
+        if session_info is not None:
+            try:
+                await self._api.end_session(session_info.id)
+            except Exception:  # noqa: BLE001 - a later aclose() can retry by ID
+                logger.warning(
+                    "failed to end boson avatar session",
+                    extra={"session_id": session_info.id},
+                    exc_info=True,
+                )
+            else:
+                if self._session_info is session_info:
+                    self._session_info = None
+
+        if not self._closed:
+            self._detach_agent_close_listener()
+            try:
+                await super().aclose()
+            finally:
+                self._closed = True
+
+    def _consume_startup_cleanup_result(self, task: asyncio.Task[None]) -> None:
+        if self._startup_cleanup_task is task:
+            self._startup_cleanup_task = None
+        self._consume_background_task_result(
+            task, "failed to compensate cancelled boson avatar startup"
+        )
+
+    def _consume_shutdown_result(self, task: asyncio.Task[None]) -> None:
+        if self._shutdown_task is task:
+            self._shutdown_task = None
+        self._consume_background_task_result(task, "failed to close boson avatar session")
+
+    async def _compensate_start(self, session_info: AvatarSessionInfo) -> None:
+        try:
+            await self._api.end_session(session_info.id)
+        except Exception:  # noqa: BLE001 - startup compensation is best-effort
+            logger.warning(
+                "failed to compensate boson avatar session after startup error",
+                extra={"session_id": session_info.id},
+                exc_info=True,
+            )
+        else:
+            if self._session_info is session_info:
+                self._session_info = None
+
+    def _on_agent_session_close(self, _: Any) -> None:
+        self._close_requested = True
+        if (self._closed and self._session_info is None) or self._agent_close_task is not None:
+            return
+        self._agent_close_task = asyncio.create_task(
+            self.aclose(), name="boson_avatar_agent_session_close"
+        )
+        self._agent_close_task.add_done_callback(self._consume_agent_close_result)
+
+    def _consume_agent_close_result(self, task: asyncio.Task[None]) -> None:
+        self._consume_background_task_result(
+            task, "failed to close boson avatar after AgentSession closed"
+        )
+
+    @staticmethod
+    def _consume_background_task_result(task: asyncio.Task[None], message: str) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                message,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _detach_agent_close_listener(self) -> None:
+        if self._tracked_agent_session is not None:
+            self._tracked_agent_session.off("close", self._on_agent_session_close)
+            self._tracked_agent_session = None
 
     def _mint_avatar_token(
         self,
@@ -231,9 +372,9 @@ class AvatarSession(BaseAvatarSession[Any]):
         grants = api.VideoGrants(
             room_join=True,
             room=room.name,
-            can_publish=True,
-            can_subscribe=True,
+            can_subscribe=False,
             can_publish_data=True,
+            can_publish_sources=["camera", "microphone"],
         )
         ttl = timedelta(
             seconds=(self._max_duration_seconds + 300)
@@ -274,18 +415,21 @@ def _resolve_optional_string(value: NotGivenOr[str], default: str) -> str:
     return default
 
 
-def _resolve_optional_positive_int(value: NotGivenOr[int], name: str) -> int | None:
+def _resolve_optional_positive_int(
+    value: NotGivenOr[int],
+    name: str,
+    *,
+    maximum: int | None = None,
+) -> int | None:
     if not utils.is_given(value) or value is None:
         return None
-    if isinstance(value, bool):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise BosonAvatarException(f"{name} must be a positive integer")
-    try:
-        resolved = int(value)
-    except (TypeError, ValueError) as exc:
-        raise BosonAvatarException(f"{name} must be a positive integer") from exc
-    if resolved <= 0:
+    if value <= 0:
         raise BosonAvatarException(f"{name} must be a positive integer")
-    return resolved
+    if maximum is not None and value > maximum:
+        raise BosonAvatarException(f"{name} must be between 1 and {maximum}")
+    return value
 
 
-__all__ = ["SAMPLE_RATE", "AvatarSession"]
+__all__ = ["MAX_DURATION_SECONDS", "SAMPLE_RATE", "AvatarSession"]

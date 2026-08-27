@@ -18,6 +18,8 @@ import asyncio
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import aiohttp
@@ -39,6 +41,7 @@ from .version import __version__
 
 DEFAULT_API_URL = "https://api.boson.ai/v1/avatar/livekit"
 _USER_AGENT = f"livekit-plugins-boson-avatar/{__version__}"
+_SESSION_OBJECT = "avatar.livekit.session"
 
 
 @dataclass(frozen=True)
@@ -104,33 +107,65 @@ class BosonAvatarAPI:
         if max_duration_seconds is not None:
             body["max_duration_seconds"] = max_duration_seconds
 
-        data = await self._json(
+        _, data = await self._json(
             "POST",
             "/sessions",
             json=body,
             headers={"Idempotency-Key": idempotency_key or str(uuid.uuid4())},
+            success_statuses=frozenset({200, 201}),
         )
         session_id = data.get("id")
         returned_identity = data.get("avatar_identity")
-        if not isinstance(session_id, str) or not session_id:
-            raise BosonAvatarException("Boson Avatar API response is missing a session id")
-        if returned_identity != avatar_identity:
-            try:
-                await self.end_session(session_id)
-            except Exception:  # noqa: BLE001 - compensation must not hide protocol failure
-                logger.warning(
-                    "failed to compensate boson avatar session after identity mismatch",
-                    extra={"session_id": session_id},
-                    exc_info=True,
+        response_valid = (
+            isinstance(session_id, str)
+            and bool(session_id)
+            and data.get("object") == _SESSION_OBJECT
+            and data.get("status") == "active"
+            and returned_identity == avatar_identity
+        )
+        if not response_valid:
+            # A protocol-invalid response can still represent an allocated
+            # provider session. Compensate whenever it gives us a usable ID.
+            if isinstance(session_id, str) and session_id:
+                try:
+                    await self.end_session(session_id)
+                except Exception:  # noqa: BLE001 - compensation must not hide protocol failure
+                    logger.warning(
+                        "failed to compensate boson avatar session after invalid response",
+                        extra={"session_id": session_id},
+                        exc_info=True,
+                    )
+            if not isinstance(session_id, str) or not session_id:
+                raise BosonAvatarException("Boson Avatar API response is missing a session id")
+            if returned_identity != avatar_identity:
+                raise BosonAvatarException(
+                    "Boson Avatar API returned a participant identity that does not match "
+                    "the request"
                 )
-            raise BosonAvatarException(
-                "Boson Avatar API returned a participant identity that does not match the request"
-            )
+            raise BosonAvatarException("Boson Avatar API returned an invalid active session")
+
+        assert isinstance(session_id, str)
+        assert isinstance(returned_identity, str)
         return AvatarSessionInfo(id=session_id, avatar_identity=returned_identity)
 
     async def end_session(self, session_id: str) -> None:
         """Idempotently stop a hosted Boson Avatar session."""
-        await self._json("DELETE", f"/sessions/{session_id}", allow_empty=True)
+        status_code, data = await self._json(
+            "DELETE",
+            f"/sessions/{session_id}",
+            allow_empty=True,
+            success_statuses=frozenset({200, 204}),
+        )
+        invalid_response = (status_code == 204 and bool(data)) or (
+            status_code == 200
+            and (
+                data.get("id") != session_id
+                or data.get("object") != _SESSION_OBJECT
+                or data.get("status") != "terminated"
+            )
+        )
+        if invalid_response:
+            raise BosonAvatarException("Boson Avatar API returned an invalid terminated session")
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -145,7 +180,8 @@ class BosonAvatarAPI:
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         allow_empty: bool = False,
-    ) -> dict[str, Any]:
+        success_statuses: frozenset[int],
+    ) -> tuple[int, dict[str, Any]]:
         request_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "User-Agent": _USER_AGENT,
@@ -156,6 +192,7 @@ class BosonAvatarAPI:
         error: Exception | None = None
 
         for attempt in range(self._conn_options.max_retry + 1):
+            retry_after: float | None = None
             try:
                 async with self._ensure_http_session().request(
                     method,
@@ -165,9 +202,9 @@ class BosonAvatarAPI:
                     timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
                 ) as response:
                     payload = await _read_payload(response)
-                    if response.ok:
-                        if payload is None and allow_empty:
-                            return {}
+                    if response.status in success_statuses:
+                        if payload is None and allow_empty and response.status == 204:
+                            return response.status, {}
                         if not isinstance(payload, dict):
                             raise APIStatusError(
                                 "Boson Avatar API returned a non-object JSON response",
@@ -175,9 +212,10 @@ class BosonAvatarAPI:
                                 body=payload,
                                 retryable=False,
                             )
-                        return payload
+                        return response.status, payload
 
                     request_id = response.headers.get("x-request-id")
+                    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
                     if isinstance(payload, dict):
                         error_body = payload.get("error")
                         if isinstance(error_body, dict):
@@ -189,6 +227,7 @@ class BosonAvatarAPI:
                         status_code=response.status,
                         request_id=request_id,
                         body=payload,
+                        retryable=not 200 <= response.status < 400,
                     )
             except asyncio.TimeoutError as exc:
                 error = APITimeoutError()
@@ -208,7 +247,10 @@ class BosonAvatarAPI:
                 "boson avatar api request failed, retrying",
                 extra={"attempt": attempt + 1, "method": method, "path": path},
             )
-            await asyncio.sleep(self._conn_options._interval_for_retry(attempt))
+            retry_delay = self._conn_options._interval_for_retry(attempt)
+            if retry_after is not None:
+                retry_delay = max(retry_delay, retry_after)
+            await asyncio.sleep(retry_delay)
 
         raise APIConnectionError("Failed to call Boson Avatar API after all retries.") from error
 
@@ -236,6 +278,22 @@ async def _read_payload(response: aiohttp.ClientResponse) -> object | None:
         return payload
     except ValueError:
         return {"raw": text}
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
 __all__ = ["DEFAULT_API_URL", "AvatarSessionInfo", "BosonAvatarAPI"]

@@ -51,6 +51,7 @@ async def entrypoint(ctx: JobContext) -> None:
 `BOSON_AVATAR_ID` can supply `avatar_id` instead. `AvatarSession` also accepts
 optional `width`, `height`, `max_duration_seconds`,
 `avatar_participant_identity`, and `APIConnectOptions`.
+`max_duration_seconds` must be an integer from 1 through 14400.
 
 The `avatar_id` is the value behind the Avatar selected in your application or
 Boson dashboard; end users do not need to type or remember it.
@@ -61,5 +62,19 @@ developer does not need to call Boson's Avatar REST API or combine voice and
 Avatar responses in an application server. The application server only needs
 its normal responsibility: create a LiveKit room and dispatch the Agent Worker.
 
-When started inside a LiveKit job, cleanup is registered automatically. If you
-start an Avatar outside a job context, call `await avatar.aclose()` yourself.
+When started inside a LiveKit job, cleanup is registered automatically. When
+using the plugin in a standalone script or test, open LiveKit's HTTP context and
+close the Avatar explicitly:
+
+```python
+from livekit.agents import utils
+
+
+async with utils.http_context.open():
+    await avatar.start(session, room)
+    try:
+        # Run the standalone session.
+        ...
+    finally:
+        await avatar.aclose()
+```
