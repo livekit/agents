@@ -361,6 +361,36 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         ):
             BosonAvatarAPI(api_key="boson-key")
 
+    def test_invalid_api_urls_fail_without_network_access(self) -> None:
+        invalid_urls = (
+            "/",
+            "avatar.example/v1",
+            "ftp://avatar.example/v1",
+            "https:///v1",
+            "https://avatar.example/v1?region=us",
+            "https://avatar.example/v1#sessions",
+            "https://user:password@avatar.example/v1",
+            "https://avatar.example:invalid/v1",
+            "http://avatar.example/v1",
+        )
+        for api_url in invalid_urls:
+            with (
+                self.subTest(api_url=api_url),
+                self.assertRaises(BosonAvatarException),
+            ):
+                BosonAvatarAPI(api_key="boson-key", api_url=api_url)
+
+    def test_loopback_http_api_urls_are_allowed_for_local_development(self) -> None:
+        for api_url in (
+            "http://localhost:8400/v1/",
+            "http://worker.localhost:8400/v1/",
+            "http://127.0.0.1:8400/v1/",
+            "http://[::1]:8400/v1/",
+        ):
+            with self.subTest(api_url=api_url):
+                client = BosonAvatarAPI(api_key="boson-key", api_url=api_url)
+                self.assertEqual(client._api_url, api_url.rstrip("/"))
+
 
 if __name__ == "__main__":
     unittest.main()

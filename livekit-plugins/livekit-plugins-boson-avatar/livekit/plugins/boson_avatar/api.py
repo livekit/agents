@@ -15,12 +15,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -75,7 +77,7 @@ class BosonAvatarAPI:
                 "api_url must be set by passing it to AvatarSession or setting "
                 "the BOSON_AVATAR_API_URL environment variable"
             )
-        self._api_url = resolved_url.rstrip("/")
+        self._api_url = _validate_api_url(resolved_url)
         self._conn_options = conn_options
         self._session = session
 
@@ -271,6 +273,48 @@ def _resolve_optional_string(value: NotGivenOr[str], env_name: str) -> str | Non
         return str(value).strip() or None
     env_value = os.getenv(env_name)
     return env_value.strip() if env_value and env_value.strip() else None
+
+
+def _validate_api_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    try:
+        parsed = urlsplit(normalized)
+        # Accessing port also validates that it is a well-formed integer in range.
+        _ = parsed.port
+    except ValueError as exc:
+        raise BosonAvatarException("api_url must be a valid absolute HTTP(S) base URL") from exc
+
+    if (
+        not normalized
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "?" in normalized
+        or "#" in normalized
+        or any(char.isspace() for char in normalized)
+    ):
+        raise BosonAvatarException(
+            "api_url must be an absolute HTTP(S) base URL without credentials, query, or fragment"
+        )
+
+    if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        raise BosonAvatarException(
+            "api_url must use HTTPS unless it targets a loopback host; the API key is sent "
+            "as a Bearer credential"
+        )
+    return normalized
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 async def _read_payload(response: aiohttp.ClientResponse) -> object | None:

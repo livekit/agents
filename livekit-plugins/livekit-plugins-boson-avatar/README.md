@@ -27,7 +27,10 @@ export LIVEKIT_API_SECRET="..."
 ```
 
 The plugin deliberately has no hard-coded provider endpoint. Your application
-or deployment environment supplies the Avatar session service URL.
+or deployment environment supplies the base URL exposed by its Boson Avatar
+deployment/operator. The plugin appends `POST /sessions` when starting an
+Avatar and `DELETE /sessions/{id}` during cleanup, so do not include
+`/sessions` itself in `BOSON_AVATAR_API_URL`.
 
 ## Usage
 
