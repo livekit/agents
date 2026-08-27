@@ -56,8 +56,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
 `BOSON_AVATAR_ID` can supply `avatar_id` instead. `AvatarSession` also accepts
 optional `width`, `height`, `max_duration_seconds`,
-`avatar_participant_identity`, and `APIConnectOptions`.
+`avatar_participant_identity`, `idempotency_key`, and `APIConnectOptions`.
 `max_duration_seconds` must be an integer from 1 through 14400.
+
+Inside a LiveKit Agent job, provider-session creation automatically uses the
+LiveKit job ID as its idempotency key. If LiveKit redelivers that job after a
+worker crash, the plugin recovers the existing provider session instead of
+allocating another one. Pass `idempotency_key` only when the application has a
+more appropriate stable session-intent ID.
 
 The `avatar_id` is the value behind the Avatar selected in your application or
 Boson dashboard; end users do not need to type or remember it.

@@ -99,6 +99,8 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             {"max_duration_seconds": -1},
             {"max_duration_seconds": 1.5},
             {"max_duration_seconds": 14_401},
+            {"idempotency_key": ""},
+            {"idempotency_key": 123},
         )
         for kwargs in invalid:
             with self.subTest(kwargs=kwargs), self.assertRaises(BosonAvatarException):
@@ -132,7 +134,10 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "livekit.plugins.boson_avatar.avatar.get_job_context",
-                return_value=None,
+                return_value=SimpleNamespace(
+                    job=SimpleNamespace(id="AJ_test"),
+                    local_participant_identity="voice-1",
+                ),
             ),
             patch(
                 "livekit.plugins.boson_avatar.avatar.DataStreamAudioOutput",
@@ -174,6 +179,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["width"], 640)
         self.assertEqual(call["height"], 480)
         self.assertEqual(call["max_duration_seconds"], 900)
+        self.assertEqual(call["idempotency_key"], "livekit-job-AJ_test")
         claims = _jwt_claims(call["livekit_token"])
         self.assertEqual(claims["sub"], "avatar-1")
         self.assertEqual(claims["name"], "Demo Avatar")
@@ -187,6 +193,52 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(RuntimeError, "called twice"):
             await avatar.start(agent_session, _Room())  # type: ignore[arg-type]
+
+    async def test_explicit_idempotency_key_overrides_livekit_job_default(self) -> None:
+        api_client = SimpleNamespace(
+            start_session=AsyncMock(
+                return_value=AvatarSessionInfo("provider-session-1", "avatar-1")
+            ),
+            end_session=AsyncMock(),
+        )
+
+        with (
+            patch(
+                "livekit.plugins.boson_avatar.avatar.BosonAvatarAPI",
+                return_value=api_client,
+            ),
+            patch(
+                "livekit.plugins.boson_avatar.avatar.get_job_context",
+                return_value=SimpleNamespace(
+                    job=SimpleNamespace(id="AJ_test"),
+                    local_participant_identity="voice-1",
+                ),
+            ),
+            patch(
+                "livekit.plugins.boson_avatar.avatar.DataStreamAudioOutput",
+                return_value=object(),
+            ),
+            patch.object(BaseAvatarSession, "start", new=AsyncMock()),
+            patch.object(BaseAvatarSession, "aclose", new=AsyncMock()),
+        ):
+            avatar = AvatarSession(
+                avatar_id="asset-1",
+                api_key="boson-key",
+                avatar_participant_identity="avatar-1",
+                idempotency_key="application-session-1",
+            )
+            await avatar.start(
+                _AgentSession(),  # type: ignore[arg-type]
+                _Room(),  # type: ignore[arg-type]
+                livekit_url="wss://tenant.livekit.cloud",
+                livekit_api_key="livekit-key",
+                livekit_api_secret="livekit-secret-with-enough-entropy",
+            )
+
+        self.assertEqual(
+            api_client.start_session.await_args.kwargs["idempotency_key"],
+            "application-session-1",
+        )
 
     async def test_start_failure_ends_provider_session_and_base_session(self) -> None:
         api_client = SimpleNamespace(

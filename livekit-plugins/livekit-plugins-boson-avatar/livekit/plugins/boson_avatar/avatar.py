@@ -56,6 +56,7 @@ class AvatarSession(BaseAvatarSession[Any]):
         max_duration_seconds: NotGivenOr[int] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        idempotency_key: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Create a Boson Avatar session.
@@ -70,6 +71,9 @@ class AvatarSession(BaseAvatarSession[Any]):
             max_duration_seconds: Optional maximum Avatar session duration.
             avatar_participant_identity: LiveKit identity used by the Avatar.
             avatar_participant_name: LiveKit display name used by the Avatar.
+            idempotency_key: Optional stable key for provider-session creation.
+                Defaults to the LiveKit job ID when running inside an Agent job,
+                so a redelivered job recovers the same provider session.
             conn_options: Timeout and retry options for Boson API requests.
 
         Raises:
@@ -98,6 +102,7 @@ class AvatarSession(BaseAvatarSession[Any]):
             avatar_participant_identity, _AVATAR_AGENT_IDENTITY
         )
         self._avatar_name = _resolve_optional_string(avatar_participant_name, _AVATAR_AGENT_NAME)
+        self._idempotency_key = _resolve_optional_idempotency_key(idempotency_key)
         self._api = BosonAvatarAPI(
             api_key=api_key,
             api_url=api_url,
@@ -178,6 +183,7 @@ class AvatarSession(BaseAvatarSession[Any]):
                         width=self._width,
                         height=self._height,
                         max_duration_seconds=self._max_duration_seconds,
+                        idempotency_key=self._idempotency_key or _livekit_job_idempotency_key(),
                     ),
                     name="boson_avatar_create_session",
                 )
@@ -402,6 +408,14 @@ def _local_participant_identity(room: rtc.Room) -> str:
     raise BosonAvatarException("failed to get the local LiveKit participant identity")
 
 
+def _livekit_job_idempotency_key() -> str | None:
+    job_ctx = get_job_context(required=False)
+    if job_ctx is None:
+        return None
+    job_id = str(job_ctx.job.id).strip()
+    return f"livekit-job-{job_id}" if job_id else None
+
+
 def _resolve_env_or_value(value: NotGivenOr[str], env_name: str) -> str | None:
     if utils.is_given(value) and value:
         return str(value).strip() or None
@@ -413,6 +427,14 @@ def _resolve_optional_string(value: NotGivenOr[str], default: str) -> str:
     if utils.is_given(value) and value:
         return str(value).strip() or default
     return default
+
+
+def _resolve_optional_idempotency_key(value: NotGivenOr[str]) -> str | None:
+    if not utils.is_given(value) or value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise BosonAvatarException("idempotency_key must be a non-empty string")
+    return value.strip()
 
 
 def _resolve_optional_positive_int(
