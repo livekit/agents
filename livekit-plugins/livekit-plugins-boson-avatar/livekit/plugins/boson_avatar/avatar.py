@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -413,7 +414,9 @@ def _livekit_job_idempotency_key() -> str | None:
     if job_ctx is None:
         return None
     job_id = str(job_ctx.job.id).strip()
-    return f"livekit-job-{job_id}" if job_id else None
+    if not job_id:
+        return None
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"livekit-job:{job_id}"))
 
 
 def _resolve_env_or_value(value: NotGivenOr[str], env_name: str) -> str | None:
