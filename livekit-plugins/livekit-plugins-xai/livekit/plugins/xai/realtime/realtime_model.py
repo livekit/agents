@@ -418,9 +418,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             event.previous_item_id = None
 
         if event.previous_item_id is None:
-            event.previous_item_id = (
-                self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
-            )
+            event.previous_item_id = self._remote_chat_ctx.tail_id
 
         super()._handle_conversion_item_added(event)
 
