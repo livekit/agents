@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 from google.genai import types
@@ -13,6 +16,41 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
+    """Whether this task is a genai client's ``aclose()`` left behind by a finalizer.
+
+    Keyed on the coroutine's defining module, not its name alone -- ``aclose``
+    is a common method name and this must not touch unrelated tasks. Coroutine
+    objects carry no ``__module__``, hence the walk through ``cr_frame``.
+    """
+    coro = task.get_coro()
+    if not (getattr(coro, "__qualname__", "") or "").endswith(".aclose"):
+        return False
+    frame = getattr(coro, "cr_frame", None)
+    module = frame.f_globals.get("__name__", "") if frame else ""
+    return module.startswith("google.genai")
+
+
+@pytest.fixture(autouse=True)
+async def _settle_genai_finalizers() -> AsyncIterator[None]:
+    """Finish the genai client teardown this test started, before the next one.
+
+    ``AsyncClient.__del__`` schedules ``aclose()`` on whatever event loop is
+    running when the collector reaches it, with no check for a client that was
+    already closed explicitly -- so even the sessions this module closes
+    properly leave a finalizer behind. Settled here, while this test still owns
+    the loop, those tasks would otherwise surface as leaked tasks in an
+    unrelated test in a later module.
+    """
+    yield
+    gc.collect()
+    if pending := [
+        task for task in asyncio.all_tasks() if not task.done() and _is_genai_client_teardown(task)
+    ]:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
 _PCM_FRAME = b"\x00\x01" * 240
