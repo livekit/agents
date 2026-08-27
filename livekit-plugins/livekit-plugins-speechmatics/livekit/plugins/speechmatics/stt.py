@@ -49,6 +49,9 @@ from speechmatics.agent_stt import (
     ServerMessageType,
     TranscriptionConfig,
 )
+from speechmatics.agent_stt import (
+    TurnDetectionMode as AgentTurnDetectionMode,
+)
 
 # Public-API types — unchanged from the voice-SDK plugin surface.
 from speechmatics.voice import (
@@ -65,27 +68,20 @@ from .version import __version__ as lk_version
 
 
 class TurnDetectionMode(str, Enum):
-    """Endpoint and turn detection handling mode.
+    """How turn boundaries (end of speech) are detected.
 
-    How the STT engine handles the endpointing of speech. Use `TurnDetectionMode.EXTERNAL` when
-    turn boundaries are controlled manually, for example via an external VAD or the `finalize()`
-    method.
+    `DEFAULT`: the STT service runs its own VAD and closes turns itself.
 
-    To use the STT engine's built-in endpointing, use `TurnDetectionMode.ADAPTIVE` for simple
-    voice activity detection or `TurnDetectionMode.SMART_TURN` for more advanced ML-based
-    endpointing.
+    `EXTERNAL`: turn boundaries are controlled by the caller — the service does not
+    endpoint on its own, and the caller drives turns by calling `finalize()` (for
+    example from an external VAD).
 
-    The `TurnDetectionMode.FIXED` mode uses a fixed amount of silence, as determined by the
-    `end_of_utterance_silence_trigger` parameter.
-
-    The default is `TurnDetectionMode.EXTERNAL` which delegates endpointing to an external VAD
-    (Silero is auto-loaded if no `vad` is provided).
+    The values mirror the Agent STT SDK's own turn-detection modes so the two never
+    drift; only the member names differ (DEFAULT=VAD)
     """
 
-    EXTERNAL = "external"
-    FIXED = "fixed"
-    ADAPTIVE = "adaptive"
-    SMART_TURN = "smart_turn"
+    DEFAULT = AgentTurnDetectionMode.VAD.value
+    EXTERNAL = AgentTurnDetectionMode.EXTERNAL.value
 
 
 @dataclasses.dataclass
@@ -96,6 +92,9 @@ class STTOptions:
     language: LanguageCode = LanguageCode("en")
     output_locale: str | None = None
     domain: str | None = None
+
+    # Endpointing mode
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.DEFAULT
 
     # Output formatting
     speaker_active_format: str | None = None
@@ -136,7 +135,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.DEFAULT,
         model: NotGivenOr[Model | str] = NOT_GIVEN,
         operating_point: NotGivenOr[OperatingPoint | Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
@@ -172,13 +171,10 @@ class STT(stt.STT):
             base_url: Custom base URL for the API. Can be set via `base_url`
                 argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
 
-            turn_detection_mode: Controls how the STT engine detects end of speech
-                turns. Use `EXTERNAL` when turn boundaries are controlled manually,
-                for example via an external VAD or the `finalize()` method. Use
-                `ADAPTIVE` for simple VAD or `SMART_TURN` for ML-based endpointing.
-                `FIXED` uses a fixed amount of silence, as determined by the
-                `end_of_utterance_silence_trigger` parameter.
-                Defaults to `TurnDetectionMode.EXTERNAL`.
+            turn_detection_mode: How end-of-speech turns are detected. `DEFAULT` lets
+                the STT service run its own VAD and close turns itself. `EXTERNAL`
+                hands turn control to the caller, who drives it via `finalize()` (e.g.
+                from an external VAD). Defaults to `TurnDetectionMode.DEFAULT`.
 
             model: The transcription model (operating point) to use, e.g. `"linden-1"`.
                 Defaults to the SDK's default model. Preferred over `operating_point`.
@@ -297,6 +293,7 @@ class STT(stt.STT):
             language=LanguageCode(language),
             output_locale=_set(output_locale),
             domain=_set(domain),
+            turn_detection_mode=turn_detection_mode,
             speaker_active_format=_set(speaker_active_format),
             speaker_passive_format=_set(speaker_passive_format),
             focus_speakers=_set(focus_speakers) or [],
@@ -438,6 +435,7 @@ class STT(stt.STT):
         config = TranscriptionConfig(
             language=language if is_given(language) else opts.language,
             model=opts.model,
+            turn_detection_mode=_handle_turn_detection_mode(opts.turn_detection_mode),
             diarization="speaker" if opts.enable_diarization else None,
             additional_vocab=opts.additional_vocab or None,
             output_locale=opts.output_locale,
@@ -487,7 +485,9 @@ class STT(stt.STT):
             if not stream._client or not stream._client.is_connected:
                 continue
 
-            stream._client.finalize()
+            # Only finalize() if EXTERNAL turn_detection_mode is selected
+            if stream._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
+                stream._client.finalize()
 
     async def get_speaker_ids(
         self,
@@ -857,6 +857,19 @@ class SpeechStream(stt.RecognizeStream):
         # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+
+
+def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:
+    """Map the plugin's turn detection mode onto the session driver's.
+
+    - `DEFAULT`  -> the service runs its own VAD and closes turns.
+    - `EXTERNAL` -> the caller closes turns by calling `finalize()`.
+
+    The plugin's enum values are the SDK's values, so this is a direct lookup — but it
+    is still required: `TranscriptionConfig.to_dict()` compares by identity, so the
+    config must carry the SDK's own enum member, not the plugin's.
+    """
+    return AgentTurnDetectionMode(mode.value)
 
 
 def _model_name(value: Model | OperatingPoint | str) -> str:
