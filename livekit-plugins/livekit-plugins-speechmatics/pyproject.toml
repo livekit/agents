@@ -24,7 +24,6 @@ classifiers = [
 
 dependencies = [
     "livekit-agents>=1.6.10",
-    "speechmatics-voice[smart]>=0.2.8",
     # Agent STT SDK — pinned to the in-development `agent-stt-sdk` branch (monorepo
     # subdirectory). Swap this for a published `speechmatics-agent-stt>=X` pin once
     # the branch is released to PyPI (DEL-35002).

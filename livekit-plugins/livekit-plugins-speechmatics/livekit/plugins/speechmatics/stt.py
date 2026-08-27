@@ -35,31 +35,25 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 
-# Session driver: the Agent STT SDK. Only the transport/config/message shapes come from
-# here — the plugin's public API (below) is unchanged and still speaks the voice-SDK types.
+# Everything comes from the Agent STT SDK now — the plugin no longer depends on the
+# legacy voice SDK for the driver, config, message shapes, or public-API types.
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
     REMOVE,
+    AdditionalVocabEntry,
     AgentSttAsyncClient,
+    AudioEncoding,
     AudioFormat,
     ClientMessageType,
     Model,
     Segment,
     ServerMessageType,
+    SpeakerIdentifier,
     TranscriptionConfig,
 )
 from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
-)
-
-# Public-API types — unchanged from the voice-SDK plugin surface.
-from speechmatics.voice import (
-    AdditionalVocabEntry,
-    AudioEncoding,
-    OperatingPoint,
-    SpeakerFocusMode,
-    SpeakerIdentifier,
 )
 
 from ._debug import dd  # noqa: F401  # debug-only dump-and-die helper
@@ -101,9 +95,6 @@ class STTOptions:
     speaker_passive_format: str | None = None
 
     # Speakers
-    focus_speakers: list[str] = dataclasses.field(default_factory=list)
-    ignore_speakers: list[str] = dataclasses.field(default_factory=list)
-    focus_mode: SpeakerFocusMode = SpeakerFocusMode.RETAIN
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
 
     # Custom dictionary
@@ -137,7 +128,7 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = TurnDetectionMode.DEFAULT,
         model: NotGivenOr[Model | str] = NOT_GIVEN,
-        operating_point: NotGivenOr[OperatingPoint | Model | str] = NOT_GIVEN,
+        operating_point: NotGivenOr[Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -153,9 +144,6 @@ class STT(stt.STT):
         speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
         speaker_passive_format: NotGivenOr[str] = NOT_GIVEN,
         prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
-        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        focus_mode: SpeakerFocusMode = SpeakerFocusMode.RETAIN,
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
@@ -238,21 +226,6 @@ class STT(stt.STT):
                 extra weight to be identified as the same speaker. Overrides preset if
                 provided. Optional.
 
-            focus_speakers: List of speaker IDs to focus on. Only these speakers are
-                emitted as `FINAL_TRANSCRIPT` events; others are treated as passive.
-                Words from passive speakers are still processed but only emitted when a
-                focused speaker has also said new words. Defaults to [].
-
-            ignore_speakers: List of speaker IDs to ignore. These speakers are excluded
-                from transcription and their speech will not trigger VAD or end of
-                utterance detection. By default, any speaker with a label wrapped in
-                double underscores (e.g. `__ASSISTANT__`) is excluded. Defaults to [].
-
-            focus_mode: Controls what happens to words from non-focused speakers. When
-                `RETAIN`, non-ignored speakers are processed as passive frames. When
-                `IGNORE`, their words are discarded entirely. Defaults to
-                `SpeakerFocusMode.RETAIN`.
-
             known_speakers: List of known speaker labels and identifiers. When supplied,
                 the STT engine uses them to attribute words to specific speakers across
                 sessions. Defaults to [].
@@ -296,9 +269,6 @@ class STT(stt.STT):
             turn_detection_mode=turn_detection_mode,
             speaker_active_format=_set(speaker_active_format),
             speaker_passive_format=_set(speaker_passive_format),
-            focus_speakers=_set(focus_speakers) or [],
-            ignore_speakers=_set(ignore_speakers) or [],
-            focus_mode=focus_mode,
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
             model=_resolve_model(model, operating_point),
@@ -448,27 +418,6 @@ class STT(stt.STT):
         # config.override_config({"vad_config": REMOVE})
 
         return config
-
-    def update_speakers(
-        self,
-        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        focus_mode: NotGivenOr[SpeakerFocusMode] = NOT_GIVEN,
-    ) -> None:
-        """Updates the speaker configuration.
-
-        Records the new speaker focus configuration on the options. Note that
-        speaker focus is a voice-SDK concept with no agent-STT wire equivalent yet,
-        so the update is not pushed to an in-flight session.
-        """
-        if is_given(focus_speakers):
-            self._stt_options.focus_speakers = focus_speakers
-        if is_given(ignore_speakers):
-            self._stt_options.ignore_speakers = ignore_speakers
-        if is_given(focus_mode):
-            self._stt_options.focus_mode = focus_mode
-
-        logger.info("update_speakers has no agent-STT equivalent; not pushed to the session")
 
     def finalize(self) -> None:
         """Finalize the turn (from external VAD).
@@ -872,18 +821,18 @@ def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMo
     return AgentTurnDetectionMode(mode.value)
 
 
-def _model_name(value: Model | OperatingPoint | str) -> str:
-    """Normalize a model / operating-point value to its wire string.
+def _model_name(value: Model | str) -> str:
+    """Normalize a model value to its wire string.
 
-    Accepts an enum member (`Model`, `OperatingPoint`, or any future `str` enum) or a
-    plain string, and returns the string the service reads.
+    Accepts an enum member (`Model`, or any future `str` enum) or a plain string,
+    and returns the string the service reads.
     """
     return value.value if isinstance(value, Enum) else str(value)
 
 
 def _resolve_model(
     model: NotGivenOr[Model | str],
-    operating_point: NotGivenOr[OperatingPoint | Model | str],
+    operating_point: NotGivenOr[Model | str],
 ) -> str:
     """Reconcile the preferred `model` with its deprecated `operating_point` alias.
 
