@@ -1,14 +1,19 @@
 from abc import abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from livekit.agents import ProviderTool
-from livekit.agents.llm.tool_context import Tool, Toolset, get_fnc_tool_names
+from livekit.agents.llm.tool_context import FunctionTool, RawFunctionTool, Tool
 
 
 class XAITool(ProviderTool):
     """Base class for xAI server-side provider tools."""
+
+    # function names the server answers to once this tool is enabled. Measured against
+    # grok-voice-latest: a client function of the same name makes the first
+    # response.create return server_error.
+    _reserved_function_names: ClassVar[frozenset[str]] = frozenset()
 
     @abstractmethod
     def to_dict(self) -> dict[str, Any]: ...
@@ -21,6 +26,8 @@ class WebSearch(XAITool):
     Do not also register a function named ``web_search`` or ``browse_page``;
     xAI's WebSearch already uses those names.
     """
+
+    _reserved_function_names: ClassVar[frozenset[str]] = frozenset({"web_search", "browse_page"})
 
     def __post_init__(self) -> None:
         super().__init__(id="xai_web_search")
@@ -38,6 +45,9 @@ class XSearch(XAITool):
     xAI's XSearch already uses those names.
     """
 
+    _reserved_function_names: ClassVar[frozenset[str]] = frozenset(
+        {"x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}
+    )
     allowed_x_handles: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -58,6 +68,9 @@ class FileSearch(XAITool):
     xAI's FileSearch already uses those names.
     """
 
+    _reserved_function_names: ClassVar[frozenset[str]] = frozenset(
+        {"collections_search", "file_search"}
+    )
     vector_store_ids: list[str] = field(default_factory=list)
     max_num_results: int | None = None
 
@@ -75,33 +88,19 @@ class FileSearch(XAITool):
         return result
 
 
-# Measured against grok-voice-latest: a client function of these names plus the
-# matching provider tool makes the first response.create return server_error.
-_XAI_TOOL_RESERVED_FUNCTION_NAMES: dict[type[XAITool], frozenset[str]] = {
-    WebSearch: frozenset({"web_search", "browse_page"}),
-    XSearch: frozenset(
-        {"x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}
-    ),
-    FileSearch: frozenset({"collections_search", "file_search"}),
-}
-
-
-def _raise_if_xai_tool_reserved_name_conflict(tools: Sequence[Tool | Toolset]) -> None:
-    reserved: set[str] = set()
-    owners: dict[str, str] = {}
+def _raise_if_xai_tool_reserved_name_conflict(tools: Sequence[Tool]) -> None:
+    """Reject a client function whose name an enabled xAI provider tool already answers to."""
+    fnc_names = {
+        tool.info.name for tool in tools if isinstance(tool, (FunctionTool, RawFunctionTool))
+    }
     for tool in tools:
-        for tool_cls, names in _XAI_TOOL_RESERVED_FUNCTION_NAMES.items():
-            if isinstance(tool, tool_cls):
-                reserved |= names
-                for name in names:
-                    owners[name] = tool_cls.__name__
-    if not reserved:
-        return
-    for name in get_fnc_tool_names(tools):
-        if name in reserved:
+        if not isinstance(tool, XAITool):
+            continue
+        if conflicts := sorted(tool._reserved_function_names & fnc_names):
+            names = ", ".join(repr(name) for name in conflicts)
             raise ValueError(
-                f"xAI {owners[name]} already uses the function name {name!r}. "
-                "Rename or remove the function; mixing the provider tool with a "
-                "client function of a reserved name makes grok-voice-latest "
-                "return server_error/internal_error on the first response.create."
+                f"xAI {type(tool).__name__} already uses the function name(s) {names}. "
+                "Rename or remove them; a client function that shadows a provider tool's "
+                "own name makes grok-voice-latest return server_error/internal_error on "
+                "the first response.create."
             )

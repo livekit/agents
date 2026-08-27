@@ -105,8 +105,9 @@ def test_file_search_plus_raw_collections_search_raises() -> None:
 
 def test_file_search_plus_nested_toolset_reserved_name_raises() -> None:
     toolset = llm.Toolset(id="nested", tools=[collections_search])
+    tools = llm.ToolContext([FileSearch(), toolset]).flatten()
     with pytest.raises(ValueError, match="Rename or remove"):
-        _raise_if_xai_tool_reserved_name_conflict([FileSearch(), toolset])
+        _raise_if_xai_tool_reserved_name_conflict(tools)
 
 
 _HARMLESS_PAIRS: list[tuple[llm.ProviderTool | None, str]] = [
