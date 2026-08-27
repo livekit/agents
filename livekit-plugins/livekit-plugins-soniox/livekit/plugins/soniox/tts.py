@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiohttp
 
@@ -35,6 +35,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -555,40 +556,45 @@ class _CancelStream:
 _OutboundMsg = _StartConfig | _SendText | _CancelStream
 
 
-def _is_spaceless_language(language: str) -> bool:
-    """Languages written without spaces (zh/ja): each character is its own word."""
-    return language.split("-")[0].lower() in ("zh", "ja")
+def _timed_words(chars: list[_Char], *, flush: bool) -> tuple[list[TimedString], list[_Char]]:
+    """Split buffered timed characters into word-aligned ``TimedString``s.
 
+    Soniox sends three equal-length parallel arrays per message (character,
+    start_seconds, end_seconds); the caller zips them into ``_Char``s and passes the
+    running buffer here. ``split_words`` handles all whitespace, keeps punctuation,
+    and splits CJK/Thai per character. Each delta spans one word plus the
+    whitespace/punctuation up to the next word, so the deltas re-concatenate to the
+    original text. The last word may still be growing, so it is returned as the
+    buffer to carry into the next call — unless ``flush`` closes the stream.
+    """
+    if not chars:
+        return [], []
 
-def _chars_to_word_times(
-    characters: list[str],
-    start_times: list[float],
-    partial: tuple[str, float] | None,
-    spaceless: bool,
-) -> tuple[list[tuple[str, float]], tuple[str, float] | None]:
-    """Group one Soniox timestamp message into ``(word, start_seconds)`` tuples."""
-    if len(characters) != len(start_times):
-        logger.error(
-            f"Soniox TTS timestamp length mismatch: {len(characters)} vs {len(start_times)}"
+    text = "".join(c.text for c in chars)
+    words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], chars
+
+    bounds = [start for _, start, _ in words] + [len(chars)]
+    count = len(words) if flush else len(words) - 1
+    timed = [
+        TimedString(
+            text=text[bounds[i] : bounds[i + 1]],
+            start_time=chars[bounds[i]].start,
+            end_time=chars[bounds[i + 1] - 1].end,
         )
-        return [], partial
+        for i in range(count)
+    ]
+    if flush:
+        return timed, []
+    keep = bounds[count]  # start of the still-growing last word
+    return timed, chars[keep:]
 
-    if spaceless:
-        words = [(ch, t) for ch, t in zip(characters, start_times, strict=True) if ch.isalnum()]
-        return words, None
 
-    text, start = partial or ("", 0.0)
-    words = []
-    for ch, t in zip(characters, start_times, strict=True):
-        if ch == " ":
-            if text:
-                words.append((text + " ", start))
-                text = ""
-        else:
-            if not text:  # new word
-                start = t
-            text += ch
-    return words, ((text, start) if text else None)
+class _Char(NamedTuple):
+    text: str
+    start: float
+    end: float
 
 
 @dataclass
@@ -601,10 +607,9 @@ class _StreamData:
     # This flag is how recv loop tells them apart.
     cancel_sent: bool = False
     config_sent: bool = False
-    partial: tuple[str, float] | None = None
-    """Word spanning multiple timestamp messages: (text, start_seconds)."""
-    spaceless: bool = False
-    """Spaceless language (zh/ja); frozen at register time."""
+    # Buffered characters with timing, accumulated across timestamp messages until
+    # whole words can be emitted.
+    ts_chars: list[_Char] = field(default_factory=list)
 
 
 class _Connection:
@@ -685,12 +690,7 @@ class _Connection:
             raise ValueError(f"stream_id {stream_id} already registered")
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(
-            emitter=emitter,
-            waiter=waiter,
-            opts=opts,
-            spaceless=_is_spaceless_language(opts.language),
-        )
+        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -842,15 +842,20 @@ class _Connection:
 
                 timestamps = resp.get("timestamps")
                 if timestamps:
-                    words, stream.partial = _chars_to_word_times(
-                        timestamps.get("characters", []),
-                        timestamps.get("character_start_times_seconds", []),
-                        stream.partial,
-                        stream.spaceless,
-                    )
-                    if words:
-                        stream.emitter.push_timed_transcript(
-                            [TimedString(text=w, start_time=t) for w, t in words]
+                    chars = timestamps.get("characters", [])
+                    starts = timestamps.get("character_start_times_seconds", [])
+                    ends = timestamps.get("character_end_times_seconds", [])
+                    if len(chars) == len(starts) == len(ends):
+                        stream.ts_chars += [
+                            _Char(c, s, e) for c, s, e in zip(chars, starts, ends, strict=True)
+                        ]
+                        words, stream.ts_chars = _timed_words(stream.ts_chars, flush=False)
+                        if words:
+                            stream.emitter.push_timed_transcript(words)
+                    else:
+                        logger.error(
+                            f"Soniox TTS timestamp array mismatch: "
+                            f"{len(chars)}/{len(starts)}/{len(ends)}"
                         )
 
                 if resp.get("audio_end"):
@@ -859,13 +864,11 @@ class _Connection:
                     # block (covers cancel/error paths too).
 
                 if resp.get("terminated"):
-                    # Flush the final word (no trailing space closed it).
-                    if stream.partial:
-                        text, start = stream.partial
-                        stream.emitter.push_timed_transcript(
-                            TimedString(text=text, start_time=start)
-                        )
-                        stream.partial = None
+                    # Flush the final buffered word (nothing closed it yet).
+                    words, _ = _timed_words(stream.ts_chars, flush=True)
+                    if words:
+                        stream.emitter.push_timed_transcript(words)
+                    stream.ts_chars = []
 
                     # Don't clobber an exception already raised on the error_code path.
                     if not stream.waiter.done():
