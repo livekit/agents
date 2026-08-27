@@ -34,6 +34,7 @@ from .events import (
     ClientToolInvocationEvent,
     ClientToolResultEvent,
     DebugEvent,
+    ForcedAgentMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
     PongEvent,
@@ -298,6 +299,9 @@ class RealtimeSession(
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
         self._chat_ctx = llm.ChatContext.empty()
+
+        # Prevent GC of in-flight say() tasks; cancelled on close.
+        self._say_tasks: set[asyncio.Task[None]] = set()
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
@@ -586,17 +590,17 @@ class RealtimeSession(
         if isinstance(text, str):
             self._send_forced_agent_message(text)
         else:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._collect_and_send_forced_message(text),
                 name="ultravox-say-collect",
             )
+            self._say_tasks.add(task)
+            task.add_done_callback(self._say_tasks.discard)
 
         def _on_timeout() -> None:
             if not fut.done():
                 fut.set_exception(
-                    llm.RealtimeError(
-                        "say() timed out waiting for generation_created event."
-                    )
+                    llm.RealtimeError("say() timed out waiting for generation_created event.")
                 )
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
@@ -620,11 +624,7 @@ class RealtimeSession(
         return fut
 
     def _send_forced_agent_message(self, text: str) -> None:
-        self._send_client_event({
-            "type": "forced_agent_message",
-            "content": text,
-            "uninterruptible": True,
-        })
+        self._send_client_event(ForcedAgentMessageEvent(content=text, uninterruptible=True))
 
     async def _collect_and_send_forced_message(
         self,
@@ -669,6 +669,9 @@ class RealtimeSession(
         self._closed = True
         self._msg_ch.close()
         self._session_should_close.set()
+
+        if self._say_tasks:
+            await utils.aio.cancel_and_wait(*self._say_tasks)
 
         await utils.aio.cancel_and_wait(self._main_atask)
 
