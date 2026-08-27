@@ -48,3 +48,9 @@ session = AgentSession(
 each utterance is one complete sentence (Vakyam does not accept partial
 tokens). `synthesize()` uses HTTP streaming (`POST /v1/tts/stream`) and
 returns PCM audio.
+
+WebSocket connections are pooled and reused between sequential agent turns.
+Each active synthesis stream has exclusive ownership of its connection, so an
+overlapping stream uses a separate connection. On interruption, the plugin
+sends `cancel`, drains through Vakyam's cancellation acknowledgement, and
+returns the healthy connection to the pool.

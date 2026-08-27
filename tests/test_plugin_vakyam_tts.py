@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
 
 pytestmark = pytest.mark.unit
 
@@ -105,11 +105,13 @@ def test_update_options() -> None:
     from livekit.plugins.vakyam import TTS
 
     tts = TTS(api_key="test-key")
+    old_pool = tts._pool_for(tts._opts)
     tts.update_options(language="en-IN", voice="Archana", sample_rate=8000, speed=0.9)
     assert tts._opts.language == "en-IN"
     assert tts.sample_rate == 8000
     assert tts._opts.speed == 0.9
-    assert tts._needs_reconnect is True
+    assert tts._session_config(tts._opts).sample_rate == 8000
+    assert tts._pool_for(tts._opts) is not old_pool
 
 
 def test_websocket_url_from_https() -> None:
@@ -174,6 +176,321 @@ def test_text_too_long() -> None:
 
     with pytest.raises(ValueError, match="3000"):
         validate_text("a" * 3001)
+
+
+def test_split_text_respects_provider_limit() -> None:
+    from livekit.plugins.vakyam._utils import split_text
+
+    chunks = split_text("word " * 1000, max_characters=100)
+    assert " ".join(chunks) == ("word " * 1000).strip()
+    assert all(0 < len(chunk) <= 100 for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_connection_pool_exclusively_checks_out_websockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.vakyam import TTS
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
+
+    class FakeWS:
+        async def send(self, data: str) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    connected: list[AsyncStreamingTTSSession] = []
+
+    async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
+        self._connection = FakeWS()
+        connected.append(self)
+
+    monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
+    synth = TTS(api_key="test-key")
+    pool = synth._pool_for(synth._opts)
+
+    first = await pool.get(timeout=1.0)
+    second = await pool.get(timeout=1.0)
+    assert first is not second
+    assert len(connected) == 2
+
+    pool.put(first)
+    pool.put(second)
+    reused = await pool.get(timeout=1.0)
+    assert reused in {first, second}
+    pool.put(reused)
+    await synth.aclose()
+
+
+@pytest.mark.asyncio
+async def test_websocket_receive_timeout_resets_active_state() -> None:
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
+
+    class StalledWS:
+        async def send(self, data: str) -> None:
+            return None
+
+        async def recv(self) -> bytes | str:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    session = AsyncStreamingTTSSession(api_key="test-key", config=TTSSessionConfig())
+    session._connection = StalledWS()
+
+    with pytest.raises(APITimeoutError):
+        await anext(session.synthesize_stream("Hello.", timeout=0.01))
+    assert session.utterance_active is False
+
+
+@pytest.mark.asyncio
+async def test_stream_retry_uses_fresh_attempt_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.plugins.vakyam import TTS
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
+
+    class FakeWS:
+        def __init__(self, incoming: list[bytes | str | Exception]) -> None:
+            self._incoming = incoming
+
+        async def send(self, data: str) -> None:
+            return None
+
+        async def recv(self) -> bytes | str:
+            item = self._incoming.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        async def close(self) -> None:
+            return None
+
+    attempts = 0
+
+    async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            self._connection = FakeWS([RuntimeError("stale socket")])
+        else:
+            self._connection = FakeWS(
+                [
+                    b"\0" * 2400,
+                    json.dumps(
+                        {
+                            "type": "end_of_utterance",
+                            "characters_used": 6,
+                            "duration_seconds": 0.05,
+                        }
+                    ),
+                ]
+            )
+
+    monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
+    synth = TTS(api_key="test-key")
+    stream = synth.stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=0.1)
+    )
+    stream.push_text("Hello.")
+    stream.end_input()
+
+    frames = [event.frame async for event in stream]
+    assert frames
+    assert attempts == 2
+    await synth.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_retry_after_partial_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.vakyam import TTS
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
+
+    class FailingWS:
+        def __init__(self) -> None:
+            self._incoming: list[bytes | Exception] = [
+                b"\0" * 2400,
+                RuntimeError("connection lost"),
+            ]
+
+        async def send(self, data: str) -> None:
+            return None
+
+        async def recv(self) -> bytes:
+            item = self._incoming.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        async def close(self) -> None:
+            return None
+
+    attempts = 0
+
+    async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
+        nonlocal attempts
+        attempts += 1
+        self._connection = FailingWS()
+
+    monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
+    synth = TTS(api_key="test-key")
+    stream = synth.stream(
+        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=0.1)
+    )
+    stream.push_text("Hello.")
+    stream.end_input()
+
+    with pytest.raises(APIConnectionError):
+        async for _ in stream:
+            pass
+    assert attempts == 1
+    await synth.aclose()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.plugins.vakyam import TTS
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
+
+    class ReusableWS:
+        def __init__(self) -> None:
+            self.utterance = 0
+            self.audio_sent = False
+            self.cancel_sent = asyncio.Event()
+
+        async def send(self, data: str) -> None:
+            msg_type = json.loads(data)["type"]
+            if msg_type == "text":
+                self.utterance += 1
+                self.audio_sent = False
+            elif msg_type == "cancel":
+                self.cancel_sent.set()
+
+        async def recv(self) -> bytes | str:
+            if not self.audio_sent:
+                self.audio_sent = True
+                return b"\0" * 2400
+            if self.utterance == 1:
+                await self.cancel_sent.wait()
+                return json.dumps(
+                    {"type": "cancellation", "characters_used": 2, "duration_seconds": 0.05}
+                )
+            return json.dumps(
+                {
+                    "type": "end_of_utterance",
+                    "characters_used": 6,
+                    "duration_seconds": 0.05,
+                }
+            )
+
+        async def close(self) -> None:
+            return None
+
+    connection = ReusableWS()
+    attempts = 0
+
+    async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
+        nonlocal attempts
+        attempts += 1
+        self._connection = connection
+
+    monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
+    synth = TTS(api_key="test-key")
+
+    interrupted = synth.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+    interrupted.push_text("First reply.")
+    interrupted.end_input()
+    await anext(interrupted)
+    await asyncio.wait_for(interrupted.aclose(), timeout=0.5)
+
+    completed = synth.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+    completed.push_text("Second reply.")
+    completed.end_input()
+    frames = [event.frame async for event in completed]
+
+    assert frames
+    assert attempts == 1
+    assert connection.utterance == 2
+    await synth.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
+    from livekit.plugins.vakyam import TTS
+
+    class FakeContent:
+        async def iter_chunks(self):
+            yield b"\0" * 2400, True
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/octet-stream"}
+        content = FakeContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        async def text(self) -> str:
+            return ""
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.timeout = None
+
+        def post(self, url, *, json, headers, timeout):
+            self.timeout = timeout
+            return FakeResponse()
+
+    http_session = FakeSession()
+    synth = TTS(api_key="test-key", http_session=http_session)  # type: ignore[arg-type]
+    stream = synth.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.25))
+
+    frames = [event.frame async for event in stream]
+    assert frames
+    assert http_session.timeout.total is None
+    assert http_session.timeout.sock_connect == 0.25
+    assert http_session.timeout.sock_read == 0.25
+    await synth.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_stream_rejects_non_audio_success_response() -> None:
+    from livekit.plugins.vakyam import TTS
+
+    class FakeContent:
+        async def iter_chunks(self):
+            if False:
+                yield b"", False
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+        content = FakeContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        async def text(self) -> str:
+            return '{"error":"upstream proxy failure"}'
+
+    class FakeSession:
+        def post(self, url, *, json, headers, timeout):
+            return FakeResponse()
+
+    synth = TTS(api_key="test-key", http_session=FakeSession())  # type: ignore[arg-type]
+    stream = synth.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.25))
+
+    with pytest.raises(APIStatusError, match="non-audio") as exc_info:
+        async for _ in stream:
+            pass
+    assert exc_info.value.status_code == 502
+    await synth.aclose()
 
 
 @pytest.mark.asyncio
@@ -270,3 +587,35 @@ def test_raise_http_error_parses_envelope() -> None:
         )
     assert exc_info.value.status_code == 429
     assert exc_info.value.retryable is True
+
+
+def test_websocket_auth_close_is_not_retryable() -> None:
+    from livekit.plugins.vakyam._websocket import _websocket_connection_error
+
+    class ReceivedClose:
+        code = 4001
+        reason = "invalid key"
+
+    class Closed(Exception):
+        rcvd = ReceivedClose()
+
+    error = _websocket_connection_error(Closed(), message="connect failed")
+    assert isinstance(error, APIStatusError)
+    assert error.status_code == 401
+    assert error.retryable is False
+
+
+def test_websocket_internal_close_is_retryable() -> None:
+    from livekit.plugins.vakyam._websocket import _websocket_connection_error
+
+    class ReceivedClose:
+        code = 1011
+        reason = "session lost"
+
+    class Closed(Exception):
+        rcvd = ReceivedClose()
+
+    error = _websocket_connection_error(Closed(), message="synthesis failed")
+    assert isinstance(error, APIStatusError)
+    assert error.status_code == 1011
+    assert error.retryable is True

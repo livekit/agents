@@ -16,7 +16,7 @@
 
 Support for text-to-speech with [Vakyam AI](https://vakyam.ai/) Raaga 1.
 
-See https://docs.livekit.io/agents/models/tts/vakyam/ for more information.
+See https://docs.vakyam.ai/guides/realtime-websocket for protocol details.
 """
 
 from .tts import TTS, ChunkedStream, SynthesizeStream

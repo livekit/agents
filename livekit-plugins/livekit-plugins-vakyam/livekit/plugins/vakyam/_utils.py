@@ -125,6 +125,26 @@ def validate_text(text: str) -> None:
         )
 
 
+def split_text(text: str, *, max_characters: int = MAX_TEXT_CHARACTERS) -> list[str]:
+    """Split an oversized utterance at whitespace, falling back to a hard boundary."""
+    if max_characters <= 0:
+        raise ValueError("max_characters must be greater than zero")
+
+    remaining = text.strip()
+    chunks: list[str] = []
+    while len(remaining) > max_characters:
+        split_at = remaining.rfind(" ", 0, max_characters + 1)
+        if split_at <= 0:
+            split_at = max_characters
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 def speech_payload(
     *,
     text: str,
