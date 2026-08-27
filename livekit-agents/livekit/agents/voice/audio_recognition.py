@@ -1362,7 +1362,11 @@ class AudioRecognition:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
 
-            if self._end_of_turn_task is not None:
+            # a manually committed turn is authoritative: VAD activity must not
+            # cancel its pending end-of-turn
+            if self._end_of_turn_task is not None and not (
+                self._turn_detection_mode == "manual" and self._user_turn_committed
+            ):
                 self._end_of_turn_task.cancel()
 
             if self._session.amd is not None:
@@ -1756,6 +1760,16 @@ class AudioRecognition:
                 self._user_turn_start,
             )
         )
+        self._end_of_turn_task.add_done_callback(self._on_eou_task_done)
+
+    def _on_eou_task_done(self, task: asyncio.Task[None]) -> None:
+        # a cancelled eou task skips the turn-scoped resets at the end of
+        # _bounce_eou_task; left set, _user_turn_committed makes _on_stt_event
+        # discard every later transcript. skip if a newer task took over.
+        if task.cancelled() and self._end_of_turn_task is task:
+            self._turn_backchannel_over_agent = False
+            self._overlap_in_current_turn = False
+            self._user_turn_committed = False
 
     def _check_user_turn_limit(self, transcript: str) -> None:
         """Check if the user turn exceeds configured limits.
