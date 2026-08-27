@@ -37,7 +37,12 @@ from .utils import DEFAULT_REGION
 
 try:
     from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-    from aws_sdk_transcribe_streaming.config import Config
+
+    try:
+        from aws_sdk_transcribe_streaming.config import Config
+    except ImportError:
+        # aws-sdk-transcribe-streaming 0.10 renamed the exported class to lowercase.
+        from aws_sdk_transcribe_streaming.config import config as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
@@ -400,6 +405,10 @@ class SpeechStream(stt.SpeechStream):
                         await asyncio.wait_for(tasks[1], timeout=3.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
+                    except BadRequestException:
+                        # Already handled above (e.g. idle-timeout retry). Swallow so
+                        # re-awaiting the failed task here cannot override `continue`.
+                        pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):

@@ -25,8 +25,11 @@ dependencies = [
     "google-auth >= 2, < 3",
     "google-cloud-speech >= 2, < 3",
     "google-cloud-texttospeech >= 2.32, < 3",
-    "google-genai >= 1.68; python_version >= '3.10'",
-    "livekit-agents>=1.7.0",
+    # 2.13 is the floor for the Live transcription surface this package uses:
+    # LiveServerContent.interim_input_transcription landed in 2.9 and
+    # AudioTranscriptionConfig.custom_vocabulary in 2.13.
+    "google-genai >= 2.13; python_version >= '3.10'",
+    "livekit-agents>=1.7.1",
 ]
 
 [project.urls]
