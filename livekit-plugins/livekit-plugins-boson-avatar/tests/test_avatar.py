@@ -182,7 +182,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["max_duration_seconds"], 900)
         self.assertEqual(
             call["idempotency_key"],
-            "0d441494-3258-55f2-84fa-d16ed7e1ee67",
+            "d2efd9c4-b705-5e73-9303-66ecad5bc551",
         )
         claims = _jwt_claims(call["livekit_token"])
         self.assertEqual(claims["sub"], "avatar-1")

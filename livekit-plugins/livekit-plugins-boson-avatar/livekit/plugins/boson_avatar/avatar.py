@@ -74,8 +74,9 @@ class AvatarSession(BaseAvatarSession[Any]):
             avatar_participant_identity: LiveKit identity used by the Avatar.
             avatar_participant_name: LiveKit display name used by the Avatar.
             idempotency_key: Optional stable key for provider-session creation.
-                Defaults to the LiveKit job ID when running inside an Agent job,
-                so a redelivered job recovers the same provider session.
+                Must be a UUID when provided. Inside an Agent job, the default
+                is a UUID derived from the job ID and immutable Avatar session
+                binding, so a redelivered job recovers the provider session.
             conn_options: Timeout and retry options for Boson API requests.
 
         Raises:
@@ -187,6 +188,7 @@ class AvatarSession(BaseAvatarSession[Any]):
                         max_duration_seconds=self._max_duration_seconds,
                         idempotency_key=self._idempotency_key
                         or _livekit_job_idempotency_key(
+                            livekit_url=livekit_url_value,
                             room_name=room.name,
                             avatar_id=self._avatar_id,
                             avatar_identity=self._avatar_identity,
@@ -421,6 +423,7 @@ def _local_participant_identity(room: rtc.Room) -> str:
 
 def _livekit_job_idempotency_key(
     *,
+    livekit_url: str,
     room_name: str,
     avatar_id: str,
     avatar_identity: str,
@@ -438,6 +441,7 @@ def _livekit_job_idempotency_key(
     intent = json.dumps(
         {
             "job_id": job_id,
+            "livekit_url": livekit_url,
             "room_name": room_name,
             "avatar_id": avatar_id,
             "avatar_identity": avatar_identity,
