@@ -15,11 +15,12 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import boto3
+from aws_sdk_bedrock_runtime.auth import HTTPAuthSchemeResolver
 from aws_sdk_bedrock_runtime.client import (
-    BedrockRuntimeClient,
+    AsyncBedrockRuntimeClient,
     InvokeModelWithBidirectionalStreamOperationInput,
 )
-from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
+from aws_sdk_bedrock_runtime.config import AsyncBedrockRuntimeConfig
 from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
@@ -30,6 +31,7 @@ from aws_sdk_bedrock_runtime.models import (
     ThrottlingException,
     ValidationException,
 )
+from smithy_aws_core.auth import SigV4AuthScheme
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
@@ -591,7 +593,7 @@ class RealtimeSession(  # noqa: F811
     @utils.log_exceptions(logger=logger)
     def _initialize_client(self) -> None:
         """Instantiate the Bedrock runtime client"""
-        config = Config(
+        config = AsyncBedrockRuntimeConfig(
             endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
             region=self._realtime_model._opts.region,
             aws_credentials_identity_resolver=_get_credentials_resolver(),
@@ -599,7 +601,7 @@ class RealtimeSession(  # noqa: F811
             auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
             user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
         )
-        self._bedrock_client = BedrockRuntimeClient(config=config)
+        self._bedrock_client = AsyncBedrockRuntimeClient(config=config)
 
     def _calculate_session_duration(self) -> float:
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
