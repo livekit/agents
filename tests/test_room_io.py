@@ -370,6 +370,31 @@ async def test_selector_returns_noise_cancellation_options() -> None:
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_same_publication_new_track_reattaches() -> None:
+    room = _FakeRoom()
+    stream = _make_audio_input_stream(room, noise_cancellation=None)
+    stream.set_participant("test-user")
+
+    track1, publication, participant = _make_track_available_args(sid="TR_MIC")
+    track2, _, _ = _make_track_available_args(sid="TR_MIC")
+    created: list[object] = []
+
+    def _from_track(**kwargs: object) -> _MockAudioStream:
+        created.append(kwargs["track"])
+        return _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=_from_track):
+        assert stream._on_track_available(track1, publication, participant)
+        assert stream._on_track_available(track1, publication, participant) is False
+        assert stream._on_track_available(track2, publication, participant)
+
+    assert created == [track1, track2]
+    assert stream._track is track2
+
+    await stream.aclose()
+
+
 # -- audio output tests -------------------------------------------------------
 
 

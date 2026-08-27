@@ -58,6 +58,15 @@ _EOU_MAX_HISTORY_TURNS = 6
 _STT_RECONNECT_INTERVAL = 0.5
 
 
+def _send_audio_nowait(ch: aio.Chan[Any] | None, frame: rtc.AudioFrame) -> None:
+    if ch is None:
+        return
+    try:
+        ch.send_nowait(frame)
+    except aio.ChanClosed:
+        pass
+
+
 @dataclass
 class _EndOfTurnMetrics:
     started_speaking_at: float | None
@@ -223,8 +232,12 @@ class _STTPipeline:
                     return
                 continue
 
-            # node ended without error (audio input closed): stop
-            return
+            if self._audio_ch.closed or self._is_closing():
+                return
+            logger.warning("STT stream ended, recreating")
+            await asyncio.sleep(_STT_RECONNECT_INTERVAL)
+            if self._audio_ch.closed or self._is_closing():
+                return
 
     def _rebind_node(self, stt_node: io.STTNode) -> None:
         # the pipeline outlives the agent that created it (reused across handoff);
@@ -736,19 +749,25 @@ class AudioRecognition:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
-            self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
+            _send_audio_nowait(
+                self._stt_pipeline.audio_ch, stt_frame if stt_frame is not None else frame
+            )
 
-        if self._vad_ch is not None:
-            self._vad_ch.send_nowait(frame)
+        _send_audio_nowait(self._vad_ch, frame)
 
         if self._session.amd is not None:
-            self._session.amd.push_audio(frame)
+            try:
+                self._session.amd.push_audio(frame)
+            except aio.ChanClosed:
+                pass
 
-        if self._interruption_ch is not None:
-            self._interruption_ch.send_nowait(frame)
+        _send_audio_nowait(self._interruption_ch, frame)
 
         if self._turn_detector_stream is not None:
-            self._turn_detector_stream.push_audio(frame)
+            try:
+                self._turn_detector_stream.push_audio(frame)
+            except aio.ChanClosed:
+                pass
 
     async def _aclose(self) -> None:
         self._closing.set()
@@ -829,6 +848,9 @@ class AudioRecognition:
             # reused pipeline: rebind to this activity's node so a recreation
             # after an error doesn't call into the previous (torn-down) agent
             pipeline._rebind_node(stt)
+            pump = getattr(pipeline, "_pump_task", None)
+            if pump is not None and pump.done():
+                pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
 
         if pipeline is not None:
             self._stt_consumer_atask = asyncio.create_task(

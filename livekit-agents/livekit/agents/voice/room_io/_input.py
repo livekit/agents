@@ -41,6 +41,7 @@ class _ParticipantInputStream(Generic[T], ABC):
 
         self._data_ch = aio.Chan[T]()
         self._publication: rtc.RemoteTrackPublication | None = None
+        self._track: rtc.RemoteTrack | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
         self._attached = True
@@ -122,6 +123,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             await self._stream.aclose()
             self._stream = None
         self._publication = None
+        self._track = None
         if self._processor:
             self._processor._close()
             self._processor = None
@@ -183,7 +185,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             task.add_done_callback(self._tasks.discard)
             self._tasks.add(task)
             self._stream = None
-            self._publication = None
+        self._publication = None
+        self._track = None
         self._update_processor(None)
 
     def _on_track_available(
@@ -195,13 +198,14 @@ class _ParticipantInputStream(Generic[T], ABC):
         if (
             self._participant_identity != participant.identity
             or publication.source not in self._accepted_sources
-            or (self._publication and self._publication.sid == publication.sid)
+            or self._track is track
         ):
             return False
 
         self._close_stream()
         self._stream = self._create_stream(track, participant)
         self._publication = publication
+        self._track = track
         self._forward_atask = asyncio.create_task(
             self._forward_task(self._forward_atask, self._stream, publication, participant)
         )

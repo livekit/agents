@@ -919,6 +919,8 @@ class AgentActivity(RecognitionHooks):
                 and self.stt is new_activity.stt
             ):
                 resources.stt_pipeline = await self._audio_recognition._detach_stt()
+                if resources.stt_pipeline is not None:
+                    resources.stt_pipeline._rebind_node(new_activity.agent.stt_node)
 
             # reuse the stream during a handoff whenever we can
             if (

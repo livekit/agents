@@ -1863,8 +1863,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async for frame in audio_input:
-            if self._activity is not None:
+            if self._activity is None:
+                continue
+            try:
                 self._activity.push_audio(frame)
+            except Exception:
+                logger.exception("failed to push user audio frame")
 
     @utils.log_exceptions(logger=logger)
     async def _forward_video_task(self) -> None:

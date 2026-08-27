@@ -1705,6 +1705,40 @@ async def test_stt_pipeline_recreation_uses_rebound_node(
         await pipeline.aclose()
 
 
+async def test_stt_pipeline_recreates_after_clean_stream_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        async for _ in audio:
+            pass
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+        assert attempts == 2
+    finally:
+        await pipeline.aclose()
+
+
 async def test_vad_fallback_uses_next_vad_inference_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
