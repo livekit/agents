@@ -1350,7 +1350,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             # separately. Reading the base's copy would silently never match.
             logger.debug(
                 "Ignoring empty commit; server VAD had already committed the turn",
-                extra={"error": error, "event_id": event_id},
+                extra={"lk.pii.error": error, "event_id": event_id},
             )
             return
 
@@ -1366,7 +1366,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             # error that cannot be correlated to one.
             logger.debug(
                 "Ignoring non-fatal Boson realtime error",
-                extra={"error": error, "event_id": event_id},
+                extra={"lk.pii.error": error, "event_id": event_id},
             )
             if event_id and event_id in self._response_created_futures:
                 self._fail_response_created_futures(
@@ -1388,7 +1388,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
                         "Could not determine which conversation item an "
                         "invalid_previous_item_id error refers to; "
                         "update_chat_ctx() will report it as a timeout instead.",
-                        extra={"error": error},
+                        extra={"lk.pii.error": error},
                     )
                     return
                 fut = self._item_create_future.get(rejected_item_id)
@@ -1410,10 +1410,9 @@ class RealtimeSession(openai_rt.RealtimeSession):
             # announce a recovery in the window before the close contradicts it.
             # A refusal sent without a close is handled by the same branch.
             logger.error(
-                "%s refused service: %s",
+                "%s refused service",
                 self._realtime_model._provider_label,
-                message,
-                extra={"error": error},
+                extra={"lk.pii.error": error},
             )
             raise APIError(message=message, body=error, retryable=False)
 
