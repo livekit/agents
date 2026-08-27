@@ -66,8 +66,9 @@ class AvatarSession(BaseAvatarSession[Any]):
         Args:
             avatar_id: Boson Avatar asset ID. Defaults to `BOSON_AVATAR_ID`.
             api_key: Boson API key. Defaults to `BOSON_API_KEY`.
-            api_url: Boson Avatar API URL. Defaults to `BOSON_AVATAR_API_URL`
-                or the production Boson API.
+            api_url: Avatar session service URL supplied by the application.
+                Defaults to `BOSON_AVATAR_API_URL`; there is no hard-coded
+                production endpoint.
             width: Optional output width. Must be provided with `height`.
             height: Optional output height. Must be provided with `width`.
             max_duration_seconds: Optional maximum Avatar session duration.

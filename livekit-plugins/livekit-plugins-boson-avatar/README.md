@@ -20,10 +20,14 @@ Set the credentials used by your LiveKit Agent Worker:
 
 ```shell
 export BOSON_API_KEY="..."
+export BOSON_AVATAR_API_URL="https://your-avatar-session-service.example/v1"
 export LIVEKIT_URL="wss://..."
 export LIVEKIT_API_KEY="..."
 export LIVEKIT_API_SECRET="..."
 ```
+
+The plugin deliberately has no hard-coded provider endpoint. Your application
+or deployment environment supplies the Avatar session service URL.
 
 ## Usage
 

@@ -93,7 +93,11 @@ def _active_session(
 
 class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env = patch.dict(
+            os.environ,
+            {"BOSON_AVATAR_API_URL": "https://avatar.test/v1"},
+            clear=True,
+        )
         self.env.start()
 
     def tearDown(self) -> None:
@@ -349,6 +353,13 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
     def test_missing_api_key_fails_without_network_access(self) -> None:
         with self.assertRaisesRegex(BosonAvatarException, "BOSON_API_KEY"):
             BosonAvatarAPI()
+
+    def test_missing_api_url_fails_without_network_access(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(BosonAvatarException, "BOSON_AVATAR_API_URL"),
+        ):
+            BosonAvatarAPI(api_key="boson-key")
 
 
 if __name__ == "__main__":

@@ -77,7 +77,11 @@ def _jwt_claims(token: str) -> dict:
 
 class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env = patch.dict(
+            os.environ,
+            {"BOSON_AVATAR_API_URL": "https://avatar.test/v1"},
+            clear=True,
+        )
         self.env.start()
 
     def tearDown(self) -> None:
@@ -88,6 +92,11 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             AvatarSession(api_key="boson-key")
         with self.assertRaisesRegex(BosonAvatarException, "BOSON_API_KEY"):
             AvatarSession(avatar_id="asset-1")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(BosonAvatarException, "BOSON_AVATAR_API_URL"),
+        ):
+            AvatarSession(avatar_id="asset-1", api_key="boson-key")
 
     def test_constructor_validates_configuration(self) -> None:
         invalid = (
@@ -110,7 +119,11 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
     def test_constructor_uses_environment(self) -> None:
         with patch.dict(
             os.environ,
-            {"BOSON_API_KEY": "env-key", "BOSON_AVATAR_ID": "asset-env"},
+            {
+                "BOSON_API_KEY": "env-key",
+                "BOSON_AVATAR_ID": "asset-env",
+                "BOSON_AVATAR_API_URL": "https://avatar.test/v1",
+            },
             clear=True,
         ):
             session = AvatarSession()

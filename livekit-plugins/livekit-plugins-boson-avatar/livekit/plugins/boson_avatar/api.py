@@ -39,7 +39,6 @@ from .errors import BosonAvatarException
 from .log import logger
 from .version import __version__
 
-DEFAULT_API_URL = "https://api.boson.ai/v1/avatar/livekit"
 _USER_AGENT = f"livekit-plugins-boson-avatar/{__version__}"
 _SESSION_OBJECT = "avatar.livekit.session"
 
@@ -71,7 +70,12 @@ class BosonAvatarAPI:
             )
 
         resolved_url = _resolve_optional_string(api_url, "BOSON_AVATAR_API_URL")
-        self._api_url = (resolved_url or DEFAULT_API_URL).rstrip("/")
+        if not resolved_url:
+            raise BosonAvatarException(
+                "api_url must be set by passing it to AvatarSession or setting "
+                "the BOSON_AVATAR_API_URL environment variable"
+            )
+        self._api_url = resolved_url.rstrip("/")
         self._conn_options = conn_options
         self._session = session
 
@@ -296,4 +300,4 @@ def _parse_retry_after(value: str | None) -> float | None:
     return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
-__all__ = ["DEFAULT_API_URL", "AvatarSessionInfo", "BosonAvatarAPI"]
+__all__ = ["AvatarSessionInfo", "BosonAvatarAPI"]
