@@ -89,7 +89,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BosonAvatarException, "BOSON_API_KEY"):
             AvatarSession(avatar_id="asset-1")
 
-    def test_constructor_validates_dimensions(self) -> None:
+    def test_constructor_validates_configuration(self) -> None:
         invalid = (
             {"width": 640},
             {"width": 0, "height": 640},
@@ -101,6 +101,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             {"max_duration_seconds": 14_401},
             {"idempotency_key": ""},
             {"idempotency_key": 123},
+            {"idempotency_key": "application-session-1"},
         )
         for kwargs in invalid:
             with self.subTest(kwargs=kwargs), self.assertRaises(BosonAvatarException):
@@ -181,7 +182,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["max_duration_seconds"], 900)
         self.assertEqual(
             call["idempotency_key"],
-            "bf876a44-4652-581d-b9a3-062ae0106a8d",
+            "0d441494-3258-55f2-84fa-d16ed7e1ee67",
         )
         claims = _jwt_claims(call["livekit_token"])
         self.assertEqual(claims["sub"], "avatar-1")
@@ -228,7 +229,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
                 avatar_id="asset-1",
                 api_key="boson-key",
                 avatar_participant_identity="avatar-1",
-                idempotency_key="application-session-1",
+                idempotency_key="123e4567-e89b-12d3-a456-426614174000",
             )
             await avatar.start(
                 _AgentSession(),  # type: ignore[arg-type]
@@ -240,7 +241,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             api_client.start_session.await_args.kwargs["idempotency_key"],
-            "application-session-1",
+            "123e4567-e89b-12d3-a456-426614174000",
         )
 
     async def test_start_failure_ends_provider_session_and_base_session(self) -> None:

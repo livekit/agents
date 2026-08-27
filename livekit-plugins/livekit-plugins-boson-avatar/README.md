@@ -60,10 +60,12 @@ optional `width`, `height`, `max_duration_seconds`,
 `max_duration_seconds` must be an integer from 1 through 14400.
 
 Inside a LiveKit Agent job, provider-session creation automatically derives a
-stable UUID idempotency key from the LiveKit job ID. If LiveKit redelivers that
-job after a worker crash, the plugin recovers the existing provider session
-instead of allocating another one. Pass `idempotency_key` only when the
-application has a more appropriate stable session-intent ID.
+stable UUID idempotency key from the LiveKit job ID and Avatar session binding.
+If LiveKit redelivers that job after a worker crash, the plugin recovers the
+existing provider session instead of allocating another one. The standard
+model is one Avatar lifecycle per LiveKit job. If one job intentionally starts
+another Avatar after closing the first, pass a new explicit UUID
+`idempotency_key` for that lifecycle.
 
 The `avatar_id` is the value behind the Avatar selected in your application or
 Boson dashboard; end users do not need to type or remember it.

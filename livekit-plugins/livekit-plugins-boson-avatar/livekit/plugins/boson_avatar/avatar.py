@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import timedelta
@@ -184,7 +185,16 @@ class AvatarSession(BaseAvatarSession[Any]):
                         width=self._width,
                         height=self._height,
                         max_duration_seconds=self._max_duration_seconds,
-                        idempotency_key=self._idempotency_key or _livekit_job_idempotency_key(),
+                        idempotency_key=self._idempotency_key
+                        or _livekit_job_idempotency_key(
+                            room_name=room.name,
+                            avatar_id=self._avatar_id,
+                            avatar_identity=self._avatar_identity,
+                            publisher_identity=publisher_identity,
+                            width=self._width,
+                            height=self._height,
+                            max_duration_seconds=self._max_duration_seconds,
+                        ),
                     ),
                     name="boson_avatar_create_session",
                 )
@@ -409,14 +419,37 @@ def _local_participant_identity(room: rtc.Room) -> str:
     raise BosonAvatarException("failed to get the local LiveKit participant identity")
 
 
-def _livekit_job_idempotency_key() -> str | None:
+def _livekit_job_idempotency_key(
+    *,
+    room_name: str,
+    avatar_id: str,
+    avatar_identity: str,
+    publisher_identity: str,
+    width: int | None,
+    height: int | None,
+    max_duration_seconds: int | None,
+) -> str | None:
     job_ctx = get_job_context(required=False)
     if job_ctx is None:
         return None
     job_id = str(job_ctx.job.id).strip()
     if not job_id:
         return None
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"livekit-job:{job_id}"))
+    intent = json.dumps(
+        {
+            "job_id": job_id,
+            "room_name": room_name,
+            "avatar_id": avatar_id,
+            "avatar_identity": avatar_identity,
+            "publisher_identity": publisher_identity,
+            "width": width,
+            "height": height,
+            "max_duration_seconds": max_duration_seconds,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"boson-avatar-livekit:{intent}"))
 
 
 def _resolve_env_or_value(value: NotGivenOr[str], env_name: str) -> str | None:
@@ -436,8 +469,11 @@ def _resolve_optional_idempotency_key(value: NotGivenOr[str]) -> str | None:
     if not utils.is_given(value) or value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise BosonAvatarException("idempotency_key must be a non-empty string")
-    return value.strip()
+        raise BosonAvatarException("idempotency_key must be a UUID string")
+    try:
+        return str(uuid.UUID(value.strip()))
+    except ValueError as exc:
+        raise BosonAvatarException("idempotency_key must be a UUID string") from exc
 
 
 def _resolve_optional_positive_int(
