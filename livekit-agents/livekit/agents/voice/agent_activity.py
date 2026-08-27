@@ -2562,6 +2562,7 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
+                self._cancel_preemptive_generation()
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 

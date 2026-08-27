@@ -97,3 +97,23 @@ async def test_cancelling_latest_user_turn_does_not_cancel_predecessor() -> None
 
     predecessor.cancel()
     await asyncio.gather(predecessor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_skipping_uninterruptible_speech_cancels_preemptive_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AgentSession()
+    activity = AgentActivity(Agent(instructions="test"), session)
+    activity._current_speech = cast(Any, SimpleNamespace(allow_interruptions=False))
+    cancelled = False
+
+    def cancel_preemptive_generation() -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    monkeypatch.setattr(activity, "_cancel_preemptive_generation", cancel_preemptive_generation)
+
+    await activity._user_turn_completed_task(None, _end_of_turn(1))
+
+    assert cancelled
