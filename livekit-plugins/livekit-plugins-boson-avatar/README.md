@@ -4,6 +4,12 @@ Use Boson's Higgs Audio-Driven Avatar as the video output for a LiveKit voice
 agent. This is an Avatar plugin: it composes with your existing voice/LLM
 plugin and does not replace or fork it.
 
+The plugin has no dependency on Boson Voice, Boson Audio, or a particular TTS
+provider. Its input is the standard audio output of a LiveKit `AgentSession`,
+so it works with any TTS plugin, realtime model, or custom source that produces
+LiveKit audio frames. Only Avatar rendering and Avatar session lifecycle are
+Boson-specific.
+
 ## Installation
 
 ```shell
@@ -21,8 +27,8 @@ export LIVEKIT_API_SECRET="..."
 
 ## Usage
 
-Create the voice `AgentSession` as usual, then start the Avatar before starting
-the agent session:
+Create the voice `AgentSession` with the audio provider of your choice, then
+start the Avatar before starting the agent session:
 
 ```python
 from livekit.agents import Agent, AgentSession, JobContext, inference

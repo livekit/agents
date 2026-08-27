@@ -114,7 +114,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session._avatar_id, "asset-env")
         self.assertEqual(session.avatar_identity, "boson-avatar-agent")
 
-    async def test_start_mints_scoped_token_and_installs_audio_output(self) -> None:
+    async def test_start_accepts_generic_agent_audio_and_mints_scoped_token(self) -> None:
         api_client = SimpleNamespace(
             start_session=AsyncMock(
                 return_value=AvatarSessionInfo("provider-session-1", "avatar-1")

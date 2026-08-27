@@ -43,7 +43,7 @@ _AVATAR_AGENT_NAME = "Boson Avatar"
 
 
 class AvatarSession(BaseAvatarSession[Any]):
-    """A Boson Higgs Audio-Driven Avatar session for LiveKit Agents."""
+    """A provider-agnostic audio session for Boson Higgs Avatar rendering."""
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class AvatarSession(BaseAvatarSession[Any]):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> str:
-        """Start the Avatar participant and route AgentSession audio to it."""
+        """Start the Avatar participant and route generic AgentSession audio to it."""
         if self._start_called:
             raise RuntimeError("AvatarSession.start() called twice; create a new AvatarSession.")
         self._start_called = True
