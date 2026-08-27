@@ -27,6 +27,7 @@ from typing import cast, get_args
 from grpc.aio import StreamStreamCall
 
 import google.auth
+import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
@@ -67,6 +68,11 @@ _max_session_duration = 240
 
 # Google is very sensitive to background noise, so we'll ignore results with low confidence
 _default_min_confidence = 0.65
+
+# Default boost applied to keyterms set via the provider-agnostic keyterm hook.
+# Google accepts boosts in roughly 0-20; a moderate value biases toward the terms without
+# over-triggering false positives.
+_DEFAULT_KEYTERM_BOOST = 10.0
 
 
 # This class is only be used internally to encapsulate the options
@@ -144,6 +150,7 @@ class STT(stt.STT):
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        project: NotGivenOr[str] = NOT_GIVEN,
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
@@ -153,6 +160,7 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -162,8 +170,9 @@ class STT(stt.STT):
         """
         Create a new instance of Google STT.
 
-        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or via Application Default Credentials as
+        Credentials must be provided, either as a ``google.auth.credentials.Credentials`` object
+        via ``credentials``, by using the ``credentials_info`` dict, by reading from the file
+        specified in ``credentials_file``, or via Application Default Credentials as
         described in https://cloud.google.com/docs/authentication/application-default-credentials
 
         args:
@@ -177,6 +186,7 @@ class STT(stt.STT):
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            project(str): the Google Cloud project to use for recognition
             profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
@@ -185,6 +195,10 @@ class STT(stt.STT):
             adaptation (SpeechAdaptation): speech adaptation for biasing specific words and phrases (default: None)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
+            credentials(google.auth.credentials.Credentials): a credentials object to use
+                directly, e.g. from Workload Identity Federation, where credentials are
+                obtained in memory and never exist on disk. Takes precedence over
+                ``credentials_info`` and ``credentials_file`` (default: NOT_GIVEN)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
@@ -226,15 +240,22 @@ class STT(stt.STT):
                 streaming=use_streaming,
                 interim_results=True,
                 aligned_transcript="word" if enable_word_time_offsets and use_streaming else False,
+                # adaptation shadows keywords (see build_adaptation), so keyterms can't be applied
+                keyterms=not is_given(adaptation),
             )
         )
 
         self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
-        self._project_id: str | None = None
+        self._credentials = credentials
+        self._project_id: str | None = project if is_given(project) else None
 
-        if not is_given(credentials_file) and not is_given(credentials_info):
+        if (
+            not is_given(credentials)
+            and not is_given(credentials_file)
+            and not is_given(credentials_info)
+        ):
             try:
                 gauth_default()
             except DefaultCredentialsError:
@@ -269,6 +290,9 @@ class STT(stt.STT):
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
         )
+        # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
+        self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
+        self._session_keyterms: list[str] = []  # framework-managed; merged with user keywords
         self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
             max_session_duration=_max_session_duration,
@@ -292,7 +316,17 @@ class STT(stt.STT):
         client_cls = SpeechAsyncClientV2 if self._config.version == 2 else SpeechAsyncClientV1
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
-        if is_given(self._credentials_info):
+        if is_given(self._credentials):
+            if self._project_id is None:
+                # in-memory credentials (e.g. Workload Identity Federation) may
+                # carry the project directly; resolve it here so _get_recognizer
+                # doesn't fall back to Application Default Credentials, which
+                # such setups typically don't have
+                self._project_id = getattr(self._credentials, "project_id", None) or getattr(
+                    self._credentials, "quota_project_id", None
+                )
+            client = client_cls(credentials=self._credentials, client_options=client_options)
+        elif is_given(self._credentials_info):
             client = client_cls.from_service_account_info(
                 self._credentials_info, client_options=client_options
             )
@@ -301,7 +335,8 @@ class STT(stt.STT):
                 self._credentials_file,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
-            self._project_id = project_id
+            if self._project_id is None:
+                self._project_id = project_id
             client = client_cls(credentials=credentials, client_options=client_options)
         else:
             client = client_cls(client_options=client_options)
@@ -321,7 +356,16 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()
+            try:
+                _, project_id = ga_default()
+            except DefaultCredentialsError as e:
+                raise APIConnectionError(
+                    "google stt: could not determine the GCP project id: the supplied "
+                    "credentials expose no project_id/quota_project_id and Application "
+                    "Default Credentials are unavailable. Pass credentials that carry a "
+                    "project (e.g. with a quota_project_id) or use credentials_info / "
+                    "credentials_file."
+                ) from e
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
@@ -513,6 +557,10 @@ class STT(stt.STT):
                 logger.warning(
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
+            self._user_keywords = list(keywords)
+            # re-merge with the active session keyterms so a user update doesn't drop them,
+            # and forward the merged value to the streams below (not the raw user keywords)
+            keywords = self._get_merged_keywords()
             self._config.keywords = keywords
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
@@ -543,6 +591,36 @@ class STT(stt.STT):
                 speech_end_timeout=speech_end_timeout,
                 endpointing_sensitivity=endpointing_sensitivity,
             )
+
+    def _get_merged_keywords(self) -> list[tuple[str, float]]:
+        # Google biases via (phrase, boost) pairs; the session hook carries no per-term weight,
+        # so keep the user keyword boosts and bias session terms no stronger than the weakest
+        # user term (or a moderate default when the user gave none).
+        user_phrases = {phrase for phrase, _ in self._user_keywords}
+        session_boost = (
+            min(boost for _, boost in self._user_keywords)
+            if self._user_keywords
+            else _DEFAULT_KEYTERM_BOOST
+        )
+        return self._user_keywords + [
+            (term, session_boost) for term in self._session_keyterms if term not in user_phrases
+        ]
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if is_given(self._config.adaptation):
+            logger.warning("'adaptation' is set; ignoring keyterms update")
+            return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = self._get_merged_keywords()
+        self._config.keywords = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keywords = merged
+            else:
+                stream.update_options(keywords=merged)
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -582,6 +660,9 @@ class SpeechStream(stt.SpeechStream):
         self._config = config
         self._reconnect_event = asyncio.Event()
         self._session_connected_at: float = 0
+        self._speaking = False
+        # keywords set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keywords: list[tuple[str, float]] | None = None
 
     def update_options(
         self,
@@ -631,6 +712,7 @@ class SpeechStream(stt.SpeechStream):
             self._config.adaptation = adaptation
         if is_given(keywords):
             self._config.keywords = keywords
+            self._pending_keywords = None
         if is_given(speech_start_timeout):
             self._config.speech_start_timeout = speech_start_timeout
         if is_given(speech_end_timeout):
@@ -639,6 +721,11 @@ class SpeechStream(stt.SpeechStream):
             self._config.endpointing_sensitivity = endpointing_sensitivity
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keywords is not None:
+            self.update_options(keywords=self._pending_keywords)
+            self._pending_keywords = None
 
     def _build_streaming_config(
         self,
@@ -794,7 +881,7 @@ class SpeechStream(stt.SpeechStream):
                 | cloud_speech_v1.StreamingRecognizeResponse
             ],
         ) -> None:
-            has_started = False
+            self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
                 if resp.speech_event_type == (
@@ -805,7 +892,7 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
-                    has_started = True
+                    self._speaking = True
 
                 if (
                     resp.speech_event_type
@@ -844,11 +931,12 @@ class SpeechStream(stt.SpeechStream):
                                 "Google STT maximum connection time reached. Reconnecting..."
                             )
                             self._pool.remove(client)
-                            if has_started:
+                            if self._speaking:
                                 self._event_ch.send_nowait(
                                     stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                 )
-                                has_started = False
+                                self._speaking = False
+                                self._on_end_of_speech()
                             self._reconnect_event.set()
                             return
 
@@ -860,7 +948,8 @@ class SpeechStream(stt.SpeechStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                     )
-                    has_started = False
+                    self._speaking = False
+                    self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
                     self._event_ch.send_nowait(

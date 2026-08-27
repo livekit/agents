@@ -35,6 +35,8 @@ class SpeechHandle:
     ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._interruption_holds = 0
+        self._interruption_holds_restore = allow_interruptions
         self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
@@ -64,6 +66,7 @@ class SpeechHandle:
 
         self._done_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
+        self._error: BaseException | None = None
 
     @staticmethod
     def create(
@@ -131,6 +134,29 @@ class SpeechHandle:
 
         self._allow_interruptions = value
 
+    def _hold_interruptions(self) -> None:
+        """Disallow interruptions until every hold taken here is released.
+
+        Counted rather than set, because the holders of one speech are not serialised
+        against each other: the inline tasks awaited from a turn's parallel tool calls run
+        one at a time, and a hold released between them would let the user turns of one
+        task's sub-conversation interrupt the speech the rest are still anchored to. An
+        interrupted handle can no longer disallow interruptions, so those tasks could then
+        never run. The first holder owns the value the last one restores.
+        """
+        if self._interruption_holds == 0:
+            self._interruption_holds_restore = self._allow_interruptions
+            self.allow_interruptions = False
+
+        self._interruption_holds += 1
+
+    def _release_interruptions(self) -> None:
+        self._interruption_holds -= 1
+        if self._interruption_holds == 0:
+            # a forced interrupt lands regardless of the hold, and leaves nothing to restore
+            with contextlib.suppress(RuntimeError):
+                self.allow_interruptions = self._interruption_holds_restore
+
     @property
     def chat_items(self) -> list[llm.ChatItem]:
         return self._chat_items
@@ -138,15 +164,38 @@ class SpeechHandle:
     def done(self) -> bool:
         return self._done_fut.done()
 
+    def exception(self) -> BaseException | None:
+        """Return the error that caused this speech to fail, if any.
+
+        Awaiting a SpeechHandle never raises; call this method after the handle
+        is done to check whether the generation failed (e.g. ``llm.RealtimeError``
+        when a realtime reply timed out).
+
+        Raises:
+            asyncio.InvalidStateError: If the speech is not done yet.
+
+        Returns:
+            BaseException | None: The error the generation failed with, or None.
+        """
+        if not self._done_fut.done():
+            raise asyncio.InvalidStateError("SpeechHandle is not done yet")
+
+        return self._error
+
     def interrupt(self, *, force: bool = False) -> SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
-            RuntimeError: If this speech handle does not allow interruptions.
+            RuntimeError: If this speech handle is still running and does not allow
+                interruptions.
 
         Returns:
             SpeechHandle: The same speech handle that was interrupted.
         """
+        if self.interrupted or self.done():
+            # already cancelled or finished: nothing to interrupt, and protection is moot
+            return self
+
         if not force and not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
@@ -274,11 +323,12 @@ class SpeechHandle:
             self._generations[-1].set_result(None)
 
     def _mark_done(self, error: BaseException | None = None) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
+        # the error is kept out of _done_fut so awaiting the handle never raises
+        # (most handles are never awaited); it is exposed via exception() instead
+        if not self._done_fut.done():
             if error is not None:
-                self._done_fut.set_exception(error)
-            else:
-                self._done_fut.set_result(None)
+                self._error = error
+            self._done_fut.set_result(None)
 
         if self._generations:
             self._mark_generation_done()

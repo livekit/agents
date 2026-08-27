@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypedDict
 
@@ -13,6 +14,7 @@ from ..llm.chat_context import ChatContext, ChatItem
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
+    DuplicateScope,
     FunctionTool,
     RawFunctionTool,
     StopResponse,
@@ -22,10 +24,16 @@ from ..llm.tool_context import (
     Toolset,
     function_tool,
 )
-from ..llm.utils import prepare_function_arguments
+from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from .events import RunContext
+from .events import (
+    RunContext,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
+)
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -39,12 +47,14 @@ The task is still running, so DON'T make up or give information not included in 
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
-If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
-or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id."""
+or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
+Only run duplicate or cancel the existing one when user explicitly requests it."""
 
 # used when the pending update is the most recent item in chat_ctx — the agent
 # can't have already talked about it.
@@ -190,12 +200,53 @@ def has_cancellable_tool(tools: Sequence[Tool | Toolset]) -> bool:
     return False
 
 
+def _canonical_args(raw_arguments: dict[str, Any]) -> str:
+    """Stable JSON for argument comparison.
+
+    ``sort_keys`` recurses into nested objects, so a provider's key-emission order
+    can't make two identical calls look different. Lists stay order-sensitive —
+    ``["a", "b"]`` and ``["b", "a"]`` are genuinely different arguments.
+    """
+    return json.dumps(raw_arguments, sort_keys=True, default=str)
+
+
+def _duplicate_key(
+    *,
+    fnc: FunctionTool | RawFunctionTool,
+    fnc_name: str,
+    scope: DuplicateScope,
+    raw_arguments: dict[str, Any],
+) -> tuple[str, str | None]:
+    """The identity a call is deduplicated on. Always name-scoped, so two tools
+    can never collide; under ``"name"`` equality reduces to name equality.
+
+    ``"name_and_args"`` compares *validated* arguments, so an optional parameter the
+    LLM omitted on one call and passed explicitly on the next still reads as the same
+    call (see :func:`validated_arguments`).
+    """
+    if scope != "name_and_args":
+        return (fnc_name, None)
+
+    # the confirm flag is harness state, not an argument
+    raw = {k: v for k, v in raw_arguments.items() if k != CONFIRM_DUPLICATE_PARAM}
+
+    try:
+        # encoding is in the try too: validated values are Python objects, so a type like
+        # dict[SomeEnum, int] yields keys json can't encode
+        return (fnc_name, _canonical_args(validated_arguments(fnc, raw)))
+    except Exception:
+        # the call raises ToolError on its own later; key on what was sent, which always
+        # encodes, rather than failing the guard here
+        return (fnc_name, _canonical_args(raw))
+
+
 @dataclass
 class _RunningTask:
     ctx: RunContext
     exe_task: asyncio.Task[Any]
     executor: _ToolExecutor
     allow_cancellation: bool
+    duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
 
 
 @dataclass
@@ -264,15 +315,26 @@ class _ToolExecutor:
         if on_duplicate == "confirm":
             confirm_duplicate = bool(raw_arguments.pop(CONFIRM_DUPLICATE_PARAM, False))
 
-        duplicate_result = await self._check_duplicate(
-            fnc_name, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
-        )
-        if duplicate_result is not None:
-            logger.debug(
-                "duplicate tool call rejected",
-                extra={"call_id": call_id, "function": fnc_name},
+        # nothing can match an "allow" tool's key: keys are name-scoped, the mode is per tool
+        dup_key: tuple[str, str | None] | None = None
+        if on_duplicate != "allow":
+            # derived AFTER the pop, so a confirming re-call keys like the call it confirms
+            dup_key = _duplicate_key(
+                fnc=tool,
+                fnc_name=fnc_name,
+                scope=info.duplicate_scope,
+                raw_arguments=raw_arguments,
             )
-            return duplicate_result
+
+            duplicate_result = await self._check_duplicate(
+                dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
+            )
+            if duplicate_result is not None:
+                logger.debug(
+                    "duplicate tool call rejected",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                return duplicate_result
 
         if call_id in self._running_tasks:
             raise ValueError(f"Task already running for call_id: {call_id}")
@@ -281,6 +343,8 @@ class _ToolExecutor:
         first_update_fut = asyncio.Future[Any]()
         run_ctx._attach_executor(self, first_update_fut)
 
+        # run the tool and return its raw output (or the caught exception); _on_done
+        # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
@@ -296,7 +360,7 @@ class _ToolExecutor:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
                 if not first_update_fut.done():
                     first_update_fut.set_result(None)
-                return
+                raise  # _on_done emits the cancelled terminal
             except Exception as e:
                 output = e
 
@@ -306,24 +370,10 @@ class _ToolExecutor:
                     first_update_fut.set_exception(output)
                 else:
                     first_update_fut.set_result(output)
-                return
-
-            if isinstance(output, BaseException):
-                if isinstance(output, ToolError):
-                    logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
-                    )
-                elif not isinstance(output, StopResponse):
-                    logger.error(
-                        "exception occurred while executing tool",
-                        extra={"function": fnc_name, "call_id": call_id},
-                        exc_info=output,
-                    )
+                return output
 
             if output is None or isinstance(output, StopResponse):
-                return
+                return output
 
             # the first update has already been returned to dispatch, so an Agent
             # return now has no surface to carry an agent_task back
@@ -335,12 +385,27 @@ class _ToolExecutor:
                     "agent handoff after a progress update is not supported",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
-                return
+                raise RuntimeError("agent handoff after a progress update is not supported")
+
+            if isinstance(output, BaseException):
+                if isinstance(output, ToolError):
+                    logger.warning(
+                        "ToolError while executing tool: %s",
+                        output.message,
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+                else:
+                    logger.error(
+                        "exception occurred while executing tool",
+                        extra={"function": fnc_name, "call_id": call_id},
+                        exc_info=output,
+                    )
 
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
         from .agent import _pass_through_activity_task_info
@@ -352,18 +417,55 @@ class _ToolExecutor:
             exe_task=exe_task,
             executor=self,
             allow_cancellation=allow_cancellation,
+            duplicate_key=dup_key,
         )
         self._running_tasks[call_id] = running_task
 
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
-        def _on_done(_: asyncio.Task[Any]) -> None:
+        session._tool_execution_updated(
+            ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
+        )
+
+        def _on_done(task: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
             run_ctx._detach_executor()
+
+            # how the task ended: a returned value, a raised exception, or cancellation
+            try:
+                output = task.result()
+            except BaseException as e:
+                output = e
+
+            if not first_update_fut.done():
+                first_update_fut.set_result(None)  # cancelled before the first update
+
+            # one terminal entry per call; deferred entries use the _final id
+            from .agent import Agent
+
+            status: Literal["done", "error", "cancelled"]
+            message: str | None
+            if task.cancelled() or isinstance(output, asyncio.CancelledError):
+                status, message = "cancelled", None
+            elif isinstance(output, BaseException) and not isinstance(output, StopResponse):
+                status, message = "error", str(output)
+            elif output is None or isinstance(output, (StopResponse, Agent)):
+                status, message = "done", None
+            else:
+                status, message = "done", str(output)
+
+            entry_id = call_id + "_final" if run_ctx._updates else call_id
+            session._tool_execution_updated(
+                ToolExecutionUpdatedEvent(
+                    update=ToolCallEnded(
+                        id=entry_id, call_id=call_id, message=message, status=status
+                    )
+                ),
+            )
 
         exe_task.add_done_callback(_on_done)
 
@@ -497,6 +599,13 @@ class _ToolExecutor:
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
+        session._tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=call_ids, status="scheduled", speech_id=speech.id
+                )
+            ),
+        )
         logger.debug(
             "generate async tool reply",
             extra={
@@ -511,6 +620,15 @@ class _ToolExecutor:
         )
 
         def _on_speech_done(speech: SpeechHandle) -> None:
+            reply_status: Literal["completed", "interrupted", "skipped"]
+            if speech.interrupted:
+                reply_status = "interrupted"
+            elif not speech.chat_items:
+                # the LLM judged the content already covered and produced no output
+                reply_status = "skipped"
+            else:
+                reply_status = "completed"
+
             if not speech.chat_items:
                 logger.debug(
                     "async tool reply was done without outputs",
@@ -518,11 +636,19 @@ class _ToolExecutor:
                 )
                 # TODO(long): reschedule interrupted replies?
 
+            session._tool_execution_updated(
+                ToolExecutionUpdatedEvent(
+                    update=ToolReplyUpdated(
+                        update_ids=call_ids, status=reply_status, speech_id=speech.id
+                    )
+                ),
+            )
+
         speech.add_done_callback(_on_speech_done)
 
     async def _check_duplicate(
         self,
-        fnc_name: str,
+        dup_key: tuple[str, str | None],
         *,
         on_duplicate: DuplicateMode,
         confirm_duplicate: bool | None,
@@ -530,11 +656,13 @@ class _ToolExecutor:
         if on_duplicate == "allow":
             return None
 
+        fnc_name = dup_key[0]
+
         async with self._duplicate_check_lock:
             running_fnc_calls = [
                 t.ctx.function_call
                 for t in self._running_tasks.values()
-                if t.ctx.function_call.name == fnc_name
+                if t.duplicate_key == dup_key
             ]
             if len(running_fnc_calls) == 0:
                 return None

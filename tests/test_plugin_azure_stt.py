@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -49,3 +50,41 @@ def test_azure_stream_emits_usage_for_processed_audio():
     assert events[0].recognition_usage is not None
     assert events[0].recognition_usage.audio_duration == 3.5
     assert stream._audio_duration == 0.0
+
+
+def _canceled_event(reason, code=None, error_details=""):
+    return SimpleNamespace(
+        cancellation_details=SimpleNamespace(reason=reason, code=code, error_details=error_details)
+    )
+
+
+def test_azure_canceled_error_unblocks_run():
+    # An Error cancellation (e.g. a service timeout) must wake _run via the
+    # stopped event and stash the details, so the base retry/fallback path runs
+    # instead of the stream hanging on a dead recognizer.
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._session_stopped_event = asyncio.Event()
+    stream._cancellation_error = None
+
+    details = SimpleNamespace(
+        reason=azure_stt.speechsdk.CancellationReason.Error,
+        code=azure_stt.speechsdk.CancellationErrorCode.ServiceTimeout,
+        error_details="timeout",
+    )
+    stream._on_canceled(SimpleNamespace(cancellation_details=details))
+
+    assert stream._session_stopped_event.is_set()
+    assert stream._cancellation_error is details
+
+
+def test_azure_canceled_without_error_is_ignored():
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._session_stopped_event = asyncio.Event()
+    stream._cancellation_error = None
+
+    stream._on_canceled(_canceled_event(azure_stt.speechsdk.CancellationReason.EndOfStream))
+
+    assert not stream._session_stopped_event.is_set()
+    assert stream._cancellation_error is None

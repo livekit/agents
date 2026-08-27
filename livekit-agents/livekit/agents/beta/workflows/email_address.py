@@ -12,7 +12,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from .utils import InstructionParts
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
@@ -27,7 +27,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
     def __init__(
         self,
         *,
-        instructions: NotGivenOr[InstructionParts | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -42,14 +42,14 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         extra_instructions: str = "",
     ) -> None:
         if not is_given(instructions):
-            instructions = InstructionParts(persona=PERSONA, extra=extra_instructions)
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
         elif extra_instructions:
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
-        if isinstance(instructions, InstructionParts):
-            instructions = Instructions(INSTRUCTIONS_TEMPLATE).format(
-                persona=instructions.persona if is_given(instructions.persona) else PERSONA,
-                extra=instructions.extra,
+        if isinstance(instructions, WorkflowInstructions):
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
                 _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
                 _confirmation=Instructions(
                     # confirmation is enabled by default for audio, disabled by default for text
@@ -58,7 +58,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 ),
             )
 
-        assert is_given(instructions)  # for type checking
+        assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
@@ -76,7 +76,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their email address. If the user already stated one earlier "
+                "in this conversation, record it with update_email_address instead of asking again."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -121,16 +126,19 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
     def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_email_address() -> None:
+        async def confirm_email_address() -> str | None:
             """Call after the user confirms the email address is correct."""
             if email != self._current_email:
-                self.session.generate_reply(
-                    instructions="The email has changed since confirmation was requested, ask the user to confirm the updated email."
+                # stale closure: update_email_address ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The email has changed since confirmation was requested, "
+                    "ask the user to confirm the updated email."
                 )
-                return
 
             if not self.done():
                 self.complete(GetEmailResult(email_address=email))
+            return None
 
         return confirm_email_address
 
@@ -159,16 +167,12 @@ EMAIL_REGEX = (
 PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
 
 AUDIO_SPECIFIC = """\
-Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
-- 'john dot doe at gmail dot com'
-- 'susan underscore smith at yahoo dot co dot uk'
-- 'dave dash b at protonmail dot com'
-- 'jane at example' (partial—prompt for the domain)
-- 'theo t h e o at livekit dot io' (name followed by spelling)
+Handle input as noisy voice transcription. Users say emails aloud.
 Normalize common spoken patterns silently:
 - Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
 - Convert 'at' to `@`.
 - Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- If only the part before the '@' is given, prompt for the domain.
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""

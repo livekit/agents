@@ -69,7 +69,9 @@ def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
                 url=args.url,
                 api_key=args.api_key,
                 api_secret=args.api_secret,
-                reload_addr=args.reload_addr,
+                # --cli-addr is the current name; --reload-addr is the legacy
+                # alias the CLI still passes for backwards compatibility.
+                cli_addr=args.cli_addr or args.reload_addr,
                 log_format=args.log_format,
                 dev=args.dev,
                 simulation=args.simulation,
@@ -111,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     start_p.add_argument("--api-key")
     start_p.add_argument("--api-secret")
     start_p.add_argument("--dev", action="store_true", default=False)
+    # address of the driving `lk` CLI's dev channel. --reload-addr is the legacy
+    # name, kept for backwards compatibility with older CLIs.
+    start_p.add_argument("--cli-addr")
     start_p.add_argument("--reload-addr")
     # set by `lk simulate`: disables the worker load limit so simulation runs
     # can saturate the agent

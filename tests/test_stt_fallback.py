@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -55,6 +56,96 @@ class FallbackAdapterTester(FallbackAdapter):
         return self._availability_changed_ch[id(stt)]
 
 
+class _NamedSTT(FakeSTT):
+    """FakeSTT with a configurable model/provider so tests can tell instances apart."""
+
+    def __init__(self, *, model: str, provider: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._model_name = model
+        self._provider_name = provider
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider_name
+
+
+async def test_reports_active_instance_model_and_provider() -> None:
+    fake1 = _NamedSTT(
+        model="primary-model",
+        provider="primary",
+        fake_exception=APIConnectionError("fake1 failed"),
+        fake_timeout=0.5,
+    )
+    fake2 = _NamedSTT(model="fallback-model", provider="fallback", fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    # before any traffic, the primary is reported
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    await fallback_adapter.recognize([])
+
+    # the fallback served the request, so metrics must be labeled with it
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    # a successful recovery probe must not relabel: its result is never surfaced
+    fake1.update_options(fake_exception=None, fake_transcript="probe")
+    assert (
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 1.0)
+    ).available, "fake1 should have recovered"
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+
+    # once the recovered primary serves real traffic again, the label follows
+    await fallback_adapter.recognize([])
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    await fallback_adapter.aclose()
+
+
+async def test_stream_reports_active_instance_model_and_provider() -> None:
+    fake1 = _NamedSTT(
+        model="primary-model",
+        provider="primary",
+        fake_exception=APIConnectionError("fake1 failed"),
+    )
+    fake2 = _NamedSTT(model="fallback-model", provider="fallback", fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+
+    await fallback_adapter.aclose()
+
+
 async def test_stt_fallback() -> None:
     fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeSTT(fake_transcript="hello world")
@@ -92,6 +183,33 @@ async def test_stt_fallback() -> None:
             last_alt = ev.alternatives[0].text
 
         assert last_alt == "hello world"
+
+    await fallback_adapter.aclose()
+
+
+async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
+    # A mid-stream fallback must anchor each leg's timestamps to the original input
+    # timeline by seeding start_time_offset; otherwise a leg created after the switch
+    # emits timestamps relative to the switch moment, placing post-switch transcripts
+    # far in the past for consumers that anchor them to the input start.
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    stream = fallback_adapter.stream()
+    # simulate that audio input started 30s before this stream was created
+    stream.start_time_offset = 30.0
+
+    async with stream:
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    leg1 = fake1.stream_ch.recv_nowait()
+    leg2 = fake2.stream_ch.recv_nowait()
+    assert leg1.start_time_offset >= 30.0
+    assert leg2.start_time_offset >= 30.0
 
     await fallback_adapter.aclose()
 

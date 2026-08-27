@@ -11,6 +11,13 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...tts._provider_format import (
+    ExpressiveTag,
+    TranscriptMarkupStripper,
+    expression_attribute,
+    split_all_markup,
+    strip_all_markup,
+)
 from ...types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_TRANSCRIPTION_FINAL,
@@ -57,9 +64,21 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._forwarding_task: asyncio.Task[None] | None = None
 
         self._pushed_duration: float = 0.0
+        self._source_pushed_duration: float = 0.0
+        self._source_discarded_duration: float = 0.0
+        self._interruption_generation = 0
+
+        # the playhead sits at `_source_pushed_duration - queued_duration`; `_dry_at` is when
+        # the source runs out if nothing more is pushed, which dates a run that has ended
+        self._run_offset: float = 0.0
+        self._dry_at: float | None = None
 
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
+        # set only when _forward_audio is neither holding nor submitting a frame
+        self._forwarding_idle = asyncio.Event()
+        self._forwarding_idle.set()
+        # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
 
     async def _publish_track(self) -> None:
@@ -133,19 +152,36 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
-        self._first_frame_event.clear()
+
+    def _report_run(
+        self, *, offset: float, ended_at: float, resumes_at: float | None = None
+    ) -> None:
+        """Report the open run, and begin the next past any audio that never played."""
+        if self._dry_at is not None:
+            # a run cannot outlast the audio the source held, however late the caller noticed
+            ended_at = min(ended_at, self._dry_at)
+
+        duration = offset - self._run_offset
+        if duration > 0:
+            self.on_playback_progressed(
+                started_at=ended_at - duration, offset=self._run_offset, duration=duration
+            )
+        self._run_offset = offset if resumes_at is None else resumes_at
+        self._dry_at = None
 
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
 
         async def _wait_buffered_audio() -> None:
-            while not self._audio_buf.empty():
-                if not self._playback_enabled.is_set():
-                    await self._playback_enabled.wait()
+            while True:
+                await self._forwarding_idle.wait()
+                if self._audio_buf.empty():
+                    break
 
-                await self._audio_source.wait_for_playout()
-                # avoid deadlock when clear_buffer called before capture_frame
+                await self._playback_enabled.wait()
                 await asyncio.sleep(0)
+
+            await self._audio_source.wait_for_playout()
 
         wait_for_playout = asyncio.create_task(_wait_buffered_audio())
         await asyncio.wait(
@@ -154,43 +190,78 @@ class _ParticipantAudioOutput(io.AudioOutput):
         )
 
         interrupted = self._interrupted_event.is_set()
-        pushed_duration = self._pushed_duration
+        pushed_duration = max(
+            self._source_pushed_duration - self._source_discarded_duration,
+            0,
+        )
 
         if interrupted:
+            self._interruption_generation += 1
             queued_duration = self._audio_source.queued_duration
             while not self._audio_buf.empty():
-                queued_duration += self._audio_buf.recv_nowait().duration
+                self._audio_buf.recv_nowait()
 
             pushed_duration = max(pushed_duration - queued_duration, 0)
+            # the playhead stops where the cleared queue begins
+            self._report_run(
+                offset=self._source_pushed_duration - queued_duration, ended_at=time.time()
+            )
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
         else:
             wait_for_interruption.cancel()
+            # the source drained, so everything pushed has played
+            self._report_run(offset=self._source_pushed_duration, ended_at=time.time())
+
+        self._run_offset = 0.0
 
         self._pushed_duration = 0
+        self._source_pushed_duration = 0
+        self._source_discarded_duration = 0
         self._interrupted_event.clear()
         self._first_frame_event.clear()
         self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
-            if not self._playback_enabled.is_set():
-                self._audio_source.clear_queue()
-                await self._playback_enabled.wait()
-                # TODO(long): save the frames in the queue and play them later
-                # TODO(long): ignore frames from previous syllable
+            interruption_generation = self._interruption_generation
+            self._forwarding_idle.clear()
+            try:
+                if not self._playback_enabled.is_set():
+                    queued = self._audio_source.queued_duration
+                    self._source_discarded_duration += queued
+                    # the dropped queue never plays, so the next run resumes past it
+                    self._report_run(
+                        offset=self._source_pushed_duration - queued,
+                        ended_at=time.time(),
+                        resumes_at=self._source_pushed_duration,
+                    )
+                    self._audio_source.clear_queue()
+                    await self._playback_enabled.wait()
+                    # drop a paused frame when its original segment was interrupted.
+                    if interruption_generation != self._interruption_generation:
+                        continue
+                    # TODO(long): ignore frames from previous syllable
 
-            if self._interrupted_event.is_set() or self._pushed_duration == 0:
-                if self._interrupted_event.is_set() and self._flush_task:
-                    await self._flush_task
+                if self._interrupted_event.is_set() or self._pushed_duration == 0:
+                    if self._interrupted_event.is_set() and self._flush_task:
+                        await self._flush_task
 
-                # ignore frames if interrupted
-                continue
+                    # ignore frames if interrupted
+                    continue
 
-            if not self._first_frame_event.is_set():
-                self._first_frame_event.set()
-                self.on_playback_started(created_at=time.time())
-            await self._audio_source.capture_frame(frame)
+                if not self._first_frame_event.is_set():
+                    self._first_frame_event.set()
+                    self.on_playback_started(created_at=time.time())
+                if self._dry_at is not None and time.time() >= self._dry_at:
+                    # the source ran out before this frame arrived
+                    self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
+
+                self._source_pushed_duration += frame.duration
+                await self._audio_source.capture_frame(frame)
+                self._dry_at = time.time() + self._audio_source.queued_duration
+            finally:
+                self._forwarding_idle.set()
 
 
 class _ParticipantLegacyTranscriptionOutput:
@@ -267,15 +338,21 @@ class _ParticipantLegacyTranscriptionOutput:
         else:
             self._pushed_text = text
 
-        await self._publish_transcription(self._current_id, self._pushed_text, final=False)
+        # _pushed_text keeps the raw text (markup intact); publish the visible text only.
+        # Stripping the whole accumulation each time avoids partial-tag edge cases; the
+        # expression is dropped here — the deprecated rtc Transcription API has no
+        # attribute channel (the stream-based output carries lk.expression instead).
+        clean_text = strip_all_markup(self._pushed_text)
+        await self._publish_transcription(self._current_id, clean_text, final=False)
 
     @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
         if self._participant_identity is None or self._track_id is None or not self._capturing:
             return
 
+        clean_text = strip_all_markup(self._pushed_text)
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, self._pushed_text, final=True)
+            self._publish_transcription(self._current_id, clean_text, final=True)
         )
         self._reset_state()
 
@@ -365,7 +442,6 @@ class _ParticipantStreamTranscriptionOutput:
         self._track_id: str | None = None
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
-
         self._writer: rtc.TextStreamWriter | None = None
         self._json_format = json_format
 
@@ -400,9 +476,33 @@ class _ParticipantStreamTranscriptionOutput:
         self._current_id = utils.shortuuid("SG_")
         self._capturing = False
         self._latest_text = ""
+        # per-segment markup stripping: delta streams strip incrementally (buffering a tag
+        # split across chunks); non-delta streams re-strip the full text each time and keep
+        # the latest tags here for the expression attribute (see TranscriptMarkupStripper)
+        self._stripper = TranscriptMarkupStripper()
+        self._segment_tags: list[ExpressiveTag] = []
+
+    def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
+        """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
+        if not self._json_format:
+            return clean_text
+
+        ts_pb = agent_pb.TimedString(text=clean_text)
+        if isinstance(timing_src, TimedString):
+            if utils.is_given(timing_src.start_time):
+                ts_pb.start_time = timing_src.start_time
+            if utils.is_given(timing_src.end_time):
+                ts_pb.end_time = timing_src.end_time
+            if utils.is_given(timing_src.confidence):
+                ts_pb.confidence = timing_src.confidence
+            if utils.is_given(timing_src.start_time_offset):
+                ts_pb.start_time_offset = timing_src.start_time_offset
+        return json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
 
     async def _create_text_writer(
-        self, attributes: dict[str, str] | None = None
+        self,
+        attributes: dict[str, str] | None = None,
+        extra: dict[str, str] | None = None,
     ) -> rtc.TextStreamWriter:
         assert self._participant_identity is not None, "participant_identity is not set"
 
@@ -413,6 +513,10 @@ class _ParticipantStreamTranscriptionOutput:
             if self._track_id:
                 attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
         attributes[ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID] = self._current_id
+        # overlaid rather than replacing, so the caller can add a key without
+        # dropping the transcription attributes the protocol requires
+        if extra:
+            attributes.update(extra)
 
         for key, val in self._additional_attributes.items():
             if key not in attributes:
@@ -436,44 +540,56 @@ class _ParticipantStreamTranscriptionOutput:
             self._reset_state()
             self._capturing = True
 
-        if self._json_format:
-            ts_pb = agent_pb.TimedString(text=str(text))
-            if isinstance(text, TimedString):
-                if utils.is_given(text.start_time):
-                    ts_pb.start_time = text.start_time
-                if utils.is_given(text.end_time):
-                    ts_pb.end_time = text.end_time
-                if utils.is_given(text.confidence):
-                    ts_pb.confidence = text.confidence
-                if utils.is_given(text.start_time_offset):
-                    ts_pb.start_time_offset = text.start_time_offset
-            text = json.dumps(MessageToDict(ts_pb, preserving_proto_field_name=True)) + "\n"
+        # the raw text (expressive markup intact) arrives here; publish only the visible
+        # text. Skip a chunk that strips to nothing (a partial tag still buffering, or a
+        # markup-only token) so the transcript cadence isn't disturbed.
+        if self._is_delta_stream:
+            clean_text = self._stripper.push(text)
+        else:
+            clean_text, self._segment_tags = split_all_markup(text)
+        if not clean_text:
+            return
 
-        self._latest_text = text
+        payload = self._encode(clean_text, text)
+        self._latest_text = payload
 
         try:
             if self._room.isconnected():
                 if self._is_delta_stream:  # reuse the existing writer
                     if self._writer is None:
-                        self._writer = await self._create_text_writer()
+                        # the leading expression is stripped before any visible text, so it is
+                        # already known here. Put it on the opening header as well as the closing
+                        # one, or a frontend can't colour the turn until the agent stops talking.
+                        self._writer = await self._create_text_writer(
+                            extra=expression_attribute(self._stripper.tags)
+                        )
 
-                    await self._writer.write(text)
+                    await self._writer.write(payload)
                 else:  # always create a new writer
                     tmp_writer = await self._create_text_writer()
-                    await tmp_writer.write(text)
+                    await tmp_writer.write(payload)
                     await tmp_writer.aclose()
         except Exception as e:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
-    async def _flush_task(self, writer: rtc.TextStreamWriter | None) -> None:
+    async def _flush_task(
+        self,
+        writer: rtc.TextStreamWriter | None,
+        extra_attributes: dict[str, str] | None = None,
+        pending_text: str = "",
+    ) -> None:
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if self._track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        for key, val in (extra_attributes or {}).items():
+            attributes.setdefault(key, val)
 
         try:
             if self._room.isconnected():
                 if self._is_delta_stream:
                     if writer:
+                        if pending_text:  # visible text left in the strip buffer
+                            await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
                     tmp_writer = await self._create_text_writer(attributes=attributes)
@@ -483,13 +599,27 @@ class _ParticipantStreamTranscriptionOutput:
             logger.warning("failed to publish agent transcription to room: %s", e)
 
     def flush(self) -> None:
+        # only emit on a segment that captured text (keeps lk.transcription cadence intact).
+        # The leading expression the sinks stripped rides along on the closing header as the
+        # lk.expression attribute.
         if self._participant_identity is None or not self._capturing:
             return
 
         self._capturing = False
         curr_writer = self._writer
         self._writer = None
-        self._flush_atask = asyncio.create_task(self._flush_task(curr_writer))
+
+        if self._is_delta_stream:
+            remaining = self._stripper.flush()
+            tags = self._stripper.tags
+        else:
+            remaining = ""
+            tags = self._segment_tags
+
+        pending_text = self._encode(remaining) if remaining else ""
+        self._flush_atask = asyncio.create_task(
+            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+        )
 
     async def aclose(self) -> None:
         if self._closed:

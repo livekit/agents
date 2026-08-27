@@ -16,6 +16,7 @@ from .. import llm, utils
 from ..llm import (
     ChatChunk,
     ChatContext,
+    CompletionUsage,
     StopResponse,
     ToolContext,
     ToolError,
@@ -24,7 +25,12 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import USERDATA_TIMED_TRANSCRIPT, FlushSentinel, NotGivenOr
+from ..types import (
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    FlushSentinel,
+    NotGivenOr,
+)
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
@@ -52,7 +58,9 @@ class _LLMGenerationData:
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
+    started_at: float | None = None
     ttft: float | None = None
+    tps: float | None = None
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -96,6 +104,29 @@ def _inject_running_tool_calls(
                 ),
             ]
         )
+
+
+def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
+    """Remove expressive TTS markup from past assistant messages, in place.
+
+    Called when a turn runs with expressive off (toggled off via
+    ``session.update_options``, an agent-level override, or a handoff to a TTS
+    without a markup dialect): tags left in history would few-shot the LLM into
+    emitting markup that nothing downstream converts or strips, so an unsupported
+    tag would reach the TTS as literal text and be spoken. Mutates the stored
+    history: once a turn runs with expressive off, prior turns' markup is gone
+    even if expressive is re-enabled later (the re-injected instructions carry
+    the style examples instead).
+    """
+    from ..tts._provider_format import strip_all_markup
+
+    for item in chat_ctx.items:
+        if item.type != "message" or item.role != "assistant":
+            continue
+        # markup is XML-only here: strip_all_markup leaves square-bracket spans alone
+        if not any(isinstance(c, str) and "<" in c for c in item.content):
+            continue
+        item.content = [strip_all_markup(c) if isinstance(c, str) else c for c in item.content]
 
 
 def _strip_running_tool_calls(chat_ctx: ChatContext) -> None:
@@ -154,6 +185,7 @@ async def _llm_inference_task(
     provider: str | None = None,
 ) -> bool:
     start_time = time.perf_counter()
+    data.started_at = start_time
     current_span = trace.get_current_span()
     data.started_fut.set_result(None)
 
@@ -201,26 +233,32 @@ async def _llm_inference_task(
         return False
 
     # forward llm stream to output channels
+    usage: CompletionUsage | None = None
+    first_content_at: float | None = None
+    last_content_at = 0.0
     try:
         async for chunk in llm_node:
-            if data.ttft is None:
-                data.ttft = time.perf_counter() - start_time
+            # extract text content from either str or ChatChunk
+            content: str | None = None
+            generated = False
 
-            # io.LLMNode can either return a string or a ChatChunk
             if isinstance(chunk, str):
-                data.generated_text += chunk
-                text_ch.send_nowait(chunk)
+                content = chunk
+                generated = bool(chunk)
 
             elif isinstance(chunk, ChatChunk):
+                if chunk.usage is not None:
+                    usage = chunk.usage
                 if not chunk.delta:
                     continue
+
+                generated = chunk.has_response()
 
                 if chunk.delta.tool_calls:
                     for tool in chunk.delta.tool_calls:
                         if tool.type != "function":
                             continue
 
-                        # lazily update the tool_ctx in case tools changed in the middle of `llm_node`
                         if (
                             tool_ctx.get_function_tool(tool.name) is None
                             and tools != tools_snapshot
@@ -241,19 +279,38 @@ async def _llm_inference_task(
                 if chunk.delta.extra:
                     data.generated_extra.update(chunk.delta.extra)
 
-                if chunk.delta.content:
-                    data.generated_text += chunk.delta.content
-                    text_ch.send_nowait(chunk.delta.content)
+                content = chunk.delta.content
 
             elif isinstance(chunk, FlushSentinel):
                 text_ch.send_nowait(chunk)
+                content = None
             else:
                 logger.warning(
                     f"LLM node returned an unexpected type: {type(chunk)}",
                 )
+                content = None
+
+            if generated and data.ttft is None:
+                data.ttft = time.perf_counter() - start_time
+
+            # route text content to output channels
+            if content:
+                now = time.perf_counter()
+                if first_content_at is None:
+                    first_content_at = now
+                last_content_at = now
+                data.generated_text += content
+                text_ch.send_nowait(content)
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
+
+    if (
+        usage is not None
+        and first_content_at is not None
+        and (streaming_window := last_content_at - first_content_at) > 0
+    ):
+        data.tps = usage.completion_tokens / streaming_window
 
     current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
     current_span.set_attribute(
@@ -272,6 +329,17 @@ class _TTSGenerationData:
     audio_ch: aio.Chan[rtc.AudioFrame]
     timed_texts_fut: asyncio.Future[aio.Chan[io.TimedString] | None]
     ttfb: float | None = None
+    # perf_counter when the first text of this segment reached the TTS provider, as stamped
+    # by the TTS stream itself; None when a custom tts_node publishes no stamp
+    synthesis_started_at: float | None = None
+
+
+def _time_to_first_sentence(
+    llm_data: _LLMGenerationData, tts_data: _TTSGenerationData | None
+) -> float | None:
+    if llm_data.started_at is None or tts_data is None or tts_data.synthesis_started_at is None:
+        return None
+    return tts_data.synthesis_started_at - llm_data.started_at
 
 
 def perform_tts_inference(
@@ -347,9 +415,19 @@ async def _tts_inference_task(
 
         audio_duration = 0.0
         async for audio_frame in tts_node:
-            if start_time is not None and data.ttfb is None:
-                data.ttfb = time.perf_counter() - start_time
-                current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
+            if data.ttfb is None:
+                # the framework TTS streams attach the time the text was first sent to the
+                # provider; without it (custom tts_node), fall back to the arrival of the
+                # first input token, which also counts any text buffering (e.g. sentence
+                # tokenization) as TTFB. ttfs takes no such fallback and stays unreported.
+                anchor = data.synthesis_started_at = audio_frame.userdata.get(
+                    USERDATA_TTS_STARTED_TIME
+                )
+                if anchor is None:
+                    anchor = start_time
+                if anchor is not None:
+                    data.ttfb = time.perf_counter() - anchor
+                    current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFB, data.ttfb)
 
             for text in audio_frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
                 if isinstance(text, io.TimedString):
@@ -370,7 +448,9 @@ class _TextOutput:
 
 
 def perform_text_forwarding(
-    *, text_output: io.TextOutput | None, source: AsyncIterable[str]
+    *,
+    text_output: io.TextOutput | None,
+    source: AsyncIterable[str],
 ) -> tuple[asyncio.Task[None], _TextOutput]:
     out = _TextOutput(text="", first_text_fut=asyncio.Future())
     task = asyncio.create_task(_text_forwarding_task(text_output, source, out))
@@ -383,14 +463,17 @@ async def _text_forwarding_task(
     source: AsyncIterable[str],
     out: _TextOutput,
 ) -> None:
+    # The raw LLM text (expressive markup intact) is forwarded verbatim: it flows into
+    # chat history via out.text and on to the transcript sinks. The markup is a TTS audio
+    # directive, not spoken text, so the sinks strip it downstream (and surface the leading
+    # expression as the segment's lk.expression attribute) — see TranscriptMarkupStripper.
     try:
         async for delta in source:
             out.text += delta
-            if text_output is not None:
-                await text_output.capture_text(delta)
-
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
+            if text_output is not None and delta:
+                await text_output.capture_text(delta)
     finally:
         if isinstance(source, _ACloseable):
             await source.aclose()
@@ -405,25 +488,48 @@ class _AudioOutput:
     first_frame_fut: asyncio.Future[float]
     """Future that will be set with the timestamp of the first frame's capture"""
 
+    captured_segments_before: int
+    """Output segment count before this segment starts forwarding.
+
+    With serialized forwarding, an increase proves this segment reached
+    ``AudioOutput.capture_frame``.
+    """
+
     started_forwarding_at: float | None = None
 
-    def _resolve_first_frame_fut(self, ev: io.PlaybackStartedEvent) -> None:
-        if not self.first_frame_fut.done():
-            self.first_frame_fut.set_result(ev.created_at)
+    has_captured_own_frame: bool = False
+    """Set before ``capture_frame`` so synchronous events are attributed to this segment."""
 
 
 def perform_audio_forwarding(
     *,
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
+    reconcile_playout_pause: Callable[[], None],
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
-    out = _AudioOutput(audio=[], first_frame_fut=asyncio.Future())
-    # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
-    audio_output.on("playback_started", out._resolve_first_frame_fut)
-    out.first_frame_fut.add_done_callback(
-        lambda _: audio_output.off("playback_started", out._resolve_first_frame_fut)
+    out = _AudioOutput(
+        audio=[],
+        first_frame_fut=asyncio.Future(),
+        captured_segments_before=audio_output.captured_playout_segments,
     )
-    task = asyncio.create_task(_audio_forwarding_task(audio_output, tts_output, out))
+
+    def _on_playback_started(ev: io.PlaybackStartedEvent) -> None:
+        if out.has_captured_own_frame and not out.first_frame_fut.done():
+            out.first_frame_fut.set_result(ev.created_at)
+
+    # out.first_frame_fut should be cancelled in the caller after the playout is finished or interrupted
+    audio_output.on("playback_started", _on_playback_started)
+    out.first_frame_fut.add_done_callback(
+        lambda _: audio_output.off("playback_started", _on_playback_started)
+    )
+    task = asyncio.create_task(
+        _audio_forwarding_task(
+            audio_output,
+            tts_output,
+            out,
+            reconcile_playout_pause=reconcile_playout_pause,
+        )
+    )
     return task, out
 
 
@@ -432,12 +538,15 @@ async def _audio_forwarding_task(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     out: _AudioOutput,
+    *,
+    reconcile_playout_pause: Callable[[], None],
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
     cancelled = False
     try:
-        audio_output.resume()
+        # reconcile any SOS pause before forwarding audio.
+        reconcile_playout_pause()
 
         async for frame in tts_output:
             out.audio.append(frame)
@@ -455,6 +564,8 @@ async def _audio_forwarding_task(
                     output_rate=audio_output.sample_rate,
                     num_channels=frame.num_channels,
                 )
+
+            out.has_captured_own_frame = True
 
             if resampler:
                 for f in resampler.push(frame):
@@ -509,6 +620,7 @@ async def forward_generation(
     audio_source: AsyncIterable[rtc.AudioFrame] | None,
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
+    reconcile_playout_pause: Callable[[], None],
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
@@ -523,7 +635,9 @@ async def forward_generation(
         audio_out: _AudioOutput | None = None
         if audio_output is not None and audio_source is not None:
             forward_audio_task, audio_out = perform_audio_forwarding(
-                audio_output=audio_output, tts_output=audio_source
+                audio_output=audio_output,
+                tts_output=audio_source,
+                reconcile_playout_pause=reconcile_playout_pause,
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
@@ -551,10 +665,20 @@ async def forward_generation(
             if audio_output is not None:
                 audio_output.clear_buffer()
                 playback_ev = await audio_output.wait_for_playout()
+                played_own_frame = (
+                    audio_out is not None
+                    and audio_output.captured_playout_segments > audio_out.captured_segments_before
+                )
                 if (
                     audio_out is not None
-                    and audio_out.first_frame_fut.done()
-                    and not audio_out.first_frame_fut.cancelled()
+                    and played_own_frame
+                    and (
+                        (
+                            audio_out.first_frame_fut.done()
+                            and not audio_out.first_frame_fut.cancelled()
+                        )
+                        or playback_ev.playback_position > 0
+                    )
                 ):
                     out.played = "partial"
                     out.playback_position = playback_ev.playback_position
@@ -631,7 +755,7 @@ async def _execute_tools_task(
 
     from .agent import _set_activity_task_info
     from .events import RunContext
-    from .run_result import _MockToolsContextVar
+    from .run_result import _MockToolsContextVar, _SessionMockTools
 
     def _tool_completed(out: ToolExecutionOutput) -> None:
         tool_execution_completed_cb(out)
@@ -713,10 +837,11 @@ async def _execute_tools_task(
                 raw_args = llm_utils.parse_function_arguments(json_args)
             except ValueError as e:
                 logger.warning(
-                    f"invalid arguments for AI function `{fnc_call.name}`: {e}",
+                    f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
+                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -740,9 +865,12 @@ async def _execute_tools_task(
 
             tool_execution_started_cb(fnc_call)
             try:
-                mock_tools: dict[str, Callable] = _MockToolsContextVar.get({}).get(
-                    type(session.current_agent), {}
-                )
+                # context-manager mocks (tests) take precedence over session-scoped ones
+                agent_type = type(session.current_agent)
+                mock_tools: dict[str, Callable] = {
+                    **_SessionMockTools.get(session, {}).get(agent_type, {}),
+                    **_MockToolsContextVar.get({}).get(agent_type, {}),
+                }
                 mock = mock_tools.get(fnc_call.name)
                 mocked = mock is not None
 
@@ -754,7 +882,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
-                        "arguments": fnc_call.arguments,
+                        "lk.pii.arguments": fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -802,13 +930,12 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-                    if fnc_call_out := output.fnc_call_out:
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_OUTPUT, fnc_call_out.output
-                        )
-                        current_span.set_attribute(
-                            trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, fnc_call_out.is_error
-                        )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
+                    )
+                    current_span.set_attribute(
+                        trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
@@ -862,11 +989,10 @@ async def _execute_tools_task(
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
-    fnc_call_out: llm.FunctionCallOutput | None
+    fnc_call_out: llm.FunctionCallOutput
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
-    reply_required: bool = field(default=True)
 
 
 def make_tool_output(
@@ -903,11 +1029,16 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "output": output},
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),
-                fnc_call_out=None,
+                fnc_call_out=llm.FunctionCallOutput(
+                    name=fnc_call.name,
+                    call_id=fnc_call.call_id,
+                    output="the tool returned more than one agent",
+                    is_error=True,
+                ),
                 agent_task=None,
                 raw_output=output,
                 raw_exception=exception,
@@ -931,15 +1062,30 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
+    # a tool with nothing to say, such as a bare handoff, expects no reply
+    base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        reply_required=fnc_out is not None,  # require a reply if the tool returned an output
         agent_task=task,
         raw_output=output,
         raw_exception=exception,
     )
+
+
+def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
+    """The output to record for a tool that finished on an interrupted turn.
+
+    A handoff answers as a failure, since the interruption left it unapplied.
+    """
+    fnc_call_out = out.fnc_call_out
+    if out.agent_task is not None:
+        fnc_call_out.output = "the agent handoff was interrupted and did not happen"
+        fnc_call_out.is_error = True
+
+    fnc_call_out.reply_required = False
+    return fnc_call_out
 
 
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
@@ -949,25 +1095,30 @@ The ID of the instructions message in the chat context. (only for stateless LLMs
 
 
 def update_instructions(
-    chat_ctx: ChatContext, *, instructions: str | Instructions, add_if_missing: bool
+    chat_ctx: ChatContext,
+    *,
+    instructions: str | Instructions,
+    add_if_missing: bool,
+    modality: Literal["audio", "text"] = "audio",
 ) -> None:
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    This function looks for an existing instruction message in the chat context using the identifier
-    'INSTRUCTIONS_MESSAGE_ID'.
-
-    Raises:
-        ValueError: If an existing instruction message is not of type "message".
+    Instructions are resolved to a plain string using the given modality before storage.
     """
+    text = (
+        instructions.render(modality=modality)
+        if isinstance(instructions, Instructions)
+        else instructions
+    )
+
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
     if idx is not None:
         if chat_ctx.items[idx].type == "message":
-            # create a new instance to avoid mutating the original
             chat_ctx.items[idx] = llm.ChatMessage(
                 id=INSTRUCTIONS_MESSAGE_ID,
                 role="system",
-                content=[instructions],
+                content=[text],
                 created_at=chat_ctx.items[idx].created_at,
             )
         else:
@@ -975,34 +1126,52 @@ def update_instructions(
                 "expected the instructions inside the chat_ctx to be of type 'message'"
             )
     elif add_if_missing:
-        # insert the instructions at the beginning of the chat context
         chat_ctx.items.insert(
             0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instructions]),
+            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text]),
         )
-
-
-def apply_instructions_modality(
-    chat_ctx: ChatContext, *, modality: Literal["audio", "text"]
-) -> None:
-    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
-    if idx is not None and (item := chat_ctx.items[idx]).type == "message":
-        has_modality_specific = any(isinstance(c, Instructions) for c in item.content)
-        if not has_modality_specific:
-            return
-
-        # ChatContext.copy shadows the original item, create a new instance to avoid mutating the original
-        new_item = item.model_copy()
-        new_item.content = [
-            c.as_modality(modality) if isinstance(c, Instructions) else c for c in new_item.content
-        ]
-        chat_ctx.items[idx] = new_item
 
 
 def remove_instructions(chat_ctx: ChatContext) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
     while True:
         if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
+            chat_ctx.items.remove(msg)
+        else:
+            break
+
+
+EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change
+"""
+The ID of the expressive TTS markup-guide message in the chat context.
+"""
+
+
+def update_expressive_instructions(chat_ctx: ChatContext, *, text: str) -> None:
+    """Insert or replace the expressive markup-guide system message.
+
+    Keyed by :data:`EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID` so per-turn re-injection
+    replaces the previous guide instead of accumulating one copy per turn, and a
+    turn that runs with expressive off can remove it again
+    (:func:`remove_expressive_instructions`).
+    """
+    idx = chat_ctx.index_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+    if idx is not None:
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
+        )
+    else:
+        chat_ctx.add_message(role="system", content=text, id=EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+
+
+def remove_expressive_instructions(chat_ctx: ChatContext) -> None:
+    """Remove the expressive markup-guide message added by
+    :func:`update_expressive_instructions`, if present."""
+    while True:
+        if msg := chat_ctx.get_by_id(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID):
             chat_ctx.items.remove(msg)
         else:
             break

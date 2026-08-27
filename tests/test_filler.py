@@ -68,10 +68,15 @@ class _FakeSession:
         self._listeners: dict[str, list[Any]] = {}
         self._idle_event = asyncio.Event()
         self._idle_event.set()  # idle by default
+        self._global_run_state = None  # read by RunContext
 
     def on(self, event: str, callback: Any) -> Any:
         self._listeners.setdefault(event, []).append(callback)
         return callback
+
+    def emit(self, event: str, ev: Any) -> None:
+        for cb in list(self._listeners.get(event, [])):
+            cb(ev)
 
     def off(self, event: str, callback: Any) -> None:
         if callback in self._listeners.get(event, []):

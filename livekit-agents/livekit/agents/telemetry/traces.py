@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import random
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -46,15 +48,39 @@ from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import Attributes, AttributeValue
 
 from livekit import api
-from livekit.protocol import agent_pb, metrics as proto_metrics
+from livekit.protocol import metrics as proto_metrics
 
+from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
-from . import trace_types
+from ..types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    recording_enabled,
+)
+from . import trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
     from ..observability import Tagger
+    from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
+
+
+_SESSION_OPTION_KEY_ALIASES = {
+    "keyterms": "lk.pii.keyterms",
+}
+
+
+def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
+    def _serialize(value: dict[str, Any]) -> dict[str, Any]:
+        return {
+            _SESSION_OPTION_KEY_ALIASES.get(key, key): (
+                _serialize(nested_value) if isinstance(nested_value, dict) else nested_value
+            )
+            for key, nested_value in value.items()
+        }
+
+    return _serialize(vars(options))
 
 
 class _DynamicTracer(Tracer):
@@ -74,12 +100,102 @@ class _DynamicTracer(Tracer):
         return self._tracer.start_span(*args, **kwargs)
 
     @_agnosticcontextmanager
+    def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
+        with trace_api.use_span(*args, **kwargs) as span:
+            yield span
+
+    @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        if telemetry_utils._redaction_enabled():
+            kwargs = {
+                **kwargs,
+                "record_exception": False,
+                "set_status_on_exception": False,
+            }
         with self._tracer.start_as_current_span(*args, **kwargs) as span:
             yield span
 
 
 tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
+
+
+class _UploadGate:
+    """Process-wide gate that stops observability uploads once LiveKit Cloud reports data
+    recording is disabled for the project. Reset per session from JobContext.init_recording().
+    """
+
+    # substrings identifying the 401 "data recording is disabled by owner" rejection. Other
+    # 401s ("missing project id", "operation requires observability write grant") share the
+    # same status/grpc code, so we match the message text rather than the code.
+    _DISABLED_MARKERS = ("data recording is disabled", "disabled by owner")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._disabled = False
+
+    def reset(self) -> None:
+        with self._lock:
+            self._disabled = False
+
+    @property
+    def disabled(self) -> bool:
+        return self._disabled
+
+    def disable(self) -> None:
+        with self._lock:
+            if self._disabled:
+                return
+            self._disabled = True
+        logger.warning(
+            "LiveKit Cloud data recording is disabled for this project; "
+            "skipping telemetry and recording uploads for this session"
+        )
+
+    @staticmethod
+    def is_disabled_response(status_code: int, body: bytes) -> bool:
+        """Return True if an upload response means recording is disabled by the project owner."""
+        if status_code != 401:
+            return False
+        text = body.decode("utf-8", "ignore").lower()
+        return any(marker in text for marker in _UploadGate._DISABLED_MARKERS)
+
+
+_upload_gate = _UploadGate()
+
+
+class _AuthRefreshingSession(requests.Session):
+    """requests.Session shared by the OTLP exporters. Injects a fresh auth header on every
+    request and, once the project reports recording is disabled, stops uploading and reports
+    success so the exporters don't keep logging errors."""
+
+    def __init__(self, header_provider: Callable[[], dict[str, str]]) -> None:
+        super().__init__()
+        self._header_provider = header_provider
+
+    @staticmethod
+    def _make_ok_response() -> requests.Response:
+        """A synthetic 200 response so OTLP exporters treat the export as successful."""
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = b""
+        return resp
+
+    def request(self, *args: Any, **kwargs: Any) -> requests.Response:
+        if _upload_gate.disabled:
+            return self._make_ok_response()
+
+        self.headers.update(self._header_provider())
+        resp = super().request(*args, **kwargs)
+        if _upload_gate.is_disabled_response(resp.status_code, resp.content):
+            _upload_gate.disable()
+            return self._make_ok_response()
+        return resp
 
 
 class _MetadataSpanProcessor(SpanProcessor):
@@ -98,7 +214,7 @@ class _MetadataLogProcessor(LogRecordProcessor):
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(self._metadata)  # type: ignore
         else:
-            log_data.log_record.attributes = self._metadata
+            log_data.log_record.attributes = dict(self._metadata)
 
         if log_data.instrumentation_scope:
             log_data.log_record.attributes.update(  # type: ignore
@@ -132,6 +248,15 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
+        if telemetry_utils._redaction_enabled() and log_record.attributes:
+            attributes = dict(log_record.attributes)
+            if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
+                attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
+                    telemetry_utils.REDACTED_EXCEPTION_MESSAGE
+                )
+            attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
+            log_record.attributes = attributes
+
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
         if record.levelno == TRACE_LEVEL:
@@ -158,21 +283,16 @@ def _setup_cloud_tracer(
     *,
     room_id: str,
     job_id: str,
+    agent_name: str = "",
     observability_url: str,
     enable_traces: bool = True,
     enable_logs: bool = True,
+    metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
+    _upload_gate.reset()
+
     token_ttl = timedelta(hours=6)
     refresh_margin = timedelta(minutes=5)
-
-    class _AuthRefreshingSession(requests.Session):
-        def __init__(self, header_provider: _AuthHeaderProvider) -> None:
-            super().__init__()
-            self._header_provider = header_provider
-
-        def request(self, *args: Any, **kwargs: Any) -> requests.Response:
-            self.headers.update(self._header_provider())
-            return super().request(*args, **kwargs)
 
     class _AuthHeaderProvider:
         def __init__(self) -> None:
@@ -201,15 +321,24 @@ def _setup_cloud_tracer(
     header_provider = _AuthHeaderProvider()
     session = _AuthRefreshingSession(header_provider)
     otlp_compression = Compression.Gzip
-    metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+    base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+    if agent_name:
+        # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
+        # only; the default dispatch has no agent name). Included in both the
+        # resource (traces) and the session metadata (spans + logs).
+        base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
+    # cloud agent id and deployment provided by LiveKit Cloud via env vars.
+    # Included in both the resource and the session metadata like agent_name;
+    # omitted when unset.
+    if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
+        base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
+    if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
+        base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
+    session_metadata = dict(base_metadata)
+    if metadata:
+        session_metadata.update(metadata)
 
-    resource = Resource.create(
-        {
-            SERVICE_NAME: "livekit-agents",
-            "room_id": room_id,
-            "job_id": job_id,
-        }
-    )
+    resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
 
     if enable_traces:
         # Check if a tracer provider is not set and set one up
@@ -235,7 +364,7 @@ def _setup_cloud_tracer(
         )
 
         if isinstance(tracer_provider, trace_sdk.TracerProvider):
-            tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
+            tracer_provider.add_span_processor(_MetadataSpanProcessor(session_metadata))
             tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
 
     # Always set up the logger provider — it's needed for session reports,
@@ -251,7 +380,7 @@ def _setup_cloud_tracer(
             compression=otlp_compression,
             session=session,
         )
-        logger_provider.add_log_record_processor(_MetadataLogProcessor(metadata))
+        logger_provider.add_log_record_processor(_MetadataLogProcessor(session_metadata))
         logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
 
         handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
@@ -296,7 +425,7 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     for item in chat_ctx.items:
         if item.type == "message" and (event_name := role_to_event.get(item.role)):
             # only support text content for now
-            events.append((event_name, {"content": item.text_content or ""}))
+            events.append((event_name, {"content": item.raw_text_content or ""}))
         elif item.type == "function_call":
             events.append(
                 (
@@ -325,109 +454,15 @@ def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attribute
     return events
 
 
-def _build_proto_chat_item(
-    item: ChatItem,
-) -> agent_pb.agent_session.ChatContext.ChatItem:
-    item_pb = agent_pb.agent_session.ChatContext.ChatItem()
-
-    if item.type == "message":
-        msg = item_pb.message
-        msg.id = item.id
-
-        role_map = {
-            "developer": agent_pb.agent_session.DEVELOPER,
-            "system": agent_pb.agent_session.SYSTEM,
-            "user": agent_pb.agent_session.USER,
-            "assistant": agent_pb.agent_session.ASSISTANT,
-        }
-        msg.role = role_map[item.role]
-
-        for content in item.content:
-            if isinstance(content, str):
-                content_pb = msg.content.add()
-                content_pb.text = content
-
-        msg.interrupted = item.interrupted
-
-        if item.transcript_confidence is not None:
-            msg.transcript_confidence = item.transcript_confidence
-
-        for key, value in item.extra.items():
-            msg.extra[key] = str(value)
-
-        metrics = item.metrics
-        if "started_speaking_at" in metrics:
-            msg.metrics.started_speaking_at.FromMilliseconds(
-                int(metrics["started_speaking_at"] * 1000)
-            )
-        if "stopped_speaking_at" in metrics:
-            msg.metrics.stopped_speaking_at.FromMilliseconds(
-                int(metrics["stopped_speaking_at"] * 1000)
-            )
-        if "transcription_delay" in metrics:
-            msg.metrics.transcription_delay = metrics["transcription_delay"]
-        if "end_of_turn_delay" in metrics:
-            msg.metrics.end_of_turn_delay = metrics["end_of_turn_delay"]
-        if "on_user_turn_completed_delay" in metrics:
-            msg.metrics.on_user_turn_completed_delay = metrics["on_user_turn_completed_delay"]
-        if "llm_node_ttft" in metrics:
-            msg.metrics.llm_node_ttft = metrics["llm_node_ttft"]
-        if "tts_node_ttfb" in metrics:
-            msg.metrics.tts_node_ttfb = metrics["tts_node_ttfb"]
-        if "e2e_latency" in metrics:
-            msg.metrics.e2e_latency = metrics["e2e_latency"]
-        msg.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "function_call":
-        fc = item_pb.function_call
-        fc.id = item.id
-        fc.call_id = item.call_id
-        fc.arguments = item.arguments
-        fc.name = item.name
-        fc.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "function_call_output":
-        fco = item_pb.function_call_output
-        fco.id = item.id
-        fco.name = item.name
-        fco.call_id = item.call_id
-        fco.output = item.output
-        fco.is_error = item.is_error
-        fco.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "agent_handoff":
-        ah = item_pb.agent_handoff
-        ah.id = item.id
-        if item.old_agent_id is not None:
-            ah.old_agent_id = item.old_agent_id
-        ah.new_agent_id = item.new_agent_id
-        ah.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    elif item.type == "agent_config_update":
-        acu = item_pb.agent_config_update
-        acu.id = item.id
-        if item.instructions is not None:
-            acu.instructions = item.instructions
-        if item.tools_added:
-            acu.tools_added.extend(item.tools_added)
-        if item.tools_removed:
-            acu.tools_removed.extend(item.tools_removed)
-        acu.created_at.FromMilliseconds(int(item.created_at * 1000))
-
-    return item_pb
+def _chat_item_span_attribute(item: ChatItem) -> dict:
+    return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
 
 
-def _to_proto_chat_item(item: ChatItem) -> dict:
-    return MessageToDict(_build_proto_chat_item(item), preserving_proto_field_name=True)
-
-
-async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
-    """Parse a protobuf Status error response for RetryInfo and return the retry delay in seconds,
-    or None if the error is not retryable."""
+def _parse_retry_delay(body: bytes) -> float | None:
+    """Return the delay from a protobuf ``RetryInfo`` detail, if present."""
     from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
 
     try:
-        body = await resp.read()
         status = status_pb2.Status()
         status.ParseFromString(body)
         for detail in status.details:
@@ -441,6 +476,14 @@ async def _parse_retry_delay(resp: aiohttp.ClientResponse) -> float | None:
     return None
 
 
+_RECORDING_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_connect=30)
+_RECORDING_UPLOAD_MAX_RETRIES = 3
+
+
+def _recording_upload_retry_delay(attempt: int) -> float:
+    return random.uniform(0.0, min(2.0**attempt, 8.0))
+
+
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -448,7 +491,12 @@ async def _upload_session_report(
     report: SessionReport,
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
+    metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
+    if _upload_gate.disabled:
+        return
+    metadata = metadata or {}
+
     def _get_logger(name: str) -> Any:
         return get_logger_provider().get_logger(
             name=name,
@@ -456,6 +504,7 @@ async def _upload_session_report(
                 "room_id": report.room_id,
                 "job_id": report.job_id,
                 "room": report.room,
+                **metadata,
             },
         )
 
@@ -476,15 +525,15 @@ async def _upload_session_report(
         )
 
     chat_logger = _get_logger("chat_history")
-    recording_options = report.recording_options
+    recording_options = report.options.recording_options
 
-    if any(recording_options.values()):
+    if recording_enabled(recording_options):
         _log(
             chat_logger,
             body="session report",
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
-                "session.options": vars(report.options),
+                "session.options": _serialize_session_options(report.options),
                 "session.report_timestamp": report.timestamp,
                 "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,
@@ -500,7 +549,7 @@ async def _upload_session_report(
 
     if recording_options["transcript"]:
         for item in report.chat_history.items:
-            item_log = _to_proto_chat_item(item)
+            item_log = _chat_item_span_attribute(item)
             severity: SeverityNumber = SeverityNumber.UNSPECIFIED
             severity_text: str = "unspecified"
 
@@ -578,6 +627,9 @@ async def _upload_session_report(
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,
+        job_id=report.job_id,
+        simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
+        redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()
@@ -591,8 +643,14 @@ async def _upload_session_report(
         try:
             async with aiofiles.open(report.audio_recording_path, "rb") as f:
                 audio_bytes = await f.read()
-        except Exception:
+        except Exception as e:
             audio_bytes = b""
+            logger.warning(
+                "failed to read audio recording for session report upload, "
+                "uploading without the audio part (path=%s)",
+                report.audio_recording_path,
+                exc_info=e,
+            )
 
     url = f"{observability_url}/observability/recordings/v0"
 
@@ -620,8 +678,7 @@ async def _upload_session_report(
 
         return mp
 
-    max_retries = 3
-    for attempt in range(max_retries + 1):
+    for attempt in range(_RECORDING_UPLOAD_MAX_RETRIES + 1):
         mp = _build_multipart()
         headers = {
             "Authorization": f"Bearer {jwt}",
@@ -629,22 +686,45 @@ async def _upload_session_report(
         }
 
         logger.debug("uploading session report to LiveKit Cloud")
-        async with http_session.post(url, data=mp, headers=headers) as resp:
-            if resp.status < 400:
-                break
+        retry: tuple[float, str] | None = None
+        try:
+            async with http_session.post(
+                url,
+                data=mp,
+                headers=headers,
+                timeout=_RECORDING_UPLOAD_TIMEOUT,
+            ) as resp:
+                if resp.status < 400:
+                    break
 
-            retry_delay = await _parse_retry_delay(resp)
-            if retry_delay is None or attempt == max_retries:
-                resp.raise_for_status()
-                raise RuntimeError(f"recording upload failed: status {resp.status}")
+                body = await resp.read()
+                if _upload_gate.is_disabled_response(resp.status, body):
+                    _upload_gate.disable()
+                    return
 
-            logger.warning(
-                "recording upload failed (attempt %d/%d), retrying in %.1fs",
-                attempt + 1,
-                max_retries + 1,
-                retry_delay,
-            )
-            await asyncio.sleep(retry_delay)
+                retry_delay = _parse_retry_delay(body)
+                if retry_delay is None or attempt == _RECORDING_UPLOAD_MAX_RETRIES:
+                    resp.raise_for_status()
+                else:
+                    retry = (retry_delay, f"status {resp.status}")
+        except aiohttp.ClientSSLError:
+            raise
+        except (aiohttp.ConnectionTimeoutError, aiohttp.ClientConnectorError) as e:
+            if attempt == _RECORDING_UPLOAD_MAX_RETRIES:
+                raise
+            retry = (_recording_upload_retry_delay(attempt), type(e).__name__)
+
+        if retry is None:
+            break
+        retry_delay, failure = retry
+        logger.warning(
+            "recording upload failed (%s, attempt %d/%d), retrying in %.1fs",
+            failure,
+            attempt + 1,
+            _RECORDING_UPLOAD_MAX_RETRIES + 1,
+            retry_delay,
+        )
+        await asyncio.sleep(retry_delay)
 
     logger.debug("finished uploading")
 

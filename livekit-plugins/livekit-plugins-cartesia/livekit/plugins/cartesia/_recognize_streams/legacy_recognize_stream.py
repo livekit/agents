@@ -24,6 +24,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -197,27 +198,35 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    frames.append(data)
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        frames.append(data)
 
-                for frame in frames:
-                    if isinstance(frame, self._FlushSentinel):
-                        await ws.send_str("finalize")
-                    else:
-                        self._speech_duration += frame.duration
-                        await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        if isinstance(frame, self._FlushSentinel):
+                            await ws.send_str("finalize")
+                        else:
+                            self._speech_duration += frame.duration
+                            await ws.send_bytes(frame.data.tobytes())
 
-            for frame in audio_bstream.flush():
-                self._speech_duration += frame.duration
-                await ws.send_bytes(frame.data.tobytes())
+                for frame in audio_bstream.flush():
+                    self._speech_duration += frame.duration
+                    await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws = True
-            await ws.send_str("close")
+                closing_ws = True
+                await ws.send_str("close")
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError(
+                    message="Cartesia STT connection closed unexpectedly",
+                    retryable=True,
+                ) from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -321,8 +330,18 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": self._request_id},
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to cartesia") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to cartesia") from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(
+                f"failed to connect to cartesia ({type(e).__name__})",
+            ) from None
         return ws
 
     def _process_stream_event(self, data: STTEventMessage) -> None:
@@ -416,11 +435,13 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         elif data["type"] == "error":
             message = data.get("message") or "unknown error from cartesia"
             status_code = data.get("code") or 500
-            logger.warning("cartesia sent an error", extra={"data": data})
+            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
         else:
-            logger.warning("received unexpected message from Cartesia STT: %s", data)
+            logger.warning(
+                "received unexpected message from Cartesia STT", extra={"lk.pii.data": data}
+            )
 
     def update_options(
         self,

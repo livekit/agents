@@ -85,7 +85,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
         super().__init__(
             instructions=Instructions(
-                _BASE_INSTRUCTIONS.format(
+                audio=_BASE_INSTRUCTIONS.format(
                     modality_specific=_AUDIO_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is not False else ""
@@ -111,7 +111,12 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their phone number.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their phone number. If the user already stated one earlier "
+                "in this conversation, record it with update_phone_number instead of asking again."
+            )
+        )
 
     def _build_update_phone_number_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -155,16 +160,19 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
     def _build_confirm_tool(self, *, phone_number: str) -> llm.FunctionTool:
         @function_tool()
-        async def confirm_phone_number() -> None:
+        async def confirm_phone_number() -> str | None:
             """Call after the user confirms the phone number is correct."""
             if phone_number != self._current_phone_number:
-                self.session.generate_reply(
-                    instructions="The phone number has changed since confirmation was requested, ask the user to confirm the updated number."
+                # stale closure: update_phone_number ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The phone number has changed since confirmation was requested, "
+                    "ask the user to confirm the updated number."
                 )
-                return
 
             if not self.done():
                 self.complete(GetPhoneNumberResult(phone_number=phone_number))
+            return None
 
         return confirm_phone_number
 

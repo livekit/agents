@@ -43,6 +43,10 @@ async def test_slot_scheduling() -> None:
         await sess.start(FrontDeskAgent(timezone=TIMEZONE))
         result = await sess.run(user_input="Can I get an appointment tomorrow?")
         result.expect.skip_next_event_if(type="message", role="assistant")
+        # the agent may first check the current date to resolve "tomorrow"
+        if result.expect.skip_next_event_if(type="function_call", name="get_current_time"):
+            result.expect.next_event(type="function_call_output")
+            result.expect.skip_next_event_if(type="message", role="assistant")
         result.expect.next_event().is_function_call(name="list_available_slots")
         result.expect.next_event().is_function_call_output()
 
@@ -122,6 +126,10 @@ async def test_no_availability() -> None:
             user_input="Hello, can I need an appointment, what's your availability for the next 2 weeks?"
         )
         result.expect.skip_next_event_if(type="message", role="assistant")
+        # the agent may first check the current date before listing availability
+        if result.expect.skip_next_event_if(type="function_call", name="get_current_time"):
+            result.expect.next_event(type="function_call_output")
+            result.expect.skip_next_event_if(type="message", role="assistant")
         result.expect.next_event().is_function_call(name="list_available_slots")
         result.expect.next_event().is_function_call_output()
         await (
