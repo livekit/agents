@@ -49,9 +49,6 @@ from speechmatics.agent_stt import (
     ServerMessageType,
     TranscriptionConfig,
 )
-from speechmatics.agent_stt import (
-    TurnDetectionMode as AgentTurnDetectionMode,
-)
 
 # Public-API types — unchanged from the voice-SDK plugin surface.
 from speechmatics.voice import (
@@ -99,9 +96,6 @@ class STTOptions:
     language: LanguageCode = LanguageCode("en")
     output_locale: str | None = None
     domain: str | None = None
-
-    # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
 
     # Output formatting
     speaker_active_format: str | None = None
@@ -271,42 +265,16 @@ class STT(stt.STT):
 
             audio_encoding: Audio encoding format. Defaults to `AudioEncoding.PCM_S16LE`.
 
-            vad: Optional external Voice Activity Detector. When provided, the STT
-                engine's endpointing is replaced by the VAD: each audio frame is
-                forwarded to the VAD, and `finalize()` is called whenever the VAD
-                reports end of speech. Providing a VAD implicitly sets
-                `turn_detection_mode` to `EXTERNAL`. When `turn_detection_mode` is
-                `EXTERNAL` and `vad` is not provided, Silero is auto-loaded to drive
-                finalize. Pass `vad=None` to opt out of the auto-load if you intend
-                to call `finalize()` from your own logic. Defaults to NOT_GIVEN.
+            vad: Optional external Voice Activity Detector. When provided, each audio
+                frame is forwarded to the VAD and `finalize()` is called whenever the
+                VAD reports end of speech. None is auto-loaded when omitted.
+                Defaults to NOT_GIVEN.
 
             **kwargs: Catches deprecated parameters. A warning is logged for any
                 recognised deprecated name.
         """
 
-        # Resolve final turn_detection_mode — a real `vad` forces EXTERNAL.
-        if is_given(vad) and vad is not None and turn_detection_mode != TurnDetectionMode.EXTERNAL:
-            logger.info(
-                "External `vad` provided; overriding turn_detection_mode "
-                f"{turn_detection_mode.value!r} -> 'external'"
-            )
-            turn_detection_mode = TurnDetectionMode.EXTERNAL
-
-        # In EXTERNAL mode the STT does not endpoint on its own. Auto-load Silero
-        # so finalize() is wired up, unless the caller explicitly passed `vad=None`
-        # to opt out (they'll drive finalize() themselves).
-        if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
-            try:
-                from livekit.plugins.silero import VAD as SileroVAD
-            except ImportError as e:
-                raise ImportError(
-                    "livekit-plugins-silero is required for Speechmatics with "
-                    "turn_detection_mode=EXTERNAL (no server-side endpointing). "
-                    "Pass `vad=None` to opt out and drive finalize() manually."
-                ) from e
-            vad = SileroVAD.load()
-
-        # Normalize NOT_GIVEN -> None for downstream storage.
+        # An external VAD, if provided, drives finalize(); none is auto-loaded.
         self._vad = vad if is_given(vad) else None
 
         # Set default values for optional parameters
@@ -329,7 +297,6 @@ class STT(stt.STT):
             language=LanguageCode(language),
             output_locale=_set(output_locale),
             domain=_set(domain),
-            turn_detection_mode=turn_detection_mode,
             speaker_active_format=_set(speaker_active_format),
             speaker_passive_format=_set(speaker_passive_format),
             focus_speakers=_set(focus_speakers) or [],
@@ -379,10 +346,6 @@ class STT(stt.STT):
 
         # Initialize list of streams
         self._streams: list[SpeechStream] = []
-
-        # Show warning for external
-        if self._stt_options.turn_detection_mode == TurnDetectionMode.EXTERNAL:
-            logger.info("STT under external turn detection control")
 
     @property
     def provider(self) -> str:
@@ -472,18 +435,9 @@ class STT(stt.STT):
         # Reference to STT options
         opts = self._stt_options
 
-        # The plugin's 4-value TurnDetectionMode collapses to the driver's two: only
-        # EXTERNAL is external; every server-side mode maps to the service's own VAD.
-        turn_detection = (
-            AgentTurnDetectionMode.EXTERNAL
-            if opts.turn_detection_mode == TurnDetectionMode.EXTERNAL
-            else AgentTurnDetectionMode.VAD
-        )
-
         config = TranscriptionConfig(
             language=language if is_given(language) else opts.language,
             model=opts.model,
-            turn_detection_mode=turn_detection,
             diarization="speaker" if opts.enable_diarization else None,
             additional_vocab=opts.additional_vocab or None,
             output_locale=opts.output_locale,
@@ -533,10 +487,7 @@ class STT(stt.STT):
             if not stream._client or not stream._client.is_connected:
                 continue
 
-            # Only finalize when turn detection is external — the service closes
-            # turns itself otherwise.
-            if stream._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
-                stream._client.finalize()
+            stream._client.finalize()
 
     async def get_speaker_ids(
         self,
