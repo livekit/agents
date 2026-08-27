@@ -9,7 +9,11 @@ from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import pytest
-from openai.types.realtime import AudioTranscription
+from openai.types.realtime import (
+    AudioTranscription,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
+)
 
 from livekit.agents import APIConnectionError, APIError, llm
 from livekit.agents.types import APIConnectOptions
@@ -112,8 +116,8 @@ async def test_connection_refreshes_token_url_and_headers(
     )
     http_session = _FakeHTTPSession()
     model = InferenceRealtimeModel(
-        "openai/gpt-realtime",
-        provider="openai",
+        "xai/grok-voice-think-fast-2.0",
+        provider="xai",
         base_url="https://inference.example/v1",
         api_key="key",
         api_secret="secret",
@@ -129,18 +133,52 @@ async def test_connection_refreshes_token_url_and_headers(
     parsed = urlparse(http_session.connections[0][0])
     assert parsed.scheme == "wss"
     assert parsed.path == "/v1/realtime"
-    assert parse_qs(parsed.query) == {"model": ["openai/gpt-realtime"]}
+    assert parse_qs(parsed.query) == {"model": ["xai/grok-voice-think-fast-2.0"]}
     assert [headers["Authorization"] for _, headers, _ in http_session.connections] == [
         "Bearer token-one:key:secret",
         "Bearer token-two:key:secret",
     ]
     assert http_session.connections[0][1]["X-Test-Class"] == "priority"
-    assert http_session.connections[0][1]["X-LiveKit-Inference-Provider"] == "openai"
+    assert http_session.connections[0][1]["X-LiveKit-Inference-Provider"] == "xai"
     assert all(
         "X-LiveKit-Realtime-Failover-Protocol" not in headers
         for _, headers, _ in http_session.connections
     )
     await session.aclose()
+
+
+def test_xai_catalog_model_is_accepted() -> None:
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-think-fast-2.0",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    assert model._opts.model == "xai/grok-voice-think-fast-2.0"
+
+
+@pytest.mark.parametrize(
+    ("model_name", "voice", "expected"),
+    [
+        ("openai/gpt-realtime", None, "marin"),
+        ("xai/grok-voice-think-fast-2.0", None, "eve"),
+        ("xai/grok-voice-think-fast-2.0", "Ara", "Ara"),
+    ],
+)
+def test_model_specific_default_voice(
+    model_name: str,
+    voice: str | None,
+    expected: str,
+) -> None:
+    kwargs = {} if voice is None else {"voice": voice}
+    model = InferenceRealtimeModel(
+        model_name,
+        api_key="key",
+        api_secret="secret",
+        **kwargs,
+    )
+
+    assert model._opts.voice == expected
 
 
 def test_credentials_follow_inference_environment_fallbacks(
@@ -169,7 +207,46 @@ async def test_initial_event_is_ga_session_update(
     dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
     assert dumped["type"] == "session.update"
     assert dumped["session"]["type"] == "realtime"
+    assert "model" not in dumped["session"]
     assert dumped["type"] != "session.create"
+    await session.aclose()
+
+
+async def test_consumes_gateway_normalized_openai_transcription_events(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-think-fast-2.0",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+    transcripts: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", transcripts.append)
+
+    session._handle_conversion_item_input_audio_transcription_delta(
+        ConversationItemInputAudioTranscriptionDeltaEvent.construct(
+            type="conversation.item.input_audio_transcription.delta",
+            event_id="delta-event",
+            item_id="user-item",
+            content_index=0,
+            delta="hello ",
+        )
+    )
+    session._handle_conversion_item_input_audio_transcription_completed(
+        ConversationItemInputAudioTranscriptionCompletedEvent.construct(
+            type="conversation.item.input_audio_transcription.completed",
+            event_id="completed-event",
+            item_id="user-item",
+            content_index=0,
+            transcript="hello world",
+        )
+    )
+
+    assert [(event.transcript, event.is_final) for event in transcripts] == [
+        ("hello ", False),
+        ("hello world", True),
+    ]
     await session.aclose()
 
 

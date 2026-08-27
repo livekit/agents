@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -19,6 +19,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from livekit.agents.utils.misc import is_given
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -67,7 +68,7 @@ class InferenceRealtimeModel(RealtimeModel):
         api_key: str | None = None,
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
-        voice: str = DEFAULT_VOICE,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[
             AudioTranscription | InputAudioTranscription | None
@@ -107,9 +108,13 @@ class InferenceRealtimeModel(RealtimeModel):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
+        resolved_voice = (
+            voice if is_given(voice) else "eve" if model.startswith("xai/") else DEFAULT_VOICE
+        )
+
         super().__init__(
             model=model,
-            voice=voice,
+            voice=resolved_voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
@@ -161,6 +166,18 @@ class InferenceRealtimeSession(RealtimeSession):
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
         return process_base_url(self._opts.base_url, self._opts.model), headers
+
+    def _wrap_session_update(self, event_id: str, session: Any) -> dict[str, Any]:
+        event = super()._wrap_session_update(event_id, session)
+        if hasattr(event, "model_dump"):
+            event = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+        else:
+            event = dict(event)
+
+        session_payload = event.get("session")
+        if isinstance(session_payload, dict):
+            session_payload.pop("model", None)
+        return event
 
     def _is_fatal_error(self, error: object | None) -> bool:
         code = getattr(error, "code", None) or getattr(error, "type", None)
