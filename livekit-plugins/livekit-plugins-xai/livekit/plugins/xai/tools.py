@@ -54,8 +54,8 @@ class XSearch(XAITool):
 class FileSearch(XAITool):
     """Enable file search tool for searching uploaded document collections.
 
-    Do not also register a function named ``collections_search``; xAI's FileSearch
-    already uses that name.
+    Do not also register a function named ``collections_search`` or ``file_search``;
+    xAI's FileSearch already uses those names.
     """
 
     vector_store_ids: list[str] = field(default_factory=list)
@@ -82,7 +82,7 @@ _XAI_TOOL_RESERVED_FUNCTION_NAMES: dict[type[XAITool], frozenset[str]] = {
     XSearch: frozenset(
         {"x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"}
     ),
-    FileSearch: frozenset({"collections_search"}),
+    FileSearch: frozenset({"collections_search", "file_search"}),
 }
 
 

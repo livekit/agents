@@ -77,6 +77,7 @@ _RESERVED_PAIRS: list[tuple[llm.ProviderTool, str]] = [
     (XSearch(), "x_user_search"),
     (XSearch(), "x_thread_fetch"),
     (FileSearch(), "collections_search"),
+    (FileSearch(), "file_search"),
 ]
 
 
@@ -114,11 +115,11 @@ _HARMLESS_PAIRS: list[tuple[llm.ProviderTool | None, str]] = [
     (WebSearch(), "collections_search"),
     (XSearch(), "x_search"),
     (XSearch(), "harmless_control"),
-    (FileSearch(), "file_search"),
     (FileSearch(), "view_document"),
     (FileSearch(), "harmless_control"),
     (FileSearch(), "web_search"),
     (None, "collections_search"),
+    (None, "file_search"),
     (None, "web_search"),
     (None, "browse_page"),
 ]
