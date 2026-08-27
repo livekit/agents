@@ -300,16 +300,21 @@ class _SegmentSynchronizerImpl:
         # pace against the visible text only so expressive tags don't inflate the speed
         clean_pushed_text = strip_all_markup(self._text_data.pushed_text)
         pushed_hyphens = len(self._calc_hyphens(clean_pushed_text))
-        # hyphens per second
-        if self._audio_data.pushed_duration > 0:
-            self._speed = pushed_hyphens / self._audio_data.pushed_duration
+        # a segment whose visible text has no syllables at all (markup-only, punctuation,
+        # emoji) would estimate both speeds as 0: every pacing division in _main_task then
+        # raises ZeroDivisionError (even 0.0 / 0.0 raises). Keep the default estimates.
+        if pushed_hyphens > 0:
+            # hyphens per second
+            if self._audio_data.pushed_duration > 0:
+                self._speed = pushed_hyphens / self._audio_data.pushed_duration
 
-        # hyphens per speaking unit
-        pushed_speaking_units = self._audio_data.estimated_rate.accumulate_to(
-            self._audio_data.pushed_duration
-        )
-        if pushed_speaking_units > 0:
-            self._speed_on_speaking_unit = pushed_hyphens / pushed_speaking_units
+            # hyphens per speaking unit
+            if (
+                pushed_speaking_units := self._audio_data.estimated_rate.accumulate_to(
+                    self._audio_data.pushed_duration
+                )
+            ) > 0:
+                self._speed_on_speaking_unit = pushed_hyphens / pushed_speaking_units
 
     def mark_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
         if self.closed:

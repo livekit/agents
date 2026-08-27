@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Literal
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from .chat_context import ChatContext
+from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
 
@@ -77,6 +77,9 @@ class FallbackAdapter(
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
         ]
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: LLM = self._llm_instances[0]
+
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
 
@@ -87,6 +90,11 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def chat(
         self,
@@ -107,6 +115,19 @@ class FallbackAdapter(
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
         )
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm the primary LLM.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if self._llm_instances:
+            self._llm_instances[0].prewarm(loop=loop)
 
     async def aclose(self) -> None:
         for llm_instance in self._llm_instances:
@@ -181,6 +202,7 @@ class FallbackLLMStream(LLMStream):
                     if should_set_current:
                         should_set_current = False
                         self._current_stream = stream
+                        self._fallback_adapter._active_instance = llm
                     yield chunk
 
         except asyncio.TimeoutError:

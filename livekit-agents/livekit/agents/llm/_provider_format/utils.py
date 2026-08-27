@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,30 +13,37 @@ _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructio
 def parse_tool_call_arguments(fnc_call: llm.FunctionCall) -> dict[str, Any]:
     """Parse a stored function call's arguments into a dict for JSON-object providers.
 
-    ``FunctionCall.arguments`` is only canonicalized to valid JSON when the model's
-    output parses successfully; when it can't be parsed the raw string is kept
-    verbatim (an open-weight model's output that ``json_repair`` couldn't recover, or
-    history restored via ``ChatContext.from_dict`` / a custom ``llm_node``). The
-    Anthropic, Google, and AWS formatters send the arguments as a JSON object, so
-    formatting such history would otherwise raise ``json.JSONDecodeError`` on an
-    unrelated later turn. Fall back to an empty object rather than fabricating
-    arguments the model never sent, since the historical call already produced its
-    output.
+    ``FunctionCall.arguments`` is only canonicalized when the model's output was
+    parsed at the time of the call; when it can't be recovered the raw string is kept
+    verbatim, and history restored via ``ChatContext.from_dict`` or produced by a
+    custom ``llm_node`` never went through that path at all. The Anthropic, Google,
+    and AWS formatters send the arguments as a JSON object, so formatting such history
+    would otherwise raise on an unrelated later turn -- and because the bad entry
+    stays in the context, every subsequent turn raises again.
+
+    :func:`~livekit.agents.llm.utils.parse_function_arguments` does the recovery
+    (strict parse, then ``json_repair``, then chat-template token stripping, then
+    unwrapping double-encoded arguments). It raises ``ValueError`` when it cannot
+    reach a dict, which is the right contract for a live call the model can retry,
+    but not for replaying history: fall back to an empty object rather than
+    fabricating arguments the model never sent, since the historical call already
+    produced its output.
     """
+    # imported here rather than at module scope: ``llm.utils`` imports
+    # ``chat_context``, which imports this package, so a top-level import is a cycle
+    from ..utils import parse_function_arguments
+
     arguments = fnc_call.arguments
     if not arguments:
         return {}
     try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict):
-        return parsed
-    logger.warning(
-        "could not parse stored tool call arguments as a JSON object, using empty arguments",
-        extra={"call_id": fnc_call.call_id, "tool_name": fnc_call.name},
-    )
-    return {}
+        return parse_function_arguments(arguments)
+    except ValueError:
+        logger.warning(
+            "could not parse stored tool call arguments as a JSON object, using empty arguments",
+            extra={"call_id": fnc_call.call_id, "tool_name": fnc_call.name},
+        )
+        return {}
 
 
 def convert_mid_conversation_instructions(

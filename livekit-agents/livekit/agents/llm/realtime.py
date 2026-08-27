@@ -15,7 +15,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .chat_context import ChatContext, ChatItem, FunctionCall
+from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
 
 
@@ -70,6 +70,9 @@ class RealtimeCapabilities:
     """Whether the model can produce audio output directly"""
     manual_function_calls: bool
     """Whether function call items already in the chat context can be resumed"""
+    can_disable_turn_detection: bool = False
+    """Whether server-side turn detection can be disabled for a session so the client drives
+    turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -87,8 +90,18 @@ class RealtimeCapabilities:
 
 
 class RealtimeError(Exception):
-    def __init__(self, message: str) -> None:
+    """Error raised by a realtime session when a request fails.
+
+    Args:
+        message: Human-readable description of the failure.
+        code: Provider error code when the failure mirrors one (e.g. OpenAI's
+            ``conversation_already_has_active_response``), so callers can branch on it
+            programmatically; ``None`` when the error carries no provider code.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
+        self.code = code
 
 
 class RealtimeModel:
@@ -105,6 +118,11 @@ class RealtimeModel:
         return "unknown"
 
     @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this realtime model."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @property
     def capabilities(self) -> RealtimeCapabilities:
         return self._capabilities
 
@@ -113,7 +131,12 @@ class RealtimeModel:
         return self._label
 
     @abstractmethod
-    def session(self) -> RealtimeSession: ...
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        ``turn_detection_disabled`` is honored only by plugins reporting
+        ``can_disable_turn_detection``; the model itself is left unchanged and reusable."""
+        ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -153,6 +176,13 @@ class InputTranscriptionCompleted:
     is_final: bool
     confidence: float | None = None
     """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
+    turn_started_at: float | None = None
+    """When the turn this transcript belongs to began (``time.time()``).
+
+    A provider that withholds the final transcript until its reply has finished
+    generating should set this, so the user message can be placed on the session
+    timeline where the turn happened rather than where the transcript arrived.
+    """
 
 
 @dataclass

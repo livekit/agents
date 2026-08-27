@@ -7,7 +7,6 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent
-from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.agent_activity import AgentActivity
@@ -215,7 +214,6 @@ def _stub_recognition() -> AudioRecognition:
     ar._stt_consumer_atask = None  # type: ignore[attr-defined]
     ar._stt_pipeline = None  # type: ignore[attr-defined]
     ar._transcript_buffer = MagicMock()  # type: ignore[attr-defined]
-    ar._ignore_user_transcript_until = NOT_GIVEN  # type: ignore[attr-defined]
     return ar
 
 
@@ -236,6 +234,30 @@ async def test_input_anchor_preserved_when_pipeline_reused() -> None:
     ar._update_stt(MagicMock(), pipeline=reused)
 
     assert ar._input_started_at == 1000.0  # carried over, not reset to None
+    if ar._stt_consumer_atask is not None:
+        await ar._stt_consumer_atask
+
+
+async def test_reused_pipeline_rebinds_stt_node() -> None:
+    """_update_stt must rebind a reused pipeline to the current activity's node.
+
+    The pipeline is created bound to the agent that first started it. After a
+    close-based handoff that agent's activity is torn down, so recreating the
+    stream through the stale node would raise and stop the pump, leaving the
+    agent permanently deaf. Reuse must point recreation at the live node.
+    """
+    reused = object.__new__(_STTPipeline)
+    reused.input_started_at = None  # type: ignore[attr-defined]
+    reused._stt_node = MagicMock(name="previous_agent_node")  # type: ignore[attr-defined]
+    ch = aio.Chan()  # type: ignore[var-annotated]
+    ch.close()  # closed channel → the swapped-in consumer exits immediately
+    reused._event_ch = ch  # type: ignore[attr-defined]
+
+    new_node = MagicMock(name="current_agent_node")
+    ar = _stub_recognition()
+    ar._update_stt(new_node, pipeline=reused)
+
+    assert reused._stt_node is new_node
     if ar._stt_consumer_atask is not None:
         await ar._stt_consumer_atask
 

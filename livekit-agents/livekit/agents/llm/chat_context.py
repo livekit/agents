@@ -26,6 +26,7 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
+from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -256,6 +257,22 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    llm_node_tps: float
+    """LLM output tokens per second for this turn, measured at the `llm_node` over the
+    streaming window (first to last text chunk). Absent for a reply that arrived in a
+    single chunk, which has no measurable rate
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttfs: float
+    """Time from LLM generation start until the first sentence reached the TTS provider, as
+    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
+    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
+
+    Assistant `ChatMessage` only
+    """
+
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
 
@@ -276,6 +293,13 @@ class MetricsReport(TypedDict, total=False):
     """Time from when the user finished speaking to when the agent began responding
 
     Assistant `ChatMessage` only
+    """
+
+    provider_request_ids: list[str]
+    """Provider-known request or response IDs associated with this turn.
+
+    Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
+    provider-side logs.
     """
 
     llm_metadata: MetricsMetadata
@@ -353,6 +377,11 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    Only realtime models read it, since they answer a result on their own.
+    """
 
 
 class AgentHandoff(BaseModel):
@@ -735,14 +764,14 @@ class ChatContext:
         return 0
 
     def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise append it."""
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
         idx = self.index_by_id(item.id)
         if idx is not None:
             if not allow_type_mismatch and item.type != self._items[idx].type:
                 raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
             self._items[idx] = item
         else:
-            self._items.append(item)
+            self.insert(item)
 
     async def _summarize(
         self,
@@ -877,9 +906,7 @@ class ChatContext:
         return cls(items)
 
     def to_proto(self) -> agent_pb.ChatContext:
-        from ..voice.remote_session import _chat_item_to_proto
-
-        return agent_pb.ChatContext(items=[_chat_item_to_proto(item) for item in self.items])
+        return agent_pb.ChatContext(items=[encode_chat_item(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:

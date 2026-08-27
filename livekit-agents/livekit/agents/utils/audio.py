@@ -233,6 +233,7 @@ async def audio_frames_from_file(
     decoder = AudioStreamDecoder(sample_rate=sample_rate, num_channels=num_channels)
 
     async def file_reader() -> None:
+        aborted = False
         try:
             async with aiofiles.open(file_path, mode="rb") as f:
                 while True:
@@ -241,8 +242,14 @@ async def audio_frames_from_file(
                         break
 
                     decoder.push(chunk)
+        except asyncio.CancelledError:
+            aborted = True
+            raise
         finally:
-            decoder.end_input()
+            # a cancelled read leaves a truncated file, not an end of input: signalling EOF
+            # would make the decoder report the abort as invalid audio. aclose() closes it.
+            if not aborted:
+                decoder.end_input()
 
     reader_task = asyncio.create_task(file_reader())
 
@@ -285,11 +292,8 @@ class AudioArrayBuffer:
             The number of samples written to the buffer.
 
         Raises:
-            ValueError: If the frame samples are greater than the buffer size.
+            ValueError: If the frame samples, after resampling, are greater than the buffer size.
         """
-        if frame.samples_per_channel > self._buffer_size:
-            raise ValueError("frame samples are greater than the buffer size")
-
         frames: list[rtc.AudioFrame] = []
         if self._resampler is None and frame.sample_rate != self._sample_rate:
             self._resampler = rtc.AudioResampler(
@@ -305,6 +309,21 @@ class AudioArrayBuffer:
             frames.extend(self._resampler.push(frame))
         else:
             frames.append(frame)
+
+        if not frames:
+            # the resampler holds short frames back until it can emit a full output frame
+            return 0
+
+        if (samples := sum(f.samples_per_channel for f in frames)) > self._buffer_size:
+            detail = (
+                f" after resampling {frame.sample_rate}Hz to {self._sample_rate}Hz"
+                if self._resampler
+                else ""
+            )
+            raise ValueError(
+                f"frame samples ({samples}{detail}) are greater than "
+                f"the buffer size ({self._buffer_size})"
+            )
 
         frame = merge_frames(frames)
 

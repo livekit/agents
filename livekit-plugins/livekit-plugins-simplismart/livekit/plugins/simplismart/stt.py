@@ -497,7 +497,7 @@ class SpeechStream(stt.SpeechStream):
                 f"Error processing transcript data: {e}",
                 extra={
                     "request_id": self._request_id,
-                    "transcript_text": transcript_text,
+                    "lk.pii.transcript_text": transcript_text,
                 },
                 exc_info=True,
             )

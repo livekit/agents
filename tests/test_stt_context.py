@@ -20,6 +20,8 @@ from livekit.agents.voice.keyterm_detection import (
     _format_input,
     _parse_tool_call,
     _resolve_detection,
+    _resolve_stt_context_options,
+    _stt_context_from_keyterms_options,
 )
 
 pytestmark = pytest.mark.unit
@@ -559,3 +561,39 @@ def test_resolve_detection() -> None:
     assert resolved["enabled"] is True
     assert resolved["turn_interval"] == 1
     assert resolved["max_keyterms"] is None
+
+
+def test_resolve_stt_context_options_defaults() -> None:
+    resolved = _resolve_stt_context_options(None)
+    assert resolved["keyterms"] == []
+    assert resolved["keyterm_detection"]["enabled"] is False
+    assert resolved["forward_chat_context"] is True
+
+
+def test_resolve_stt_context_options_passthrough() -> None:
+    resolved = _resolve_stt_context_options(
+        {
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {"enabled": True, "turn_interval": 2},
+            "forward_chat_context": False,
+        }
+    )
+    assert resolved["keyterms"] == ["LiveKit"]
+    assert resolved["keyterm_detection"]["enabled"] is True
+    assert resolved["keyterm_detection"]["turn_interval"] == 2
+    assert resolved["forward_chat_context"] is False
+
+
+def test_stt_context_from_keyterms_options_maps_keys() -> None:
+    """The deprecated keyterms_options maps onto keyterms/keyterm_detection; the rest defaults."""
+    mapped = _stt_context_from_keyterms_options(
+        {"keyterms": ["Acme"], "keyterm_detection": {"enabled": True}}
+    )
+    assert mapped == {"keyterms": ["Acme"], "keyterm_detection": {"enabled": True}}
+
+    resolved = _resolve_stt_context_options(mapped)
+    assert resolved["keyterms"] == ["Acme"]
+    assert resolved["keyterm_detection"]["enabled"] is True
+    assert resolved["forward_chat_context"] is True
+
+    assert _stt_context_from_keyterms_options(None) == {}

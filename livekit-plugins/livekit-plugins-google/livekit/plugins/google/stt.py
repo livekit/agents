@@ -27,6 +27,7 @@ from typing import cast, get_args
 from grpc.aio import StreamStreamCall
 
 import google.auth
+import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
@@ -149,6 +150,7 @@ class STT(stt.STT):
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        project: NotGivenOr[str] = NOT_GIVEN,
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
@@ -158,6 +160,7 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
@@ -167,8 +170,9 @@ class STT(stt.STT):
         """
         Create a new instance of Google STT.
 
-        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or via Application Default Credentials as
+        Credentials must be provided, either as a ``google.auth.credentials.Credentials`` object
+        via ``credentials``, by using the ``credentials_info`` dict, by reading from the file
+        specified in ``credentials_file``, or via Application Default Credentials as
         described in https://cloud.google.com/docs/authentication/application-default-credentials
 
         args:
@@ -182,6 +186,7 @@ class STT(stt.STT):
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            project(str): the Google Cloud project to use for recognition
             profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
@@ -190,6 +195,10 @@ class STT(stt.STT):
             adaptation (SpeechAdaptation): speech adaptation for biasing specific words and phrases (default: None)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
+            credentials(google.auth.credentials.Credentials): a credentials object to use
+                directly, e.g. from Workload Identity Federation, where credentials are
+                obtained in memory and never exist on disk. Takes precedence over
+                ``credentials_info`` and ``credentials_file`` (default: NOT_GIVEN)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
@@ -239,9 +248,14 @@ class STT(stt.STT):
         self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
-        self._project_id: str | None = None
+        self._credentials = credentials
+        self._project_id: str | None = project if is_given(project) else None
 
-        if not is_given(credentials_file) and not is_given(credentials_info):
+        if (
+            not is_given(credentials)
+            and not is_given(credentials_file)
+            and not is_given(credentials_info)
+        ):
             try:
                 gauth_default()
             except DefaultCredentialsError:
@@ -302,7 +316,17 @@ class STT(stt.STT):
         client_cls = SpeechAsyncClientV2 if self._config.version == 2 else SpeechAsyncClientV1
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
-        if is_given(self._credentials_info):
+        if is_given(self._credentials):
+            if self._project_id is None:
+                # in-memory credentials (e.g. Workload Identity Federation) may
+                # carry the project directly; resolve it here so _get_recognizer
+                # doesn't fall back to Application Default Credentials, which
+                # such setups typically don't have
+                self._project_id = getattr(self._credentials, "project_id", None) or getattr(
+                    self._credentials, "quota_project_id", None
+                )
+            client = client_cls(credentials=self._credentials, client_options=client_options)
+        elif is_given(self._credentials_info):
             client = client_cls.from_service_account_info(
                 self._credentials_info, client_options=client_options
             )
@@ -311,7 +335,8 @@ class STT(stt.STT):
                 self._credentials_file,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
-            self._project_id = project_id
+            if self._project_id is None:
+                self._project_id = project_id
             client = client_cls(credentials=credentials, client_options=client_options)
         else:
             client = client_cls(client_options=client_options)
@@ -331,7 +356,16 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()
+            try:
+                _, project_id = ga_default()
+            except DefaultCredentialsError as e:
+                raise APIConnectionError(
+                    "google stt: could not determine the GCP project id: the supplied "
+                    "credentials expose no project_id/quota_project_id and Application "
+                    "Default Credentials are unavailable. Pass credentials that carry a "
+                    "project (e.g. with a quota_project_id) or use credentials_info / "
+                    "credentials_file."
+                ) from e
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:

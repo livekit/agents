@@ -75,7 +75,12 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide their address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their address. If the user already stated one earlier in "
+                "this conversation, record it with update_address instead of asking again."
+            )
+        )
 
     def _build_update_address_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -140,16 +145,19 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         # confirm tool is only injected after update_address is called,
         # preventing the LLM from hallucinating a confirmation without user input
         @function_tool()
-        async def confirm_address() -> None:
+        async def confirm_address() -> str | None:
             """Call after the user confirms the address is correct."""
             if address != self._current_address:
-                self.session.generate_reply(
-                    instructions="The address has changed since confirmation was requested, ask the user to confirm the updated address."
+                # stale closure: update_address ran again after this confirm tool
+                # was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The address has changed since confirmation was requested, "
+                    "ask the user to confirm the updated address."
                 )
-                return
 
             if not self.done():
                 self.complete(GetAddressResult(address=address))
+            return None
 
         return confirm_address
 

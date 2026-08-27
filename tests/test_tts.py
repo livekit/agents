@@ -30,6 +30,7 @@ from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
     azure,
+    bland,
     cartesia,
     deepgram,
     elevenlabs,
@@ -156,6 +157,13 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": bland.TTS(),
+            "proxy-upstream": "api.bland.ai:443",
+        },
+        id="bland",
+    ),
+    pytest.param(
+        lambda: {
             "tts": aws.TTS(region="us-west-2"),
             "proxy-upstream": "polly.us-west-2.amazonaws.com:443",
         },
@@ -174,6 +182,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.deepgram.com:443",
         },
         id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
     ),
     pytest.param(
         lambda: {
@@ -215,14 +230,7 @@ SYNTHESIZE_TTS = [
             "tts": rime.TTS(),
             "proxy-upstream": "users.rime.ai:443",
         },
-        id="rime",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": rime.TTS(model="coda"),
-            "proxy-upstream": "users.rime.ai:443",
-        },
-        id="rime-coda",
+        id="rime-default-coda",
     ),
     pytest.param(
         lambda: {
@@ -491,6 +499,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
+    ),
+    pytest.param(
+        lambda: {
             "tts": resemble.TTS(),
             "proxy-upstream": "websocket.cluster.resemble.ai:443",
         },
@@ -519,7 +534,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/arcana")),
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/coda", voice="astra")),
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-rime",

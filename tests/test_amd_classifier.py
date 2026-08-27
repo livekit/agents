@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from livekit.agents.llm import FunctionToolCall
+from livekit.agents.types import NOT_GIVEN
+from livekit.agents.voice.amd import detector as amd_detector
 from livekit.agents.voice.amd.classifier import (
     AMDCategory,
     AMDPredictionEvent,
     _AMDClassifier,
 )
+from livekit.agents.voice.amd.detector import AMD
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -45,6 +49,22 @@ def _make_classifier(
         wait_until_finished=wait_until_finished,
         max_endpointing_delay=max_endpointing_delay,
     )
+
+
+class _RecordingClassifier:
+    def __init__(self) -> None:
+        self.timer_calls = 0
+        self.listening = False
+        self.settled: list[tuple[AMDCategory, str]] = []
+
+    def start_detection_timer(self) -> None:
+        self.timer_calls += 1
+
+    def start_listening(self) -> None:
+        self.listening = True
+
+    def settle(self, category: AMDCategory, reason: str) -> None:
+        self.settled.append((category, reason))
 
 
 def _machine_vm_response(transcript: str = "voicemail greeting") -> FakeLLMResponse:
@@ -389,6 +409,46 @@ class TestAMDClassifier:
 
         await clf.close()
 
+    async def test_start_detection_timer_resets_existing_timer(self) -> None:
+        clf = _make_classifier(timeout=0.4)
+        clf.start_listening()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.start_detection_timer()
+        first_timer = clf._detection_timeout_timer
+        assert first_timer is not None
+
+        await asyncio.sleep(0.25)
+        clf.start_detection_timer()
+        assert clf._detection_timeout_timer is not None
+        assert clf._detection_timeout_timer is not first_timer
+
+        await asyncio.sleep(0.25)
+        assert results == []
+
+        await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
+        assert results[0].reason == "detection_timeout"
+
+        await clf.close()
+
+    async def test_settled_classifier_rejects_new_timers_and_listening(self) -> None:
+        clf = _make_classifier(no_speech_threshold=0.2)
+        clf.start_listening()
+
+        await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
+        assert clf._emitted is True
+        assert clf._detection_timeout_timer is None
+        assert clf.listening is False
+
+        clf.start_detection_timer()
+        clf.start_listening()
+
+        assert clf._detection_timeout_timer is None
+        assert clf.listening is False
+
+        await clf.close()
+
     async def test_emit_cancels_timers(self) -> None:
         """Timers are cancelled at successful emission, not at verdict-set."""
         llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail")])
@@ -459,8 +519,8 @@ class TestAMDClassifier:
 
         await clf.close()
 
-    async def test_eot_backstop_emits_machine_without_turn_detector(self) -> None:
-        """The synthetic end-of-turn backstop (max_endpointing_delay) lets a
+    async def test_max_endpointing_delay_emits_machine_without_turn_detector(self) -> None:
+        """The synthetic max-endpointing EOT lets a
         machine verdict emit even if on_end_of_turn() is never called."""
         llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail")])
         clf = _make_classifier(
@@ -487,11 +547,26 @@ class TestAMDClassifier:
         assert clf._eot_reached is False
         assert results == []
 
-        # the eot backstop (0.4) fires without any on_end_of_turn() call → emit
+        # the max endpointing delay (0.4) fires without any on_end_of_turn() call → emit
         await asyncio.wait_for(clf._verdict_ready.wait(), timeout=1.0)
         assert clf._eot_reached is True
         assert len(results) == 1
         assert results[0].category == AMDCategory.MACHINE_VM
+
+        await clf.close()
+
+    async def test_max_endpointing_delay_accounts_for_elapsed_silence_on_eos(self) -> None:
+        clf = _make_classifier(human_speech_threshold=0.05, max_endpointing_delay=0.4)
+        clf.start_listening()
+
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.25)
+
+        await asyncio.sleep(0.2)
+
+        assert clf._eot_reached is True
+        assert clf._eot_timer is None
 
         await clf.close()
 
@@ -528,7 +603,7 @@ class TestAMDClassifier:
         await clf.close()
 
     async def test_speech_restart_cancels_eot_backstop(self) -> None:
-        """on_user_speech_started cancels the eot backstop and resets the gate."""
+        """on_user_speech_started cancels the EOT timer and resets the gate."""
         clf = _make_classifier(human_speech_threshold=0.05, max_endpointing_delay=0.3)
         clf.start_listening()
 
@@ -545,5 +620,312 @@ class TestAMDClassifier:
         # well past the original backstop deadline → still not reached
         await asyncio.sleep(0.4)
         assert clf._eot_reached is False
+
+        await clf.close()
+
+    async def test_max_endpointing_delay_starts_from_transcript_without_eos(self) -> None:
+        """A final transcript alone starts AMD's synthetic EOT timer."""
+        clf = _make_classifier(max_endpointing_delay=0.3)
+        clf.start_listening()
+
+        clf.push_text("voicemail greeting")
+        assert clf._eot_timer is not None
+
+        await asyncio.sleep(0.4)
+
+        assert clf._eot_reached is True
+        assert clf._eot_timer is None
+
+        await clf.close()
+
+    async def test_transcript_rearms_max_endpointing_delay_after_eos(self) -> None:
+        """A post-EOS transcript re-arms the synthetic EOT timer."""
+        clf = _make_classifier(human_speech_threshold=0.05, max_endpointing_delay=0.4)
+        clf.start_listening()
+
+        clf.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        clf.on_user_speech_ended(silence_duration=0.0)
+        first_timer = clf._eot_timer
+        assert first_timer is not None
+
+        await asyncio.sleep(0.25)
+        clf.push_text("voicemail greeting")
+        assert clf._eot_timer is not None
+        assert clf._eot_timer is not first_timer
+
+        await asyncio.sleep(0.25)
+        assert clf._eot_reached is False
+
+        await asyncio.sleep(0.25)
+        assert clf._eot_reached is True
+
+        await clf.close()
+
+    def test_detection_option_max_endpointing_delay_overrides_activity(self) -> None:
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=SimpleNamespace(max_endpointing_delay=9.0),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            detection_options={"max_endpointing_delay": 0.25},
+            suppress_compatibility_warning=True,
+        )
+
+        clf = detector._resolve_classifier(session)  # type: ignore[arg-type]
+
+        assert clf is not None
+        assert clf._max_endpointing_delay == 0.25
+
+    def test_detection_option_max_endpointing_delay_falls_back_to_activity(self) -> None:
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=SimpleNamespace(max_endpointing_delay=1.25),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+
+        clf = detector._resolve_classifier(session)  # type: ignore[arg-type]
+
+        assert clf is not None
+        assert clf._max_endpointing_delay == 1.25
+
+    def test_detection_option_max_endpointing_delay_falls_back_to_default(self) -> None:
+        llm = FakeLLM()
+        session = SimpleNamespace(llm=llm, _activity=None)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+
+        clf = detector._resolve_classifier(session)  # type: ignore[arg-type]
+
+        assert clf is not None
+        assert clf._max_endpointing_delay == detector._opts["max_endpointing_delay"]
+
+    def test_amd_defaults_to_wait_until_finished(self) -> None:
+        llm = FakeLLM()
+        session = SimpleNamespace(llm=llm, _activity=None)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+
+        clf = detector._resolve_classifier(session)  # type: ignore[arg-type]
+
+        assert clf is not None
+        assert clf._wait_until_finished is True
+
+    def test_amd_wait_until_finished_can_be_disabled(self) -> None:
+        llm = FakeLLM()
+        session = SimpleNamespace(llm=llm, _activity=None)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            wait_until_finished=False,
+            suppress_compatibility_warning=True,
+        )
+
+        clf = detector._resolve_classifier(session)  # type: ignore[arg-type]
+
+        assert clf is not None
+        assert clf._wait_until_finished is False
+
+    async def test_setup_arms_detection_timer_only_at_listening(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            assert classifier.timer_calls == 0, (
+                "no detection timer must be armed while waiting for the track"
+            )
+            return SimpleNamespace(sid="track_sid")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        publisher = SimpleNamespace(
+            kind=object(),
+            identity="callee",
+            track_publications={"track_sid": object()},
+        )
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(
+                room=SimpleNamespace(remote_participants={"callee": publisher})
+            ),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.timer_calls == 1
+        assert classifier.listening is True
+        assert classifier.settled == []
+
+    async def test_setup_settles_when_participant_disconnects_before_track(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            raise RuntimeError("participant 'callee' disconnected while waiting")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_setup_settles_when_track_publication_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            await asyncio.Future[None]()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+        monkeypatch.setattr(amd_detector, "_TRACK_PUBLICATION_TIMEOUT", 0.1)
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_setup_settles_when_participant_disappears_after_track(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={})),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            participant_identity="callee",
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = NOT_GIVEN
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_sip_answer_failure_settles(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            raise RuntimeError("participant 'callee' disconnected while waiting for sip.callStatus")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        llm = FakeLLM()
+        session = SimpleNamespace(llm=llm, _activity=None)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._wait_for_sip_answer(SimpleNamespace(), "callee")  # type: ignore[arg-type]
+
+        assert classifier.settled == [(AMDCategory.UNCERTAIN, "participant_missing")]
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+    async def test_settle_emits_uncertain_before_listening(self) -> None:
+        clf = _make_classifier()
+        results: list[AMDPredictionEvent] = []
+        clf.on("amd_prediction", results.append)
+
+        clf.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
+
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.UNCERTAIN
+        assert results[0].reason == "participant_missing"
+        assert clf._verdict_ready.is_set()
 
         await clf.close()

@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
+from urllib.parse import quote
 
 import aiohttp
 
@@ -46,6 +48,25 @@ from .models import STTRealtimeSampleRates
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
+
+def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
+    """Aggregate ElevenLabs per-word logprobs into a [0, 1] transcription confidence.
+
+    Scribe returns a natural-log probability (``logprob``) per token; we average the
+    spoken-word logprobs and exponentiate to a probability (the geometric mean of the
+    token probabilities). Returns ``0.0`` when no per-word logprobs are available.
+    """
+    if not words:
+        return 0.0
+    logprobs = [
+        w["logprob"]
+        for w in words
+        if w.get("type") == "word" and isinstance(w.get("logprob"), (int, float))
+    ]
+    if not logprobs:
+        return 0.0
+    return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
 
 
 class VADOptions(TypedDict, total=False):
@@ -76,6 +97,7 @@ class STTOptions:
     keyterms: NotGivenOr[list[str]]
     no_verbatim: bool
     enable_logging: bool
+    previous_text: str | None
 
 
 class STT(stt.STT):
@@ -96,6 +118,7 @@ class STT(stt.STT):
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
+        previous_text: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -115,14 +138,16 @@ class STT(stt.STT):
                 be selected based on parameters provided.
             model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
-                Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
-                (not realtime streaming). Usage incurs additional costs.
+                Supported for both Scribe v2 (batch) and Scribe v2 realtime. Batch accepts up to
+                1000 keyterms of at most 50 characters each; realtime accepts up to 50 keyterms of
+                at most 20 characters each. Usage incurs additional costs.
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
+            previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
+                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
         if is_given(model_id):
@@ -152,6 +177,13 @@ class STT(stt.STT):
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
+        resolved_previous_text = previous_text if is_given(previous_text) else None
+        if not use_realtime and resolved_previous_text is not None:
+            logger.warning(
+                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+            )
+            resolved_previous_text = None
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=use_realtime,
@@ -179,6 +211,7 @@ class STT(stt.STT):
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
+            previous_text=resolved_previous_text,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -284,6 +317,7 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    confidence=_speech_confidence(words),
                     words=[
                         TimedString(
                             text=word.get("text", ""),
@@ -319,7 +353,7 @@ class STT(stt.STT):
             self._opts.no_verbatim = no_verbatim
 
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim)
+            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim, keyterms=keyterms)
 
     def stream(
         self,
@@ -366,12 +400,16 @@ class SpeechStream(stt.SpeechStream):
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
+            self._reconnect_event.set()
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -421,34 +459,49 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                # Write audio bytes to buffer and get 50ms frames
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    # Write audio bytes to buffer and get 50ms frames
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": audio_b64,
-                                "commit": False,
-                                "sample_rate": self._opts.sample_rate,
-                            }
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": audio_b64,
+                                    "commit": False,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
                         )
-                    )
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": "",
+                                    "commit": True,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
+                        )
                         has_ended = False
 
-            closing_ws = True
+                closing_ws = True
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -485,6 +538,19 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                if self._opts.previous_text:
+                    # Must be the first input_audio_chunk on the connection.
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                                "previous_text": self._opts.previous_text,
+                            }
+                        )
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -549,6 +615,9 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.no_verbatim:
             params.append("no_verbatim=true")
 
+        if is_given(self._opts.keyterms):
+            params.extend(f"keyterms={quote(keyterm)}" for keyterm in self._opts.keyterms)
+
         query_string = "&".join(params)
 
         # Convert HTTPS URL to WSS
@@ -591,6 +660,7 @@ class SpeechStream(stt.SpeechStream):
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
+            confidence=_speech_confidence(words),
         )
         if words:
             speech_data.words = [
@@ -604,7 +674,7 @@ class SpeechStream(stt.SpeechStream):
             ]
 
         if message_type == "partial_transcript":
-            logger.debug("Received message type partial_transcript: %s", data)
+            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
@@ -685,7 +755,11 @@ class SpeechStream(stt.SpeechStream):
         ):
             pass
         else:
-            logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+            logger.warning(
+                "ElevenLabs STT unknown message type: %s",
+                message_type,
+                extra={"lk.pii.data": data},
+            )
 
 
 def _synthesize_url(opts: STTOptions) -> str:

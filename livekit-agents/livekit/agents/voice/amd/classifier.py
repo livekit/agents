@@ -19,7 +19,7 @@ HUMAN_SILENCE_THRESHOLD = 0.5
 MACHINE_SILENCE_THRESHOLD = 1.5
 NO_SPEECH_THRESHOLD = 10.0
 TIMEOUT = 20.0
-MAX_ENDPOINTING_DELAY = 3.0  # fallback endpointing delay
+MAX_ENDPOINTING_DELAY = 3.0
 
 MAX_EXTENSIONS = 3
 MAX_EXTENSION_SECS = 10.0
@@ -141,6 +141,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._prompt = prompt
         self._speech_started_at: float | None = None
         self._speech_ended_at: float | None = None
+        self._speech_active = False
         self._listening = False
         self._closed = False
         self._silence_reached = False
@@ -150,13 +151,15 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._extension_count = 0
 
     def start_detection_timer(self) -> None:
-        """Arm the overall detection-timeout budget."""
-        if self._closed or self._detection_timeout_timer is not None:
+        """Arm or reset the overall detection-timeout budget."""
+        if self._closed or self._emitted:
             return
+        if self._detection_timeout_timer is not None:
+            self._detection_timeout_timer.cancel()
         self._detection_timeout_timer = asyncio.get_running_loop().call_later(
             self._timeout,
             functools.partial(
-                self._on_timeout,
+                self.settle,
                 category=AMDCategory.UNCERTAIN,
                 reason="detection_timeout",
             ),
@@ -168,14 +171,14 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         Call once we expect audible speech to begin (e.g. after sip answer
         for outbound calls). Until this fires, all input methods are no-ops.
         """
-        if self._closed or self._listening:
+        if self._closed or self._emitted or self._listening:
             return
         self._listening = True
         if self._no_speech_timer is None:
             self._no_speech_timer = asyncio.get_running_loop().call_later(
                 self._no_speech_threshold,
                 functools.partial(
-                    self._on_timeout,
+                    self.settle,
                     category=AMDCategory.UNCERTAIN,
                     reason="no_speech_timeout",
                 ),
@@ -195,6 +198,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             self._eot_timer = None
         if self._speech_started_at is None:
             self._speech_started_at = time.time()
+        self._speech_active = True
         self._silence_reached = False
         self._eot_reached = False
 
@@ -206,14 +210,8 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
 
         self._speech_ended_at = time.time() - silence_duration
         speech_duration = self._speech_ended_at - self._speech_started_at
-
-        # arm the fallback eot timer in case the turn detector is too slow or fails
-        if self._eot_timer is not None:
-            self._eot_timer.cancel()
-        self._eot_timer = asyncio.get_running_loop().call_later(
-            max(0, self._max_endpointing_delay - silence_duration),
-            self._on_eot_reached,
-        )
+        self._speech_active = False
+        self._arm_eot_timer(delay=max(0, self._max_endpointing_delay - silence_duration))
 
         if speech_duration <= self._human_speech_threshold:
             if self._silence_timer is not None:
@@ -224,7 +222,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
                 self._silence_timer = asyncio.get_running_loop().call_later(
                     max(0, self._human_silence_threshold - silence_duration),
                     functools.partial(
-                        self._on_timeout,
+                        self.settle,
                         category=AMDCategory.HUMAN,
                         reason="short_greeting",
                         speech_duration=speech_duration,
@@ -267,11 +265,11 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         lands last unblocks the wait). Humans only require the silence timer so
         we can respond quickly.
 
-        When the turn detector never calls this, the synthetic backstop timer
-        (``max_endpointing_delay``) sets the end-of-turn instead. This gate
-        matters most under ``wait_until_finished``: once speech has been heard
-        the detection timeout no longer forces a verdict, so the end-of-turn
-        (real or backstop) is what ultimately lets a machine verdict emit.
+        When the turn detector never calls this, the synthetic EOT timer
+        provides the backstop. This gate matters most under
+        ``wait_until_finished``: once speech has been heard the detection
+        timeout no longer forces a verdict, so the end-of-turn (real or
+        backstop) is what ultimately lets a machine verdict emit.
         """
         if self._closed:
             return
@@ -286,6 +284,17 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             self._eot_timer = None
         self._eot_reached = True
         self._try_emit_result()
+
+    def _arm_eot_timer(self, *, delay: float | None = None) -> None:
+        if self._closed or self._speech_active:
+            return
+        if self._eot_timer is not None:
+            self._eot_timer.cancel()
+        self._eot_reached = False
+        self._eot_timer = asyncio.get_running_loop().call_later(
+            self._max_endpointing_delay if delay is None else delay,
+            self._on_eot_reached,
+        )
 
     def _can_emit(self, verdict: AMDPredictionEvent) -> bool:
         """Release gate for a verdict (which verdict it is, is decided elsewhere).
@@ -333,25 +342,16 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         self._try_emit_result()
 
     @log_exceptions(logger=logger)
-    def _on_timeout(
+    def settle(
         self,
         category: AMDCategory,
         reason: str,
         speech_duration: float | None = None,
     ) -> None:
-        """A timeout (detection budget, no-speech, short greeting) fired.
+        """Commit a fallback verdict and attempt emission.
 
-        Commit a fallback verdict if none exists, then try to emit. This only
-        decides *what* the verdict is; ``_can_emit`` decides *when* it is
-        released. End-of-turn is forced here only when there is nothing left to
-        wait for: no speech was heard, or we are not waiting for the greeting to
-        finish. When ``wait_until_finished`` is set and speech was heard, the
-        fallback is still committed but its release stays gated on end-of-turn
-        (the real signal or the backstop timer), so we don't cut the greeting
-        short with an ``uncertain`` result.
-
-        Not gated by ``_listening_guard``: detection_timeout must still fire
-        when the call never reaches listening (e.g. sip never answered).
+        This can run before listening begins. After speech, ``wait_until_finished``
+        keeps emission gated on end-of-turn so a fallback cannot cut the greeting short.
         """
         if self._closed:
             return
@@ -385,6 +385,7 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
         # ignore text from other sources (e.g. when both session and AMD have STT specified)
         if source != self._source:
             return
+        self._arm_eot_timer()
 
         if self._silence_timer is not None and self._silence_timer_trigger == "short_speech":
             self._silence_timer.cancel()
