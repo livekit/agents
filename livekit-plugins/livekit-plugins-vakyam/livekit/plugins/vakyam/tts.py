@@ -303,8 +303,11 @@ class TTS(tts.TTS):
                     return
                 try:
                     await session.ping()
-                except Exception:
-                    logger.debug("Vakyam TTS keepalive failed; evicting session", exc_info=True)
+                except Exception as exc:
+                    logger.debug(
+                        "Vakyam TTS keepalive failed (%s); evicting session",
+                        type(exc).__name__,
+                    )
                     pool.remove(session)
                     return
         except asyncio.CancelledError:

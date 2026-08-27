@@ -187,28 +187,30 @@ class AsyncStreamingTTSSession:
         except ImportError as exc:
             raise APIConnectionError("websockets is required for Vakyam TTS streaming") from exc
 
-        try:
-            async with asyncio.timeout(timeout):
-                self._connection = await connect(
-                    self._url,
-                    additional_headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "User-Agent": USER_AGENT,
-                    },
-                    open_timeout=timeout,
-                    close_timeout=timeout,
-                )
-                connected = json.loads(await self._connection.recv())
-                if connected.get("type") != "connected":
-                    raise APIConnectionError("Unexpected WebSocket handshake response")
+        async def _connect_and_configure() -> None:
+            self._connection = await connect(
+                self._url,
+                additional_headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "User-Agent": USER_AGENT,
+                },
+                open_timeout=timeout,
+                close_timeout=timeout,
+            )
+            connected = json.loads(await self._connection.recv())
+            if connected.get("type") != "connected":
+                raise APIConnectionError("Unexpected WebSocket handshake response")
 
-                await self._connection.send(json.dumps(self._config.to_wire_message()))
-                configured = json.loads(await self._connection.recv())
-                if configured.get("type") == "error":
-                    raise_ws_error(configured)
-                if configured.get("type") != "configured":
-                    raise APIConnectionError("Unexpected WebSocket config response")
-        except TimeoutError as exc:
+            await self._connection.send(json.dumps(self._config.to_wire_message()))
+            configured = json.loads(await self._connection.recv())
+            if configured.get("type") == "error":
+                raise_ws_error(configured)
+            if configured.get("type") != "configured":
+                raise APIConnectionError("Unexpected WebSocket config response")
+
+        try:
+            await asyncio.wait_for(_connect_and_configure(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
             await self.close()
             raise APITimeoutError("Vakyam TTS WebSocket connection timed out") from exc
         except (APIStatusError, APIConnectionError):
@@ -256,7 +258,7 @@ class AsyncStreamingTTSSession:
         except asyncio.CancelledError:
             await asyncio.shield(self._abort_and_drain(timeout=timeout))
             raise
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket receive timed out") from exc
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -278,7 +280,7 @@ class AsyncStreamingTTSSession:
             await asyncio.wait_for(
                 self._connection.send(json.dumps(cancel_message())), timeout=timeout
             )
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
         if not drain:
             return None
@@ -292,7 +294,7 @@ class AsyncStreamingTTSSession:
                 self._connection.send(json.dumps(ping_message())), timeout=timeout
             )
             response = json.loads(await asyncio.wait_for(self._connection.recv(), timeout=timeout))
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket ping timed out") from exc
         except Exception as exc:
             raise _websocket_connection_error(
@@ -339,7 +341,7 @@ class AsyncStreamingTTSSession:
         while True:
             try:
                 message = await asyncio.wait_for(self._connection.recv(), timeout=timeout)
-            except TimeoutError as exc:
+            except asyncio.TimeoutError as exc:
                 raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
             if isinstance(message, bytes):
                 continue

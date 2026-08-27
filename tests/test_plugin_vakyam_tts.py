@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -241,6 +241,81 @@ async def test_websocket_receive_timeout_resets_active_state() -> None:
     with pytest.raises(APITimeoutError):
         await anext(session.synthesize_stream("Hello.", timeout=0.01))
     assert session.utterance_active is False
+
+
+@pytest.mark.asyncio
+async def test_websocket_connect_does_not_require_asyncio_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``asyncio.timeout`` is unavailable on the Python 3.10 minimum version."""
+    from websockets.asyncio import client
+
+    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
+
+    class HandshakeWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self._responses = iter(
+                [json.dumps({"type": "connected"}), json.dumps({"type": "configured"})]
+            )
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+        async def recv(self) -> str:
+            return next(self._responses)
+
+        async def close(self) -> None:
+            return None
+
+    ws = HandshakeWS()
+
+    async def fake_connect(*args: object, **kwargs: object) -> HandshakeWS:
+        assert kwargs["open_timeout"] == 0.1
+        assert kwargs["close_timeout"] == 0.1
+        return ws
+
+    monkeypatch.setattr(client, "connect", fake_connect)
+    monkeypatch.delattr(asyncio, "timeout", raising=False)
+
+    session = AsyncStreamingTTSSession(api_key="test-key", config=TTSSessionConfig())
+    await session.connect(timeout=0.1)
+
+    assert session.connected
+    assert json.loads(ws.sent[0])["type"] == "config"
+
+
+@pytest.mark.asyncio
+async def test_keepalive_failure_does_not_log_websocket_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.vakyam import TTS, tts as vakyam_tts
+
+    class FailedSession:
+        connected = True
+
+        async def ping(self) -> None:
+            raise RuntimeError("Bearer secret-key")
+
+    class Pool:
+        def __init__(self) -> None:
+            self.removed: object | None = None
+
+        def remove(self, session: object) -> None:
+            self.removed = session
+
+    debug = Mock()
+    monkeypatch.setattr(vakyam_tts, "KEEPALIVE_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(vakyam_tts.logger, "debug", debug)
+    session = FailedSession()
+    pool = Pool()
+
+    await TTS(api_key="test-key")._keepalive_loop(session, pool)  # type: ignore[arg-type]
+
+    assert pool.removed is session
+    debug.assert_called_once_with(
+        "Vakyam TTS keepalive failed (%s); evicting session", "RuntimeError"
+    )
 
 
 @pytest.mark.asyncio
