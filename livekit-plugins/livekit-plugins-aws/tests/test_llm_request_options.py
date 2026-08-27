@@ -1,4 +1,8 @@
+import pytest
+
 from livekit.plugins.aws.llm import _supports_inference_config
+
+pytestmark = pytest.mark.unit
 
 
 def test_claude_opus_47_does_not_receive_temperature():
