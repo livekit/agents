@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import warnings
 from enum import Enum
 from typing import Any
 
@@ -38,10 +39,12 @@ from livekit.agents.utils import AudioBuffer, is_given
 # here — the plugin's public API (below) is unchanged and still speaks the voice-SDK types.
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
+    DEFAULT_MODEL,
     REMOVE,
     AgentSttAsyncClient,
     AudioFormat,
     ClientMessageType,
+    Model,
     Segment,
     ServerMessageType,
     TranscriptionConfig,
@@ -59,6 +62,7 @@ from speechmatics.voice import (
     SpeakerIdentifier,
 )
 
+from ._debug import dd  # noqa: F401  # debug-only dump-and-die helper
 from .log import logger
 from .version import __version__ as lk_version
 
@@ -117,7 +121,8 @@ class STTOptions:
     # -------------------
 
     # Features
-    operating_point: OperatingPoint | None = None
+    # The resolved model name (operating point). See `_resolve_model`.
+    model: str = DEFAULT_MODEL.value
     max_delay: float | None = None
     end_of_utterance_silence_trigger: float | None = None
     end_of_utterance_max_delay: float | None = None
@@ -138,7 +143,8 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
-        operating_point: NotGivenOr[OperatingPoint] = NOT_GIVEN,
+        model: NotGivenOr[Model | str] = NOT_GIVEN,
+        operating_point: NotGivenOr[OperatingPoint | Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -180,8 +186,11 @@ class STT(stt.STT):
                 `end_of_utterance_silence_trigger` parameter.
                 Defaults to `TurnDetectionMode.EXTERNAL`.
 
-            operating_point: Operating point for transcription accuracy vs. latency
-                tradeoff. Overrides preset if provided. Optional.
+            model: The transcription model (operating point) to use, e.g. `"linden-1"`.
+                Defaults to the SDK's default model. Preferred over `operating_point`.
+
+            operating_point: Deprecated alias for `model`. If both are given they must
+                name the same value, otherwise a `ValueError` is raised. Optional.
 
             domain: Domain to use. Optional.
 
@@ -328,7 +337,7 @@ class STT(stt.STT):
             focus_mode=focus_mode,
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
-            operating_point=_set(operating_point),
+            model=_resolve_model(model, operating_point),
             max_delay=_set(max_delay),
             end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
@@ -381,8 +390,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        op = self._stt_options.operating_point
-        return str(op.value) if op is not None else "enhanced"
+        return self._stt_options.model
 
     async def _recognize_impl(
         self,
@@ -457,8 +465,8 @@ class STT(stt.STT):
         This is the only place the config crosses from the plugin's (voice-SDK-shaped)
         public options into the Agent STT session driver. Only the fields agent-STT
         accepts on the wire are set; the voice-only / unsupported knobs (max_delay,
-        punctuation_overrides, end_of_utterance_*, speaker focus, operating_point,
-        speaker sensitivity, max_speakers, prefer_current_speaker) are silently dropped.
+        punctuation_overrides, end_of_utterance_*, speaker focus, speaker sensitivity,
+        max_speakers, prefer_current_speaker) are silently dropped.
         """
 
         # Reference to STT options
@@ -474,6 +482,7 @@ class STT(stt.STT):
 
         config = TranscriptionConfig(
             language=language if is_given(language) else opts.language,
+            model=opts.model,
             turn_detection_mode=turn_detection,
             diarization="speaker" if opts.enable_diarization else None,
             additional_vocab=opts.additional_vocab or None,
@@ -483,11 +492,8 @@ class STT(stt.STT):
         )
 
         # TEMPORARY (spec↔SDK drift): the SDK's to_dict() always emits
-        # `transcription_config.vad_config`, but the deployed agent-STT input spec has
-        # additionalProperties=false and rejects it (StartRecognition fails, socket closes
-        # 1003). Strip it via the SDK override hook; turn_detection_mode still drives
-        # server-side VAD. Remove once the spec-vs-SDK question is resolved.
-        config.override_config({"vad_config": REMOVE})
+        # `transcription_config.vad_config`, but the deployed agent-STT input spec rejects it
+        # config.override_config({"vad_config": REMOVE})
 
         return config
 
@@ -900,6 +906,60 @@ class SpeechStream(stt.RecognizeStream):
         # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+
+
+def _model_name(value: Model | OperatingPoint | str) -> str:
+    """Normalize a model / operating-point value to its wire string.
+
+    Accepts an enum member (`Model`, `OperatingPoint`, or any future `str` enum) or a
+    plain string, and returns the string the service reads.
+    """
+    return value.value if isinstance(value, Enum) else str(value)
+
+
+def _resolve_model(
+    model: NotGivenOr[Model | str],
+    operating_point: NotGivenOr[OperatingPoint | Model | str],
+) -> str:
+    """Reconcile the preferred `model` with its deprecated `operating_point` alias.
+
+    Rules:
+        - neither given          -> the SDK's default model
+        - only `operating_point` -> use it, with a `DeprecationWarning`
+        - only `model`           -> use it
+        - both given             -> they must name the same value; if they differ a
+                                    `ValueError` is raised, otherwise `model` is used
+
+    Returns:
+        The resolved model name as a string.
+
+    Raises:
+        ValueError: if `model` and `operating_point` are both given but differ.
+    """
+    resolved_model = _model_name(model) if is_given(model) else None
+    resolved_op = _model_name(operating_point) if is_given(operating_point) else None
+
+    if resolved_model is not None and resolved_op is not None:
+        if resolved_model != resolved_op:
+            raise ValueError(
+                f"`model` ({resolved_model!r}) and `operating_point` ({resolved_op!r}) name "
+                "different options. Pass only `model` (`operating_point` is deprecated)."
+            )
+        return resolved_model
+
+    if resolved_op is not None:
+        warnings.warn(
+            "`operating_point` is deprecated and will be removed in a future release; "
+            "use `model` instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return resolved_op
+
+    if resolved_model is not None:
+        return resolved_model
+
+    return DEFAULT_MODEL.value
 
 
 def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
