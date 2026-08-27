@@ -32,6 +32,22 @@ deployment/operator. The plugin appends `POST /sessions` when starting an
 Avatar and `DELETE /sessions/{id}` during cleanup, so do not include
 `/sessions` itself in `BOSON_AVATAR_API_URL`.
 
+Load the project-scoped Avatar catalog on your application server and use it
+to populate the face picker. The returned `avatar_id` is passed unchanged to
+`AvatarSession`; browser users never need to type or remember it:
+
+```python
+from livekit.plugins import boson_avatar
+
+
+async def avatar_options():
+    # Returns [AvatarInfo(avatar_id="...", name="...")]
+    return await boson_avatar.list_avatars()
+```
+
+This calls `GET {BOSON_AVATAR_API_URL}/avatars` with `BOSON_API_KEY`. Keep the
+key server-side and cache the result according to your application's needs.
+
 ## Usage
 
 Create the voice `AgentSession` with the audio provider of your choice, then
@@ -74,8 +90,8 @@ model is one Avatar lifecycle per LiveKit job. If one job intentionally starts
 another Avatar after closing the first, pass a new explicit UUID
 `idempotency_key` for that lifecycle.
 
-The `avatar_id` is the value behind the Avatar selected in your application or
-Boson dashboard; end users do not need to type or remember it.
+The `avatar_id` is the value returned by `list_avatars()` behind the Avatar
+selected in your application; end users do not need to type or remember it.
 
 The plugin handles the provider API call, LiveKit participant token, PCM data
 stream routing, interruption buffer clears, and provider-session cleanup. A

@@ -25,7 +25,7 @@ import pytest
 from typing_extensions import Self
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
-from livekit.plugins.boson_avatar.api import BosonAvatarAPI
+from livekit.plugins.boson_avatar.api import AvatarInfo, BosonAvatarAPI
 from livekit.plugins.boson_avatar.errors import BosonAvatarException
 
 pytestmark = pytest.mark.unit
@@ -102,6 +102,70 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self.env.stop()
+
+    async def test_list_avatars_uses_provider_catalog(self) -> None:
+        session = _Session(
+            [
+                _Response(
+                    200,
+                    {
+                        "object": "avatar.list",
+                        "data": [
+                            {"avatar_id": "asset_demo", "name": "Claire"},
+                            {"avatar_id": "asset_1", "name": "Emma"},
+                        ],
+                    },
+                )
+            ]
+        )
+        client = BosonAvatarAPI(
+            api_key="boson-key",
+            api_url="https://avatar.example/v1",
+            conn_options=APIConnectOptions(max_retry=0),
+            session=session,  # type: ignore[arg-type]
+        )
+
+        avatars = await client.list_avatars()
+
+        self.assertEqual(
+            avatars,
+            [
+                AvatarInfo(avatar_id="asset_demo", name="Claire"),
+                AvatarInfo(avatar_id="asset_1", name="Emma"),
+            ],
+        )
+        self.assertEqual(session.calls[0]["method"], "GET")
+        self.assertEqual(session.calls[0]["url"], "https://avatar.example/v1/avatars")
+        self.assertEqual(
+            session.calls[0]["headers"]["Authorization"],
+            "Bearer boson-key",
+        )
+
+    async def test_list_avatars_rejects_invalid_provider_responses(self) -> None:
+        invalid_payloads = (
+            {"object": "wrong", "data": []},
+            {"object": "avatar.list", "data": {}},
+            {"object": "avatar.list", "data": ["asset_demo"]},
+            {"object": "avatar.list", "data": [{"avatar_id": "", "name": "Claire"}]},
+            {"object": "avatar.list", "data": [{"avatar_id": "asset_demo"}]},
+            {
+                "object": "avatar.list",
+                "data": [
+                    {"avatar_id": "asset_demo", "name": "Claire"},
+                    {"avatar_id": "asset_demo", "name": "Duplicate"},
+                ],
+            },
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                client = BosonAvatarAPI(
+                    api_key="boson-key",
+                    api_url="https://avatar.example/v1",
+                    conn_options=APIConnectOptions(max_retry=0),
+                    session=_Session([_Response(200, payload)]),  # type: ignore[arg-type]
+                )
+                with self.assertRaises(BosonAvatarException):
+                    await client.list_avatars()
 
     async def test_start_and_end_use_hosted_contract(self) -> None:
         session = _Session(

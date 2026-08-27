@@ -53,6 +53,14 @@ class AvatarSessionInfo:
     avatar_identity: str
 
 
+@dataclass(frozen=True)
+class AvatarInfo:
+    """Avatar that the authenticated Boson project may render."""
+
+    avatar_id: str
+    name: str
+
+
 class BosonAvatarAPI:
     """Async client for the hosted Boson LiveKit Avatar API."""
 
@@ -80,6 +88,34 @@ class BosonAvatarAPI:
         self._api_url = _validate_api_url(resolved_url)
         self._conn_options = conn_options
         self._session = session
+
+    async def list_avatars(self) -> list[AvatarInfo]:
+        """List Avatars available to the authenticated Boson project."""
+        _, payload = await self._json(
+            "GET",
+            "/avatars",
+            success_statuses=frozenset({200}),
+        )
+        raw_avatars = payload.get("data")
+        if payload.get("object") != "avatar.list" or not isinstance(raw_avatars, list):
+            raise BosonAvatarException("Boson Avatar API returned an invalid Avatar list")
+
+        avatars: list[AvatarInfo] = []
+        seen_ids: set[str] = set()
+        for raw_avatar in raw_avatars:
+            if not isinstance(raw_avatar, dict):
+                raise BosonAvatarException("Boson Avatar API returned an invalid Avatar list")
+            avatar_id = raw_avatar.get("avatar_id")
+            name = raw_avatar.get("name")
+            if not isinstance(avatar_id, str) or not isinstance(name, str):
+                raise BosonAvatarException("Boson Avatar API returned an invalid Avatar list")
+            avatar_id = avatar_id.strip()
+            name = name.strip()
+            if not avatar_id or not name or avatar_id in seen_ids:
+                raise BosonAvatarException("Boson Avatar API returned an invalid Avatar list")
+            seen_ids.add(avatar_id)
+            avatars.append(AvatarInfo(avatar_id=avatar_id, name=name))
+        return avatars
 
     async def start_session(
         self,
@@ -317,6 +353,22 @@ def _is_loopback_host(hostname: str) -> bool:
         return False
 
 
+async def list_avatars(
+    *,
+    api_key: NotGivenOr[str] = NOT_GIVEN,
+    api_url: NotGivenOr[str] = NOT_GIVEN,
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+) -> list[AvatarInfo]:
+    """List project Avatars using the configured provider endpoint."""
+    async with aiohttp.ClientSession() as session:
+        return await BosonAvatarAPI(
+            api_key=api_key,
+            api_url=api_url,
+            conn_options=conn_options,
+            session=session,
+        ).list_avatars()
+
+
 async def _read_payload(response: aiohttp.ClientResponse) -> object | None:
     text = await response.text()
     if not text:
@@ -344,4 +396,4 @@ def _parse_retry_after(value: str | None) -> float | None:
     return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
-__all__ = ["AvatarSessionInfo", "BosonAvatarAPI"]
+__all__ = ["AvatarInfo", "AvatarSessionInfo", "BosonAvatarAPI", "list_avatars"]

@@ -16,12 +16,19 @@
 
 from livekit.agents import Plugin
 
+from .api import AvatarInfo, list_avatars
 from .avatar import AvatarSession
 from .errors import BosonAvatarException
 from .log import logger
 from .version import __version__
 
-__all__ = ["AvatarSession", "BosonAvatarException", "__version__"]
+__all__ = [
+    "AvatarInfo",
+    "AvatarSession",
+    "BosonAvatarException",
+    "__version__",
+    "list_avatars",
+]
 
 
 class BosonAvatarPlugin(Plugin):
