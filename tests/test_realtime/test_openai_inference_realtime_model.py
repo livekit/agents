@@ -836,6 +836,39 @@ async def test_unsupported_transcription_model_is_terminal_without_reconnect(
     assert isinstance(errors[0].error, APIError)
 
 
+@pytest.mark.parametrize(
+    "code",
+    ["unsupported_audio_transport", "unsupported_audio_format", "invalid_audio_payload"],
+)
+async def test_terminal_gateway_audio_error_does_not_reconnect(code: str) -> None:
+    http_session = _FakeHTTPSession()
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-think-fast-2.0",
+        base_url="https://inference.example/v1",
+        api_key="key",
+        api_secret="secret",
+        http_session=http_session,  # type: ignore[arg-type]
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0, timeout=1),
+    )
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+
+    await _wait_for(lambda: len(http_session.connections) == 1)
+    ws = http_session.connections[0][2]
+    await _wait_for(lambda: len(ws.sent) == 1)
+    ws.push_server_event(_server_error(ws.sent[0]["event_id"], code))
+
+    await _wait_for(session._main_atask.done)
+    with pytest.raises(APIError) as exc_info:
+        await session._main_atask
+
+    assert exc_info.value.retryable is False
+    assert len(http_session.connections) == 1
+    assert len(errors) == 1
+    assert errors[0].recoverable is False
+
+
 @pytest.mark.parametrize("provider", ["openai", "azure", "xai"])
 async def test_direct_provider_invalid_request_stays_recoverable(provider: str) -> None:
     http_session = _FakeHTTPSession()

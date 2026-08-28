@@ -181,4 +181,9 @@ class InferenceRealtimeSession(RealtimeSession):
 
     def _is_fatal_error(self, error: object | None) -> bool:
         code = getattr(error, "code", None) or getattr(error, "type", None)
-        return code == "unsupported_transcription_model" or super()._is_fatal_error(error)
+        return code in {
+            "unsupported_transcription_model",
+            "unsupported_audio_transport",
+            "unsupported_audio_format",
+            "invalid_audio_payload",
+        } or super()._is_fatal_error(error)
