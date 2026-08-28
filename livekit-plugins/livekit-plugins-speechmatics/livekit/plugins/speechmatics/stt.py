@@ -536,8 +536,10 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         logger.debug("Connected to Speechmatics STT service")
 
-        # Open external VAD stream (if provided) before tasks start pushing frames
-        if self._vad is not None:
+        # Open external VAD stream (if provided) before tasks start pushing frames.
+        # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in DEFAULT
+        # mode the server endpoints itself, so finalizing here would double-endpoint.
+        if self._vad is not None and self._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
             self._vad_stream = self._vad.stream()
 
         # Audio and messaging tasks
