@@ -241,7 +241,10 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
             session=session,  # type: ignore[arg-type]
         )
-        with patch("livekit.plugins.boson_avatar.api.asyncio.sleep", new=AsyncMock()) as sleep:
+        with (
+            patch("livekit.plugins.boson_avatar.api.asyncio.sleep", new=AsyncMock()) as sleep,
+            self.assertLogs("livekit.plugins.boson_avatar", level="WARNING") as logs,
+        ):
             await client.start_session(
                 avatar_id="asset-1",
                 livekit_url="wss://tenant.livekit.cloud",
@@ -256,6 +259,8 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(keys[0])
         self.assertEqual(keys[0], keys[1])
         sleep.assert_awaited_once_with(5.0)
+        self.assertEqual(logs.records[0].error_type, "APIStatusError")
+        self.assertEqual(logs.records[0].__dict__["lk.pii.path"], "/sessions")
 
     async def test_non_retryable_auth_error_preserves_status_and_request_id(
         self,
@@ -300,10 +305,13 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch("livekit.plugins.boson_avatar.api.asyncio.sleep", new=AsyncMock()),
-            self.assertRaises(APIConnectionError),
+            self.assertRaises(APIConnectionError) as raised,
         ):
             await client.end_session("avatar-session-1")
         self.assertEqual(len(session.calls), 2)
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertTrue(raised.exception.__suppress_context__)
 
     async def test_rejects_missing_id_and_identity_mismatch(self) -> None:
         for payload in (
@@ -336,6 +344,39 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
                     )
                 if payload.get("id"):
                     self.assertEqual([call["method"] for call in session.calls], ["POST", "DELETE"])
+
+    async def test_compensation_log_does_not_expose_provider_error(self) -> None:
+        provider_secret = "private-provider-response"
+        session = _Session(
+            [
+                _Response(201, _active_session(avatar_identity="wrong-avatar")),
+                _Response(503, {"error": {"message": provider_secret}}),
+            ]
+        )
+        client = BosonAvatarAPI(
+            api_key="boson-key",
+            conn_options=APIConnectOptions(max_retry=0),
+            session=session,  # type: ignore[arg-type]
+        )
+
+        with (
+            self.assertLogs("livekit.plugins.boson_avatar", level="WARNING") as logs,
+            self.assertRaises(BosonAvatarException),
+        ):
+            await client.start_session(
+                avatar_id="asset-1",
+                livekit_url="wss://tenant.livekit.cloud",
+                livekit_room="room-1",
+                livekit_token="signed-livekit-token",
+                avatar_identity="avatar-1",
+                publisher_identity="voice-1",
+            )
+
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info)
+        self.assertEqual(record.error_type, "APIConnectionError")
+        self.assertEqual(record.__dict__["lk.pii.session_id"], "avatar-session-1")
+        self.assertNotIn(provider_secret, "\n".join(logs.output))
 
     async def test_rejects_non_contract_success_status_without_retry(self) -> None:
         session = _Session([_Response(202, _active_session())])

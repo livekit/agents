@@ -306,11 +306,12 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_close_retries_api_error_and_base_cleanup_remains_idempotent(
         self,
     ) -> None:
+        provider_secret = "private-provider-response"
         api_client = SimpleNamespace(
             start_session=AsyncMock(
                 return_value=AvatarSessionInfo("provider-session-1", "avatar-1")
             ),
-            end_session=AsyncMock(side_effect=[RuntimeError("provider unavailable"), None]),
+            end_session=AsyncMock(side_effect=[RuntimeError(provider_secret), None]),
         )
         agent_session = _AgentSession()
 
@@ -342,14 +343,61 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
                 livekit_api_key="livekit-key",
                 livekit_api_secret="livekit-secret-with-enough-entropy",
             )
-            await avatar.aclose()
-            await avatar.aclose()
-            await avatar.aclose()
+            with self.assertLogs("livekit.plugins.boson_avatar", level="WARNING") as logs:
+                await avatar.aclose()
+                await avatar.aclose()
+                await avatar.aclose()
 
         self.assertEqual(api_client.end_session.await_count, 2)
         api_client.end_session.assert_awaited_with("provider-session-1")
         base_close.assert_awaited_once()
         self.assertIsNone(avatar.session_id)
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info)
+        self.assertEqual(record.error_type, "RuntimeError")
+        self.assertEqual(record.__dict__["lk.pii.session_id"], "provider-session-1")
+        self.assertNotIn(provider_secret, "\n".join(logs.output))
+
+    async def test_start_compensation_log_does_not_expose_provider_error(self) -> None:
+        provider_secret = "private-provider-response"
+        api_client = SimpleNamespace(
+            end_session=AsyncMock(side_effect=RuntimeError(provider_secret)),
+        )
+        with patch(
+            "livekit.plugins.boson_avatar.avatar.BosonAvatarAPI",
+            return_value=api_client,
+        ):
+            avatar = AvatarSession(
+                avatar_id="asset-1",
+                api_key="boson-key",
+                avatar_participant_identity="avatar-1",
+            )
+
+        with self.assertLogs("livekit.plugins.boson_avatar", level="WARNING") as logs:
+            await avatar._compensate_start(AvatarSessionInfo("provider-session-1", "avatar-1"))
+
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info)
+        self.assertEqual(record.error_type, "RuntimeError")
+        self.assertEqual(record.__dict__["lk.pii.session_id"], "provider-session-1")
+        self.assertNotIn(provider_secret, "\n".join(logs.output))
+
+    async def test_background_task_log_does_not_expose_provider_error(self) -> None:
+        provider_secret = "private-provider-response"
+
+        async def fail() -> None:
+            raise RuntimeError(provider_secret)
+
+        task = asyncio.create_task(fail())
+        with self.assertRaises(RuntimeError):
+            await task
+
+        with self.assertLogs("livekit.plugins.boson_avatar", level="ERROR") as logs:
+            AvatarSession._consume_background_task_result(task, "avatar cleanup failed")
+
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertEqual(logs.records[0].error_type, "RuntimeError")
+        self.assertNotIn(provider_secret, "\n".join(logs.output))
 
     async def test_close_waits_for_inflight_start_and_compensates_session(self) -> None:
         create_entered = asyncio.Event()

@@ -247,7 +247,10 @@ class AvatarSession(BaseAvatarSession[Any]):
 
         logger.debug(
             "boson avatar session started",
-            extra={"session_id": started_info.id, "avatar_id": self._avatar_id},
+            extra={
+                "lk.pii.session_id": started_info.id,
+                "lk.pii.avatar_id": self._avatar_id,
+            },
         )
         return started_info.id
 
@@ -309,11 +312,13 @@ class AvatarSession(BaseAvatarSession[Any]):
         if session_info is not None:
             try:
                 await self._api.end_session(session_info.id)
-            except Exception:  # noqa: BLE001 - a later aclose() can retry by ID
+            except Exception as exc:  # noqa: BLE001 - a later aclose() can retry by ID
                 logger.warning(
                     "failed to end boson avatar session",
-                    extra={"session_id": session_info.id},
-                    exc_info=True,
+                    extra={
+                        "error_type": type(exc).__name__,
+                        "lk.pii.session_id": session_info.id,
+                    },
                 )
             else:
                 if self._session_info is session_info:
@@ -341,11 +346,13 @@ class AvatarSession(BaseAvatarSession[Any]):
     async def _compensate_start(self, session_info: AvatarSessionInfo) -> None:
         try:
             await self._api.end_session(session_info.id)
-        except Exception:  # noqa: BLE001 - startup compensation is best-effort
+        except Exception as exc:  # noqa: BLE001 - startup compensation is best-effort
             logger.warning(
                 "failed to compensate boson avatar session after startup error",
-                extra={"session_id": session_info.id},
-                exc_info=True,
+                extra={
+                    "error_type": type(exc).__name__,
+                    "lk.pii.session_id": session_info.id,
+                },
             )
         else:
             if self._session_info is session_info:
@@ -373,7 +380,7 @@ class AvatarSession(BaseAvatarSession[Any]):
         if error is not None:
             logger.error(
                 message,
-                exc_info=(type(error), error, error.__traceback__),
+                extra={"error_type": type(error).__name__},
             )
 
     def _detach_agent_close_listener(self) -> None:
@@ -477,8 +484,8 @@ def _resolve_optional_idempotency_key(value: NotGivenOr[str]) -> str | None:
         raise BosonAvatarException("idempotency_key must be a UUID string")
     try:
         return str(uuid.UUID(value.strip()))
-    except ValueError as exc:
-        raise BosonAvatarException("idempotency_key must be a UUID string") from exc
+    except ValueError:
+        raise BosonAvatarException("idempotency_key must be a UUID string") from None
 
 
 def _resolve_optional_positive_int(

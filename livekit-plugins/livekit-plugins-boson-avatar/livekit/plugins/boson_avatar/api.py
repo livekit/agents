@@ -32,7 +32,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     NotGivenOr,
     utils,
 )
@@ -171,11 +170,13 @@ class BosonAvatarAPI:
             if isinstance(session_id, str) and session_id:
                 try:
                     await self.end_session(session_id)
-                except Exception:  # noqa: BLE001 - compensation must not hide protocol failure
+                except Exception as exc:  # noqa: BLE001 - compensation is best-effort
                     logger.warning(
                         "failed to compensate boson avatar session after invalid response",
-                        extra={"session_id": session_id},
-                        exc_info=True,
+                        extra={
+                            "error_type": type(exc).__name__,
+                            "lk.pii.session_id": session_id,
+                        },
                     )
             if not isinstance(session_id, str) or not session_id:
                 raise BosonAvatarException("Boson Avatar API response is missing a session id")
@@ -231,7 +232,6 @@ class BosonAvatarAPI:
             **(headers or {}),
         }
         url = f"{self._api_url}{path}"
-        error: Exception | None = None
 
         for attempt in range(self._conn_options.max_retry + 1):
             retry_after: float | None = None
@@ -271,30 +271,35 @@ class BosonAvatarAPI:
                         body=payload,
                         retryable=not 200 <= response.status < 400,
                     )
-            except asyncio.TimeoutError as exc:
-                error = APITimeoutError()
-                error.__cause__ = exc
-            except aiohttp.ClientError as exc:
-                error = APIConnectionError()
-                error.__cause__ = exc
+            except asyncio.TimeoutError:
+                error_type = "timeout"
+            except aiohttp.ClientError:
+                error_type = "client_error"
             except APIStatusError as exc:
                 if not exc.retryable:
                     raise
-                error = exc
+                error_type = type(exc).__name__
 
             if attempt == self._conn_options.max_retry:
                 break
 
             logger.warning(
                 "boson avatar api request failed, retrying",
-                extra={"attempt": attempt + 1, "method": method, "path": path},
+                extra={
+                    "attempt": attempt + 1,
+                    "error_type": error_type,
+                    "method": method,
+                    "lk.pii.path": path,
+                },
             )
             retry_delay = self._conn_options._interval_for_retry(attempt)
             if retry_after is not None:
                 retry_delay = max(retry_delay, retry_after)
             await asyncio.sleep(retry_delay)
 
-        raise APIConnectionError("Failed to call Boson Avatar API after all retries.") from error
+        # Provider exceptions and status bodies can contain request payloads or
+        # credentials. Expose a stable SDK error without retaining that context.
+        raise APIConnectionError("Failed to call Boson Avatar API after all retries.") from None
 
 
 def _resolve_api_key(value: NotGivenOr[str]) -> str | None:
@@ -317,8 +322,8 @@ def _validate_api_url(value: str) -> str:
         parsed = urlsplit(normalized)
         # Accessing port also validates that it is a well-formed integer in range.
         _ = parsed.port
-    except ValueError as exc:
-        raise BosonAvatarException("api_url must be a valid absolute HTTP(S) base URL") from exc
+    except ValueError:
+        raise BosonAvatarException("api_url must be a valid absolute HTTP(S) base URL") from None
 
     if (
         not normalized
