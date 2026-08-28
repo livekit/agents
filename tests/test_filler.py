@@ -69,6 +69,7 @@ class _FakeSession:
         self._idle_event = asyncio.Event()
         self._idle_event.set()  # idle by default
         self._global_run_state = None  # read by RunContext
+        self._parent = None  # top level, also read by RunContext
 
     def on(self, event: str, callback: Any) -> Any:
         self._listeners.setdefault(event, []).append(callback)

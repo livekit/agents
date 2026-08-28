@@ -78,7 +78,9 @@ from .types import (
 )
 from .version import __version__
 from .voice import (
+    DELEGATE_TOOL_NAME,
     Agent,
+    AgentDelegate,
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentSession,
@@ -88,6 +90,11 @@ from .voice import (
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
+    Delegate,
+    DelegationOptions,
+    DelegationRequest,
+    DelegationStream,
+    DelegationUpdate,
     ErrorEvent,
     ExpressiveOptions,
     FunctionToolsExecutedEvent,
@@ -154,6 +161,7 @@ from .worker import (
 
 if typing.TYPE_CHECKING:
     from .llm import mcp  # noqa: F401
+    from .voice import a2a  # noqa: F401
 
 
 def __getattr__(name: str) -> typing.Any:
@@ -161,6 +169,11 @@ def __getattr__(name: str) -> typing.Any:
         from .llm import mcp
 
         return mcp
+
+    if name == "a2a":
+        from .voice import a2a
+
+        return a2a
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -215,6 +228,13 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "RunContext",
+    "DELEGATE_TOOL_NAME",
+    "AgentDelegate",
+    "Delegate",
+    "DelegationOptions",
+    "DelegationRequest",
+    "DelegationStream",
+    "DelegationUpdate",
     "Plugin",
     "Scenario",
     "ScenarioGroup",

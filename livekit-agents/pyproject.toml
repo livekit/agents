@@ -61,6 +61,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+a2a = ["a2a-sdk>=1.1.2,<2"]
 mcp = ["mcp>=1.24.0, <2"]
 codecs = ["numpy>=1.26.0"]
 images = ["pillow>=10.3.0"]

@@ -14,6 +14,7 @@ from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
+from .delegation import Delegate
 from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolHandlingOptions
@@ -43,6 +44,7 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        delegate: NotGivenOr[Delegate | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -124,6 +126,7 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
+        self._delegate: NotGivenOr[Delegate | None] = delegate
         self._activity: AgentActivity | None = None
 
     @property
@@ -141,6 +144,11 @@ class Agent:
             str: The core instructions that guide the agent's behavior.
         """
         return self._instructions
+
+    @property
+    def delegate(self) -> NotGivenOr[Delegate | None]:
+        """The delegate this agent hands reasoning and tool use to, overriding the session's."""
+        return self._delegate
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:

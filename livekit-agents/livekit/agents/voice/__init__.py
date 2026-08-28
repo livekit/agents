@@ -9,6 +9,15 @@ from .agent_session import (
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
+from .delegation import (
+    DELEGATE_TOOL_NAME,
+    AgentDelegate,
+    Delegate,
+    DelegationOptions,
+    DelegationRequest,
+    DelegationStream,
+    DelegationUpdate,
+)
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -60,6 +69,13 @@ __all__ = [
     "AgentTask",
     "SpeechHandle",
     "RunContext",
+    "DELEGATE_TOOL_NAME",
+    "AgentDelegate",
+    "Delegate",
+    "DelegationOptions",
+    "DelegationRequest",
+    "DelegationStream",
+    "DelegationUpdate",
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",

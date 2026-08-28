@@ -2011,6 +2011,7 @@ def _make_reply_session(speech: Any) -> Any:
     agent.update_chat_ctx = AsyncMock()
     session.current_agent = agent
     session._global_run_state = None
+    session._parent = None
     activity = MagicMock()
     activity.agent = agent
     session.wait_for_idle = AsyncMock(return_value=activity)

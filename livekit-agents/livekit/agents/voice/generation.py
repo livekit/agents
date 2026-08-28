@@ -871,7 +871,7 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable, fnc_call: llm.FunctionCall, run_ctx: RunContext
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -885,6 +885,9 @@ async def _execute_tools_task(
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        if run_ctx._suppress_reply:
+                            # a silent update() keeps the output item but asks for no speech
+                            output.fnc_call_out.reply_required = False
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
@@ -914,7 +917,7 @@ async def _execute_tools_task(
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call),
+                    _traceable_fnc_tool(function_callable, fnc_call, run_ctx),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(

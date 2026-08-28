@@ -48,8 +48,9 @@ from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
-from .agent_activity import AgentActivity, _ReusableResources
+from .agent_activity import AgentActivity, _AgentActivityContextVar, _ReusableResources
 from .amd import AMD
+from .delegation import Delegate, DelegationOptions, _resolve_delegation_options
 from .events import (
     AgentEvent,
     AgentState,
@@ -76,7 +77,12 @@ from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
+from .tool_executor import (
+    ToolHandlingOptions,
+    _resolve_async_tool_options,
+    _RunningTask,
+    _RunningTasks,
+)
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -297,6 +303,7 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     recording_options: RecordingOptions
+    delegation_options: DelegationOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -382,6 +389,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         max_tool_steps: int = 3,
+        # Delegation settings
+        delegate: NotGivenOr[Delegate | None] = NOT_GIVEN,
+        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
@@ -587,6 +597,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             recording_options=_RECORDING_ALL_OFF.copy(),
+            delegation_options=_resolve_delegation_options(
+                delegation_options if is_given(delegation_options) else None
+            ),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -630,6 +643,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        self._delegate: Delegate | None = delegate if is_given(delegate) else None
+        # resolved on start, when the session commits to serving whoever is running
+        self._parent: AgentSession | None = None
+        # in-flight tool calls of this session's nested sessions, created on first use
+        self._nested_running: dict[str, _RunningTask] | None = None
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
@@ -742,6 +760,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @userdata.setter
     def userdata(self, value: Userdata_T) -> None:
         self._userdata = value
+
+    @property
+    def delegate(self) -> Delegate | None:
+        """The delegate reasoning and tool use is handed to, if any."""
+        return self._delegate
+
+    @property
+    def parent(self) -> AgentSession | None:
+        """The session whose tool started this one, or ``None`` when this session is top level.
+
+        Resolved on start, so reading it earlier raises rather than answering before the
+        answer is known.
+        """
+        if not self._started:
+            raise RuntimeError("cannot retrieve parent, the AgentSession is not started")
+        return self._parent
+
+    def _nested_running_tasks(self) -> dict[str, _RunningTask]:
+        """In-flight calls of this session's nested sessions, shared so they see each other."""
+        if self._nested_running is None:
+            self._nested_running = {}
+        return self._nested_running
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
@@ -891,6 +931,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return None
 
             self._started_at = time.time()
+
+            # a session started on another session's behalf runs nested under it. every task
+            # an activity spawns carries the mark, so this covers a tool, a node override and
+            # on_enter alike
+            activity = _AgentActivityContextVar.get(None)
+            self._parent = activity._session if activity is not None else None
 
             # configure observability first
             record_is_given = is_given(record)

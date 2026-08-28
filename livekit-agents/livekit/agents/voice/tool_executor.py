@@ -11,6 +11,7 @@ from typing_extensions import TypedDict
 
 from .. import utils
 from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.realtime import RealtimeModel
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
@@ -271,8 +272,12 @@ class _ToolExecutor:
         *,
         owning_activity: AgentActivity | None = None,
         async_tool_options: AsyncToolOptions | None = None,
+        shared_running: dict[str, _RunningTask] | None = None,
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
+        # a parent session's nested sessions share this view, so siblings see each other.
+        # drain stays on `_running_tasks`, so closing one never touches a sibling's work
+        self._shared_running = shared_running
         self._duplicate_check_lock = asyncio.Lock()
 
         self._pending_updates: list[_PendingUpdate] = []
@@ -412,6 +417,12 @@ class _ToolExecutor:
 
         _pass_through_activity_task_info(exe_task)
 
+        # a nested session's run has to cover the work, not the turn: a delegation is not
+        # finished while its tool is still running. a top-level run belongs to a caller who
+        # wants the turn back, so it must not wait on a tool that released early
+        if run_ctx._run_state is not None and run_ctx.session._parent is not None:
+            run_ctx._run_state._watch_handle(exe_task)
+
         running_task = _RunningTask(
             ctx=run_ctx,
             exe_task=exe_task,
@@ -420,6 +431,8 @@ class _ToolExecutor:
             duplicate_key=dup_key,
         )
         self._running_tasks[call_id] = running_task
+        if self._shared_running is not None:
+            self._shared_running[call_id] = running_task
 
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
@@ -430,6 +443,8 @@ class _ToolExecutor:
 
         def _on_done(task: asyncio.Task[Any]) -> None:
             self._running_tasks.pop(call_id, None)
+            if self._shared_running is not None:
+                self._shared_running.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
             # detach so a stashed RunContext can't drive the executor post-completion
@@ -516,7 +531,9 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self, ctx: RunContext, items: list[ChatItem], *, silent: bool = False
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -527,6 +544,17 @@ class _ToolExecutor:
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
+
+        # these bypass the speech handle that feeds the run, so a tool's later reports and
+        # its return value reach it only if recorded here
+        if (run_state := ctx.session._global_run_state) is not None:
+            for item in items:
+                run_state._item_added(item)
+
+        if silent:
+            # recorded above for the model, but nothing is queued to voice it — the same
+            # contract a silent first update gets from `_suppress_reply`
+            return
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
@@ -543,9 +571,11 @@ class _ToolExecutor:
         from .agent_activity import ActivityClosedError
 
         target_agent: Agent
+        target_activity: AgentActivity
         try:
             if self._owning_activity is not None:
                 await self._owning_activity.wait_for_idle()
+                target_activity = self._owning_activity
                 target_agent = self._owning_activity.agent
             else:
                 target_activity = await session.wait_for_idle()
@@ -594,6 +624,22 @@ class _ToolExecutor:
         )
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+
+        # a model that continues on its own needs no client-triggered response: the
+        # update_chat_ctx above was the whole delivery. read off the active session, so a
+        # fallback adapter reports the model actually in use
+        rt_session = target_activity.realtime_llm_session
+        if (
+            isinstance(target_activity.llm, RealtimeModel)
+            and rt_session is not None
+            and rt_session.capabilities.auto_tool_reply_generation
+        ):
+            logger.debug(
+                "delivered async tool results without a reply, the model continues on its own",
+                extra={"call_ids": call_ids},
+            )
+            return
+
         speech = session.generate_reply(
             instructions=_render(template, {"call_ids": call_ids}),
             tool_choice="none",
@@ -659,21 +705,16 @@ class _ToolExecutor:
         fnc_name = dup_key[0]
 
         async with self._duplicate_check_lock:
-            running_fnc_calls = [
-                t.ctx.function_call
-                for t in self._running_tasks.values()
-                if t.duplicate_key == dup_key
-            ]
+            # nested sessions share a view, so a later one can replace work a sibling started
+            in_flight = self._shared_running or self._running_tasks
+            running = [t for t in in_flight.values() if t.duplicate_key == dup_key]
+            running_fnc_calls = [t.ctx.function_call for t in running]
             if len(running_fnc_calls) == 0:
                 return None
 
             if on_duplicate == "replace":
                 # replace must honor each in-flight task's allow_cancellation flag
-                non_cancellable = [
-                    fnc_call
-                    for fnc_call in running_fnc_calls
-                    if not self._running_tasks[fnc_call.call_id].allow_cancellation
-                ]
+                non_cancellable = [t for t in running if not t.allow_cancellation]
                 if non_cancellable:
                     raise ToolError(
                         f"cannot replace duplicate call of `{fnc_name}`: "
@@ -681,7 +722,7 @@ class _ToolExecutor:
                     )
 
                 results = await asyncio.gather(
-                    *[self.cancel(fnc_call.call_id) for fnc_call in running_fnc_calls],
+                    *[t.executor.cancel(t.ctx.function_call.call_id) for t in running],
                     return_exceptions=True,
                 )
                 exceptions = [result for result in results if isinstance(result, Exception)]
