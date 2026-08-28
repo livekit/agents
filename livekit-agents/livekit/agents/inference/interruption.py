@@ -41,7 +41,6 @@ from ..utils import (
     aio,
     http_context,
     is_given,
-    shortuuid,
 )
 from ._utils import (
     create_access_token,
@@ -667,7 +666,7 @@ class InterruptionStreamBase(ABC):
                 prediction_duration=ev.prediction_duration,
                 detection_delay=ev.detection_delay,
                 num_interruptions=1 if ev.is_interruption else 0,
-                num_backchannels=1 if not ev.is_interruption else 0,
+                num_backchannels=1 if not ev.is_interruption and not ev.agent_ended else 0,
                 num_requests=ev.num_requests,
                 metadata=Metadata(
                     model_name=self._model.model, model_provider=self._model.provider
@@ -769,7 +768,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(model=model, conn_options=conn_options)
-        self._request_id = str(shortuuid("interruption_request_"))
         self._reconnect_event = asyncio.Event()
 
     def update_options(
@@ -818,11 +816,16 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 await self._num_requests.increment()
                 created_at = perf_counter_ns()
                 header = struct.pack("<Q", created_at)  # 8 bytes
-                await ws.send_bytes(header + audio_data.tobytes())
                 self._cache[created_at] = InterruptionCacheEntry(
                     created_at=created_at,
                     speech_input=audio_data,
                 )
+                try:
+                    # Register before yielding so a speech boundary can invalidate this request.
+                    await ws.send_bytes(header + audio_data.tobytes())
+                except BaseException:
+                    self._cache.pop(created_at, None)
+                    raise
 
             closing_ws = True
             msg = InterruptionWSSessionCloseMessage(
@@ -887,15 +890,20 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         if (
                             overlap_started_at := self._overlap_started_at
                         ) is not None and self._overlap_started:
-                            entry = self._cache.set_or_update(
+                            entry = self._cache.update_value(
                                 created_at,
-                                lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
                                 probabilities=np.array(msg.probabilities, dtype=np.float32),
                                 is_interruption=True,
                                 prediction_duration=msg.prediction_duration,
                                 detection_delay=time.time() - overlap_started_at,
                             )
+                            if entry is None:
+                                logger.trace(
+                                    "ignoring interruption verdict outside the current speech",
+                                    extra={"created_at": created_at},
+                                )
+                                continue
                             if self._user_speech_span:
                                 self._update_user_speech_span(self._user_speech_span, entry)
                                 self._user_speech_span = None
@@ -922,15 +930,20 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         if (
                             overlap_started_at := self._overlap_started_at
                         ) is not None and self._overlap_started:
-                            entry = self._cache.set_or_update(
+                            entry = self._cache.update_value(
                                 created_at,
-                                lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
                                 prediction_duration=msg.prediction_duration,
                                 probabilities=np.array(msg.probabilities, dtype=np.float32),
                                 is_interruption=False,
                                 detection_delay=time.time() - overlap_started_at,
                             )
+                            if entry is None:
+                                logger.trace(
+                                    "ignoring interruption result outside the current speech",
+                                    extra={"created_at": created_at},
+                                )
+                                continue
                             logger.trace(
                                 "interruption inference done",
                                 extra={

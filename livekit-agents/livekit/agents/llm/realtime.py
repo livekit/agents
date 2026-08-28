@@ -90,8 +90,18 @@ class RealtimeCapabilities:
 
 
 class RealtimeError(Exception):
-    def __init__(self, message: str) -> None:
+    """Error raised by a realtime session when a request fails.
+
+    Args:
+        message: Human-readable description of the failure.
+        code: Provider error code when the failure mirrors one (e.g. OpenAI's
+            ``conversation_already_has_active_response``), so callers can branch on it
+            programmatically; ``None`` when the error carries no provider code.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
+        self.code = code
 
 
 class RealtimeModel:

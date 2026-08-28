@@ -168,6 +168,8 @@ XAIModels = Literal[
     "xai/grok-4.20-0309-non-reasoning",
     "xai/grok-4.20-0309-reasoning",
     "xai/grok-4.20-multi-agent-0309",
+    "xai/grok-4.3",
+    "xai/grok-4.5",
 ]
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
@@ -433,7 +435,7 @@ class LLMStream(llm.LLMStream):
                     extra={
                         "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
-                        "chat_ctx": chat_ctx,
+                        "lk.pii.chat_ctx": chat_ctx,
                     },
                 )
             if not self._tools:

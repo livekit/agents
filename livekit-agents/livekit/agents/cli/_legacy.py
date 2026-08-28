@@ -47,7 +47,7 @@ from livekit import api, rtc
 from .. import llm
 from .._exceptions import CLIError
 from ..job import JobExecutorType
-from ..log import logger
+from ..log import _add_global_log_fields, logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
 from ..voice import AgentSession, io
@@ -991,9 +991,11 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
 
     root = logging.getLogger()
     if c:
+        _add_global_log_fields(c._log_handler)
         root.addHandler(c._log_handler)
     else:
         handler = logging.StreamHandler(sys.stdout)
+        _add_global_log_fields(handler)
         root.addHandler(handler)
         handler.setFormatter(JsonFormatter())
 
@@ -1551,6 +1553,17 @@ def _run_console(
 
         c._validate_device_or_raise(input_device=input_device, output_device=output_device)
 
+        # Snapshot and restore tty settings, so we don't leave the terminal with echo disabled.
+        tty_fd: int | None = None
+        tty_settings: Any = None
+        try:
+            import termios
+
+            tty_fd = sys.stdin.fileno()
+            tty_settings = termios.tcgetattr(tty_fd)
+        except Exception:
+            tty_fd = None
+
         exit_triggered = False
 
         def _on_worker_shutdown() -> None:
@@ -1595,6 +1608,13 @@ def _run_console(
         finally:
             console_worker.shutdown()
             console_worker.join()
+            if tty_fd is not None:
+                try:
+                    import termios
+
+                    termios.tcsetattr(tty_fd, termios.TCSADRAIN, tty_settings)
+                except Exception:
+                    pass
 
     except (CLIError, ValueError) as e:
         c.print(" ")
