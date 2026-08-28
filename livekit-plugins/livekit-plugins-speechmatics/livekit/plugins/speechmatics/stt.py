@@ -40,7 +40,6 @@ from livekit.agents.utils import AudioBuffer, is_given
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
-    REMOVE,
     AdditionalVocabEntry,
     AgentSttAsyncClient,
     AudioEncoding,
@@ -60,6 +59,10 @@ from ._debug import dd  # noqa: F401  # debug-only dump-and-die helper
 from .log import logger
 from .version import __version__ as lk_version
 
+# Endpoint resolution. The default is the Agent STT endpoint; the env var overrides it,
+# and an explicit `base_url` argument overrides both.
+DEFAULT_BASE_URL = "wss://global.rt.speechmatics.com/v2/agent"
+BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 
 class TurnDetectionMode(str, Enum):
     """How turn boundaries (end of speech) are detected.
@@ -157,7 +160,8 @@ class STT(stt.STT):
                 or `SPEECHMATICS_API_KEY` environment variable.
 
             base_url: Custom base URL for the API. Can be set via `base_url`
-                argument or `SPEECHMATICS_RT_URL` environment variable. Optional.
+                argument or `SPEECHMATICS_RT_URL` environment variable. Falls back to
+                `DEFAULT_BASE_URL` (the Agent STT endpoint) when neither is set.
 
             turn_detection_mode: How end-of-speech turns are detected. `DEFAULT` lets
                 the STT service run its own VAD and close turns itself. `EXTERNAL`
@@ -295,11 +299,7 @@ class STT(stt.STT):
         self._api_key: str = api_key if is_given(api_key) else os.getenv("SPEECHMATICS_API_KEY", "")
 
         # Set base URL
-        self._base_url: str = (
-            base_url
-            if is_given(base_url)
-            else os.getenv("SPEECHMATICS_RT_URL", "wss://eu2.rt.speechmatics.com/v2")
-        )
+        self._base_url: str = _resolve_base_url(base_url)
 
         # Validate API key and base URL
         if not self._api_key:
@@ -413,10 +413,8 @@ class STT(stt.STT):
             enable_partials=opts.include_partials,
         )
 
-        # TEMPORARY (spec↔SDK drift): the SDK's to_dict() always emits
-        # `transcription_config.vad_config`, but the deployed agent-STT input spec rejects it
-        # config.override_config({"vad_config": REMOVE})
-
+        # `turn_detection_mode` is a wire field the SDK lifts out of transcription_config
+        # into the top-level `turn_config` on StartRecognition (per the agent-STT spec).
         return config
 
     def finalize(self) -> None:
@@ -819,6 +817,19 @@ def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMo
     config must carry the SDK's own enum member, not the plugin's.
     """
     return AgentTurnDetectionMode(mode.value)
+
+
+def _resolve_base_url(base_url: NotGivenOr[str]) -> str:
+    """Resolve the STT endpoint URL.
+
+    Precedence (highest first):
+        1. the explicit `base_url` argument
+        2. the ``SPEECHMATICS_RT_URL`` environment variable
+        3. ``DEFAULT_BASE_URL``
+    """
+    if is_given(base_url):
+        return base_url
+    return os.getenv(BASE_URL_ENV_VAR, DEFAULT_BASE_URL)
 
 
 def _model_name(value: Model | str) -> str:
