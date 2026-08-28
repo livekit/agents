@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 from ...job import DEFAULT_PARTICIPANT_KINDS
-from ._input import _ParticipantAudioInputStream, _ParticipantVideoInputStream
+from ._input import ROOM_AUDIO_INPUTS, _ParticipantVideoInputStream, _RoomAudioInput
 from ._output import _ParticipantAudioOutput, _ParticipantTranscriptionOutput
 from .types import (
     DEFAULT_CLOSE_ON_DISCONNECT_REASONS,
@@ -65,7 +65,7 @@ class RoomIO:
         ):
             self._participant_identity = self._options.participant_identity
 
-        self._audio_input: _ParticipantAudioInputStream | None = None
+        self._audio_input: _RoomAudioInput | None = None
         self._video_input: _ParticipantVideoInputStream | None = None
         self._audio_output: _ParticipantAudioOutput | None = None
         self._user_tr_output: _ParticipantTranscriptionOutput | None = None
@@ -104,18 +104,30 @@ class RoomIO:
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
-            self._pre_connect_audio_handler = PreConnectAudioHandler(
-                room=self._room,
-                timeout=input_audio_options.pre_connect_audio_timeout,
-            )
-            self._pre_connect_audio_handler.register()
+            if input_audio_options.participants != "linked":
+                # the buffer is audio from before the participant joined, so it is not
+                # concurrent with anyone: replaying it into a stream that is combined with
+                # other participants either paces it behind the rest of the mix or lands it
+                # in the pre-roll of somebody who is not speaking yet
+                # info, not a warning: pre_connect_audio is on by default, so every mix/pick
+                # session would log it without anyone having asked for it
+                logger.info(
+                    "pre-connect audio is only supported with participants='linked', ignoring",
+                    extra={"participants": input_audio_options.participants},
+                )
+            else:
+                self._pre_connect_audio_handler = PreConnectAudioHandler(
+                    room=self._room,
+                    timeout=input_audio_options.pre_connect_audio_timeout,
+                )
+                self._pre_connect_audio_handler.register()
 
         input_video_options = self._options.get_video_input_options()
         if input_video_options:
             self._video_input = _ParticipantVideoInputStream(self._room)
 
         if input_audio_options:
-            self._audio_input = _ParticipantAudioInputStream(
+            self._audio_input = ROOM_AUDIO_INPUTS[input_audio_options.participants](
                 self._room,
                 sample_rate=input_audio_options.sample_rate,
                 num_channels=input_audio_options.num_channels,
@@ -375,6 +387,19 @@ class RoomIO:
             self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
+        accepted_kinds = self._options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
+        if participant.kind not in accepted_kinds:
+            # not an accepted participant kind, skip
+            return
+
+        publishing_for_agent = (
+            participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
+            == self._room.local_participant.identity
+        )
+        if self._audio_input and not publishing_for_agent:
+            # ignored unless the audio input listens to more than the linked participant
+            self._audio_input.add_participant(participant)
+
         if self._participant_available_fut.done():
             return
 
@@ -382,21 +407,16 @@ class RoomIO:
             if participant.identity != self._participant_identity:
                 return
         # otherwise, skip participants that are marked as publishing for this agent
-        elif (
-            participant.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF)
-            == self._room.local_participant.identity
-        ):
-            return
-
-        accepted_kinds = self._options.participant_kinds or DEFAULT_PARTICIPANT_KINDS
-        if participant.kind not in accepted_kinds:
-            # not an accepted participant kind, skip
+        elif publishing_for_agent:
             return
 
         self._participant_available_fut.set_result(participant)
         self._agent_session._on_room_io_participant_linked(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if self._audio_input:
+            self._audio_input.remove_participant(participant.identity)
+
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
