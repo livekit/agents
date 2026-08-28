@@ -237,7 +237,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                diarization=enable_diarization if is_given(enable_diarization) else True,
+                diarization=True,
                 aligned_transcript="chunk",
                 offline_recognize=False,
             ),
@@ -258,7 +258,7 @@ class STT(stt.STT):
             additional_vocab=_set(additional_vocab) or [],
             model=_resolve_model(model, operating_point),
             include_partials=_set(include_partials),
-            enable_diarization=_set(enable_diarization),
+            enable_diarization=enable_diarization if is_given(enable_diarization) else True,
             speaker_sensitivity=_set(speaker_sensitivity),
             max_speakers=_set(max_speakers),
             prefer_current_speaker=_set(prefer_current_speaker),
