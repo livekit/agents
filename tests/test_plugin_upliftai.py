@@ -254,6 +254,33 @@ async def test_speed_sent_on_wire_and_validated() -> None:
     assert "speed" not in stub.emitted[2][1]
 
 
+async def test_error_payload_not_serialized_into_exception() -> None:
+    """A server error missing the `message` field must not dump the raw payload
+    (which may echo request text) into the APIError that lands in logs/spans."""
+    from livekit.plugins.upliftai.tts import TTS, WebSocketClient
+
+    tts = TTS(api_key="fake-key")
+    client = WebSocketClient(tts._opts)
+
+    q = await asyncio.wait_for(_register_queue(client, "req-pii"), timeout=1)
+    secret = "customer said something private"
+    await client._on_message(
+        {"type": "error", "requestId": "req-pii", "code": "synthesis_failed", "echo": secret}
+    )
+
+    err = q.get_nowait()
+    assert isinstance(err, APIError)
+    assert secret not in str(err), "raw payload leaked into exception message"
+    assert "synthesis_failed" in str(err), "error code should be preserved for debugging"
+
+
+async def _register_queue(client, request_id: str) -> asyncio.Queue:
+    q: asyncio.Queue = asyncio.Queue()
+    client.audio_callbacks[request_id] = q
+    client.active_requests[request_id] = True
+    return q
+
+
 async def test_disconnect_closes_half_open_socket() -> None:
     """A connect() cancelled mid-handshake leaves the socket open with
     ``connected`` still False; disconnect() must close it regardless."""

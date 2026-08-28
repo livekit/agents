@@ -484,11 +484,16 @@ class WebSocketClient:
 
         elif message_type == "error":
             request_id = data.get("requestId", "unknown")
-            error_msg = data.get("message", str(data))
-            logger.error(f"Error for {request_id}: {error_msg}")
+            # use only the structured fields — never serialize the raw payload,
+            # which may echo request text into unredacted logs/span attributes
+            error_code = data.get("code", "unknown")
+            error_msg = data.get("message") or "unknown error"
+            logger.error(f"Error for {request_id}: [{error_code}] {error_msg}")
 
             if request_id in self.audio_callbacks:
-                await self.audio_callbacks[request_id].put(APIError(f"TTS error: {error_msg}"))
+                await self.audio_callbacks[request_id].put(
+                    APIError(f"TTS error [{error_code}]: {error_msg}")
+                )
                 del self.audio_callbacks[request_id]
                 if request_id in self.active_requests:
                     del self.active_requests[request_id]
