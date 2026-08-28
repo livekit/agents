@@ -68,7 +68,6 @@ from speechmatics.agent_stt import (
     TimeoutError as SMTimeoutError,
 )
 
-from ._debug import dd  # noqa: F401  # debug-only dump-and-die helper
 from .log import logger
 from .version import __version__ as lk_version
 
@@ -108,7 +107,6 @@ class STTOptions:
 
     # Output formatting
     speaker_active_format: str | None = None
-    speaker_passive_format: str | None = None
 
     # Speakers
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
@@ -123,10 +121,6 @@ class STTOptions:
     # Features
     # The resolved model name (operating point). See `_resolve_model`.
     model: str = DEFAULT_MODEL.value
-    max_delay: float | None = None
-    end_of_utterance_silence_trigger: float | None = None
-    end_of_utterance_max_delay: float | None = None
-    punctuation_overrides: dict | None = None
     include_partials: bool | None = None
 
     # Diarization
@@ -150,15 +144,10 @@ class STT(stt.STT):
         output_locale: NotGivenOr[str] = NOT_GIVEN,
         include_partials: NotGivenOr[bool] = NOT_GIVEN,
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
-        max_delay: NotGivenOr[float] = NOT_GIVEN,
-        end_of_utterance_silence_trigger: NotGivenOr[float] = NOT_GIVEN,
-        end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
-        punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
         speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
-        speaker_passive_format: NotGivenOr[str] = NOT_GIVEN,
         prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
         sample_rate: int = 16000,
@@ -202,26 +191,9 @@ class STT(stt.STT):
                 engine will determine and attribute words to unique speakers.
                 Overrides preset if provided. Defaults to True.
 
-            max_delay: Maximum delay in seconds for transcription. This forces the
-                STT engine to speed up the processing of transcribed words and reduces
-                the interval between partial and final results. Lower values can have
-                an impact on accuracy. Overrides preset if provided. Optional.
-
-            end_of_utterance_silence_trigger: Silence duration in seconds that
-                triggers end of utterance. The delay is used to wait for any further
-                transcribed words before emitting the `FINAL_TRANSCRIPT` events.
-                Overrides preset if provided. Optional.
-
-            end_of_utterance_max_delay: Maximum delay in seconds for end of utterance.
-                Must be greater than `end_of_utterance_silence_trigger`.
-                Overrides preset if provided. Optional.
-
             additional_vocab: List of additional vocabulary entries to increase the
                 weight of specific words in the transcription model. Defaults to [].
 
-            punctuation_overrides: Punctuation overrides. Allows overriding the
-                punctuation behaviour in the STT engine. Overrides preset if provided.
-                Optional.
 
             speaker_sensitivity: Diarization sensitivity. A higher value increases the
                 sensitivity of diarization and helps when two or more speakers have
@@ -234,10 +206,6 @@ class STT(stt.STT):
             speaker_active_format: Formatter for active speaker output. The attributes
                 `text` and `speaker_id` are available. Example: `@{speaker_id}: {text}`.
                 Defaults to transcription output.
-
-            speaker_passive_format: Formatter for passive speaker output. The attributes
-                `text` and `speaker_id` are available. Example:
-                `@{speaker_id} [background]: {text}`. Defaults to transcription output.
 
             prefer_current_speaker: When True, groups of words close together are given
                 extra weight to be identified as the same speaker. Overrides preset if
@@ -285,14 +253,9 @@ class STT(stt.STT):
             domain=_set(domain),
             turn_detection_mode=turn_detection_mode,
             speaker_active_format=_set(speaker_active_format),
-            speaker_passive_format=_set(speaker_passive_format),
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
             model=_resolve_model(model, operating_point),
-            max_delay=_set(max_delay),
-            end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
-            end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
-            punctuation_overrides=_set(punctuation_overrides),
             include_partials=_set(include_partials),
             enable_diarization=_set(enable_diarization),
             speaker_sensitivity=_set(speaker_sensitivity),
@@ -372,29 +335,9 @@ class STT(stt.STT):
         errors: list[str] = []
         opts = self._stt_options
 
-        # end_of_utterance_silence_trigger must be between 0 and 2
-        if opts.end_of_utterance_silence_trigger is not None and not (
-            0 < opts.end_of_utterance_silence_trigger < 2
-        ):
-            errors.append("end_of_utterance_silence_trigger must be between 0 and 2")
-
-        # end_of_utterance_max_delay must exceed end_of_utterance_silence_trigger so the engine has time to detect silence
-        if (
-            opts.end_of_utterance_max_delay is not None
-            and opts.end_of_utterance_silence_trigger is not None
-            and opts.end_of_utterance_max_delay <= opts.end_of_utterance_silence_trigger
-        ):
-            errors.append(
-                "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger"
-            )
-
         # server rejects speaker counts outside 2–100
         if opts.max_speakers is not None and not (1 < opts.max_speakers <= 100):
             errors.append("max_speakers must be between 2 and 100")
-
-        # latency budget: below 0.7s is unsupported
-        if opts.max_delay is not None and not (0.7 <= opts.max_delay <= 4.0):
-            errors.append("max_delay must be between 0.7 and 4.0")
 
         # diarization sensitivity range enforced by the engine
         if opts.speaker_sensitivity is not None and not (0.0 < opts.speaker_sensitivity < 1.0):
@@ -405,11 +348,10 @@ class STT(stt.STT):
     def _prepare_config(self, language: NotGivenOr[str] = NOT_GIVEN) -> TranscriptionConfig:
         """Prepare an Agent STT TranscriptionConfig from STTOptions.
 
-        This is the only place the config crosses from the plugin's (voice-SDK-shaped)
-        public options into the Agent STT session driver. Only the fields agent-STT
-        accepts on the wire are set; the voice-only / unsupported knobs (max_delay,
-        punctuation_overrides, end_of_utterance_*, speaker focus, speaker sensitivity,
-        max_speakers, prefer_current_speaker) are silently dropped.
+        This is the only place the config crosses from the plugin's public options into
+        the Agent STT session driver. Only the fields agent-STT accepts on the wire are
+        set; the diarization knobs (speaker_sensitivity, max_speakers,
+        prefer_current_speaker, known_speakers) are not yet wired in here.
         """
 
         # Reference to STT options
