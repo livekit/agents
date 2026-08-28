@@ -593,20 +593,37 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
-            if identity not in room.remote_participants:
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+            # still ringing or never published audio — hang up so the supervisor
+            # phone does not keep ringing after we give up
+            def _hangup() -> None:
+                twilio_call = client.calls(call.sid).fetch()
+                if twilio_call.status in ("queued", "initiated", "ringing"):
+                    client.calls(call.sid).update(status="canceled")
+                elif twilio_call.status == "in-progress":
+                    client.calls(call.sid).update(status="completed")
+
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_hangup)
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
-        # Twilio Stream connects only after the supervisor answers. Poll the local
-        # room and the Room service for the expected identity (human-agent-sip).
+        # ConnectTwilioCall may add human-agent-sip to the room before pickup.
+        # Audio is published only after the supervisor answers — that is the
+        # no-answer signal. Poll the local room and the Room service for a track.
+        from livekit.protocol.models import TrackType
+
         job_ctx = get_job_context()
         timeout = self._ringing_timeout or _TWILIO_RINGING_TIMEOUT
         deadline = asyncio.get_running_loop().time() + timeout
 
+        def _local_answered() -> bool:
+            p = room.remote_participants.get(identity)
+            if p is None:
+                return False
+            return any(pub.kind == rtc.TrackKind.KIND_AUDIO for pub in p.track_publications.values())
+
         while asyncio.get_running_loop().time() < deadline:
-            if identity in room.remote_participants:
+            if _local_answered():
                 return
             try:
                 resp = await job_ctx.api.room.list_participants(
@@ -615,12 +632,15 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             except Exception:
                 logger.exception("failed to list participants in consult room")
             else:
-                if any(p.identity == identity for p in resp.participants):
+                if any(
+                    p.identity == identity and any(t.type == TrackType.AUDIO for t in p.tracks)
+                    for p in resp.participants
+                ):
                     return
             await asyncio.sleep(0.4)
 
         logger.error(
-            "supervisor did not join the consult room in time",
+            "supervisor did not answer in time",
             extra={
                 "expected_identity": identity,
                 "room": room.name,
