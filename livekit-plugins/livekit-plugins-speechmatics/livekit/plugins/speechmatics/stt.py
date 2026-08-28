@@ -23,7 +23,9 @@ from typing import Any
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     stt,
     utils,
@@ -53,6 +55,17 @@ from speechmatics.agent_stt import (
 )
 from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
+)
+from speechmatics.agent_stt import (
+    ConnectionError as SMConnectionError,
+)
+from speechmatics.agent_stt import (
+    SessionError,
+    TranscriptionError,
+    TransportError,
+)
+from speechmatics.agent_stt import (
+    TimeoutError as SMTimeoutError,
 )
 
 from ._debug import dd  # noqa: F401  # debug-only dump-and-die helper
@@ -568,8 +581,17 @@ class SpeechStream(stt.RecognizeStream):
         for event in messages:
             self._client.on(event, add_message)  # type: ignore[arg-type]
 
-        # Connect to the service
-        await self._client.connect()
+        # Connect to the service. A rejected session (e.g. invalid config) surfaces as an
+        # APIError so it reaches the caller instead of dying in a log; transient transport
+        # failures surface as a (retryable) APIConnectionError.
+        try:
+            await self._client.connect()
+        except (TranscriptionError, SessionError) as e:
+            raise APIError(
+                f"Speechmatics rejected the session: {e}", retryable=False
+            ) from e
+        except (SMConnectionError, SMTimeoutError, TransportError) as e:
+            raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         logger.debug("Connected to Speechmatics STT service")
 
         # Open external VAD stream (if provided) before tasks start pushing frames
@@ -697,7 +719,16 @@ class SpeechStream(stt.RecognizeStream):
         elif event == ServerMessageType.WARNING:
             logger.warning(f"{event} -> {message}")
         elif event == ServerMessageType.ERROR:
-            logger.error(f"{event} -> {message}")
+            # An agent-STT `Error` means the session is over. Raise it as an APIError so the
+            # stream fails with the reason instead of silently hanging until timeout. It
+            # propagates out of the message task and is re-raised by `_run`.
+            reason = message.get("reason", "unknown")
+            error_type = message.get("type", "error")
+            raise APIError(
+                f"Speechmatics returned an error [{error_type}]: {reason}",
+                body=message,
+                retryable=False,
+            )
 
         # Handle the messages
         elif event == ServerMessageType.ADD_PARTIAL_SEGMENT:
