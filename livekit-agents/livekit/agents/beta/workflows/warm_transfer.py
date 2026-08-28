@@ -465,6 +465,12 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         self._twilio_auth_token = (
             twilio_auth_token if is_given(twilio_auth_token) else os.getenv("TWILIO_AUTH_TOKEN", "")
         )
+        if not self._twilio_account_sid or not self._twilio_auth_token:
+            raise ValueError(
+                "Twilio credentials are required: pass `twilio_account_sid` and"
+                " `twilio_auth_token` or set the TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
+                " environment variables"
+            )
         super().__init__(
             ringing_timeout=(
                 ringing_timeout if is_given(ringing_timeout) else _TWILIO_RINGING_TIMEOUT
