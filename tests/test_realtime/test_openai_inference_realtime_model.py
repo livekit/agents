@@ -147,14 +147,22 @@ async def test_connection_refreshes_token_url_and_headers(
     await session.aclose()
 
 
-def test_xai_catalog_model_is_accepted() -> None:
+async def test_xai_catalog_model_uses_gateway_compatible_defaults(
+    paused_realtime_main: None,
+) -> None:
     model = InferenceRealtimeModel(
         "xai/grok-voice-think-fast-2.0",
         api_key="key",
         api_secret="secret",
     )
+    session = model.session()
+    event = session._msg_ch.recv_nowait()
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
 
     assert model._opts.model == "xai/grok-voice-think-fast-2.0"
+    assert dumped["session"]["audio"]["input"]["transcription"]["model"] == "grok-transcribe"
+    assert dumped["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad"
+    await session.aclose()
 
 
 @pytest.mark.parametrize(
