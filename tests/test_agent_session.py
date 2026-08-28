@@ -23,6 +23,7 @@ from livekit.agents import (
     MetricsCollectedEvent,
     ModelSettings,
     NotGivenOr,
+    RunContext,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -47,6 +48,7 @@ from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnI
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -337,12 +339,12 @@ async def test_tool_call() -> None:
     def _record_agent_speech_end(
         recognition: AudioRecognition,
         *,
-        ignore_user_transcript_until: float,
+        ended_at: float,
     ) -> None:
         agent_speech_end_states.append(session.agent_state)
         on_end_of_agent_speech(
             recognition,
-            ignore_user_transcript_until=ignore_user_transcript_until,
+            ended_at=ended_at,
         )
 
     with patch.object(
@@ -394,6 +396,176 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="lookup_order", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_tts(1.0, input="Just a moment.")
+    actions.add_llm(content="Order 42 is on the way.", input="order 42 shipped")
+    actions.add_tts(1.0)
+
+    class SlowToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def lookup_order(self, context: RunContext) -> str:
+            async with context.with_filler("Just a moment.", delay=0.5):
+                await asyncio.sleep(8.0)
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    user_state_events: list[UserStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+    session.on("user_state_changed", user_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SlowToolAgent(), drain_delay=10), timeout=SESSION_TIMEOUT
+    )
+
+    # both the reply and the filler end while the tool is still running, so each
+    # must hand back "thinking", not "listening" (which arms the user-away timer)
+    speaking_ends = [ev.new_state for ev in agent_state_events if ev.old_state == "speaking"]
+    assert speaking_ends == ["thinking", "thinking", "listening"]
+    assert all(ev.new_state != "away" for ev in user_state_events)
+
+
+async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="silent_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def silent_lookup(self, context: RunContext) -> None:
+            """A slow tool that returns nothing, so no reply follows it."""
+            await asyncio.sleep(8.0)
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    agent_state_events: list[AgentStateChangedEvent] = []
+    session.on("agent_state_changed", agent_state_events.append)
+
+    await asyncio.wait_for(
+        run_session(session, SilentToolAgent(), drain_delay=20), timeout=SESSION_TIMEOUT
+    )
+
+    # the tool holds the agent in "thinking", and nothing follows it to hand the turn back
+    transitions = [(ev.old_state, ev.new_state) for ev in agent_state_events]
+    assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
+
+
+async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+    """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> str:
+            """Look an order up in the background."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+            return "order 42 shipped"
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    # the agent is genuinely listening while the tool runs, so nothing but the tool holds
+    # the window off; landing restarts it in full rather than firing on what was left
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
+
+
+async def test_async_tool_without_a_reply_still_restarts_the_away_window() -> None:
+    """A tool returning ``None`` after an update files no reply, so nothing else can
+    restart the window it held off."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Look up my order")
+    actions.add_llm(
+        content="Let me check.",
+        tool_calls=[FunctionToolCall(name="async_lookup", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(
+        content="I'm looking it up.",
+        input=UPDATE_TEMPLATE.format(
+            function_name="async_lookup", call_id="1", message="looking it up"
+        ),
+    )
+    actions.add_tts(1.0)
+
+    tool_returned_at = 0.0
+
+    class AsyncToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def async_lookup(self, context: RunContext) -> None:
+            """Look an order up in the background and say nothing more."""
+            nonlocal tool_returned_at
+            await context.update("looking it up")
+            await asyncio.sleep(20.0)
+            tool_returned_at = time.time()
+
+    session = create_session(actions, extra_kwargs={"user_away_timeout": 3.0})
+
+    away_times: list[float] = []
+    session.on(
+        "user_state_changed",
+        lambda ev: away_times.append(time.time()) if ev.new_state == "away" else None,
+    )
+
+    await asyncio.wait_for(
+        run_session(session, AsyncToolAgent(), drain_delay=40), timeout=SESSION_TIMEOUT
+    )
+
+    assert len(away_times) == 1
+    assert away_times[0] >= tool_returned_at + 3.0
 
 
 @pytest.mark.parametrize(
@@ -1130,19 +1302,26 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
 
     try:
         recognition._on_start_of_agent_speech(started_at=time.time())
-        # backchannels during the cooldown are dropped (they are a no-op anyway,
-        # but this guards against the gate firing on `on_interruption`)
-        await recognition._on_overlap_speech_event(_backchannel_event())
+        # backchannels during the cooldown are dropped
+        event = _backchannel_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert hooks.interruptions == []
 
         # a real interruption during the cooldown must still fire
-        await recognition._on_overlap_speech_event(_interruption_event())
+        event = _interruption_event()
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
         assert len(hooks.interruptions) == 1
 
         # after cooldown, both event types behave normally
         await asyncio.sleep(0.06)
-        await recognition._on_overlap_speech_event(_backchannel_event())
-        await recognition._on_overlap_speech_event(_interruption_event())
+        backchannel_event = _backchannel_event()
+        hooks.on_overlap_speech(backchannel_event)
+        recognition._on_overlap_speech_event(backchannel_event)
+        interruption_event = _interruption_event()
+        hooks.on_overlap_speech(interruption_event)
+        recognition._on_overlap_speech_event(interruption_event)
         assert len(hooks.interruptions) == 2
     finally:
         await _close_test_session(session)
@@ -1214,35 +1393,38 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         vad=None,
         using_default_vad=False,
         interruption_detection=None,
-        turn_detection="vad",
+        turn_detection="manual",
     )
     recognition._interruption_enabled = True
     recognition._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
-    input_started_at = time.time() - 10.0
-    # the input anchor lives on the STT pipeline (see _STTPipeline.input_started_at)
-    recognition._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)  # type: ignore[assignment]
 
     try:
-        # the agent speaks for a couple of seconds so the held transcript still lands
-        # after the agent-speech start (the lower bound of the ignore window)
-        recognition._on_start_of_agent_speech(started_at=time.time() - 2.0)
-        speech_ended_at = time.time()
-        recognition._on_end_of_agent_speech(ignore_user_transcript_until=speech_ended_at)
-
-        assert not recognition._should_hold_stt_event(
+        recognition._on_start_of_agent_speech(started_at=8.0)
+        recognition._on_start_of_speech(started_at=8.1)
+        await recognition._on_stt_event(
+            _final_transcript_event(
+                text="before the boundary", start_time=0.0, end_time=0.0, created_at=9.0
+            )
+        )
+        await recognition._on_stt_event(
             _final_transcript_event(
                 text="near the boundary",
-                start_time=speech_ended_at - input_started_at - 0.25,
-                end_time=speech_ended_at - input_started_at,
+                start_time=10_000.0,
+                end_time=20_000.0,
+                created_at=9.75,
             )
         )
-        assert recognition._should_hold_stt_event(
+        recognition._on_end_of_agent_speech(ended_at=10.0)
+        await recognition._on_stt_event(
             _final_transcript_event(
-                text="before the boundary",
-                start_time=speech_ended_at - input_started_at - 0.75,
-                end_time=speech_ended_at - input_started_at - 0.5,
+                text="after agent", start_time=0.0, end_time=0.0, created_at=10.1
             )
         )
+
+        assert recognition._hooks.final_transcripts == [  # type: ignore[attr-defined]
+            "near the boundary",
+            "after agent",
+        ]
     finally:
         recognition._interruption_ch.close()
         await _close_test_session(session)
@@ -1407,6 +1589,7 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"
+        assert ev.created_at > 0
         assert attempts == 2
     finally:
         await pipeline.aclose()
@@ -1588,7 +1771,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
         await _close_test_session(session)
 
 
-async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
+async def test_flush_held_transcripts_emits_buffered_events() -> None:
     actions = FakeActions()
     session = create_session(actions)
     hooks = _TestRecognitionHooks()
@@ -1607,7 +1790,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
     )
 
     try:
-        await recognition._flush_held_transcripts(cooldown=0.0, force=True)
+        recognition._flush_held_transcripts()
 
         assert hooks.final_transcripts == ["held transcript"]
         assert not recognition._transcript_buffer
@@ -1615,7 +1798,7 @@ async def test_force_flush_held_transcripts_emits_buffered_events() -> None:
         await _close_test_session(session)
 
 
-async def test_held_final_transcript_cancels_transcription_timeout() -> None:
+async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
     session = create_session(FakeActions())
     hooks = _TestRecognitionHooks()
     recognition = AudioRecognition(
@@ -1626,10 +1809,9 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         vad=None,
         using_default_vad=False,
         interruption_detection=None,
-        turn_detection="vad",
+        turn_detection="manual",
     )
-    recognition._interruption_enabled = True
-    recognition._agent_speaking = True
+    recognition._transcript_gate_active = True
     timeout_handle = asyncio.get_running_loop().call_later(60.0, lambda: None)
     recognition._transcription_timeout_handle = timeout_handle
     event = _final_transcript_event(text="held transcript", start_time=0.0, end_time=1.0)
@@ -1641,8 +1823,59 @@ async def test_held_final_transcript_cancels_transcription_timeout() -> None:
         assert recognition._turn_transcript_received
         assert list(recognition._transcript_buffer) == [event]
         assert hooks.final_transcripts == []
+
+        recognition._flush_held_transcripts()
+
+        assert timeout_handle.cancelled()
+        assert recognition._turn_transcript_received
+        assert hooks.final_transcripts == ["held transcript"]
+        assert recognition._current_transcript == "held transcript"
     finally:
         timeout_handle.cancel()
+        await _close_test_session(session)
+
+
+async def test_true_verdict_releases_late_transcripts() -> None:
+    session = create_session(FakeActions())
+    hooks = _TestRecognitionHooks()
+    recognition = AudioRecognition(
+        session,
+        hooks=hooks,
+        endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
+        stt=None,
+        vad=None,
+        using_default_vad=False,
+        interruption_detection=None,
+        turn_detection="manual",
+    )
+    recognition._transcript_gate_active = True
+    recognition._agent_speaking = True
+    recognition._agent_speech_started_at = time.time() - 1.0
+    overlap_started_at = time.time() - 0.5
+    recognition._transcript_buffer.append(
+        _final_transcript_event(
+            text="already held",
+            start_time=0.0,
+            end_time=0.0,
+            created_at=overlap_started_at,
+        )
+    )
+
+    try:
+        event = inference.OverlappingSpeechEvent(
+            is_interruption=True,
+            overlap_started_at=overlap_started_at,
+        )
+        hooks.on_overlap_speech(event)
+        recognition._on_overlap_speech_event(event)
+        await recognition._on_stt_event(
+            _final_transcript_event(text="arrived later", start_time=0.0, end_time=0.0)
+        )
+
+        assert hooks.final_transcripts == ["already held", "arrived later"]
+        assert len(hooks.interruptions) == 1
+        assert not recognition._transcript_buffer
+    finally:
         await _close_test_session(session)
 
 
@@ -2088,9 +2321,11 @@ class _TestRecognitionHooks:
     def __init__(self) -> None:
         self.interruptions: list[inference.OverlappingSpeechEvent] = []
         self.final_transcripts: list[str] = []
+        self.interruption_by_audio_activity_enabled = False
 
-    def on_interruption(self, ev: inference.OverlappingSpeechEvent) -> None:
-        self.interruptions.append(ev)
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None:
+        if ev.is_interruption:
+            self.interruptions.append(ev)
 
     def on_backchannel_confirmed(self) -> None:
         pass
@@ -2138,8 +2373,10 @@ def _backchannel_event() -> inference.OverlappingSpeechEvent:
     )
 
 
-def _final_transcript_event(*, text: str, start_time: float, end_time: float) -> SpeechEvent:
-    return SpeechEvent(
+def _final_transcript_event(
+    *, text: str, start_time: float, end_time: float, created_at: float | None = None
+) -> SpeechEvent:
+    ev = SpeechEvent(
         type=SpeechEventType.FINAL_TRANSCRIPT,
         alternatives=[
             SpeechData(
@@ -2150,6 +2387,9 @@ def _final_transcript_event(*, text: str, start_time: float, end_time: float) ->
             )
         ],
     )
+    if created_at is not None:
+        ev.created_at = created_at
+    return ev
 
 
 async def _close_test_session(session: object) -> None:

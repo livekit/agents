@@ -1,13 +1,11 @@
-"""`inference.STT` must not claim word-aligned transcripts for models with no word data.
+"""Test inference STT alignment claims and adaptive-interruption eligibility.
 
 The gateway's Cartesia Ink-2 translator emits ``Words: []`` with ``Start`` = the
 audio-time offset and ``Duration`` = billed audio bytes / bytes-per-second — a billing
 figure, not the utterance span. Cartesia's Turns API sends no word timings to forward.
 
-That flag is load-bearing: `AgentActivity._resolve_interruption_detection` uses it as the
-`can_gatekeep` test for enabling adaptive interruption, which then disables the fast
-VAD interruption path once the backchannel boundary expires. So a false claim costs
-barge-in latency on exactly the models least able to make up for it.
+Adaptive interruption uses local STT arrival times and VAD state. The alignment claim
+still describes provider output, but it does not control adaptive-interruption eligibility.
 """
 
 from __future__ import annotations
@@ -25,10 +23,8 @@ from livekit.agents import (
     inference,
 )
 from livekit.agents.inference.stt import SpeechStream as InferenceSpeechStream
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.agent_activity import AgentActivity
-from livekit.agents.voice.audio_recognition import AudioRecognition
 
 from .fake_llm import FakeLLM
 from .fake_stt import FakeUserSpeech
@@ -140,85 +136,21 @@ def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     assert data.end_time == 12.5
 
 
-def _recognition_awaiting_flush(
-    *, ignore_until: float, input_started_at: float
-) -> AudioRecognition:
-    """An AudioRecognition mid-ignore-window, as it sits just after agent speech ends."""
-    ar = AudioRecognition.__new__(AudioRecognition)
-    ar._interruption_enabled = True
-    ar._agent_speaking = False
-    ar._ignore_user_transcript_until = ignore_until
-    # _input_started_at is a read-only property over the STT pipeline
-    ar._stt_pipeline = SimpleNamespace(input_started_at=input_started_at)
-    ar._agent_speech_started_at = input_started_at
-    return ar
-
-
-def _final(*, start_time: float, end_time: float) -> SpeechEvent:
-    return SpeechEvent(
-        type=SpeechEventType.FINAL_TRANSCRIPT,
-        alternatives=[
-            SpeechData(
-                text="are you open on sunday",
-                language="en",
-                start_time=start_time,
-                end_time=end_time,
-            )
-        ],
-    )
-
-
-def test_gateway_timestamps_defeat_the_transcript_gate() -> None:
-    """Adaptive interruption's transcript gate cannot act on the gateway's Ink-2 output.
-
-    `_should_hold_stt_event` requires ``start_time > 0``, and the gateway pins ``start`` to
-    the audio-time offset — 0 until a reconnect. So the half of adaptive interruption that
-    is supposed to gatekeep transcripts is inert for this model, even though its
-    ``aligned_transcript`` claim is what switched adaptive on.
-    """
-    import time
-
-    now = time.time()
-    ar = _recognition_awaiting_flush(ignore_until=now + 1.0, input_started_at=now - 5.0)
-
-    gateway_shaped = _final(start_time=0.0, end_time=12.5)
-    properly_aligned = _final(start_time=4.5, end_time=5.2)
-
-    assert ar._should_hold_stt_event(gateway_shaped) is False
-    assert ar._should_hold_stt_event(properly_aligned) is True
-
-
-def test_reconnect_offset_makes_the_gate_use_a_billing_span() -> None:
-    """After a reconnect the gate does engage — on a window derived from billed bytes.
-
-    `RecognizeStream` accumulates `start_time_offset` across retries, so post-reconnect
-    ``start_time > 0`` and the hold decision is made with ``end_time - start_time`` equal
-    to the audio billed since the previous turn.
-    """
-    import time
-
-    now = time.time()
-    ar = _recognition_awaiting_flush(ignore_until=now + 1.0, input_started_at=now - 5.0)
-
-    # offset 4.5s after a reconnect; duration is still the 12.5s billing figure
-    post_reconnect = _final(start_time=4.5, end_time=17.0)
-    assert ar._should_hold_stt_event(post_reconnect) is True
-    assert (
-        post_reconnect.alternatives[0].end_time - post_reconnect.alternatives[0].start_time == 12.5
-    )
-
-
-def _build_session(*, aligned_transcript: object, mode: str | None = None) -> AgentSession:
+def _build_session(
+    *, aligned_transcript: object, mode: str | None = None, streaming: bool = True
+) -> AgentSession:
     speech = FakeUserSpeech(start_time=0.5, end_time=2.0, transcript="hello", stt_delay=0.0)
     interruption = InterruptionOptions(resume_false_interruption=False)
     if mode is not None:
         interruption["mode"] = mode  # type: ignore[typeddict-item]
+    stt_impl = TurnScriptedSTT(
+        turns=[ScriptedTurn(speech_start=0.55, final_at=2.6, final_text="hello")],
+        aligned_transcript=aligned_transcript,  # type: ignore[arg-type]
+    )
+    stt_impl._capabilities.streaming = streaming
     return AgentSession[None](
         vad=FakeVAD(fake_user_speeches=[speech]),
-        stt=TurnScriptedSTT(
-            turns=[ScriptedTurn(speech_start=0.55, final_at=2.6, final_text="hello")],
-            aligned_transcript=aligned_transcript,  # type: ignore[arg-type]
-        ),
+        stt=stt_impl,
         llm=FakeLLM(fake_responses=[]),
         tts=FakeTTS(fake_responses=[]),
         turn_handling=TurnHandlingOptions(
@@ -232,30 +164,48 @@ def _build_session(*, aligned_transcript: object, mode: str | None = None) -> Ag
 
 
 @pytest.mark.parametrize(
-    ("aligned_transcript", "expect_adaptive"),
+    "aligned_transcript",
     [
-        pytest.param("word", True, id="claims-word-alignment"),
-        pytest.param(False, False, id="reports-no-alignment"),
+        pytest.param("word", id="claims-word-alignment"),
+        pytest.param(False, id="reports-no-alignment"),
     ],
 )
-def test_alignment_claim_alone_enables_adaptive_interruption(
+def test_alignment_claim_does_not_control_adaptive_interruption(
     aligned_transcript: object,
-    expect_adaptive: bool,
     monkeypatch: pytest.MonkeyPatch,
     _fake_credentials: None,
 ) -> None:
-    """Only the capability flag differs, yet it decides whether adaptive interruption runs.
-
-    Dev mode (`lk agent dev` / `console`) and LiveKit Cloud hosted agents auto-enable
-    adaptive; plain production leaves it off unless `interruption.mode` is set.
-    """
+    """Dev mode enables adaptive interruption for aligned and unaligned STTs."""
     monkeypatch.setenv("LIVEKIT_DEV_MODE", "1")
 
     session = _build_session(aligned_transcript=aligned_transcript)
     # AgentActivity resolves interruption detection in __init__, before any I/O starts
     activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
 
-    assert activity._interruption_detection_enabled is expect_adaptive
+    assert activity._interruption_detection_enabled is True
+
+
+def test_non_streaming_stt_can_use_adaptive_interruption(
+    monkeypatch: pytest.MonkeyPatch, _fake_credentials: None
+) -> None:
+    monkeypatch.setenv("LIVEKIT_DEV_MODE", "1")
+
+    session = _build_session(aligned_transcript=False, streaming=False)
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+
+    assert activity._interruption_detection_enabled is True
+
+
+def test_explicit_adaptive_mode_accepts_unaligned_stt(
+    monkeypatch: pytest.MonkeyPatch, _fake_credentials: None
+) -> None:
+    monkeypatch.delenv("LIVEKIT_DEV_MODE", raising=False)
+    monkeypatch.delenv("LIVEKIT_REMOTE_EOT_URL", raising=False)
+
+    session = _build_session(aligned_transcript=False, mode="adaptive")
+    activity = AgentActivity(Agent(instructions="You are a helpful assistant."), session)
+
+    assert activity._interruption_detection_enabled is True
 
 
 def test_adaptive_stays_off_in_plain_production(

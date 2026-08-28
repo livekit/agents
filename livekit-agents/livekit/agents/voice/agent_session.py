@@ -58,6 +58,8 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    ToolCallEnded,
+    ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
@@ -74,7 +76,7 @@ from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
+from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -707,6 +709,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_events: list[AgentEvent] = []
         self._started_at: float | None = None
         self._usage_collector = ModelUsageCollector()
+        self._redaction_enabled = False
+        self._warned_realtime_audio_redaction = False
 
         # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
@@ -920,6 +924,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             self._opts.recording_options = _resolve_recording_options(False)
 
                 job_ctx.init_recording(self._opts.recording_options)
+
+            self._redaction_enabled = bool(
+                self._opts.recording_options["redaction"]
+                or (job_ctx and job_ctx.job.enable_redaction)
+            )
 
             # hosting needs the primary designation as before, and the caller's consent
             hosting = is_primary and (session_host if is_given(session_host) else True)
@@ -1409,7 +1418,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if transcript is not None:
             logger.debug(
                 "IVR detection started with transcript",
-                extra={"transcript": transcript},
+                extra={"lk.pii.transcript": transcript},
             )
             self._ivr_activity._on_user_input_transcribed(
                 UserInputTranscribedEvent(transcript=transcript, is_final=True)
@@ -1435,7 +1444,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # attach to the session span if called outside of the AgentSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
-            use_span = trace.use_span(self._session_span, end_on_exit=False)
+            use_span = tracer.use_span(self._session_span, end_on_exit=False)
 
         with use_span:
             handle = activity.say(
@@ -1502,7 +1511,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # attach to the session span if called outside of the AgentSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
-            use_span = trace.use_span(self._session_span, end_on_exit=False)
+            use_span = tracer.use_span(self._session_span, end_on_exit=False)
 
         with use_span:
             handle = activity._generate_reply(
@@ -1875,6 +1884,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
+        if _RunningTasks.get(self):
+            # a tool in flight will speak when it lands; the window restarts then (#6883)
+            return
+
         if (
             (room_io := self._room_io)
             and room_io.subscribed_fut
@@ -2051,12 +2064,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if text := message.raw_text_content:
             logger.debug(
                 "conversation_item_added",
-                extra={"role": message.role, "text": text},
+                extra={"role": message.role, "lk.pii.text": text},
             )
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
         self._chat_ctx.insert(items)
+
+    def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
+        if (
+            isinstance(ev.update, ToolCallEnded)
+            and self._user_state == "listening"
+            and self._agent_state == "listening"
+        ):
+            # tools hold the window off, so the last one to land restarts it (#6883)
+            self._set_user_away_timer()
+
+        self.emit("tool_execution_updated", ev)
 
     def _config_update_added(self, item: llm.AgentConfigUpdate) -> None:
         self._chat_ctx.insert(item)

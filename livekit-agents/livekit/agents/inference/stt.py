@@ -68,8 +68,10 @@ XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
+    "speechmatics/linden-1",
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
+GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -152,19 +154,19 @@ class ElevenlabsOptions(TypedDict, total=False):
 class SpeechmaticsOptions(TypedDict, total=False):
     domain: str  # e.g. "finance"
     output_locale: str  # BCP-47 locale for output formatting
-    max_delay: float  # 0.7-4.0 seconds, default 1.0
-    max_delay_mode: str  # "flexible" | "fixed"
+    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: str  # "flexible" | "fixed"; RT only
     diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
     speaker_sensitivity: float  # 0.0-1.0
     max_speakers: int
     prefer_current_speaker: bool
     enable_partials: bool  # default True (overridden by gateway)
-    enable_entities: bool
+    enable_entities: bool  # RT only
     punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]
-    end_of_utterance_silence_trigger: float  # seconds of silence before final
-    audio_filtering_config: dict[str, Any]
-    transcript_filtering_config: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]  # RT only
+    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    audio_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
@@ -184,6 +186,14 @@ class InworldOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
     prompts: list[str]
     vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class GoogleOptions(TypedDict, total=False):
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -229,6 +239,9 @@ def _keyterms_extra_for_model(
 
     extra_kwargs = extra_kwargs or {}
     session_keyterms = session_keyterms or []
+
+    if model == "speechmatics/linden-1":
+        return None
 
     if model.startswith("speechmatics/"):
         # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
@@ -339,16 +352,19 @@ def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics = (
-        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    is_speechmatics_rt = (
+        is_given(model)
+        and isinstance(model, str)
+        and model.startswith("speechmatics/")
+        and model != "speechmatics/linden-1"
     )
-    if vad_instance is not None and not is_speechmatics:
+    if vad_instance is not None and not is_speechmatics_rt:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics and vad_instance is None:
+    if is_speechmatics_rt and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -379,6 +395,7 @@ STTModels = (
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
+    | GoogleModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -543,6 +560,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: GoogleModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -578,6 +612,7 @@ class STT(stt.STT):
             | XaiOptions
             | SpeechmaticsOptions
             | InworldOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -600,7 +635,8 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to Speechmatics models.
+                gateway on end of speech. Only applicable to the Speechmatics RT models
+                (enhanced/standard); linden-1 detects turns server-side.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as

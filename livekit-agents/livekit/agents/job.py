@@ -43,6 +43,8 @@ from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
+    ATTRIBUTE_SIMULATION_JOB_ID,
+    ATTRIBUTE_SIMULATION_RUN_ID,
     ATTRIBUTE_SIMULATOR,
     ATTRIBUTE_SIMULATOR_DISPATCH,
     NotGivenOr,
@@ -235,6 +237,7 @@ class JobContext:
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
+        self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
 
     def _on_setup(self) -> None:
@@ -797,11 +800,16 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
+        redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
+            raise ValueError("audio upload requires transcript upload when redaction is enabled")
+
         if self._recording_initialized:
             self._stop_log_buffering()
             return
 
         self._recording_initialized = True
+        self._redaction_enabled = redaction_enabled
 
         needs_cloud = (
             options.get("traces", True)
@@ -871,8 +879,15 @@ class JobContext:
 
     def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
-        if self.simulation_context() is not None:
+        if (sim := self.simulation_context()) is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
+            # The run/job ids ride every span and log so a run can be aggregated as a
+            # whole. Omitted when blank rather than sent empty: an absent attribute
+            # reads as "not a simulation" downstream, an empty one as a run named "".
+            if sim.simulation_run_id:
+                metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim.simulation_run_id
+            if sim.simulation_job_id:
+                metadata[ATTRIBUTE_SIMULATION_JOB_ID] = sim.simulation_job_id
         if options and options.get("redaction", False):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None

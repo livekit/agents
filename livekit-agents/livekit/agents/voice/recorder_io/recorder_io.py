@@ -5,10 +5,10 @@ import contextlib
 import queue
 import threading
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import av
 import numpy as np
@@ -17,17 +17,117 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
-from ...utils.audio import silence_frame as _create_silence_frame
 from .. import io
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
-# the recorder currently assume the input is a continous uninterrupted audio stream
-
+# Both channels sit on one absolute timeline: the user's audio where it arrived, the agent's
+# where the device reports it played. Silence is whatever nothing was written over.
 
 WRITE_INTERVAL = 2.5
 FFMPEG_STRICT_LEVEL = "experimental"
+
+# how long the writer waits on a source that stopped delivering before taking the silence as real
+INPUT_STALL_TIMEOUT = 1.0
+
+# a run continues while its own clock stays this close to the timestamps coming in; re-anchoring
+# beyond it keeps a drifting capture clock from sliding the channel
+RESYNC_TOLERANCE = 0.1
+
+
+@dataclass
+class _Captured:
+    channel: int
+    started_at: float
+    frame: rtc.AudioFrame
+
+
+@dataclass
+class _Flush:
+    until: float
+
+
+class _Track:
+    """One channel of the recording, holding runs of audio placed on the absolute timeline."""
+
+    def __init__(self, *, sample_rate: int, t0: float) -> None:
+        self._sample_rate = sample_rate
+        self._t0 = t0
+        self._placed: list[tuple[int, np.ndarray]] = []  # (start sample, mono float32)
+        self._resampler: rtc.AudioResampler | None = None
+        self._source_rate: int | None = None
+        self._run_start: float | None = None
+        self._run_samples = 0
+        self.dropped_samples = 0
+
+    def _resample(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+        """Mono frames at the recording rate, of which the resampler may still hold some back."""
+        data = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+        mono = data.mean(axis=1).astype(np.int16) if frame.num_channels > 1 else data[:, 0]
+        mono_frame = rtc.AudioFrame(
+            data=mono.tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=1,
+            samples_per_channel=len(mono),
+        )
+        if frame.sample_rate == self._sample_rate:
+            return [mono_frame]
+
+        if self._resampler is None or self._source_rate != frame.sample_rate:
+            self._source_rate = frame.sample_rate
+            self._resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate, output_rate=self._sample_rate, num_channels=1
+            )
+
+        return self._resampler.push(mono_frame)
+
+    def push(self, started_at: float, frame: rtc.AudioFrame) -> None:
+        """Add audio that began at ``started_at``, extending the open run where it fits."""
+
+        def _place(frames: list[rtc.AudioFrame]) -> None:
+            if not frames:
+                return
+
+            assert self._run_start is not None
+            joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
+            samples = joined.astype(np.float32) / 32768.0
+            start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+            self._placed.append((start, samples))
+            self._run_samples += len(samples)
+
+        expected = (
+            None
+            if self._run_start is None
+            else self._run_start + self._run_samples / self._sample_rate
+        )
+        if expected is None or abs(started_at - expected) > RESYNC_TOLERANCE:
+            if self._resampler is not None:
+                # whatever the resampler still holds is the tail of the run that just ended
+                _place(self._resampler.flush())
+            self._run_start, self._run_samples = started_at, 0
+
+        _place(self._resample(frame))
+
+    def take(self, start: int, end: int) -> np.ndarray:
+        """The channel over ``[start, end)``, silent wherever nothing was placed."""
+        block = np.zeros(max(0, end - start), dtype=np.float32)
+        keep: list[tuple[int, np.ndarray]] = []
+        for pos, samples in self._placed:
+            stop = pos + len(samples)
+            if stop <= start:
+                self.dropped_samples += len(samples)
+                continue
+            if pos >= end:
+                keep.append((pos, samples))
+                continue
+
+            lo, hi = max(pos, start), min(stop, end)
+            block[lo - start : hi - start] += samples[lo - pos : hi - pos]
+            if stop > end:
+                keep.append((end, samples[end - pos :]))
+        self._placed = keep
+        return block
 
 
 class RecorderIO:
@@ -41,8 +141,7 @@ class RecorderIO:
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
-        self._in_q: queue.Queue[list[rtc.AudioFrame] | None] = queue.Queue()
-        self._out_q: queue.Queue[list[rtc.AudioFrame] | None] = queue.Queue()
+        self._q: queue.Queue[_Captured | _Flush | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
         self._started = False
@@ -50,9 +149,10 @@ class RecorderIO:
         self._lock = asyncio.Lock()
         self._close_fut: asyncio.Future[None] = self._loop.create_future()
         self._output_path: Path | None = None
-        self._forward_atask: asyncio.Task[None] | None = None
+        self._write_atask: asyncio.Task[None] | None = None
 
-        self._skip_padding_warning = False
+        self._t0: float | None = None
+        self._input_settled: float = 0.0
 
     async def start(self, *, output_path: str | Path) -> None:
         async with self._lock:
@@ -61,15 +161,15 @@ class RecorderIO:
 
             if not self._in_record or not self._out_record:
                 raise RuntimeError(
-                    "RecorderIO not properly initialized: both `record_input()` and `record_output()` "
-                    "must be called before starting the recorder."
+                    "RecorderIO not properly initialized: both `record_input()` and "
+                    "`record_output()` must be called before starting the recorder."
                 )
 
             self._output_path = Path(output_path)
             self._started = True
-            self._skip_padding_warning = False
             self._close_fut = self._loop.create_future()
-            self._forward_atask = asyncio.create_task(self._forward_task())
+            self._t0 = self._input_settled = time.time()
+            self._write_atask = asyncio.create_task(self._write_task())
 
             thread = threading.Thread(
                 target=self._encode_thread, daemon=True, name="recorder_io_encode_thread"
@@ -81,22 +181,34 @@ class RecorderIO:
             if not self._started:
                 return
 
-            if self._forward_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_atask)
-                self._forward_atask = None
+            if self._write_atask is not None:
+                await utils.aio.cancel_and_wait(self._write_atask)
+                self._write_atask = None
 
-            self._in_q.put_nowait(None)
-            self._out_q.put_nowait(None)
+            self._q.put_nowait(_Flush(until=time.time()))
+            self._q.put_nowait(None)
             await asyncio.shield(self._close_fut)
             self._started = False
 
     def record_input(self, audio_input: io.AudioInput) -> RecorderAudioInput:
-        self._in_record = RecorderAudioInput(recording_io=self, source=audio_input)
+
+        def on_frame(started_at: float, frame: rtc.AudioFrame) -> None:
+            # a contiguous stream, so what has arrived is exactly what is settled
+            self._input_settled = started_at + frame.duration
+            self._q.put_nowait(_Captured(channel=0, started_at=started_at, frame=frame))
+
+        self._in_record = RecorderAudioInput(
+            recording_io=self, source=audio_input, on_frame=on_frame
+        )
         return self._in_record
 
     def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
+
+        def on_played(started_at: float, frame: rtc.AudioFrame) -> None:
+            self._q.put_nowait(_Captured(channel=1, started_at=started_at, frame=frame))
+
         self._out_record = RecorderAudioOutput(
-            recording_io=self, audio_output=audio_output, write_fnc=self._write_cb
+            recording_io=self, audio_output=audio_output, on_played=on_played
         )
         return self._out_record
 
@@ -110,46 +222,24 @@ class RecorderIO:
 
     @property
     def recording_started_at(self) -> float | None:
-        in_t = self._in_record.started_wall_time if self._in_record else None
-        out_t = self._out_record.started_wall_time if self._out_record else None
+        return self._t0
 
-        if in_t is None:
-            return out_t
-
-        if out_t is None:
-            return in_t
-
-        return min(in_t, out_t)
-
-    def _write_cb(self, buf: list[rtc.AudioFrame]) -> None:
-        assert self._in_record is not None
-
-        input_buf = self._in_record.take_buf(
-            pad_since=self._out_record._last_speech_end_time if self._out_record else None
-        )
-        self._in_q.put_nowait(input_buf)
-        self._out_q.put_nowait(buf)
-
-    async def _forward_task(self) -> None:
-        assert self._in_record is not None
+    async def _write_task(self) -> None:
         assert self._out_record is not None
 
-        # Forward the input audio to the encoder every WRITE_INTERVAL seconds.
         while True:
             await asyncio.sleep(WRITE_INTERVAL)
-            if self._out_record.has_pending_data:
-                # if the output is currenetly playing audio, wait for it to stay in sync
-                continue  # always wait for the complete output
 
-            input_buf = self._in_record.take_buf(pad_since=self._out_record._last_speech_end_time)
-            self._in_q.put_nowait(input_buf)
-            self._out_q.put_nowait([])
+            # a source gone quiet would hold the writer forever, so it is only waited on so long
+            settled = max(self._input_settled, time.time() - INPUT_STALL_TIMEOUT)
+            if pending := self._out_record.pending_since:
+                # a segment in flight has not said where its audio went
+                settled = min(settled, pending)
+
+            self._q.put_nowait(_Flush(until=settled))
 
     def _encode_thread(self) -> None:
-        GROW_FACTOR = 1.5
-        INV_INT16 = 1.0 / 32768.0
-
-        assert self._output_path is not None
+        assert self._output_path is not None and self._t0 is not None
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
 
         container = av.open(self._output_path, mode="w", format="ogg")
@@ -172,117 +262,25 @@ class RecorderIO:
         if codec_name == "opus":
             stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
 
-        in_resampler: rtc.AudioResampler | None = None
-        out_resampler: rtc.AudioResampler | None = None
-
-        capacity = self._sample_rate * 6  # 6s, 1ch
-        stereo_buf = np.zeros((2, capacity), dtype=np.float32)
-
-        def remix_and_resample(frames: list[rtc.AudioFrame], channel_idx: int) -> int:
-            total_samples = sum(f.samples_per_channel * f.num_channels for f in frames)
-
-            nonlocal capacity, stereo_buf
-            if total_samples > capacity:
-                while capacity < total_samples:
-                    capacity = int(capacity * GROW_FACTOR)
-
-                stereo_buf.resize((2, capacity), refcheck=False)
-
-            pos = 0
-            dest = stereo_buf[channel_idx]
-            for f in frames:
-                count = f.samples_per_channel * f.num_channels
-                arr_i16 = np.frombuffer(f.data, dtype=np.int16, count=count).reshape(
-                    -1, f.num_channels
-                )
-                slice_ = dest[pos : pos + f.samples_per_channel]
-                np.sum(arr_i16, axis=1, dtype=np.float32, out=slice_)
-                slice_ *= INV_INT16 / f.num_channels
-                pos += f.samples_per_channel
-
-            return pos
+        tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
+        cursor = 0
 
         try:
             with container:
-                while True:
-                    input_buf = self._in_q.get()
-                    output_buf = self._out_q.get()
-
-                    if input_buf is None or output_buf is None:
-                        break
-
-                    # lazy creation of the resamplers
-                    if in_resampler is None and len(input_buf):
-                        input_rate, num_channels = (
-                            input_buf[0].sample_rate,
-                            input_buf[0].num_channels,
-                        )
-                        in_resampler = rtc.AudioResampler(
-                            input_rate=input_rate,
-                            output_rate=self._sample_rate,
-                            num_channels=num_channels,
-                        )
-
-                    if out_resampler is None and len(output_buf):
-                        input_rate, num_channels = (
-                            output_buf[0].sample_rate,
-                            output_buf[0].num_channels,
-                        )
-                        out_resampler = rtc.AudioResampler(
-                            input_rate=input_rate,
-                            output_rate=self._sample_rate,
-                            num_channels=num_channels,
-                        )
-
-                    input_resampled = []
-                    for frame in input_buf:
-                        assert in_resampler is not None
-                        input_resampled.extend(in_resampler.push(frame))
-
-                    output_resampled = []
-                    for frame in output_buf:
-                        assert out_resampler is not None
-                        output_resampled.extend(out_resampler.push(frame))
-
-                    if output_buf:
-                        assert out_resampler is not None
-                        # the output is sent per-segment. Always flush when the playback is done
-                        output_resampled.extend(out_resampler.flush())
-
-                    len_left = remix_and_resample(input_resampled, 0)
-                    len_right = remix_and_resample(output_resampled, 1)
-
-                    if len_left != len_right:
-                        diff = abs(len_right - len_left)
-                        if len_left < len_right:
-                            if not self._skip_padding_warning:
-                                logger.warning(
-                                    f"Input is shorter by {diff} samples; silence has been prepended "
-                                    "to align the input channel. The resulting recording may not "
-                                    "accurately reflect the original audio. This is expected if the "
-                                    "input device or audio input is disabled. This warning will only "
-                                    "be shown once."
-                                )
-                                self._skip_padding_warning = True
-
-                            stereo_buf[0, diff : diff + len_left] = stereo_buf[0, :len_left]
-                            stereo_buf[0, :diff] = 0.0
-                            len_left = len_right
-                        else:
-                            stereo_buf[1, diff : diff + len_right] = stereo_buf[1, :len_right]
-                            stereo_buf[1, :diff] = 0.0
-                            len_right = len_left
-
-                    max_len = max(len_left, len_right)
-                    if max_len <= 0:
+                while (item := self._q.get()) is not None:
+                    if isinstance(item, _Captured):
+                        tracks[item.channel].push(item.started_at, item.frame)
                         continue
 
-                    stereo_slice = stereo_buf[:, :max_len]
-                    av_frame = av.AudioFrame.from_ndarray(
-                        stereo_slice, format="fltp", layout="stereo"
-                    )
-                    av_frame.sample_rate = self._sample_rate
+                    end = round((item.until - self._t0) * self._sample_rate)
+                    if end <= cursor:
+                        continue
 
+                    block = np.stack([t.take(cursor, end) for t in tracks])
+                    cursor = end
+
+                    av_frame = av.AudioFrame.from_ndarray(block, format="fltp", layout="stereo")
+                    av_frame.sample_rate = self._sample_rate
                     for packet in stream.encode(av_frame):
                         container.mux(packet)
 
@@ -291,6 +289,13 @@ class RecorderIO:
         except Exception:
             logger.exception("recorder encode thread failed; recording may be incomplete")
         finally:
+            for label, track in zip(("input", "output"), tracks, strict=True):
+                if track.dropped_samples:
+                    logger.warning(
+                        "recorder dropped audio that reached it after its place in the timeline "
+                        "had been written",
+                        extra={"channel": label, "samples": track.dropped_samples},
+                    )
 
             def resolve_close_fut() -> None:
                 if not self._close_fut.done():
@@ -301,49 +306,17 @@ class RecorderIO:
 
 
 class RecorderAudioInput(io.AudioInput):
-    def __init__(self, *, recording_io: RecorderIO, source: io.AudioInput) -> None:
+    def __init__(
+        self,
+        *,
+        recording_io: RecorderIO,
+        source: io.AudioInput,
+        on_frame: Callable[[float, rtc.AudioFrame], None],
+    ) -> None:
         super().__init__(label="RecorderIO", source=source)
         self.__audio_input = source
         self.__recording_io = recording_io
-        self.__acc_frames: list[rtc.AudioFrame] = []
-        self.__started_time: None | float = None
-        self.__padded: bool = False
-
-    @property
-    def started_wall_time(self) -> float | None:
-        return self.__started_time
-
-    def take_buf(self, pad_since: float | None = None) -> list[rtc.AudioFrame]:
-        frames = self.__acc_frames
-        self.__acc_frames = []
-        if (
-            pad_since
-            and self.__started_time
-            and (padding := self.__started_time - pad_since) > 0
-            and not self.__padded
-            and len(frames) > 0
-        ):
-            logger.warning(
-                "input speech started after last agent speech ended",
-                extra={
-                    "last_agent_speech_time": pad_since,
-                    "input_started_time": self.__started_time,
-                },
-            )
-            self.__padded = True
-            frames = [
-                _create_silence_frame(padding, frames[0].sample_rate, frames[0].num_channels),
-                *frames,
-            ]
-        # we could pad with silence here with some fixed SR and channels,
-        # but it's better for the user to know that this is happening
-        elif pad_since and self.__started_time is None and not self.__padded and not frames:
-            logger.warning(
-                "input speech hasn't started yet, skipping silence padding, "
-                "recording may be inaccurate until the speech starts"
-            )
-
-        return frames
+        self.__on_frame = on_frame
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame]:
         return self
@@ -352,10 +325,8 @@ class RecorderAudioInput(io.AudioInput):
         frame = await self.__audio_input.__anext__()
 
         if self.__recording_io.recording:
-            if self.__started_time is None:
-                self.__started_time = time.time()
-
-            self.__acc_frames.append(frame)
+            # frames carry no capture timestamp, so arrival is the clock
+            self.__on_frame(time.time() - frame.duration, frame)
 
         return frame
 
@@ -366,24 +337,20 @@ class RecorderAudioOutput(io.AudioOutput):
         *,
         recording_io: RecorderIO,
         audio_output: io.AudioOutput | None = None,
-        write_fnc: Callable[[list[rtc.AudioFrame]], Any],
+        on_played: Callable[[float, rtc.AudioFrame], None],
     ) -> None:
         super().__init__(
             label="RecorderIO",
             next_in_chain=audio_output,
-            # TODO: support pause
-            capabilities=io.AudioOutputCapabilities(pause=True),  # depends on the next_in_chain
+            capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self.__recording_io = recording_io
-        self.__write = write_fnc
-        self.__acc_frames: list[rtc.AudioFrame] = []
-        self.__started_time: None | float = None
-        self._last_speech_end_time: None | float = None
-        self._last_speech_start_time: None | float = None
-
-        # pause tracking
-        self.__current_pause_start: float | None = None
-        self.__pause_wall_times: list[tuple[float, float]] = []
+        self.__on_played = on_played
+        self.__acc: list[rtc.AudioFrame] = []
+        self.__pcm: np.ndarray | None = None  # the segment's frames, joined on first slice
+        self.__segment_since: float | None = None
+        self.__started_at: float | None = None
+        self.__reported = False
 
     @property
     def sample_rate(self) -> int | None:
@@ -392,38 +359,21 @@ class RecorderAudioOutput(io.AudioOutput):
         return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     @property
-    def started_wall_time(self) -> float | None:
-        return self.__started_time
+    def pending_since(self) -> float | None:
+        """Wall time from which the agent channel is unsettled, while a segment is in flight."""
+        return self.__segment_since
 
-    @property
-    def recorder_io(self) -> RecorderIO:
-        return self.__recording_io
+    def on_playback_started(self, *, created_at: float) -> None:
+        super().on_playback_started(created_at=created_at)
+        if self.__started_at is None:
+            self.__started_at = created_at
 
-    @property
-    def has_pending_data(self) -> bool:
-        return len(self.__acc_frames) > 0
+    def on_playback_progressed(self, *, started_at: float, offset: float, duration: float) -> None:
+        super().on_playback_progressed(started_at=started_at, offset=offset, duration=duration)
 
-    def pause(self) -> None:
-        """Pause playback and record the wall time."""
-        if self.__current_pause_start is None and self.__recording_io.recording:
-            self.__current_pause_start = time.time()
-
-        if self.next_in_chain:
-            self.next_in_chain.pause()
-
-    def resume(self) -> None:
-        """Resume playback and record the pause interval."""
-        if self.__current_pause_start is not None and self.__recording_io.recording:
-            self.__pause_wall_times.append((self.__current_pause_start, time.time()))
-            self.__current_pause_start = None
-
-        if self.next_in_chain:
-            self.next_in_chain.resume()
-
-    def _reset_pause_state(self) -> None:
-        """Reset all pause tracking state."""
-        self.__current_pause_start = None
-        self.__pause_wall_times = []
+        if self.__recording_io.recording:
+            self.__reported = True
+            self.__place(started_at=started_at, offset=offset, duration=duration)
 
     def on_playback_finished(
         self,
@@ -432,108 +382,52 @@ class RecorderAudioOutput(io.AudioOutput):
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
-        finish_time = self.__current_pause_start or time.time()
-        trailing_silence_duration = max(0.0, time.time() - finish_time)
-
-        if self._last_speech_start_time is None:
-            logger.warning(
-                "playback finished before speech started",
-                extra={
-                    "finish_time": finish_time,
-                    "playback_position": playback_position,
-                    "interrupted": interrupted,
-                },
-            )
-            playback_position = 0.0
-
-        playback_position = max(
-            0.0,
-            min(
-                finish_time - (self._last_speech_start_time or 0.0),
-                playback_position,
-            ),
-        )
-
         super().on_playback_finished(
             playback_position=playback_position,
             interrupted=interrupted,
             synchronized_transcript=synchronized_transcript,
         )
 
-        if not self.__recording_io.recording:
+        if self.__recording_io.recording and not self.__reported and self.__acc:
+            # the sink reports nothing of its own, so its endpoints describe the segment
+            self.__place(
+                started_at=self.__started_at
+                if self.__started_at is not None
+                else time.time() - playback_position,
+                offset=0.0,
+                duration=playback_position,
+            )
+
+        self.__acc = []
+        self.__pcm = None
+        self.__segment_since = None
+        self.__started_at = None
+        self.__reported = False
+
+    def __place(self, *, started_at: float, offset: float, duration: float) -> None:
+        """Hand the recorder the captured audio a report covers, at the time it played."""
+        if not self.__acc or duration <= 0:
             return
 
-        if self.__current_pause_start is not None:
-            self.__pause_wall_times.append((self.__current_pause_start, finish_time))
-            self.__current_pause_start = None
+        rate, channels = self.__acc[0].sample_rate, self.__acc[0].num_channels
+        if self.__pcm is None:
+            self.__pcm = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in self.__acc])
 
-        if not self.__acc_frames:
-            self._reset_pause_state()
-            self._last_speech_end_time = time.time()
-            self._last_speech_start_time = None
+        lo = round(offset * rate) * channels
+        hi = min(round((offset + duration) * rate) * channels, len(self.__pcm))
+        if hi <= lo:
             return
 
-        pause_events: deque[tuple[float, float]] = deque()  # (position, duration)
-        playback_start_time = finish_time - playback_position
-        if self.__pause_wall_times:
-            total_pause_duration = sum(end - start for start, end in self.__pause_wall_times)
-            playback_start_time = finish_time - playback_position - total_pause_duration
-
-            accumulated_pause = 0.0
-            for pause_start, pause_end in self.__pause_wall_times:
-                position = (pause_start - playback_start_time) - accumulated_pause
-                duration = pause_end - pause_start
-                position = max(0.0, min(position, playback_position))
-                pause_events.append((position, duration))
-                accumulated_pause += duration
-
-        buf: list[rtc.AudioFrame] = []
-        acc_dur = 0.0
-        sample_rate = self.__acc_frames[0].sample_rate
-        num_channels = self.__acc_frames[0].num_channels
-
-        should_break = False
-        for frame in self.__acc_frames:
-            if frame.duration + acc_dur > playback_position:
-                frame, _ = _split_frame(frame, playback_position - acc_dur)
-                should_break = True
-
-            # process any pauses before this frame starts
-            while pause_events and pause_events[0][0] <= acc_dur:
-                pause_pos, pause_dur = pause_events.popleft()
-                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
-
-            # process any pauses within this frame
-            while pause_events and pause_events[0][0] < acc_dur + frame.duration:
-                pause_pos, pause_dur = pause_events.popleft()
-                left, frame = _split_frame(frame, pause_pos - acc_dur)
-                buf.append(left)
-                acc_dur += left.duration
-                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
-
-            buf.append(frame)
-            acc_dur += frame.duration
-
-            if should_break:
-                break
-
-        while pause_events:
-            pause_pos, pause_dur = pause_events.popleft()
-            if pause_pos <= playback_position:
-                buf.append(_create_silence_frame(pause_dur, sample_rate, num_channels))
-
-        buf = [f for f in buf if f.duration > 0.0]
-        if buf:
-            if trailing_silence_duration > 0.0:
-                buf.append(
-                    _create_silence_frame(trailing_silence_duration, sample_rate, num_channels)
-                )
-            self.__write(buf)
-
-        self.__acc_frames = []
-        self._reset_pause_state()
-        self._last_speech_end_time = time.time()
-        self._last_speech_start_time = None
+        chunk = self.__pcm[lo:hi]
+        self.__on_played(
+            started_at,
+            rtc.AudioFrame(
+                data=chunk.tobytes(),
+                sample_rate=rate,
+                num_channels=channels,
+                samples_per_channel=len(chunk) // channels,
+            ),
+        )
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         if self.next_in_chain:
@@ -542,28 +436,10 @@ class RecorderAudioOutput(io.AudioOutput):
         await super().capture_frame(frame)
 
         if self.__recording_io.recording:
-            self.__acc_frames.append(frame)
-
-        if self.__started_time is None or self._last_speech_start_time is None:
-            capture_time = time.time()
-
-            if self.__started_time is None:
-                self.__started_time = capture_time
-
-            if self._last_speech_start_time is None:
-                # exclude pauses from before this segment.
-                self.__pause_wall_times = [
-                    (max(start, capture_time), end)
-                    for start, end in self.__pause_wall_times
-                    if end > capture_time
-                ]
-                # a pause cannot start before the segment
-                if self.__current_pause_start is not None:
-                    self.__current_pause_start = max(
-                        self.__current_pause_start,
-                        capture_time,
-                    )
-                self._last_speech_start_time = capture_time
+            if not self.__acc:
+                self.__segment_since = time.time()
+            self.__acc.append(frame)
+            self.__pcm = None
 
     def flush(self) -> None:
         super().flush()
@@ -574,44 +450,3 @@ class RecorderAudioOutput(io.AudioOutput):
     def clear_buffer(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
-
-
-def _split_frame(frame: rtc.AudioFrame, position: float) -> tuple[rtc.AudioFrame, rtc.AudioFrame]:
-    if position <= 0.0:
-        return rtc.AudioFrame(
-            data=b"",
-            num_channels=frame.num_channels,
-            samples_per_channel=0,
-            sample_rate=frame.sample_rate,
-        ), frame
-
-    if position >= frame.duration:
-        return frame, rtc.AudioFrame(
-            data=b"",
-            num_channels=frame.num_channels,
-            samples_per_channel=0,
-            sample_rate=frame.sample_rate,
-        )
-
-    samples_needed = min(int(position * frame.sample_rate), frame.samples_per_channel)
-
-    # `frame.data` is a memoryview of int16 samples (format "h"), so it is indexed in
-    # samples, not bytes. The split point in that buffer is `samples_per_channel` worth
-    # of interleaved samples across all channels.
-    split = samples_needed * frame.num_channels
-    data = frame.data
-
-    return (
-        rtc.AudioFrame(
-            data=bytes(data[:split]),
-            num_channels=frame.num_channels,
-            samples_per_channel=samples_needed,
-            sample_rate=frame.sample_rate,
-        ),
-        rtc.AudioFrame(
-            data=bytes(data[split:]),
-            num_channels=frame.num_channels,
-            samples_per_channel=frame.samples_per_channel - samples_needed,
-            sample_rate=frame.sample_rate,
-        ),
-    )
