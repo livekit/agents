@@ -49,7 +49,9 @@ Rime lifecycle as follows:
 
 You can send more text after `flush()`. A flush does not cause a `done` event and does not start a
 new synthesis context. A flush drains the current sentence tokenizer before it asks Coda to speak
-pending text. Later text continues in the same Coda context with a new tokenizer stream.
+pending text. Later text continues in the same Coda context with a new tokenizer stream. The
+tokenizer normally sends complete sentences. Calling `flush()` commits any buffered fragment,
+including an incomplete sentence. Call `flush()` only after a complete sentence or a stable clause.
 
 The first v1 implementation has these limits:
 
@@ -58,3 +60,6 @@ The first v1 implementation has these limits:
 - It does not provide aligned word timestamps.
 - `speed_alpha` is not supported. Use `time_scale_factor` to control speed.
 - The adapter uses the JSON `rime.v1.json` WebSocket subprotocol.
+- The adapter reuses WebSocket connections between sequential LiveKit streams. It does not run
+  concurrent Coda contexts on one WebSocket. Concurrent LiveKit streams use separate pooled
+  WebSocket connections.

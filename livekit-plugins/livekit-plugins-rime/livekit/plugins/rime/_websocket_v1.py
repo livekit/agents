@@ -148,6 +148,10 @@ async def run_context(
     """Run one LiveKit output turn as one Rime synthesis context."""
     context_started = asyncio.Event()
     input_complete = asyncio.Event()
+    input_ended = asyncio.Event()
+    server_started = asyncio.Event()
+    server_activity = asyncio.Event()
+    terminal_received = asyncio.Event()
     state = _ContextState()
 
     async def _send() -> None:
@@ -168,6 +172,7 @@ async def run_context(
 
         if state.active:
             await _send_envelope(ws, context_id, "end", {})
+            input_ended.set()
         else:
             input_complete.set()
             context_started.set()
@@ -186,7 +191,11 @@ async def run_context(
         if input_complete.is_set():
             return
         while True:
-            envelope = await _receive_envelope(ws, timeout=timeout)
+            # A live context can remain silent while it waits for more text after a
+            # flush. Start and terminal watchdogs enforce bounded waits where
+            # the protocol requires progress.
+            envelope = await _receive_envelope(ws, timeout=None)
+            server_activity.set()
             payload = _payload(envelope)
             if payload == "error" and not envelope.get("contextId", ""):
                 raise _rime_error(envelope["error"], fallback_request_id=state.request_id)
@@ -200,6 +209,7 @@ async def run_context(
                 ):
                     raise _ContaminatedConnection("Rime v1 sent a malformed started event")
                 state.server_started = True
+                server_started.set()
                 state.request_id = request_id
                 output_emitter.initialize(
                     request_id=request_id,
@@ -224,17 +234,49 @@ async def run_context(
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent done before started")
                 state.terminal = True
+                terminal_received.set()
                 output_emitter.end_input()
                 return
             elif payload == "cancelled":
+                terminal_received.set()
                 raise _ContaminatedConnection("Rime v1 cancelled an active context unexpectedly")
             elif payload == "error":
                 state.terminal = True
+                terminal_received.set()
                 raise _rime_error(envelope["error"], fallback_request_id=state.request_id)
             else:
                 raise _ContaminatedConnection(f"Unexpected Rime v1 event {payload!r}")
 
-    tasks = [asyncio.create_task(_send()), asyncio.create_task(_receive())]
+    async def _watch_started() -> None:
+        await context_started.wait()
+        if input_complete.is_set():
+            return
+        try:
+            await asyncio.wait_for(server_started.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise APITimeoutError("Timed out waiting for the Rime v1 started event") from None
+
+    async def _watch_terminal() -> None:
+        await context_started.wait()
+        if input_complete.is_set():
+            return
+        await input_ended.wait()
+
+        while not terminal_received.is_set():
+            server_activity.clear()
+            if terminal_received.is_set():
+                return
+            try:
+                await asyncio.wait_for(server_activity.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                raise APITimeoutError("Timed out waiting for a Rime v1 event after end") from None
+
+    tasks = [
+        asyncio.create_task(_send()),
+        asyncio.create_task(_receive()),
+        asyncio.create_task(_watch_started()),
+        asyncio.create_task(_watch_terminal()),
+    ]
     try:
         await asyncio.gather(*tasks)
         return RunResult(reusable=True)
@@ -316,10 +358,13 @@ async def _send_envelope(
 
 
 async def _receive_envelope(
-    ws: aiohttp.ClientWebSocketResponse, *, timeout: float
+    ws: aiohttp.ClientWebSocketResponse, *, timeout: float | None
 ) -> dict[str, Any]:
     try:
-        message = await ws.receive(timeout=timeout)
+        if timeout is None:
+            message = await ws.receive()
+        else:
+            message = await ws.receive(timeout=timeout)
     except asyncio.TimeoutError:
         raise APITimeoutError("Timed out waiting for a Rime v1 event") from None
 

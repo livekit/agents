@@ -12,7 +12,12 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -46,6 +51,7 @@ class _RimeV1Server:
         self.connections = 0
         self.ready_events = 0
         self.requests: list[dict[str, Any]] = []
+        self.request_connections: list[int] = []
         self.headers: list[dict[str, str]] = []
         self.paths: list[str] = []
         self.text_received = asyncio.Event()
@@ -88,6 +94,7 @@ class _RimeV1Server:
                     continue
                 envelope = json.loads(message.data)
                 self.requests.append(envelope)
+                self.request_connections.append(connection)
                 context_id = envelope.get("contextId", "")
                 if "start" in envelope:
                     await ws.send_json(
@@ -115,7 +122,7 @@ class _RimeV1Server:
                 elif "end" in envelope:
                     if self.response_mode == "malformed_done":
                         await ws.send_json({"contextId": context_id, "done": None})
-                    elif self.response_mode not in ("error", "partial_error"):
+                    elif self.response_mode not in ("error", "partial_error", "no_done"):
                         await ws.send_json({"contextId": context_id, "done": {}})
                 elif "cancel" in envelope and self.cancel_reply:
                     if self.response_mode == "malformed_cancelled":
@@ -372,6 +379,27 @@ async def test_v1_resumes_context_after_nonfinal_flush() -> None:
     assert metrics[0].characters_count == len("firstsecond")
 
 
+async def test_v1_flush_pause_can_exceed_api_timeout() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+        stream.push_text("First sentence.")
+        stream.flush()
+        await asyncio.wait_for(server.flush_received.wait(), timeout=2)
+
+        await asyncio.sleep(0.2)
+
+        stream.push_text("Second sentence.")
+        stream.end_input()
+        events = await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert _payloads(server) == ["start", "text", "flush", "text", "end"]
+    assert len({request["contextId"] for request in server.requests}) == 1
+    assert events[-1].is_final
+
+
 async def test_v1_ignores_flush_before_first_text() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
@@ -405,6 +433,32 @@ async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
     assert server.connections == 1
     assert server.ready_events == 1
     assert _payloads(server).count("start") == 2
+
+
+async def test_v1_overlapping_streams_use_separate_connections() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server)
+        first = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        first.push_text("First stream stays active. Pending")
+        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+
+        second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        second.push_text("Second stream completes.")
+        second.end_input()
+        events = await _collect(second)
+
+        await first.aclose()
+        await second.aclose()
+        await tts.aclose()
+
+    contexts_by_connection: dict[int, set[str]] = {}
+    for connection, request in zip(server.request_connections, server.requests, strict=True):
+        contexts_by_connection.setdefault(connection, set()).add(request["contextId"])
+
+    assert server.connections == 2
+    assert len(contexts_by_connection) == 2
+    assert all(len(contexts) == 1 for contexts in contexts_by_connection.values())
+    assert events[-1].is_final
 
 
 async def test_v1_stream_snapshots_options() -> None:
@@ -530,6 +584,25 @@ async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
         second.end_input()
         await _collect(second)
         await second.aclose()
+        await tts.aclose()
+
+    assert server.connections == 2
+
+
+async def test_v1_end_times_out_when_terminal_event_never_arrives() -> None:
+    async with _RimeV1Server(response_mode="no_done") as server:
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+        stream.push_text("The server will not finish this context.")
+        stream.end_input()
+        with pytest.raises(APITimeoutError, match="after end"):
+            await _collect(stream)
+        await stream.aclose()
+
+        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        empty.end_input()
+        assert await _collect(empty) == []
+        await empty.aclose()
         await tts.aclose()
 
     assert server.connections == 2
