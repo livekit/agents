@@ -491,6 +491,73 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
     def _setup_origination(self, **_: object) -> None:
         pass  # dials via the Twilio connector; no SIP config needed
 
+    async def _dial_human_agent(self) -> AgentSession:
+        # same consult-room flow as SIP, but do not close/delete the room if the
+        # Twilio Stream reconnects on answer (that would hang up the supervisor)
+        assert self._caller_room is not None
+
+        job_ctx = get_job_context()
+        ws_url = job_ctx._info.url
+        human_agent_room_name = self._caller_room.name + "-human-agent"
+        room = rtc.Room()
+        token = (
+            api.AccessToken()
+            .with_identity(self._caller_room.local_participant.identity)
+            .with_grants(
+                api.VideoGrants(
+                    room_join=True,
+                    room=human_agent_room_name,
+                    can_update_own_metadata=True,
+                    can_publish=True,
+                    can_subscribe=True,
+                )
+            )
+            .with_kind("agent")
+        ).to_jwt()
+        await room.connect(ws_url, token)
+        room.on("disconnected", self._on_human_agent_room_close)
+
+        human_agent_sess: AgentSession = AgentSession(
+            vad=self.session.vad or NOT_GIVEN,
+            llm=self.session.llm or NOT_GIVEN,
+            stt=self.session.stt or NOT_GIVEN,
+            tts=self.session.tts or NOT_GIVEN,
+            turn_detection=self.session.turn_detection or NOT_GIVEN,
+        )
+        human_agent_agent = Agent(
+            instructions=self.instructions,
+            turn_detection=self.turn_detection,
+            stt=self.stt,
+            vad=self.vad,
+            llm=self.llm,
+            tts=self.tts,
+            tools=self.tools,
+            chat_ctx=self.chat_ctx,
+            allow_interruptions=self.allow_interruptions,
+        )
+        await human_agent_sess.start(
+            agent=human_agent_agent,
+            room=room,
+            room_options=room_io.RoomOptions(
+                close_on_disconnect=False,
+                delete_room_on_close=False,
+                participant_identity=self._human_agent_identity,
+            ),
+            record=False,
+        )
+
+        try:
+            await self._originate_human_agent(
+                room_name=human_agent_room_name,
+                identity=self._human_agent_identity,
+                room=room,
+            )
+        except Exception:
+            human_agent_sess.shutdown()
+            raise
+
+        return human_agent_sess
+
     async def _originate_human_agent(
         self, *, room_name: str, identity: str, room: rtc.Room
     ) -> None:
@@ -526,40 +593,41 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
-            # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+            if identity not in room.remote_participants:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
-        # the connector publishes the supervisor's track only after the call is answered
-        published = asyncio.Event()
+        # Twilio Stream connects only after the supervisor answers. Poll the local
+        # room and the Room service for the expected identity (human-agent-sip).
+        job_ctx = get_job_context()
+        timeout = self._ringing_timeout or _TWILIO_RINGING_TIMEOUT
+        deadline = asyncio.get_running_loop().time() + timeout
 
-        def _published(p: rtc.RemoteParticipant) -> bool:
-            return p.identity == identity and any(
-                pub.kind == rtc.TrackKind.KIND_AUDIO for pub in p.track_publications.values()
-            )
+        while asyncio.get_running_loop().time() < deadline:
+            if identity in room.remote_participants:
+                return
+            try:
+                resp = await job_ctx.api.room.list_participants(
+                    api.ListParticipantsRequest(room=room.name)
+                )
+            except Exception:
+                logger.exception("failed to list participants in consult room")
+            else:
+                if any(p.identity == identity for p in resp.participants):
+                    return
+            await asyncio.sleep(0.4)
 
-        def _on_track_published(pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
-            if _published(p):
-                published.set()
-
-        def _on_connected(p: rtc.RemoteParticipant) -> None:
-            if _published(p):
-                published.set()
-
-        room.on("track_published", _on_track_published)
-        room.on("participant_connected", _on_connected)
-        try:
-            existing = room.remote_participants.get(identity)
-            if existing is not None and _published(existing):
-                published.set()
-            await asyncio.wait_for(published.wait(), timeout=self._ringing_timeout)
-        except asyncio.TimeoutError as e:
-            raise ToolError("supervisor did not answer") from e
-        finally:
-            room.off("track_published", _on_track_published)
-            room.off("participant_connected", _on_connected)
+        logger.error(
+            "supervisor did not join the consult room in time",
+            extra={
+                "expected_identity": identity,
+                "room": room.name,
+                "remote_participants": [p.identity for p in room.remote_participants.values()],
+            },
+        )
+        raise ToolError("supervisor did not answer")
 
 
 # instructions
