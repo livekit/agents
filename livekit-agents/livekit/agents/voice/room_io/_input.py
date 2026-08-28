@@ -374,12 +374,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     )
 
             except asyncio.TimeoutError:
+                self._pre_connect_audio_publications.add(pre_connect_key)
                 logger.warning(
                     "timeout waiting for pre-connect audio buffer",
                     extra=logging_extra,
                 )
 
             except Exception as e:
+                self._pre_connect_audio_publications.add(pre_connect_key)
                 logger.error(
                     "error reading pre-connect audio buffer", extra=logging_extra, exc_info=e
                 )
