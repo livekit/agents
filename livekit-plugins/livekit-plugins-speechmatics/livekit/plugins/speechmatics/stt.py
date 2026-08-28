@@ -50,6 +50,7 @@ from speechmatics.agent_stt import (
     Model,
     Segment,
     ServerMessageType,
+    SpeakerDiarizationConfig,
     SpeakerIdentifier,
     TranscriptionConfig,
 )
@@ -349,9 +350,7 @@ class STT(stt.STT):
         """Prepare an Agent STT TranscriptionConfig from STTOptions.
 
         This is the only place the config crosses from the plugin's public options into
-        the Agent STT session driver. Only the fields agent-STT accepts on the wire are
-        set; the diarization knobs (speaker_sensitivity, max_speakers,
-        prefer_current_speaker, known_speakers) are not yet wired in here.
+        the Agent STT session driver. Only the fields agent-STT accepts on the wire are set.
         """
 
         # Reference to STT options
@@ -362,6 +361,7 @@ class STT(stt.STT):
             model=opts.model,
             turn_detection_mode=_handle_turn_detection_mode(opts.turn_detection_mode),
             diarization="speaker" if opts.enable_diarization else None,
+            speaker_diarization_config=_build_diarization_config(opts),
             additional_vocab=opts.additional_vocab or None,
             output_locale=opts.output_locale,
             domain=opts.domain,
@@ -777,6 +777,28 @@ class SpeechStream(stt.RecognizeStream):
         # Remove from active streams
         if self in self._stt._streams:
             self._stt._streams.remove(self)
+
+
+def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | None:
+    """Build the wire `speaker_diarization_config` from the diarization options.
+
+    Returns `None` when diarization is off or no diarization knob was set, so an empty
+    config is never sent. Only the fields the caller actually set are included.
+    """
+    if not opts.enable_diarization:
+        return None
+
+    fields: dict[str, Any] = {}
+    if opts.max_speakers is not None:
+        fields["max_speakers"] = opts.max_speakers
+    if opts.speaker_sensitivity is not None:
+        fields["speaker_sensitivity"] = opts.speaker_sensitivity
+    if opts.prefer_current_speaker is not None:
+        fields["prefer_current_speaker"] = opts.prefer_current_speaker
+    if opts.known_speakers:
+        fields["speakers"] = opts.known_speakers
+
+    return SpeakerDiarizationConfig(**fields) if fields else None
 
 
 def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:
