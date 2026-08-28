@@ -213,6 +213,47 @@ async def test_interruption_cancels_inflight_requests() -> None:
     # deterministic relative to drain state)
 
 
+async def test_speed_sent_on_wire_and_validated() -> None:
+    """speed must be forwarded in the synthesize message when set, omitted when
+    not, and rejected outside the server's 0.5-2.0 bounds."""
+    from livekit.plugins.upliftai.tts import TTS, WebSocketClient
+
+    with pytest.raises(ValueError):
+        TTS(api_key="fake-key", speed=2.5)
+    with pytest.raises(ValueError):
+        TTS(api_key="fake-key", speed=0.4)
+    tts = TTS(api_key="fake-key", speed=1.5)
+    with pytest.raises(ValueError):
+        tts.update_options(speed=3.0)
+
+    class StubSio:
+        def __init__(self) -> None:
+            self.emitted: list[tuple[str, dict]] = []
+
+        async def emit(self, event: str, message: dict, namespace: str | None = None) -> None:
+            self.emitted.append((event, message))
+
+    client = WebSocketClient(tts._opts)
+    stub = StubSio()
+    client.sio = stub  # type: ignore[assignment]
+    client.connected = True
+
+    await client.synthesize("hello", "req-1")
+    assert stub.emitted[0][1]["speed"] == 1.5
+
+    tts.update_options(speed=0.8)
+    await client.synthesize("hello again", "req-2")
+    assert stub.emitted[1][1]["speed"] == 0.8
+
+    # no speed configured -> field omitted entirely so server default applies
+    tts_default = TTS(api_key="fake-key")
+    client2 = WebSocketClient(tts_default._opts)
+    client2.sio = stub  # type: ignore[assignment]
+    client2.connected = True
+    await client2.synthesize("no speed", "req-3")
+    assert "speed" not in stub.emitted[2][1]
+
+
 async def test_disconnect_closes_half_open_socket() -> None:
     """A connect() cancelled mid-handshake leaves the socket open with
     ``connected`` still False; disconnect() must close it regardless."""

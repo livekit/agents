@@ -57,6 +57,9 @@ _CLOSING_CHARS = "\"'”’»)]"
 
 DEFAULT_MIN_CHUNK_LEN = 20
 DEFAULT_MAX_CHUNK_LEN = 200
+# speaking-rate bounds enforced by the server (speed 1.0 = normal rate)
+MIN_SPEED = 0.5
+MAX_SPEED = 2.0
 # how many synthesis requests may be in flight ahead of the one currently being emitted
 MAX_PIPELINED_REQUESTS = 3
 AUDIO_CHUNK_TIMEOUT = 30.0
@@ -85,12 +88,18 @@ def _ends_sentence(token: str) -> bool:
     return bool(stripped) and stripped[-1] in SENTENCE_END_CHARS
 
 
+def _validate_speed(speed: float) -> None:
+    if not MIN_SPEED <= speed <= MAX_SPEED:
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, got {speed}")
+
+
 @dataclass
 class VoiceSettings:
     """Voice configuration settings"""
 
     voice_id: str = DEFAULT_VOICE_ID
     output_format: OutputFormat = DEFAULT_OUTPUT_FORMAT
+    speed: float | None = None
 
 
 @dataclass
@@ -123,6 +132,7 @@ class TTS(tts.TTS):
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         min_chunk_len: int = DEFAULT_MIN_CHUNK_LEN,
         max_chunk_len: int = DEFAULT_MAX_CHUNK_LEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of Uplift TTS.
@@ -149,6 +159,8 @@ class TTS(tts.TTS):
                 triggers a synthesis request. Defaults to 20
             max_chunk_len: Maximum buffered characters before a synthesis request is
                 forced, even without a sentence boundary. Defaults to 200
+            speed: Speaking rate, 0.5 (half speed) to 2.0 (double speed).
+                Defaults to the server's normal rate (1.0)
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -178,6 +190,8 @@ class TTS(tts.TTS):
             raise ValueError("min_chunk_len must be at least 1")
         if max_chunk_len <= min_chunk_len:
             raise ValueError("max_chunk_len must be greater than min_chunk_len")
+        if is_given(speed):
+            _validate_speed(speed)
 
         # Use provided tokenizer or create default
         resolved_word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
@@ -189,7 +203,11 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             base_url=resolved_base_url,
             api_key=resolved_api_key,
-            voice_settings=VoiceSettings(voice_id=voice_id, output_format=output_format),
+            voice_settings=VoiceSettings(
+                voice_id=voice_id,
+                output_format=output_format,
+                speed=speed if is_given(speed) else None,
+            ),
             word_tokenizer=resolved_word_tokenizer,
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=num_channels,
@@ -215,6 +233,7 @@ class TTS(tts.TTS):
         *,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         output_format: NotGivenOr[OutputFormat] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
         Update TTS configuration options.
@@ -222,11 +241,15 @@ class TTS(tts.TTS):
         Args:
             voice_id: New voice ID
             output_format: New output format (see __init__ for options)
+            speed: New speaking rate, 0.5 to 2.0 (see __init__)
         """
         if is_given(voice_id):
             self._opts.voice_settings.voice_id = voice_id
         if is_given(output_format):
             self._opts.voice_settings.output_format = output_format
+        if is_given(speed):
+            _validate_speed(speed)
+            self._opts.voice_settings.speed = speed
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -379,6 +402,9 @@ class WebSocketClient:
 
         if self.opts.phrase_replacement_config_id:
             message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
+
+        if self.opts.voice_settings.speed is not None:
+            message["speed"] = self.opts.voice_settings.speed
 
         logger.debug(
             f"Sending synthesis request {request_id[:8]}", extra={"lk.pii.text": text[:50]}
