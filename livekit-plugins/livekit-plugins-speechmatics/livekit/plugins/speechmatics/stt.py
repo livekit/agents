@@ -237,7 +237,7 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                diarization=True,
+                diarization=enable_diarization if is_given(enable_diarization) else True,
                 aligned_transcript="chunk",
                 offline_recognize=False,
             ),
@@ -657,9 +657,9 @@ class SpeechStream(stt.RecognizeStream):
             ServerMessageType.RECOGNITION_STARTED,
             ServerMessageType.INFO,
         ]:
-            logger.info(f"{event} -> {message}")
+            logger.info(f"received {event} message", extra={"lk.pii.message": message})
         elif event == ServerMessageType.WARNING:
-            logger.warning(f"{event} -> {message}")
+            logger.warning(f"received {event} message", extra={"lk.pii.message": message})
         elif event == ServerMessageType.ERROR:
             # An agent-STT `Error` means the session is over. Raise it as an APIError so the
             # stream fails with the reason instead of silently hanging until timeout. It
@@ -688,7 +688,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Log all other messages
         else:
-            logger.debug(f"{event} -> {message}")
+            logger.debug(f"received {event} message", extra={"lk.pii.message": message})
 
     def _handle_segment(self, message: dict[str, Any], is_final: bool) -> None:
         """Handle AddSegment / AddPartialSegment events.
