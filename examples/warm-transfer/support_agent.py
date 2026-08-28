@@ -55,7 +55,7 @@ class SupportAgent(Agent):
 
         logger.info(
             "transfer to supervisor successful",
-            extra={"supervisor_identity": result.human_agent_identity},
+            extra={"lk.pii.supervisor_identity": result.human_agent_identity},
         )
         await self.session.say(
             "you are on the line with my supervisor. I'll be hanging up now.",
