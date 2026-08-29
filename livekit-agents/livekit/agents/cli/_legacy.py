@@ -75,7 +75,10 @@ class _ToggleMode(Exception):
     pass
 
 
-class _ExitCli(BaseException):
+class _ExitCli(SystemExit):
+    # SystemExit rather than BaseException, mirroring cli.py: if the raise from
+    # the signal handler ever lands inside an asyncio task or callback, only
+    # SystemExit/KeyboardInterrupt are re-raised out of the event loop (#5856).
     pass
 
 
