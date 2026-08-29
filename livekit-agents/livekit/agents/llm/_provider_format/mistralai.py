@@ -16,8 +16,14 @@ class MistralFormatData:
 
 def to_conversations_ctx(
     chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
 ) -> tuple[list[dict], MistralFormatData]:
     """Convert ChatContext to Mistral Conversations API entry format.
+
+    Mistral requires the last serving turn to be User or Tool (HTTP 400 /
+    code 3230 otherwise). When ``inject_dummy_user_message`` is True, append
+    a dummy user turn if the context ends on an assistant message.
 
     Returns:
         A tuple of (entries, instructions) where instructions is the extracted
@@ -65,7 +71,20 @@ def to_conversations_ctx(
                 }
             )
 
+    if inject_dummy_user_message and not _last_serving_role_ok(entries):
+        entries.append({"type": "message.input", "role": "user", "content": "."})
+
     return entries, MistralFormatData(instructions=instructions)
+
+
+def _last_serving_role_ok(entries: list[dict[str, Any]]) -> bool:
+    """True when the last entry is a user message or a tool result."""
+    if not entries:
+        return False
+    last = entries[-1]
+    if last.get("type") == "function.result":
+        return True
+    return last.get("type") == "message.input" or last.get("role") == "user"
 
 
 def _to_entry(item: llm.ChatItem) -> dict[str, Any] | None:

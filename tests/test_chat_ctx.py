@@ -875,3 +875,53 @@ def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
+
+
+def test_mistralai_injects_dummy_user_when_last_message_is_assistant():
+    """Mistral serving requires last role User or Tool; a trailing assistant 400s."""
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="Hello")
+    ctx.add_message(role="assistant", content="One moment...")
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    assert entries[-1] == {"type": "message.input", "role": "user", "content": "."}
+    assert entries[-2] == {
+        "type": "message.output",
+        "role": "assistant",
+        "content": "One moment...",
+    }
+
+
+def test_mistralai_does_not_inject_when_last_is_user():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="Hello")
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    assert entries == [{"type": "message.input", "role": "user", "content": "Hello"}]
+
+
+def test_mistralai_does_not_inject_when_last_is_tool_result():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="lookup")
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    assert entries[-1] == {
+        "type": "function.result",
+        "tool_call_id": "c1",
+        "result": "ok",
+    }
+
+
+def test_mistralai_can_disable_dummy_user_injection():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="Hello")
+    ctx.add_message(role="assistant", content="Hi")
+
+    entries, _ = ctx.to_provider_format(format="mistralai", inject_dummy_user_message=False)
+
+    assert entries[-1] == {"type": "message.output", "role": "assistant", "content": "Hi"}
