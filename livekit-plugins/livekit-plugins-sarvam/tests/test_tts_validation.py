@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 from livekit.plugins.sarvam.tts import TTS, validate_model_speaker_compatibility
@@ -90,10 +92,33 @@ async def test_update_options_rejects_a_model_switch_with_an_invalid_existing_pa
         await tts.aclose()
 
 
+async def test_update_options_is_atomic_when_the_new_model_rejects_the_existing_speaker() -> None:
+    tts = TTS(api_key="test-key", model="bulbul:v3-beta", speaker="amelia", pace=1.0)
+    try:
+        with pytest.raises(ValueError, match="incompatible with bulbul:v3"):
+            tts.update_options(model="bulbul:v3")
+        assert tts._opts.model == "bulbul:v3-beta"
+        assert tts._opts.speaker == "amelia"
+        assert tts._opts.pace == 1.0
+    finally:
+        await tts.aclose()
+
+
+async def test_update_options_invalidates_connections_when_url_options_change() -> None:
+    tts = TTS(api_key="test-key")
+    tts._pool.invalidate = Mock()
+    try:
+        tts.update_options(model="bulbul:v3")
+        tts._pool.invalidate.assert_called_once_with()
+    finally:
+        await tts.aclose()
+
+
 @pytest.mark.parametrize("sample_rate", [32000, 44100, 48000])
 async def test_rest_only_sample_rates_are_rejected_before_streaming(sample_rate: int) -> None:
     tts = TTS(api_key="test-key", speech_sample_rate=sample_rate)
     try:
+        assert not tts.capabilities.streaming
         with pytest.raises(ValueError, match="streaming TTS"):
             tts.stream()
     finally:
