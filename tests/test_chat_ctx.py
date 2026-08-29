@@ -875,3 +875,62 @@ def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
+
+
+# ── Mistral trailing-assistant regression (issue #7030) ───────────────────────
+
+
+def test_mistral_formatter_trailing_assistant_injects_dummy_user():
+    """When ChatContext ends with an assistant message, the Mistral formatter must
+    append a dummy user message so the last entry is not message.output.
+
+    The Mistral Conversations API requires the inputs list to end with a user
+    (message.input) or tool-result (function.result) entry.  Sending a trailing
+    message.output causes the API to reject the request.
+    """
+    ctx = ChatContext.empty()
+    ctx.insert(ChatMessage(role="user", content=["Hello"]))
+    ctx.insert(ChatMessage(role="assistant", content=["Hi there!"]))
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    # The last entry must NOT be a message.output (assistant)
+    assert entries[-1]["role"] != "assistant", (
+        f"Last entry is {entries[-1]['type']} / {entries[-1]['role']}, "
+        "but Mistral requires a user or tool entry at the end"
+    )
+    # The dummy user message should be present
+    assert entries[-1]["type"] == "message.input"
+    assert entries[-1]["role"] == "user"
+
+
+def test_mistral_formatter_trailing_tool_output_no_injection():
+    """When ChatContext ends with tool/function output, no dummy message is needed."""
+    ctx = ChatContext.empty()
+    ctx.insert(ChatMessage(role="user", content=["What's the weather?"]))
+    ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="get_weather", output="sunny", is_error=False))
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    # Last entry is already a function.result – no dummy needed
+    assert entries[-1]["type"] == "function.result"
+
+
+def test_mistral_formatter_trailing_user_no_injection():
+    """When ChatContext ends with a user message, no dummy message is needed."""
+    ctx = ChatContext.empty()
+    ctx.insert(ChatMessage(role="user", content=["Hello"]))
+
+    entries, _ = ctx.to_provider_format(format="mistralai")
+
+    assert len(entries) == 1
+    assert entries[0]["type"] == "message.input"
+    assert entries[0]["role"] == "user"
+
+
+def test_mistral_formatter_empty_context():
+    """An empty ChatContext should produce no entries."""
+    ctx = ChatContext.empty()
+    entries, _ = ctx.to_provider_format(format="mistralai")
+    assert entries == []

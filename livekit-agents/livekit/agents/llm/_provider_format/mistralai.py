@@ -16,8 +16,17 @@ class MistralFormatData:
 
 def to_conversations_ctx(
     chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
 ) -> tuple[list[dict], MistralFormatData]:
     """Convert ChatContext to Mistral Conversations API entry format.
+
+    Args:
+        chat_ctx: The chat context to convert.
+        inject_dummy_user_message: If ``True`` (the default), a dummy user message
+            (``"."``) is appended when the last entry is an assistant message.
+            The Mistral Conversations API requires the inputs list to end with a
+            ``message.input`` (user) or ``function.result`` (tool) entry.
 
     Returns:
         A tuple of (entries, instructions) where instructions is the extracted
@@ -64,6 +73,15 @@ def to_conversations_ctx(
                     "result": tool_output.output,
                 }
             )
+
+    # Mistral Conversations API requires the last entry to be a user message
+    # (message.input) or tool result (function.result), not an assistant message.
+    if (
+        inject_dummy_user_message
+        and entries
+        and entries[-1]["type"] == "message.output"
+    ):
+        entries.append({"type": "message.input", "role": "user", "content": "."})
 
     return entries, MistralFormatData(instructions=instructions)
 
