@@ -575,8 +575,18 @@ class SpeechStream(stt.SpeechStream):
             )
             self._report_connection_acquired(time.perf_counter() - t0, False)
             logger.debug("established Smallest AI STT WebSocket connection")
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to Smallest AI STT") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to Smallest AI STT") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to Smallest AI STT ({type(e).__name__})"
+            ) from None
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:

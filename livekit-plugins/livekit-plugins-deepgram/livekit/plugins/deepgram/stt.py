@@ -783,8 +783,18 @@ class SpeechStream(stt.SpeechStream):
                 "Established new Deepgram STT WebSocket connection:",
                 extra={"headers": ws_headers},
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to deepgram") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
