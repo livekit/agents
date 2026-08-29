@@ -6,12 +6,15 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
+import httpx
 import pytest
 from openai.types import Reasoning
+from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
 
-from livekit.agents import APIConnectionError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
+    LLM as ResponsesLLM,
     LLMStream,
     _ResponsesWebsocket,
 )
@@ -37,6 +40,7 @@ class _RecordingWS:
         self._reply = reply
         self._dead = dead
         self.closed = False
+        self.receive_calls = 0
 
     async def send_str(self, data: str) -> None:
         if self._dead:
@@ -44,6 +48,9 @@ class _RecordingWS:
         self.sent = data
 
     async def receive(self) -> _FakeWSMsg:
+        self.receive_calls += 1
+        if self.receive_calls > 1:
+            raise AssertionError("terminal response must not read another WebSocket frame")
         return _FakeWSMsg(json.dumps(self._reply))
 
     async def close(self) -> None:
@@ -96,6 +103,26 @@ async def test_reasoning_object_serialized_without_null_fields() -> None:
     assert sent["reasoning"] == {"effort": "none"}
     # No serialized request model may carry an explicit null-valued key.
     assert None not in sent["reasoning"].values()
+
+
+async def test_incomplete_response_is_a_terminal_websocket_event() -> None:
+    """`response.incomplete` ends a request just like completed/failed/error.
+
+    When the transport generator is fully consumed directly, it must yield the
+    frame once, return without waiting for a second frame, and make the cleanly
+    terminated socket available for reuse.
+    """
+    frame = {"type": "response.incomplete"}
+    rec = _RecordingWS(frame)
+    transport = _make_transport()
+    _use_connections(transport, rec)
+
+    events = [event async for event in transport.generate_response({"type": "response.create"})]
+
+    assert events == [frame]
+    assert rec.receive_calls == 1
+    assert rec in transport._pool._available
+    await transport.aclose()
 
 
 def test_error_event_missing_sequence_number_parses_cleanly() -> None:
@@ -222,6 +249,129 @@ _TEXT_DELTA = {
     "output_index": 0,
     "logprobs": [],
 }
+
+
+def _response_incomplete(reason: str | None) -> dict:
+    response = {
+        **_RESPONSE_CREATED["response"],
+        "status": "incomplete",
+    }
+    if reason is not None:
+        response["incomplete_details"] = {"reason": reason}
+    return {
+        "type": "response.incomplete",
+        "sequence_number": 2,
+        "response": response,
+    }
+
+
+@pytest.mark.parametrize("reason", ["max_output_tokens", "content_filter"])
+def test_incomplete_ws_event_parses_provider_reason(reason: str) -> None:
+    parsed = LLMStream._parse_ws_event(  # type: ignore[arg-type]
+        object(), _response_incomplete(reason)
+    )
+
+    assert isinstance(parsed, ResponseIncompleteEvent)
+    assert parsed.response.incomplete_details is not None
+    assert parsed.response.incomplete_details.reason == reason
+
+
+class _ReplayResponsesWS:
+    """Hermetic WebSocket LLM transport that ends after the supplied frames."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, frames: list[dict]) -> None:
+        self._frames = frames
+        self.attempts = 0
+
+    def generate_response(self, payload: dict):  # noqa: ANN201
+        self.attempts += 1
+
+        async def _replay():  # noqa: ANN202
+            for frame in self._frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _ReplayHTTPStream:
+    """Minimal OpenAI AsyncStream stand-in for the HTTP Responses path."""
+
+    def __init__(self, events: list[ResponseCreatedEvent | ResponseIncompleteEvent]) -> None:
+        self._events = events
+
+    async def __aenter__(self) -> _ReplayHTTPStream:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        pass
+
+    def __aiter__(self):  # noqa: ANN204
+        async def _replay():  # noqa: ANN202
+            for event in self._events:
+                yield event
+
+        return _replay()
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("reason", ["max_output_tokens", None])
+async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
+    transport_kind: str, reason: str | None
+) -> None:
+    raw_events = [_RESPONSE_CREATED, _response_incomplete(reason)]
+
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+        transport = _ReplayResponsesWS(raw_events)
+        llm_model._ws = transport  # type: ignore[assignment]
+        request_counter = transport
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        parsed_events = [
+            ResponseCreatedEvent.model_validate(raw_events[0]),
+            ResponseIncompleteEvent.model_validate(raw_events[1]),
+        ]
+        client.responses.create = AsyncMock(
+            side_effect=lambda **_kwargs: _ReplayHTTPStream(parsed_events)
+        )
+        llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+        request_counter = client.responses.create
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        with pytest.raises(APIStatusError) as exc_info:
+            async with llm_model.chat(
+                chat_ctx=chat_ctx,
+                conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0),
+            ) as stream:
+                async for _ in stream:
+                    pass
+
+        error = exc_info.value
+        assert error.status_code == -1
+        assert error.retryable is False
+        if reason is None:
+            assert "reason unavailable" in error.message
+        else:
+            assert reason in error.message
+        attempts = (
+            request_counter.attempts
+            if isinstance(request_counter, _ReplayResponsesWS)
+            else request_counter.await_count
+        )
+        assert attempts == 1
+        assert llm_model._prev_resp_id == ""
+        assert llm_model._prev_chat_ctx is None
+    finally:
+        await llm_model.aclose()
 
 
 class _StallingResponsesWS:

@@ -32,6 +32,7 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
@@ -156,7 +157,12 @@ class _ResponsesWebsocket:
 
                 event = json.loads(raw_msg.data)
                 yield event
-                if event["type"] in ["response.completed", "response.failed", "error"]:
+                if event["type"] in [
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                ]:
                     completed = True
                     return
         finally:
@@ -567,6 +573,8 @@ class LLMStream(llm.LLMStream):
             return ResponseCompletedEvent.model_validate(event)
         elif event_type == "response.failed":
             return ResponseFailedEvent.model_validate(event)
+        elif event_type == "response.incomplete":
+            return ResponseIncompleteEvent.model_validate(event)
         return None
 
     def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
@@ -586,6 +594,8 @@ class LLMStream(llm.LLMStream):
             chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
+        if isinstance(event, ResponseIncompleteEvent):
+            self._handle_response_incomplete(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
         return chunk
@@ -602,6 +612,15 @@ class LLMStream(llm.LLMStream):
         err = event.response.error
         raise APIStatusError(
             err.message if err else "response.failed",
+            status_code=-1,
+            retryable=False,
+        )
+
+    def _handle_response_incomplete(self, event: ResponseIncompleteEvent) -> None:
+        details = event.response.incomplete_details
+        reason = details.reason if details else None
+        raise APIStatusError(
+            f"response incomplete: {reason or 'reason unavailable'}",
             status_code=-1,
             retryable=False,
         )
