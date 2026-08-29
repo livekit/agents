@@ -40,6 +40,7 @@ from ._utils import (
 
 CartesiaModels = Literal[
     "cartesia",
+    "cartesia/sonic-3.6",
     "cartesia/sonic-3.5",
     "cartesia/sonic-3",
     "cartesia/sonic-2",
@@ -48,6 +49,75 @@ CartesiaModels = Literal[
     "cartesia/sonic-3-latest",
     "cartesia/sonic-latest",
 ]
+CartesiaLanguage = Literal[
+    "en",
+    "de",
+    "es",
+    "fr",
+    "ja",
+    "pt",
+    "zh",
+    "hi",
+    "ko",
+    "it",
+    "nl",
+    "pl",
+    "ru",
+    "sv",
+    "tr",
+    "tl",
+    "bg",
+    "ro",
+    "ar",
+    "cs",
+    "el",
+    "fi",
+    "hr",
+    "ms",
+    "sk",
+    "da",
+    "ta",
+    "uk",
+    "hu",
+    "no",
+    "vi",
+    "bn",
+    "th",
+    "he",
+    "ka",
+    "id",
+    "te",
+    "gu",
+    "kn",
+    "ml",
+    "mr",
+    "pa",
+    "or",
+    "ur",
+]
+CartesiaLocale = (
+    CartesiaLanguage
+    | Literal[
+        "en-GB",
+        "en-US",
+        "en-IN",
+        "en-IE",
+        "en-ZA",
+        "en-NZ",
+        "en-SG",
+        "en-AU",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-FR",
+        "fr-CA",
+        "nl-NL",
+        "nl-BE",
+        "pt-PT",
+        "pt-BR",
+    ]
+)
+CartesiaNormalization = Literal["auto", "off"] | CartesiaLocale
 DeepgramModels = Literal[
     "deepgram",
     "deepgram/aura",
@@ -160,6 +230,8 @@ def _normalize_fallback(
 
 
 class CartesiaOptions(TypedDict, total=False):
+    locale: CartesiaLocale  # sonic-3.6+; mutually exclusive with language
+    normalization: CartesiaNormalization  # sonic-3.6+
     emotion: str
     speed: Literal["slow", "normal", "fast"] | float
     volume: float
@@ -269,7 +341,7 @@ class TTS(tts.TTS):
         model: CartesiaModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[CartesiaLanguage] = NOT_GIVEN,
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
