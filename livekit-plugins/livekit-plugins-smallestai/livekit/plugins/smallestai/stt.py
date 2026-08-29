@@ -573,8 +573,6 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            logger.debug("established Smallest AI STT WebSocket connection")
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to Smallest AI STT") from None
         except aiohttp.ClientResponseError as e:
@@ -587,6 +585,9 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError(
                 f"failed to connect to Smallest AI STT ({type(e).__name__})"
             ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:

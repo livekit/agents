@@ -573,13 +573,6 @@ class SpeechStreamv2(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            ws_headers = {
-                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
-            }
-            logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
-            )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None
         except aiohttp.ClientResponseError as e:
@@ -592,6 +585,14 @@ class SpeechStreamv2(stt.SpeechStream):
             raise APIConnectionError(
                 f"failed to connect to deepgram ({type(e).__name__})"
             ) from None
+
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram STT WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
