@@ -106,6 +106,7 @@ CartesiaLocale = (
         "en-NZ",
         "en-SG",
         "en-AU",
+        "hi-IN",
         "es-ES",
         "es-MX",
         "es-US",
@@ -165,6 +166,15 @@ TTSModels = (
     | XaiModels
     | FishAudioModels
 )
+
+
+def _validate_cartesia_options(
+    model: str,
+    language: NotGivenOr[str],
+    extra_kwargs: dict[str, Any],
+) -> None:
+    if model.split("/")[0] == "cartesia" and is_given(language) and "locale" in extra_kwargs:
+        raise ValueError("Cartesia TTS accepts either language or locale, not both")
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -539,6 +549,7 @@ class TTS(tts.TTS):
                 voice = parsed_voice
 
         resolved_extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        _validate_cartesia_options(model, language, resolved_extra_kwargs)
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -726,14 +737,19 @@ class TTS(tts.TTS):
             language (str, optional): Language code for the TTS model.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
-        if is_given(model):
-            self._opts.model = model
+        updated_model = model if is_given(model) else self._opts.model
+        updated_language = LanguageCode(language) if is_given(language) else self._opts.language
+        updated_extra_kwargs = self._opts.extra_kwargs.copy()
+        if is_given(extra_kwargs):
+            updated_extra_kwargs.update(extra_kwargs)
+
+        _validate_cartesia_options(updated_model, updated_language, updated_extra_kwargs)
+
+        self._opts.model = updated_model
+        self._opts.language = updated_language
+        self._opts.extra_kwargs = updated_extra_kwargs
         if is_given(voice):
             self._opts.voice = voice
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
-        if is_given(extra_kwargs):
-            self._opts.extra_kwargs.update(extra_kwargs)
 
         self._capabilities.aligned_transcript = _has_aligned_transcript(
             self._opts.model, self._opts.extra_kwargs

@@ -12,7 +12,7 @@ import pytest
 import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
 from livekit.agents.inference._utils import HEADER_SESSION_ID
-from livekit.agents.inference.tts import TTS, CartesiaLanguage
+from livekit.agents.inference.tts import TTS, CartesiaLanguage, CartesiaLocale
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 pytestmark = pytest.mark.unit
@@ -20,9 +20,46 @@ pytestmark = pytest.mark.unit
 
 def test_cartesia_sonic_36_languages() -> None:
     languages = set(get_args(CartesiaLanguage))
+    locales = set(get_args(get_args(CartesiaLocale)[1]))
 
     assert len(languages) == 44
     assert {"or", "ur"} <= languages
+    assert "hi-IN" in locales
+
+
+def test_cartesia_language_and_locale_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="either language or locale"):
+        TTS(
+            model="cartesia/sonic-3.6",
+            language="hi",
+            api_key="test-key",
+            api_secret="test-secret",
+            extra_kwargs={"locale": "hi-IN"},
+        )
+
+
+def test_cartesia_update_options_rejects_language_and_locale_atomically() -> None:
+    language_tts = TTS(
+        model="cartesia/sonic-3.6",
+        language="hi",
+        api_key="test-key",
+        api_secret="test-secret",
+    )
+    with pytest.raises(ValueError, match="either language or locale"):
+        language_tts.update_options(extra_kwargs={"locale": "hi-IN"})
+
+    assert "locale" not in language_tts._opts.extra_kwargs
+
+    locale_tts = TTS(
+        model="cartesia/sonic-3.6",
+        api_key="test-key",
+        api_secret="test-secret",
+        extra_kwargs={"locale": "hi-IN"},
+    )
+    with pytest.raises(ValueError, match="either language or locale"):
+        locale_tts.update_options(language="hi")
+
+    assert not isinstance(locale_tts._opts.language, str)
 
 
 class _FakeWebSocket:
