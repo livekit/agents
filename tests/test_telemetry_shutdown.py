@@ -2,7 +2,7 @@
 
 ``_setup_cloud_tracer`` must create OTel SDK providers with
 ``shutdown_on_exit=False``.  The SDK default is ``True``, which registers
-``atexit`` handlers calling ``provider.shutdown() → worker_thread.join()``.
+``atexit`` handlers calling ``provider.shutdown() -> worker_thread.join()``.
 When the OTLP endpoint is unreachable the worker threads may be stuck
 exporting, blocking process exit indefinitely.
 
@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 from opentelemetry import metrics as metrics_api
@@ -30,21 +31,30 @@ from livekit.agents.telemetry.traces import tracer
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
-_ENV = {**os.environ, "LIVEKIT_API_KEY": "dummy", "LIVEKIT_API_SECRET": "dummy"}
+# Subprocess env: supply dummy credentials so AccessToken validation passes.
+# These are never sent anywhere — the endpoint is unreachable (127.0.0.1:1).
+_SUBPROCESS_ENV = {
+    **os.environ,
+    "LIVEKIT_API_KEY": "test-api-key",
+    "LIVEKIT_API_SECRET": "test-api-secret",
+}
 
 
-def _setup() -> None:
-    """Call _setup_cloud_tracer with an unreachable endpoint."""
+def _mocked_setup() -> None:
+    """Call _setup_cloud_tracer with a mocked AccessToken (no credentials needed)."""
     from livekit.agents.telemetry.traces import _setup_cloud_tracer
 
-    _setup_cloud_tracer(
-        room_id="room",
-        job_id="job",
-        agent_name="agent",
-        observability_url="http://127.0.0.1:1",
-        enable_traces=True,
-        enable_logs=True,
-    )
+    mock_token = MagicMock()
+    mock_token.to_jwt.return_value = "dummy.jwt.token"
+    with patch("livekit.api.AccessToken", return_value=mock_token):
+        _setup_cloud_tracer(
+            room_id="room",
+            job_id="job",
+            agent_name="agent",
+            observability_url="http://127.0.0.1:1",
+            enable_traces=True,
+            enable_logs=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +71,7 @@ def test_providers_created_without_atexit() -> None:
     orig_lp = get_logger_provider()
     orig_mp = metrics_api.get_meter_provider()
     try:
-        _setup()
+        _mocked_setup()
 
         if isinstance(tracer._tracer_provider, trace_sdk.TracerProvider):
             tp = tracer._tracer_provider
@@ -107,7 +117,7 @@ def test_offline_exit_no_hang() -> None:
         capture_output=True,
         text=True,
         timeout=15,
-        env=_ENV,
+        env=_SUBPROCESS_ENV,
     )
     elapsed = time.monotonic() - start
     assert result.returncode == 0, (
