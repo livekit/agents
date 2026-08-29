@@ -210,10 +210,30 @@ class _AuthRefreshingSession(requests.Session):
         return resp
 
 
+# Internal marker stamped on spans/log records created by a job that disabled
+# their upload; the gated exporters drop marked items. THREAD-mode workers run
+# jobs concurrently on shared providers, so per-record marking — not a process
+# gate alone — is what keeps a recorded job from exporting a disabled job's data.
+_ATTR_EXPORT_SUPPRESSED = "lk.cloud.export_suppressed"
+
+
+def _job_telemetry_state() -> tuple[dict[str, AttributeValue] | None, bool, bool] | None:
+    """(span/log metadata, traces_enabled, logs_enabled) of the job on this
+    context, or None when outside a job or before its recording was initialized."""
+    from ..job import get_job_context  # local import: job.py imports this module
+
+    ctx = get_job_context(required=False)
+    if ctx is None or not ctx._recording_initialized:
+        return None
+    return ctx._otel_session_metadata, ctx._otel_traces_enabled, ctx._otel_logs_enabled
+
+
 class _MetadataSpanProcessor(SpanProcessor):
-    """Stamps per-job metadata on every span. The processor itself has process
-    lifetime (there is no API to detach it from a provider); the metadata it
-    stamps is swapped per job and cleared between jobs."""
+    """Stamps per-job metadata on every span, resolved from the originating
+    job's context — THREAD-mode jobs run concurrently on one shared provider, so
+    a single metadata slot would stamp another job's identity. The process-wide
+    slot remains as a fallback for spans created outside a job context. Spans of
+    a job that disabled trace upload are marked for the gated exporter to drop."""
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
         self._metadata = dict(metadata) if metadata else {}
@@ -226,12 +246,21 @@ class _MetadataSpanProcessor(SpanProcessor):
         self._metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
+        if (state := _job_telemetry_state()) is not None:
+            metadata, traces_enabled, _ = state
+            if not traces_enabled:
+                span.set_attribute(_ATTR_EXPORT_SUPPRESSED, True)
+                return
+            if metadata:
+                span.set_attributes(metadata)
+            return
         if self._metadata:
             span.set_attributes(self._metadata)
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    """Log counterpart of :class:`_MetadataSpanProcessor` — same lifetime split."""
+    """Log counterpart of :class:`_MetadataSpanProcessor` — same per-job
+    resolution with the process-wide slot as fallback."""
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
         self._metadata = dict(metadata) if metadata else {}
@@ -243,10 +272,20 @@ class _MetadataLogProcessor(LogRecordProcessor):
         self._metadata = {}
 
     def on_emit(self, log_data: ReadWriteLogRecord) -> None:
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)  # type: ignore
+        stamped: dict[str, AttributeValue]
+        if (state := _job_telemetry_state()) is not None:
+            metadata, _, logs_enabled = state
+            if not logs_enabled:
+                stamped = {_ATTR_EXPORT_SUPPRESSED: True}
+            else:
+                stamped = dict(metadata) if metadata else {}
         else:
-            log_data.log_record.attributes = dict(self._metadata)
+            stamped = dict(self._metadata)
+
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(stamped)  # type: ignore
+        else:
+            log_data.log_record.attributes = stamped
 
         if log_data.instrumentation_scope:
             log_data.log_record.attributes.update(  # type: ignore
@@ -273,7 +312,10 @@ class _GatedSpanExporter(SpanExporter):
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         if not self.enabled:
             return SpanExportResult.SUCCESS
-        return self._inner.export(spans)
+        exportable = [s for s in spans if not (s.attributes or {}).get(_ATTR_EXPORT_SUPPRESSED)]
+        if not exportable:
+            return SpanExportResult.SUCCESS
+        return self._inner.export(exportable)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return self._inner.force_flush(timeout_millis)
@@ -292,7 +334,12 @@ class _GatedLogExporter(LogRecordExporter):
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         if not self.enabled:
             return LogRecordExportResult.SUCCESS
-        return self._inner.export(batch)
+        exportable = [
+            r for r in batch if not (r.log_record.attributes or {}).get(_ATTR_EXPORT_SUPPRESSED)
+        ]
+        if not exportable:
+            return LogRecordExportResult.SUCCESS
+        return self._inner.export(exportable)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
@@ -516,7 +563,10 @@ class _CloudTelemetry:
         enable_traces: bool = True,
         enable_logs: bool = True,
         metadata: dict[str, AttributeValue] | None = None,
-    ) -> None:
+    ) -> dict[str, AttributeValue]:
+        """Set up (or reuse) the pipelines for a job. Returns the session
+        metadata stamped on the job's spans and logs, for the caller to keep on
+        the JobContext (per-record stamping resolves it from there)."""
         base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
         if agent_name:
             # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
@@ -586,6 +636,8 @@ class _CloudTelemetry:
                 atexit.register(self.shutdown_at_exit)
 
             self._active_jobs += 1
+
+        return session_metadata
 
     def _ensure_trace_pipeline(self, resource: Resource, url: str) -> None:
         # Check if a tracer provider is not set and set one up
@@ -811,9 +863,9 @@ def _setup_cloud_tracer(
     enable_traces: bool = True,
     enable_logs: bool = True,
     metadata: dict[str, AttributeValue] | None = None,
-) -> None:
+) -> dict[str, AttributeValue]:
     _upload_gate.reset()
-    _cloud.configure(
+    return _cloud.configure(
         room_id=room_id,
         job_id=job_id,
         agent_name=agent_name,

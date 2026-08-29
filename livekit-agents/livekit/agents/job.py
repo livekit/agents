@@ -248,6 +248,15 @@ class JobContext:
         # provider outlives the job, so each measurement carries the job's
         # identity and session metadata (see otel_metrics._job_attrs)
         self._otel_measurement_attrs: dict[str, Any] | None = None
+        # per-record span/log state, set by init_recording(): providers are
+        # shared across (possibly concurrent) jobs, so stamping and upload
+        # gating resolve from the originating job (see traces._job_telemetry_state)
+        self._otel_session_metadata: dict[str, Any] | None = None
+        self._otel_traces_enabled = False
+        self._otel_logs_enabled = False
+        # whether this job registered with the process-wide telemetry (so
+        # _on_cleanup only releases a registration this job actually made)
+        self._telemetry_configured = False
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -357,7 +366,11 @@ class JobContext:
                 self._stop_log_buffering()
 
         self._tempdir.cleanup()
-        _shutdown_telemetry()
+        # release only a registration this job made: _on_cleanup runs for every
+        # job, and in THREAD mode an unconfigured job's release would otherwise
+        # decrement a concurrent recorded job's registration and stop its export
+        if self._telemetry_configured:
+            _shutdown_telemetry()
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)
@@ -831,21 +844,28 @@ class JobContext:
             return
 
         logger.debug("configuring session recording")
-        session_metadata = self._otel_metadata(options)
+        user_metadata = self._otel_metadata(options)
         self._otel_measurement_attrs = {
             "room_id": self.job.room.sid,
             "job_id": self.job.id,
-            **(session_metadata or {}),
+            **(user_metadata or {}),
         }
-        _setup_cloud_tracer(
+        session_metadata = _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
             agent_name=self.job.agent_name,
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=session_metadata,
+            metadata=user_metadata,
         )
+        # per-record telemetry state: spans/logs are stamped and gated from the
+        # originating job's context (THREAD-mode jobs run concurrently on shared
+        # providers), and _on_cleanup releases only what this job registered
+        self._otel_session_metadata = session_metadata
+        self._otel_traces_enabled = options["traces"]
+        self._otel_logs_enabled = options["logs"]
+        self._telemetry_configured = True
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
         # relates to the job

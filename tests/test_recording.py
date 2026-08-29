@@ -1044,20 +1044,22 @@ def test_gated_exporters_drop_data_while_disabled() -> None:
 
     from livekit.agents.telemetry.traces import _GatedLogExporter, _GatedSpanExporter
 
+    span = SimpleNamespace(attributes={"room_id": "room-1"})
     inner = MagicMock()
     gate = _GatedSpanExporter(inner)
-    assert gate.export([]) is SpanExportResult.SUCCESS
+    assert gate.export([span]) is SpanExportResult.SUCCESS
     inner.export.assert_not_called()
     gate.enabled = True
-    gate.export([])
+    gate.export([span])
     inner.export.assert_called_once()
 
+    record = SimpleNamespace(log_record=SimpleNamespace(attributes={"room_id": "room-1"}))
     inner = MagicMock()
     log_gate = _GatedLogExporter(inner)
-    assert log_gate.export([]) is LogRecordExportResult.SUCCESS
+    assert log_gate.export([record]) is LogRecordExportResult.SUCCESS
     inner.export.assert_not_called()
     log_gate.enabled = True
-    log_gate.export([])
+    log_gate.export([record])
     inner.export.assert_called_once()
 
 
@@ -1279,6 +1281,166 @@ def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
         mock_owned_shutdown.assert_called_once()
         new_batch.shutdown.assert_called_once()
         integrator.shutdown.assert_not_called()
+
+
+def _make_telemetry_job_ctx(
+    *,
+    room_id: str,
+    job_id: str,
+    initialized: bool = True,
+    traces: bool = True,
+    logs: bool = True,
+    metadata: dict[str, Any] | None = None,
+) -> MagicMock:
+    """A JobContext stand-in carrying the per-record telemetry state that
+    init_recording() stashes."""
+    ctx = MagicMock()
+    ctx.job.id = job_id
+    ctx.job.room.sid = room_id
+    ctx._recording_initialized = initialized
+    ctx._otel_traces_enabled = traces
+    ctx._otel_logs_enabled = logs
+    ctx._otel_session_metadata = (
+        {"room_id": room_id, "job_id": job_id, **(metadata or {})} if initialized else None
+    )
+    return ctx
+
+
+@contextlib.contextmanager
+def _job_ctx_active(ctx: MagicMock) -> Iterator[None]:
+    from livekit.agents.job import _JobContextVar
+
+    token = _JobContextVar.set(ctx)
+    try:
+        yield
+    finally:
+        _JobContextVar.reset(token)
+
+
+def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
+    """_on_cleanup runs for every job, including ones that never configured
+    telemetry (recording disabled, no observability URL). Such a job must not
+    release a concurrent recorded job's registration — in THREAD mode that would
+    turn export off underneath it."""
+    from livekit.agents.job import JobContext
+
+    def _make_ctx(configured: bool) -> JobContext:
+        ctx = object.__new__(JobContext)
+        ctx._early_log_handler = None
+        ctx._recording_initialized = True
+        ctx._telemetry_configured = configured
+        ctx._tempdir = MagicMock()
+        ctx._handlers_with_filter = []
+        ctx._log_filter = MagicMock()
+        return ctx
+
+    with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
+        _make_ctx(configured=False)._on_cleanup()
+    mock_shutdown.assert_not_called()
+
+    with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
+        _make_ctx(configured=True)._on_cleanup()
+    mock_shutdown.assert_called_once()
+
+
+def test_spans_of_a_job_that_disabled_traces_are_not_uploaded() -> None:
+    """Concurrent THREAD-mode jobs share the provider and the export gates: a
+    recorded job holding the gate open must not cause a disabled job's spans to
+    upload. Spans are marked from their originating job context and dropped by
+    the gated exporter."""
+    from livekit.agents.telemetry.traces import (
+        _ATTR_EXPORT_SUPPRESSED,
+        _GatedSpanExporter,
+        _MetadataSpanProcessor,
+    )
+
+    processor = _MetadataSpanProcessor()
+    disabled_ctx = _make_telemetry_job_ctx(room_id="room-b", job_id="job-b", traces=False)
+    span = MagicMock()
+    with _job_ctx_active(disabled_ctx):
+        processor.on_start(span)
+    span.set_attribute.assert_called_once_with(_ATTR_EXPORT_SUPPRESSED, True)
+    span.set_attributes.assert_not_called()
+
+    inner = MagicMock()
+    gate = _GatedSpanExporter(inner)
+    gate.enabled = True  # held open by the concurrent recorded job
+
+    suppressed = SimpleNamespace(attributes={_ATTR_EXPORT_SUPPRESSED: True})
+    recorded = SimpleNamespace(attributes={"room_id": "room-a"})
+
+    gate.export([suppressed])
+    inner.export.assert_not_called()
+
+    gate.export([suppressed, recorded])
+    inner.export.assert_called_once_with([recorded])
+
+
+def test_concurrent_jobs_stamp_their_own_identity_on_spans() -> None:
+    """Span metadata resolves from the originating job's context, not from the
+    shared last-configured slot — concurrent jobs must not inherit each other's
+    room/job identity."""
+    from livekit.agents.telemetry.traces import _MetadataSpanProcessor
+
+    processor = _MetadataSpanProcessor()
+    # a second job configured after the first: the shared slot holds job B's data
+    processor.set_metadata({"room_id": "room-b", "job_id": "job-b"})
+
+    ctx_a = _make_telemetry_job_ctx(
+        room_id="room-a", job_id="job-a", metadata={"lk.simulation.enabled": True}
+    )
+    span = MagicMock()
+    with _job_ctx_active(ctx_a):
+        processor.on_start(span)
+    span.set_attributes.assert_called_once_with(
+        {"room_id": "room-a", "job_id": "job-a", "lk.simulation.enabled": True}
+    )
+
+    # outside any job context, the slot is still the fallback
+    span = MagicMock()
+    processor.on_start(span)
+    span.set_attributes.assert_called_once_with({"room_id": "room-b", "job_id": "job-b"})
+
+
+def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
+    """Log counterpart: records are stamped/marked from their originating job
+    context and marked ones are dropped by the gated log exporter."""
+    from livekit.agents.telemetry.traces import (
+        _ATTR_EXPORT_SUPPRESSED,
+        _GatedLogExporter,
+        _MetadataLogProcessor,
+    )
+
+    processor = _MetadataLogProcessor()
+
+    def _emit(ctx: MagicMock) -> dict[str, Any]:
+        log_data = MagicMock()
+        log_data.log_record.attributes = {}
+        log_data.instrumentation_scope = None
+        with _job_ctx_active(ctx):
+            processor.on_emit(log_data)
+        return log_data.log_record.attributes
+
+    enabled_ctx = _make_telemetry_job_ctx(room_id="room-a", job_id="job-a")
+    attrs = _emit(enabled_ctx)
+    assert attrs["room_id"] == "room-a" and attrs["job_id"] == "job-a"
+    assert _ATTR_EXPORT_SUPPRESSED not in attrs
+
+    disabled_ctx = _make_telemetry_job_ctx(room_id="room-b", job_id="job-b", logs=False)
+    attrs = _emit(disabled_ctx)
+    assert attrs.get(_ATTR_EXPORT_SUPPRESSED) is True
+    assert "room_id" not in attrs
+
+    inner = MagicMock()
+    gate = _GatedLogExporter(inner)
+    gate.enabled = True
+    suppressed = SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
+    recorded = SimpleNamespace(log_record=SimpleNamespace(attributes={"room_id": "room-a"}))
+
+    gate.export([suppressed])
+    inner.export.assert_not_called()
+    gate.export([recorded, suppressed])
+    inner.export.assert_called_once_with([recorded])
 
 
 # ---------------------------------------------------------------------------
