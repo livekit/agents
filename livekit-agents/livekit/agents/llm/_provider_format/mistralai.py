@@ -76,11 +76,7 @@ def to_conversations_ctx(
 
     # Mistral Conversations API requires the last entry to be a user message
     # (message.input) or tool result (function.result), not an assistant message.
-    if (
-        inject_dummy_user_message
-        and entries
-        and entries[-1]["type"] == "message.output"
-    ):
+    if inject_dummy_user_message and entries and entries[-1]["type"] == "message.output":
         entries.append({"type": "message.input", "role": "user", "content": "."})
 
     return entries, MistralFormatData(instructions=instructions)
