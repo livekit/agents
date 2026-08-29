@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import metrics as metrics_api
 
@@ -82,8 +82,29 @@ _connection_acquire_time = _meter.create_histogram(
 )
 
 
-def _model_attrs(metadata: Metadata | None) -> dict[str, str]:
-    attrs: dict[str, str] = {}
+def _job_attrs() -> dict[str, Any]:
+    """Per-measurement job attribution.
+
+    The meter provider has process lifetime (the OTel metrics global is
+    set-once) and worker processes are reused across jobs, so per-job fields
+    cannot live on the provider's resource. Instead, each measurement carries
+    the job's identity plus the same session metadata that is stamped on spans
+    and logs (simulation ids, redaction flag, ...), which is also correct for
+    concurrent jobs in THREAD mode. Returns a fresh dict — callers may add to it.
+    """
+    from ..job import get_job_context  # local import: job.py imports this module
+
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return {}
+    if ctx._otel_measurement_attrs is not None:
+        return dict(ctx._otel_measurement_attrs)
+    # recording was not initialized (disabled, or the crash path); keep identity
+    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+
+
+def _model_attrs(metadata: Metadata | None) -> dict[str, Any]:
+    attrs = _job_attrs()
     if metadata:
         if metadata.model_provider:
             attrs["model_provider"] = metadata.model_provider
@@ -98,19 +119,20 @@ def flush_turn_metrics(chat_ctx: ChatContext) -> None:
         _record_turn_metrics(msg.metrics)
 
 
-def _metadata_to_attrs(metadata: MetricsMetadata) -> dict[str, str]:
-    attrs: dict[str, str] = {}
-    if "model_name" in metadata:
-        attrs["model_name"] = metadata["model_name"]
-    if "model_provider" in metadata:
-        attrs["model_provider"] = metadata["model_provider"]
+def _metadata_to_attrs(metadata: MetricsMetadata | None) -> dict[str, Any]:
+    attrs = _job_attrs()
+    if metadata:
+        if "model_name" in metadata:
+            attrs["model_name"] = metadata["model_name"]
+        if "model_provider" in metadata:
+            attrs["model_provider"] = metadata["model_provider"]
     return attrs
 
 
 def _record_turn_metrics(report: MetricsReport) -> None:
-    llm_attrs = _metadata_to_attrs(report["llm_metadata"]) if "llm_metadata" in report else {}
-    tts_attrs = _metadata_to_attrs(report["tts_metadata"]) if "tts_metadata" in report else {}
-    stt_attrs = _metadata_to_attrs(report["stt_metadata"]) if "stt_metadata" in report else {}
+    llm_attrs = _metadata_to_attrs(report.get("llm_metadata"))
+    tts_attrs = _metadata_to_attrs(report.get("tts_metadata"))
+    stt_attrs = _metadata_to_attrs(report.get("stt_metadata"))
 
     if "e2e_latency" in report:
         _turn_e2e_latency.record(report["e2e_latency"], attributes=llm_attrs)

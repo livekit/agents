@@ -244,6 +244,10 @@ class JobContext:
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
+        # per-measurement metric attribution, set by init_recording(): the meter
+        # provider outlives the job, so each measurement carries the job's
+        # identity and session metadata (see otel_metrics._job_attrs)
+        self._otel_measurement_attrs: dict[str, Any] | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -827,6 +831,12 @@ class JobContext:
             return
 
         logger.debug("configuring session recording")
+        session_metadata = self._otel_metadata(options)
+        self._otel_measurement_attrs = {
+            "room_id": self.job.room.sid,
+            "job_id": self.job.id,
+            **(session_metadata or {}),
+        }
         _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
@@ -834,7 +844,7 @@ class JobContext:
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=self._otel_metadata(options),
+            metadata=session_metadata,
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it

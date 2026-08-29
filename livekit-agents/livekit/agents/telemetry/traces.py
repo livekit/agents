@@ -496,10 +496,6 @@ class _CloudTelemetry:
         self._owned_meter_provider: SdkMeterProvider | None = None
         self._metrics_unavailable = False
 
-        # batch processors orphaned by a mid-process tracer provider swap; they
-        # are flushed on release and shut down at process exit
-        self._abandoned_processors: list[BatchSpanProcessor] = []
-
     @property
     def logger_provider(self) -> LoggerProvider | None:
         """The logger provider the framework exports through (ours or adopted)."""
@@ -575,7 +571,15 @@ class _CloudTelemetry:
                     if self._log_handler not in root.handlers:
                         root.addHandler(self._log_handler)
 
-            self._ensure_meter_provider(resource, url)
+            # the meter provider outlives the job (the OTel metrics global is
+            # set-once), so its resource carries only process-stable identity;
+            # per-job room_id/job_id ride on each measurement instead
+            # (otel_metrics._job_identity_attrs)
+            process_metadata = {
+                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
+            }
+            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
+            self._ensure_meter_provider(meter_resource, url)
 
             if not self._atexit_registered:
                 self._atexit_registered = True
@@ -612,12 +616,18 @@ class _CloudTelemetry:
             # called after a job already exported); re-attach to the new one and
             # retire the old pipeline
             logger.warning("tracer provider changed; re-attaching LiveKit Cloud span exporter")
-            if self._span_gate is not None:
-                self._span_gate.enabled = False
             if self._span_metadata_processor is not None:
                 self._span_metadata_processor.clear_metadata()
             if self._span_batch_processor is not None:
-                self._abandoned_processors.append(self._span_batch_processor)
+                # shut the old pipeline down in the background: shutdown drains its
+                # queue through its still-enabled gate, exporting the prior jobs'
+                # remaining spans, then goes quiet. shutdown() is idempotent, so
+                # the owned provider shutting it down again at exit is harmless.
+                threading.Thread(
+                    target=self._span_batch_processor.shutdown,
+                    name="livekit-telemetry-retire-BatchSpanProcessor",
+                    daemon=True,
+                ).start()
 
         assert self._session is not None
         span_exporter = OTLPSpanExporter(
@@ -724,8 +734,6 @@ class _CloudTelemetry:
                 flush_targets.append(("logs", self._log_batch_processor.force_flush))
             if self._owned_meter_provider is not None:
                 flush_targets.append(("metrics", self._owned_meter_provider.force_flush))
-            for p in self._abandoned_processors:
-                flush_targets.append(("abandoned-spans", p.force_flush))
 
         # flush before gating off, so the job's remaining telemetry is exported
         _run_bounded("flush", flush_targets, timeout)
@@ -760,17 +768,24 @@ class _CloudTelemetry:
         with self._lock:
             targets: list[tuple[str, Callable[[], Any]]] = []
             if self._owned_tracer_provider is not None:
+                # shutting the provider down also shuts down every processor
+                # attached to it
                 targets.append(("TracerProvider", self._owned_tracer_provider.shutdown))
-            elif self._span_batch_processor is not None:
+            if self._span_batch_processor is not None and (
+                self._trace_provider_attached is not self._owned_tracer_provider
+            ):
+                # the current pipeline is attached to a provider we do not own
+                # (adopted from the integrator, possibly after a mid-process swap
+                # away from our own provider) — its shutdown is on us
                 targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
             if self._owned_logger_provider is not None:
                 targets.append(("LoggerProvider", self._owned_logger_provider.shutdown))
-            elif self._log_batch_processor is not None:
+            if self._log_batch_processor is not None and (
+                self._logger_provider is not self._owned_logger_provider
+            ):
                 targets.append(("BatchLogRecordProcessor", self._log_batch_processor.shutdown))
             if self._owned_meter_provider is not None:
                 targets.append(("MeterProvider", self._owned_meter_provider.shutdown))
-            for p in self._abandoned_processors:
-                targets.append(("AbandonedBatchSpanProcessor", p.shutdown))
             handler = self._log_handler
 
         if handler is not None:

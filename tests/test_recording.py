@@ -5,6 +5,7 @@ import contextlib
 import inspect
 import logging
 import ssl
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -1161,6 +1162,123 @@ def test_meter_provider_skipped_when_integrator_set_a_custom_one() -> None:
 
     stubs.meter_provider_cls.assert_not_called()
     stubs.set_meter_provider.assert_not_called()
+
+
+def test_meter_provider_resource_carries_no_job_identity() -> None:
+    """The meter provider outlives the job (set-once global), so its resource
+    must not carry the first job's room_id/job_id — per-job identity rides on
+    each measurement instead (otel_metrics._job_identity_attrs)."""
+    with _stub_cloud_tracer_deps() as stubs:
+        _setup_cloud_tracer_for_job(agent_name="test-agent")
+
+    resource = stubs.meter_provider_cls.call_args.kwargs["resource"]
+    assert "room_id" not in resource.attributes
+    assert "job_id" not in resource.attributes
+    # process-stable identity is kept
+    assert resource.attributes["service.name"] == "livekit-agents"
+    assert resource.attributes["lk.agent_name"] == "test-agent"
+
+
+def test_metric_measurements_carry_job_identity() -> None:
+    """Usage metrics are stamped with the job's identity and session metadata —
+    the same per-job fields that ride on spans and logs."""
+    from livekit.agents.job import _JobContextVar
+    from livekit.agents.metrics.base import LLMMetrics
+    from livekit.agents.telemetry import otel_metrics
+
+    mock_ctx = MagicMock()
+    mock_ctx.job.id = "job-42"
+    mock_ctx.job.room.sid = "room-42"
+    # what init_recording() stashes: identity + session metadata
+    mock_ctx._otel_measurement_attrs = {
+        "room_id": "room-42",
+        "job_id": "job-42",
+        "lk.simulation.enabled": True,
+    }
+
+    ev = MagicMock(spec=LLMMetrics)
+    ev.metadata = None
+    ev.prompt_tokens = 5
+    ev.prompt_cached_tokens = 0
+    ev.completion_tokens = 0
+
+    with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
+        token = _JobContextVar.set(mock_ctx)
+        try:
+            otel_metrics.collect_usage(ev)
+        finally:
+            _JobContextVar.reset(token)
+
+    attrs = mock_counter.add.call_args.kwargs["attributes"]
+    assert attrs["room_id"] == "room-42"
+    assert attrs["job_id"] == "job-42"
+    assert attrs["lk.simulation.enabled"] is True
+
+    # recording never initialized (disabled / crash path): identity still stamped
+    mock_ctx._otel_measurement_attrs = None
+    with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
+        token = _JobContextVar.set(mock_ctx)
+        try:
+            otel_metrics.collect_usage(ev)
+        finally:
+            _JobContextVar.reset(token)
+    attrs = mock_counter.add.call_args.kwargs["attributes"]
+    assert attrs == {"room_id": "room-42", "job_id": "job-42"}
+
+    # outside a job context the attributes are simply absent, never wrong
+    with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
+        otel_metrics.collect_usage(ev)
+    attrs = mock_counter.add.call_args.kwargs["attributes"]
+    assert "room_id" not in attrs and "job_id" not in attrs
+
+
+def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
+    """If the integrator replaces a framework-created tracer provider
+    mid-process, process exit must shut down BOTH the old owned provider and the
+    batch processor attached to the integrator's provider, or its queued spans
+    are lost — and it must never shut down the integrator's provider itself."""
+    from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+    from opentelemetry.trace import NoOpTracerProvider
+
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry, set_tracer_provider
+
+    with _stub_cloud_tracer_deps() as stubs:
+        batch_instances: list[MagicMock] = []
+        stubs.span_batch.side_effect = lambda *a, **k: (
+            batch_instances.append(MagicMock()) or batch_instances[-1]
+        )
+
+        # job 1: no integrator provider — the framework creates its own
+        set_tracer_provider(NoOpTracerProvider())
+        _setup_cloud_tracer_for_job(job_id="job-1")
+        owned = traces_mod._cloud._owned_tracer_provider
+        assert owned is not None and len(batch_instances) == 1
+        _shutdown_telemetry()
+
+        # the integrator replaces the provider mid-process
+        integrator = MagicMock(spec=SdkTracerProvider)
+        set_tracer_provider(integrator)
+
+        # job 2: the pipeline re-attaches to the integrator's provider and the
+        # old one is retired (shut down on a background thread)
+        _setup_cloud_tracer_for_job(job_id="job-2")
+        assert len(batch_instances) == 2
+        old_batch, new_batch = batch_instances
+        integrator.add_span_processor.assert_any_call(new_batch)
+        for _ in range(50):  # retire happens on a daemon thread
+            if old_batch.shutdown.called:
+                break
+            time.sleep(0.02)
+        old_batch.shutdown.assert_called_once()
+        _shutdown_telemetry()
+
+        with patch.object(owned, "shutdown") as mock_owned_shutdown:
+            traces_mod._cloud.shutdown_at_exit()
+
+        mock_owned_shutdown.assert_called_once()
+        new_batch.shutdown.assert_called_once()
+        integrator.shutdown.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
