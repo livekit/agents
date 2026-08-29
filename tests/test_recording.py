@@ -973,7 +973,8 @@ def test_shutdown_telemetry_keeps_integrator_providers_alive() -> None:
 def test_framework_created_providers_live_for_the_process() -> None:
     """Providers the framework creates are reused by the next job in the process
     (the OTel logger/meter globals are set-once) and shut down only at process
-    exit — not per job, which previously left job 2+ on dead providers."""
+    exit — never per job: the set-once OTel globals cannot be replaced, so a
+    per-job shutdown would leave every later job on dead providers."""
     from opentelemetry.trace import NoOpTracerProvider
 
     from livekit.agents.telemetry import traces as traces_mod

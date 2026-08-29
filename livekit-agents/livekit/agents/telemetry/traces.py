@@ -213,11 +213,11 @@ class _AuthRefreshingSession(requests.Session):
 
 @dataclass(frozen=True)
 class _JobTelemetry:
-    """Per-job telemetry state, built by ``_CloudTelemetry.configure`` and kept
-    on the ``JobContext``. Spans, logs, and metric measurements resolve their
-    attribution and upload gating from the originating job through this object —
-    THREAD-mode jobs run concurrently on shared providers, so nothing per-job
-    can live in process-wide state."""
+    """A job's cloud-telemetry registration, built by
+    ``_CloudTelemetry.configure`` and kept on the ``JobContext``. Spans, logs,
+    and metric measurements created by the job resolve their attribution and
+    upload gating through this object, which stays correct when jobs run
+    concurrently on the shared providers (THREAD executor)."""
 
     # the job's identity and session metadata, stamped on every span/log/metric
     attributes: dict[str, AttributeValue]
@@ -227,7 +227,12 @@ class _JobTelemetry:
 
 def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
     """The attributes stamped on telemetry created by the job on this context,
-    or None outside any job context."""
+    or None outside any job context.
+
+    Stamping is pure attribution and applies regardless of the job's recording
+    options — every exporter on a shared provider (an integrator's included)
+    sees the same attributes. Whether LiveKit Cloud uploads a record is decided
+    separately, by the exportable-jobs registry (``_job_export_state``)."""
 
     from ..job import get_job_context  # local import: job.py imports this module
 
@@ -518,27 +523,33 @@ class _CloudTelemetry:
     ``configure()`` and ``release()`` run once per job (from
     ``JobContext.init_recording`` and ``JobContext._on_cleanup``), but worker
     processes outlive jobs: the THREAD executor runs every job of the worker in
-    one shared process, and an integrator's OTel providers (e.g. the Langfuse
-    setup in the tracing docs, Logfire, dd-trace) are configured once at process
-    start. Telemetry state is therefore split by lifetime:
+    one shared process — possibly several concurrently — and an integrator's
+    OTel providers (e.g. the Langfuse setup in the tracing docs, Logfire,
+    dd-trace) are configured once at process start. State is therefore split by
+    lifetime:
 
-    * **process-lifetime** — the OTLP exporters, the framework's batch and
-      metadata processors, any provider the framework itself creates, and the
+    * **process** — the OTLP exporters, the framework's batch and metadata
+      processors, any provider the framework itself creates, and the
       root-logger handler instance. Created lazily on first use and shut down
       exactly once, at process exit (bounded, via atexit). A provider supplied
       by the integrator is *adopted*: the framework attaches its own processors
-      to it and NEVER shuts it down.
-    * **per-job** — the metadata stamped on spans/logs, the export gates
-      (a job that disabled traces/logs must not upload them), and whether the
-      root-logger handler is attached. ``release()`` flushes the framework's
-      batch processors (bounded) so LiveKit Cloud receives the job's telemetry
-      at job end, then disables export until the next job.
+      to it and never shuts it down.
+    * **job** — attribution and upload policy, kept independent of each other.
+      Every span/log/metric is stamped with its originating job's attributes,
+      resolved through the job contextvar, regardless of the job's recording
+      options — every destination on a shared provider sees consistent
+      attribution. Whether LiveKit Cloud uploads a record is decided by the
+      exportable-jobs registry (``_export_jobs``): the gated exporters upload a
+      record only while its stamped job_id is registered with that signal
+      enabled. ``release()`` flushes the batch processors (bounded) while the
+      job is still registered, then unregisters it.
 
-    The ``Resource`` on a framework-created provider is built by the first
-    configuring job; per-job attribution (room_id/job_id) rides on the metadata
-    processors, which stamp every span/log. Concurrent jobs in THREAD mode share
-    the single metadata slot — last configured wins, matching the previous
-    behavior of stacking one metadata processor per job on a shared provider.
+    The ``Resource`` on a framework-created tracer/logger provider is built by
+    the first configuring job; the meter provider's resource carries only
+    process-stable identity, with per-job attribution on each measurement.
+    Telemetry emitted outside any job context is stamped from a fallback slot
+    holding the most recently configured job's attributes, cleared once no job
+    remains registered.
     """
 
     def __init__(self) -> None:
@@ -650,7 +661,7 @@ class _CloudTelemetry:
             # the meter provider outlives the job (the OTel metrics global is
             # set-once), so its resource carries only process-stable identity;
             # per-job room_id/job_id ride on each measurement instead
-            # (otel_metrics._job_identity_attrs)
+            # (otel_metrics._job_attrs)
             process_metadata = {
                 k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
             }

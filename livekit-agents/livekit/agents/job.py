@@ -245,11 +245,10 @@ class JobContext:
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
-        # per-job telemetry state, set by init_recording(): providers are shared
-        # across (possibly concurrent) jobs, so span/log/metric attribution and
-        # upload gating resolve from the originating job. None also means this
-        # job never registered with the process-wide telemetry, so _on_cleanup
-        # must not release another job's registration.
+        # this job's cloud-telemetry registration, set by init_recording():
+        # span/log/metric attribution and upload gating resolve from it (the
+        # OTel providers are shared across possibly-concurrent jobs). None while
+        # the job has no registration to release.
         self._telemetry_state: _JobTelemetry | None = None
 
     def _on_setup(self) -> None:
@@ -360,9 +359,8 @@ class JobContext:
                 self._stop_log_buffering()
 
         self._tempdir.cleanup()
-        # per-job release: _on_cleanup runs for every job, and in THREAD mode a
-        # concurrent recorded job must keep exporting — release() only removes
-        # this job's own registration (a no-op if it never configured telemetry)
+        # telemetry registrations are per job: releasing this job's flushes its
+        # remaining telemetry and leaves any concurrent job's export untouched
         if self._telemetry_state is not None:
             _shutdown_telemetry(self.job.id)
 
