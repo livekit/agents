@@ -8,7 +8,8 @@ import os
 import random
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -210,30 +211,39 @@ class _AuthRefreshingSession(requests.Session):
         return resp
 
 
-# Internal marker stamped on spans/log records created by a job that disabled
-# their upload; the gated exporters drop marked items. THREAD-mode workers run
-# jobs concurrently on shared providers, so per-record marking — not a process
-# gate alone — is what keeps a recorded job from exporting a disabled job's data.
-_ATTR_EXPORT_SUPPRESSED = "lk.cloud.export_suppressed"
+@dataclass(frozen=True)
+class _JobTelemetry:
+    """Per-job telemetry state, built by ``_CloudTelemetry.configure`` and kept
+    on the ``JobContext``. Spans, logs, and metric measurements resolve their
+    attribution and upload gating from the originating job through this object —
+    THREAD-mode jobs run concurrently on shared providers, so nothing per-job
+    can live in process-wide state."""
+
+    # the job's identity and session metadata, stamped on every span/log/metric
+    attributes: dict[str, AttributeValue]
+    traces_enabled: bool
+    logs_enabled: bool
 
 
-def _job_telemetry_state() -> tuple[dict[str, AttributeValue] | None, bool, bool] | None:
-    """(span/log metadata, traces_enabled, logs_enabled) of the job on this
-    context, or None when outside a job or before its recording was initialized."""
+def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
+    """The attributes stamped on telemetry created by the job on this context,
+    or None outside any job context."""
+
     from ..job import get_job_context  # local import: job.py imports this module
 
     ctx = get_job_context(required=False)
-    if ctx is None or not ctx._recording_initialized:
+    if ctx is None:
         return None
-    return ctx._otel_session_metadata, ctx._otel_traces_enabled, ctx._otel_logs_enabled
+    if (state := ctx._telemetry_state) is not None:
+        return state.attributes
+    # recording not (or not yet) initialized: still attribute the telemetry
+    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
 
 
 class _MetadataSpanProcessor(SpanProcessor):
     """Stamps per-job metadata on every span, resolved from the originating
-    job's context — THREAD-mode jobs run concurrently on one shared provider, so
-    a single metadata slot would stamp another job's identity. The process-wide
-    slot remains as a fallback for spans created outside a job context. Spans of
-    a job that disabled trace upload are marked for the gated exporter to drop."""
+    job's context. The process-wide slot remains as a fallback for spans created
+    outside a job context (worker-level telemetry) while a job is running."""
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
         self._metadata = dict(metadata) if metadata else {}
@@ -246,13 +256,8 @@ class _MetadataSpanProcessor(SpanProcessor):
         self._metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        if (state := _job_telemetry_state()) is not None:
-            metadata, traces_enabled, _ = state
-            if not traces_enabled:
-                span.set_attribute(_ATTR_EXPORT_SUPPRESSED, True)
-                return
-            if metadata:
-                span.set_attributes(metadata)
+        if (attributes := _job_stamp_attributes()) is not None:
+            span.set_attributes(attributes)
             return
         if self._metadata:
             span.set_attributes(self._metadata)
@@ -273,21 +278,19 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
     def on_emit(self, log_data: ReadWriteLogRecord) -> None:
         stamped: dict[str, AttributeValue]
-        if (state := _job_telemetry_state()) is not None:
-            metadata, _, logs_enabled = state
-            if not logs_enabled:
-                stamped = {_ATTR_EXPORT_SUPPRESSED: True}
-            else:
-                stamped = dict(metadata) if metadata else {}
+        if (attributes := _job_stamp_attributes()) is not None:
+            stamped = dict(attributes)
         else:
             stamped = dict(self._metadata)
 
         if log_data.log_record.attributes:
             log_data.log_record.attributes.update(stamped)  # type: ignore
-        else:
+        elif stamped:
             log_data.log_record.attributes = stamped
 
         if log_data.instrumentation_scope:
+            if log_data.log_record.attributes is None:
+                log_data.log_record.attributes = {}
             log_data.log_record.attributes.update(  # type: ignore
                 {"logger.name": log_data.instrumentation_scope.name}
             )
@@ -299,20 +302,40 @@ class _MetadataLogProcessor(LogRecordProcessor):
         return True
 
 
-class _GatedSpanExporter(SpanExporter):
-    """Wraps the OTLP span exporter so per-job recording options can turn export
-    off without shutting anything down: the exporter and its batch processor have
-    process lifetime, but a job that disabled traces (or the gap between two jobs)
-    must not upload spans."""
+def _job_export_state(
+    export_jobs: Mapping[str, _JobTelemetry], attributes: Mapping[str, Any] | None
+) -> _JobTelemetry | None:
+    """Look up a record's originating job in the exportable-jobs registry.
 
-    def __init__(self, inner: SpanExporter) -> None:
+    Upload to LiveKit Cloud is explicit policy, decoupled from attribution: a
+    record is uploaded only while its stamped job_id (globally unique) is
+    registered — jobs register in ``configure()`` and are removed after their
+    final flush in ``release()`` — and only for the signals that job enabled.
+    Records of a job that disabled recording, and records emitted between jobs,
+    keep their attributes on every destination but never reach Cloud."""
+    if not attributes:
+        return None
+    job_id = attributes.get("job_id")
+    if not isinstance(job_id, str):
+        return None
+    return export_jobs.get(job_id)
+
+
+class _GatedSpanExporter(SpanExporter):
+    """Wraps the OTLP span exporter so only spans of registered, trace-enabled
+    jobs are uploaded (see ``_job_export_state``)."""
+
+    def __init__(self, inner: SpanExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
         self._inner = inner
-        self.enabled = False
+        self._export_jobs = export_jobs
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        if not self.enabled:
-            return SpanExportResult.SUCCESS
-        exportable = [s for s in spans if not (s.attributes or {}).get(_ATTR_EXPORT_SUPPRESSED)]
+        exportable = [
+            s
+            for s in spans
+            if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
+            and state.traces_enabled
+        ]
         if not exportable:
             return SpanExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -327,15 +350,16 @@ class _GatedSpanExporter(SpanExporter):
 class _GatedLogExporter(LogRecordExporter):
     """Log counterpart of :class:`_GatedSpanExporter`."""
 
-    def __init__(self, inner: LogRecordExporter) -> None:
+    def __init__(self, inner: LogRecordExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
         self._inner = inner
-        self.enabled = False
+        self._export_jobs = export_jobs
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
-        if not self.enabled:
-            return LogRecordExportResult.SUCCESS
         exportable = [
-            r for r in batch if not (r.log_record.attributes or {}).get(_ATTR_EXPORT_SUPPRESSED)
+            r
+            for r in batch
+            if (state := _job_export_state(self._export_jobs, r.log_record.attributes)) is not None
+            and state.logs_enabled
         ]
         if not exportable:
             return LogRecordExportResult.SUCCESS
@@ -519,23 +543,29 @@ class _CloudTelemetry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._active_jobs = 0
+        # the exportable-jobs registry: job_id (globally unique) -> the job's
+        # telemetry state, registered by configure() and removed after the final
+        # flush in release(). The gated exporters hold a reference to this exact
+        # dict, so it is mutated in place, never rebound.
+        self._export_jobs: dict[str, _JobTelemetry] = {}
         self._atexit_registered = False
         self._session: _AuthRefreshingSession | None = None
         self._observability_url: str | None = None
 
+        # everything the framework created, shut down once at process exit:
+        # providers it built (constructed with shutdown_on_exit=False) and every
+        # batch processor it attached — appended at each creation site. A
+        # provider supplied by the integrator is never in this list.
+        self._exit_targets: list[tuple[str, Callable[[], Any]]] = []
+
         # traces
         self._trace_provider_attached: trace_sdk.TracerProvider | None = None
-        self._owned_tracer_provider: trace_sdk.TracerProvider | None = None
         self._span_metadata_processor: _MetadataSpanProcessor | None = None
-        self._span_gate: _GatedSpanExporter | None = None
         self._span_batch_processor: BatchSpanProcessor | None = None
 
         # logs
         self._logger_provider: LoggerProvider | None = None
-        self._owned_logger_provider: LoggerProvider | None = None
         self._log_metadata_processor: _MetadataLogProcessor | None = None
-        self._log_gate: _GatedLogExporter | None = None
         self._log_batch_processor: BatchLogRecordProcessor | None = None
         self._log_handler: _TraceLevelLoggingHandler | None = None
 
@@ -563,10 +593,10 @@ class _CloudTelemetry:
         enable_traces: bool = True,
         enable_logs: bool = True,
         metadata: dict[str, AttributeValue] | None = None,
-    ) -> dict[str, AttributeValue]:
-        """Set up (or reuse) the pipelines for a job. Returns the session
-        metadata stamped on the job's spans and logs, for the caller to keep on
-        the JobContext (per-record stamping resolves it from there)."""
+    ) -> _JobTelemetry:
+        """Set up (or reuse) the pipelines for a job. Returns the job's
+        telemetry state, for the caller to keep on the JobContext — per-record
+        stamping and upload gating resolve it from there."""
         base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
         if agent_name:
             # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
@@ -603,8 +633,6 @@ class _CloudTelemetry:
                 self._ensure_trace_pipeline(resource, url)
                 if self._span_metadata_processor is not None:
                     self._span_metadata_processor.set_metadata(session_metadata)
-                if self._span_gate is not None:
-                    self._span_gate.enabled = True
 
             # Always set up the logger provider — it's needed for session reports,
             # evaluations, and chat history, not just Python log export.
@@ -614,8 +642,6 @@ class _CloudTelemetry:
                 self._ensure_log_pipeline(url)
                 if self._log_metadata_processor is not None:
                     self._log_metadata_processor.set_metadata(session_metadata)
-                if self._log_gate is not None:
-                    self._log_gate.enabled = True
                 if self._log_handler is not None:
                     root = logging.getLogger()
                     if self._log_handler not in root.handlers:
@@ -635,9 +661,14 @@ class _CloudTelemetry:
                 self._atexit_registered = True
                 atexit.register(self.shutdown_at_exit)
 
-            self._active_jobs += 1
+            state = _JobTelemetry(
+                attributes=session_metadata,
+                traces_enabled=enable_traces,
+                logs_enabled=enable_logs,
+            )
+            self._export_jobs[job_id] = state
 
-        return session_metadata
+        return state
 
     def _ensure_trace_pipeline(self, resource: Resource, url: str) -> None:
         # Check if a tracer provider is not set and set one up
@@ -649,7 +680,9 @@ class _CloudTelemetry:
             (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
         ):
             owned = trace_sdk.TracerProvider(resource=resource, shutdown_on_exit=False)
-            self._owned_tracer_provider = owned
+            # shutting the provider down also shuts down every processor attached
+            # to it (processor shutdown is idempotent, so overlap is harmless)
+            self._exit_targets.append(("TracerProvider", owned.shutdown))
             set_tracer_provider(owned)
             provider = owned
         else:
@@ -671,10 +704,10 @@ class _CloudTelemetry:
             if self._span_metadata_processor is not None:
                 self._span_metadata_processor.clear_metadata()
             if self._span_batch_processor is not None:
-                # shut the old pipeline down in the background: shutdown drains its
-                # queue through its still-enabled gate, exporting the prior jobs'
-                # remaining spans, then goes quiet. shutdown() is idempotent, so
-                # the owned provider shutting it down again at exit is harmless.
+                # shut the old pipeline down in the background: shutdown drains
+                # its queue, exporting the prior jobs' remaining stamped spans,
+                # then goes quiet. shutdown() is idempotent, so shutting it down
+                # again at process exit is harmless.
                 threading.Thread(
                     target=self._span_batch_processor.shutdown,
                     name="livekit-telemetry-retire-BatchSpanProcessor",
@@ -687,9 +720,11 @@ class _CloudTelemetry:
             compression=Compression.Gzip,
             session=self._session,
         )
-        self._span_gate = _GatedSpanExporter(span_exporter)
         self._span_metadata_processor = _MetadataSpanProcessor()
-        self._span_batch_processor = BatchSpanProcessor(self._span_gate)
+        self._span_batch_processor = BatchSpanProcessor(
+            _GatedSpanExporter(span_exporter, self._export_jobs)
+        )
+        self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
         provider.add_span_processor(self._span_metadata_processor)
         provider.add_span_processor(self._span_batch_processor)
         self._trace_provider_attached = provider
@@ -703,8 +738,8 @@ class _CloudTelemetry:
             self._logger_provider = current
         else:
             owned = LoggerProvider(shutdown_on_exit=False)
+            self._exit_targets.append(("LoggerProvider", owned.shutdown))
             set_logger_provider(owned)
-            self._owned_logger_provider = owned
             self._logger_provider = owned
 
     def _ensure_log_pipeline(self, url: str) -> None:
@@ -716,9 +751,11 @@ class _CloudTelemetry:
             compression=Compression.Gzip,
             session=self._session,
         )
-        self._log_gate = _GatedLogExporter(log_exporter)
         self._log_metadata_processor = _MetadataLogProcessor()
-        self._log_batch_processor = BatchLogRecordProcessor(self._log_gate)
+        self._log_batch_processor = BatchLogRecordProcessor(
+            _GatedLogExporter(log_exporter, self._export_jobs)
+        )
+        self._exit_targets.append(("BatchLogRecordProcessor", self._log_batch_processor.shutdown))
         self._logger_provider.add_log_record_processor(self._log_metadata_processor)
         self._logger_provider.add_log_record_processor(self._log_batch_processor)
         self._log_handler = _TraceLevelLoggingHandler(
@@ -764,20 +801,22 @@ class _CloudTelemetry:
             ).start()
             self._metrics_unavailable = True
             return
+        self._exit_targets.append(("MeterProvider", provider.shutdown))
         self._owned_meter_provider = provider
 
-    def release(self, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
-        """Per-job teardown: flush the framework's exporters (bounded), then —
-        when no other job is running — disable export and detach the log handler.
+    def release(self, job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+        """Per-job teardown: flush the framework's exporters (bounded) while the
+        job is still registered, then remove it from the exportable-jobs
+        registry — records stamped with its id no longer upload. When no job
+        remains, the fallback stamp is cleared and the log handler detached.
 
         Nothing is shut down here: providers (ours or the integrator's) and the
         batch processors keep running for the next job in the process. Final
         shutdown happens once, at process exit (:meth:`shutdown_at_exit`).
         """
         with self._lock:
-            if self._active_jobs == 0:
-                return
-            self._active_jobs -= 1
+            if job_id not in self._export_jobs:
+                return  # never configured, or already released
 
             flush_targets: list[tuple[str, Callable[[], Any]]] = []
             if self._span_batch_processor is not None:
@@ -787,17 +826,14 @@ class _CloudTelemetry:
             if self._owned_meter_provider is not None:
                 flush_targets.append(("metrics", self._owned_meter_provider.force_flush))
 
-        # flush before gating off, so the job's remaining telemetry is exported
+        # flush before unregistering, so the job's remaining telemetry is exported
         _run_bounded("flush", flush_targets, timeout)
 
         with self._lock:
-            if self._active_jobs > 0:
+            self._export_jobs.pop(job_id, None)
+            if self._export_jobs:
                 # another job is still running in this process; keep exporting
                 return
-            if self._span_gate is not None:
-                self._span_gate.enabled = False
-            if self._log_gate is not None:
-                self._log_gate.enabled = False
             if self._span_metadata_processor is not None:
                 self._span_metadata_processor.clear_metadata()
             if self._log_metadata_processor is not None:
@@ -812,32 +848,15 @@ class _CloudTelemetry:
     def shutdown_at_exit(self, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
         """Shut down what the framework created — once, at process exit, bounded.
 
-        Providers the framework created are shut down in full (they were built
-        with ``shutdown_on_exit=False``, so this is the only shutdown they get).
-        For an adopted provider, only the batch processors the framework attached
-        to it are shut down; the integrator's own pipeline is never touched.
+        ``_exit_targets`` is appended at each creation site: providers the
+        framework created (built with ``shutdown_on_exit=False``, so this is the
+        only shutdown they get) and every batch processor the framework attached.
+        Processor shutdown is idempotent, so a processor also covered by its
+        owned provider is harmless — and a provider the integrator supplied is
+        never in the list.
         """
         with self._lock:
-            targets: list[tuple[str, Callable[[], Any]]] = []
-            if self._owned_tracer_provider is not None:
-                # shutting the provider down also shuts down every processor
-                # attached to it
-                targets.append(("TracerProvider", self._owned_tracer_provider.shutdown))
-            if self._span_batch_processor is not None and (
-                self._trace_provider_attached is not self._owned_tracer_provider
-            ):
-                # the current pipeline is attached to a provider we do not own
-                # (adopted from the integrator, possibly after a mid-process swap
-                # away from our own provider) — its shutdown is on us
-                targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
-            if self._owned_logger_provider is not None:
-                targets.append(("LoggerProvider", self._owned_logger_provider.shutdown))
-            if self._log_batch_processor is not None and (
-                self._logger_provider is not self._owned_logger_provider
-            ):
-                targets.append(("BatchLogRecordProcessor", self._log_batch_processor.shutdown))
-            if self._owned_meter_provider is not None:
-                targets.append(("MeterProvider", self._owned_meter_provider.shutdown))
+            targets = list(self._exit_targets)
             handler = self._log_handler
 
         if handler is not None:
@@ -863,7 +882,7 @@ def _setup_cloud_tracer(
     enable_traces: bool = True,
     enable_logs: bool = True,
     metadata: dict[str, AttributeValue] | None = None,
-) -> dict[str, AttributeValue]:
+) -> _JobTelemetry:
     _upload_gate.reset()
     return _cloud.configure(
         room_id=room_id,
@@ -1199,16 +1218,17 @@ async def _upload_session_report(
     logger.debug("finished uploading")
 
 
-def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+def _shutdown_telemetry(job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
     """Per-job telemetry teardown, with a hard wall-clock bound.
 
     This flushes the exporters the framework attached, so LiveKit Cloud receives
-    the job's telemetry at job end — it does NOT shut providers down. Worker
-    processes are reused across jobs (the THREAD executor runs every job in one
-    shared process), and a provider configured by the integrator at process
-    start (Langfuse, Logfire, dd-trace) must keep running for later jobs; the
-    framework's own providers likewise stay alive because the OTel logger/meter
-    globals are set-once. See :class:`_CloudTelemetry` for the ownership model;
-    final shutdown happens once at process exit.
+    the job's telemetry at job end, and unregisters the job from the export
+    registry — it does NOT shut providers down. Worker processes are reused
+    across jobs (the THREAD executor runs every job in one shared process), and
+    a provider configured by the integrator at process start (Langfuse, Logfire,
+    dd-trace) must keep running for later jobs; the framework's own providers
+    likewise stay alive because the OTel logger/meter globals are set-once. See
+    :class:`_CloudTelemetry` for the ownership model; final shutdown happens
+    once at process exit.
     """
-    _cloud.release(timeout)
+    _cloud.release(job_id, timeout)

@@ -955,7 +955,7 @@ def test_shutdown_telemetry_keeps_integrator_providers_alive() -> None:
         integrator_tracer.add_span_processor.assert_called()
         integrator_logger.add_log_record_processor.assert_called()
 
-        _shutdown_telemetry()
+        _shutdown_telemetry("job-1")
 
         # per-job teardown flushes the framework's own exporters...
         stubs.span_batch.return_value.force_flush.assert_called_once()
@@ -990,12 +990,12 @@ def test_framework_created_providers_live_for_the_process() -> None:
         assert isinstance(created, SdkTracerProvider)
 
         with patch.object(created, "shutdown") as mock_tracer_shutdown:
-            _shutdown_telemetry()
+            _shutdown_telemetry("job-1")
 
             # job 2 in the same process: everything is reused, nothing rebuilt
             _setup_cloud_tracer_for_job(job_id="job-2")
             assert traces_mod.tracer._tracer_provider is created
-            _shutdown_telemetry()
+            _shutdown_telemetry("job-2")
 
             stubs.span_exporter.assert_called_once()
             stubs.log_exporter.assert_called_once()
@@ -1009,58 +1009,78 @@ def test_framework_created_providers_live_for_the_process() -> None:
             assert stubs.span_batch.return_value.force_flush.call_count == 2
             assert stubs.meter_provider_cls.return_value.force_flush.call_count == 2
 
-            # process exit shuts down everything the framework created, once
+        # process exit shuts down everything the framework created, exactly once
+        with patch(f"{_TRACES_MOD}._run_bounded") as mock_run_bounded:
             traces_mod._cloud.shutdown_at_exit()
-            mock_tracer_shutdown.assert_called_once()
-            stubs.meter_provider_cls.return_value.shutdown.assert_called_once()
+        target_fns = [fn for _, fn in mock_run_bounded.call_args.args[1]]
+        assert created.shutdown in target_fns
+        assert stubs.meter_provider_cls.return_value.shutdown in target_fns
+        assert target_fns.count(created.shutdown) == 1
 
 
-def test_export_gates_follow_job_lifecycle() -> None:
-    """Export is enabled only while a job that asked for it is running: a job
-    with traces/logs disabled — and the gap between jobs — must not upload."""
+def test_slot_metadata_follows_job_lifecycle() -> None:
+    """The fallback stamp for out-of-job-context telemetry is set while a job is
+    running and cleared when the last job releases — unstamped records between
+    jobs are then dropped by the stamp-gated exporters."""
     from livekit.agents.telemetry import traces as traces_mod
     from livekit.agents.telemetry.traces import _shutdown_telemetry
 
     with _stub_cloud_tracer_deps():
         _setup_cloud_tracer_for_job(job_id="job-1")
         cloud = traces_mod._cloud
-        assert cloud._span_gate is not None and cloud._span_gate.enabled
-        assert cloud._log_gate is not None and cloud._log_gate.enabled
+        assert cloud._span_metadata_processor is not None
+        assert cloud._span_metadata_processor._metadata["job_id"] == "job-1"
+        assert cloud._log_metadata_processor is not None
+        assert cloud._log_metadata_processor._metadata["job_id"] == "job-1"
 
-        _shutdown_telemetry()
-        assert not cloud._span_gate.enabled
-        assert not cloud._log_gate.enabled
-
-        # a later job that disabled traces must not re-open the span gate
-        _setup_cloud_tracer_for_job(job_id="job-2", enable_traces=False)
-        assert not cloud._span_gate.enabled
-        assert cloud._log_gate.enabled
-        _shutdown_telemetry()
+        _shutdown_telemetry("job-1")
+        assert cloud._span_metadata_processor._metadata == {}
+        assert cloud._log_metadata_processor._metadata == {}
 
 
-def test_gated_exporters_drop_data_while_disabled() -> None:
+def test_exporters_only_upload_records_of_registered_jobs() -> None:
+    """Cloud export is registry-gated: a record uploads only while its stamped
+    job_id is in the exportable-jobs registry, and only for the signals that
+    job enabled. Attribution is never stripped from any record — upload policy
+    and attributes are independent."""
     from opentelemetry.sdk._logs.export import LogRecordExportResult
     from opentelemetry.sdk.trace.export import SpanExportResult
 
-    from livekit.agents.telemetry.traces import _GatedLogExporter, _GatedSpanExporter
+    from livekit.agents.telemetry.traces import (
+        _GatedLogExporter,
+        _GatedSpanExporter,
+        _JobTelemetry,
+    )
 
-    span = SimpleNamespace(attributes={"room_id": "room-1"})
-    inner = MagicMock()
-    gate = _GatedSpanExporter(inner)
-    assert gate.export([span]) is SpanExportResult.SUCCESS
-    inner.export.assert_not_called()
-    gate.enabled = True
-    gate.export([span])
-    inner.export.assert_called_once()
+    export_jobs = {
+        "job-on": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True),
+        "job-off": _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=False),
+    }
 
-    record = SimpleNamespace(log_record=SimpleNamespace(attributes={"room_id": "room-1"}))
+    recorded = SimpleNamespace(attributes={"room_id": "room-1", "job_id": "job-on"})
+    disabled = SimpleNamespace(attributes={"room_id": "room-2", "job_id": "job-off"})
+    released = SimpleNamespace(attributes={"room_id": "room-3", "job_id": "job-gone"})
+    unstamped = SimpleNamespace(attributes={"some": "attr"})
+
     inner = MagicMock()
-    log_gate = _GatedLogExporter(inner)
-    assert log_gate.export([record]) is LogRecordExportResult.SUCCESS
+    gate = _GatedSpanExporter(inner, export_jobs)
+    assert gate.export([disabled, released, unstamped]) is SpanExportResult.SUCCESS
     inner.export.assert_not_called()
-    log_gate.enabled = True
-    log_gate.export([record])
-    inner.export.assert_called_once()
+    gate.export([disabled, recorded, released, unstamped])
+    inner.export.assert_called_once_with([recorded])
+
+    def _rec(attrs: dict[str, Any] | None) -> SimpleNamespace:
+        return SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
+
+    inner = MagicMock()
+    log_gate = _GatedLogExporter(inner, export_jobs)
+    assert (
+        log_gate.export([_rec({"job_id": "job-off"}), _rec(None)]) is LogRecordExportResult.SUCCESS
+    )
+    inner.export.assert_not_called()
+    recorded_rec = _rec({"room_id": "room-1", "job_id": "job-on"})
+    log_gate.export([_rec({"job_id": "job-gone"}), recorded_rec])
+    inner.export.assert_called_once_with([recorded_rec])
 
 
 def test_shutdown_telemetry_is_idempotent_and_safe_without_setup() -> None:
@@ -1069,11 +1089,11 @@ def test_shutdown_telemetry_is_idempotent_and_safe_without_setup() -> None:
     from livekit.agents.telemetry.traces import _shutdown_telemetry
 
     with _stub_cloud_tracer_deps() as stubs:
-        _shutdown_telemetry()  # no configure ran — must be a no-op
+        _shutdown_telemetry("job-1")  # no configure ran — must be a no-op
 
         _setup_cloud_tracer_for_job()
-        _shutdown_telemetry()
-        _shutdown_telemetry()
+        _shutdown_telemetry("job-1")
+        _shutdown_telemetry("job-1")
         assert stubs.span_batch.return_value.force_flush.call_count == 1
 
 
@@ -1090,12 +1110,13 @@ def test_concurrent_jobs_keep_exporting_until_the_last_release() -> None:
         cloud = traces_mod._cloud
         root = logging.getLogger()
 
-        _shutdown_telemetry()  # job A ends; job B is still running
-        assert cloud._span_gate is not None and cloud._span_gate.enabled
+        _shutdown_telemetry("job-a")  # job A ends; job B is still running
+        assert cloud._span_metadata_processor is not None
+        assert cloud._span_metadata_processor._metadata  # slot still stamped
         assert cloud.log_handler is not None and cloud.log_handler in root.handlers
 
-        _shutdown_telemetry()  # job B ends
-        assert not cloud._span_gate.enabled
+        _shutdown_telemetry("job-b")  # job B ends
+        assert cloud._span_metadata_processor._metadata == {}
         assert cloud.log_handler not in root.handlers
 
 
@@ -1115,7 +1136,7 @@ def test_shutdown_telemetry_leaves_foreign_log_handlers_attached() -> None:
             ours = traces_mod._cloud.log_handler
             assert ours is not None and ours in root.handlers
 
-            _shutdown_telemetry()
+            _shutdown_telemetry("job-1")
             assert ours not in root.handlers
         assert foreign_handler in root.handlers
     finally:
@@ -1187,16 +1208,17 @@ def test_metric_measurements_carry_job_identity() -> None:
     from livekit.agents.job import _JobContextVar
     from livekit.agents.metrics.base import LLMMetrics
     from livekit.agents.telemetry import otel_metrics
+    from livekit.agents.telemetry.traces import _JobTelemetry
 
     mock_ctx = MagicMock()
     mock_ctx.job.id = "job-42"
     mock_ctx.job.room.sid = "room-42"
     # what init_recording() stashes: identity + session metadata
-    mock_ctx._otel_measurement_attrs = {
-        "room_id": "room-42",
-        "job_id": "job-42",
-        "lk.simulation.enabled": True,
-    }
+    mock_ctx._telemetry_state = _JobTelemetry(
+        attributes={"room_id": "room-42", "job_id": "job-42", "lk.simulation.enabled": True},
+        traces_enabled=True,
+        logs_enabled=True,
+    )
 
     ev = MagicMock(spec=LLMMetrics)
     ev.metadata = None
@@ -1217,7 +1239,7 @@ def test_metric_measurements_carry_job_identity() -> None:
     assert attrs["lk.simulation.enabled"] is True
 
     # recording never initialized (disabled / crash path): identity still stamped
-    mock_ctx._otel_measurement_attrs = None
+    mock_ctx._telemetry_state = None
     with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
         token = _JobContextVar.set(mock_ctx)
         try:
@@ -1254,9 +1276,9 @@ def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
         # job 1: no integrator provider — the framework creates its own
         set_tracer_provider(NoOpTracerProvider())
         _setup_cloud_tracer_for_job(job_id="job-1")
-        owned = traces_mod._cloud._owned_tracer_provider
-        assert owned is not None and len(batch_instances) == 1
-        _shutdown_telemetry()
+        owned = traces_mod.tracer._tracer_provider
+        assert isinstance(owned, SdkTracerProvider) and len(batch_instances) == 1
+        _shutdown_telemetry("job-1")
 
         # the integrator replaces the provider mid-process
         integrator = MagicMock(spec=SdkTracerProvider)
@@ -1273,14 +1295,16 @@ def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
                 break
             time.sleep(0.02)
         old_batch.shutdown.assert_called_once()
-        _shutdown_telemetry()
+        _shutdown_telemetry("job-2")
 
-        with patch.object(owned, "shutdown") as mock_owned_shutdown:
+        # the exit targets cover the owned provider AND the current pipeline on
+        # the integrator's provider — never the integrator's provider itself
+        with patch(f"{_TRACES_MOD}._run_bounded") as mock_run_bounded:
             traces_mod._cloud.shutdown_at_exit()
-
-        mock_owned_shutdown.assert_called_once()
-        new_batch.shutdown.assert_called_once()
-        integrator.shutdown.assert_not_called()
+        target_fns = [fn for _, fn in mock_run_bounded.call_args.args[1]]
+        assert owned.shutdown in target_fns
+        assert new_batch.shutdown in target_fns
+        assert integrator.shutdown not in target_fns
 
 
 def _make_telemetry_job_ctx(
@@ -1294,14 +1318,19 @@ def _make_telemetry_job_ctx(
 ) -> MagicMock:
     """A JobContext stand-in carrying the per-record telemetry state that
     init_recording() stashes."""
+    from livekit.agents.telemetry.traces import _JobTelemetry
+
     ctx = MagicMock()
     ctx.job.id = job_id
     ctx.job.room.sid = room_id
-    ctx._recording_initialized = initialized
-    ctx._otel_traces_enabled = traces
-    ctx._otel_logs_enabled = logs
-    ctx._otel_session_metadata = (
-        {"room_id": room_id, "job_id": job_id, **(metadata or {})} if initialized else None
+    ctx._telemetry_state = (
+        _JobTelemetry(
+            attributes={"room_id": room_id, "job_id": job_id, **(metadata or {})},
+            traces_enabled=traces,
+            logs_enabled=logs,
+        )
+        if initialized
+        else None
     )
     return ctx
 
@@ -1323,12 +1352,18 @@ def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
     release a concurrent recorded job's registration — in THREAD mode that would
     turn export off underneath it."""
     from livekit.agents.job import JobContext
+    from livekit.agents.telemetry.traces import _JobTelemetry
 
     def _make_ctx(configured: bool) -> JobContext:
         ctx = object.__new__(JobContext)
+        ctx._info = SimpleNamespace(job=SimpleNamespace(id="job-x"))
         ctx._early_log_handler = None
         ctx._recording_initialized = True
-        ctx._telemetry_configured = configured
+        ctx._telemetry_state = (
+            _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+            if configured
+            else None
+        )
         ctx._tempdir = MagicMock()
         ctx._handlers_with_filter = []
         ctx._log_filter = MagicMock()
@@ -1340,17 +1375,18 @@ def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
 
     with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
         _make_ctx(configured=True)._on_cleanup()
-    mock_shutdown.assert_called_once()
+    mock_shutdown.assert_called_once_with("job-x")
 
 
 def test_spans_of_a_job_that_disabled_traces_are_not_uploaded() -> None:
-    """Concurrent THREAD-mode jobs share the provider and the export gates: a
-    recorded job holding the gate open must not cause a disabled job's spans to
-    upload. Spans are marked from their originating job context and dropped by
-    the gated exporter."""
+    """Concurrent THREAD-mode jobs share the provider and the exporter: a
+    recorded job must not cause a disabled job's spans to upload. The disabled
+    job's spans keep their full attribution for the integrator's exporters on
+    the same provider — Cloud upload is denied by the exportable-jobs registry,
+    not by stripping attributes."""
     from livekit.agents.telemetry.traces import (
-        _ATTR_EXPORT_SUPPRESSED,
         _GatedSpanExporter,
+        _JobTelemetry,
         _MetadataSpanProcessor,
     )
 
@@ -1359,21 +1395,24 @@ def test_spans_of_a_job_that_disabled_traces_are_not_uploaded() -> None:
     span = MagicMock()
     with _job_ctx_active(disabled_ctx):
         processor.on_start(span)
-    span.set_attribute.assert_called_once_with(_ATTR_EXPORT_SUPPRESSED, True)
-    span.set_attributes.assert_not_called()
+    # attribution is unconditional — the integrator's copy keeps room/job ids
+    span.set_attributes.assert_called_once_with({"room_id": "room-b", "job_id": "job-b"})
 
+    export_jobs = {
+        "job-a": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True),
+        "job-b": _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=True),
+    }
     inner = MagicMock()
-    gate = _GatedSpanExporter(inner)
-    gate.enabled = True  # held open by the concurrent recorded job
+    gate = _GatedSpanExporter(inner, export_jobs)
 
-    suppressed = SimpleNamespace(attributes={_ATTR_EXPORT_SUPPRESSED: True})
-    recorded = SimpleNamespace(attributes={"room_id": "room-a"})
+    disabled_span = SimpleNamespace(attributes={"room_id": "room-b", "job_id": "job-b"})
+    recorded_span = SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"})
 
-    gate.export([suppressed])
+    gate.export([disabled_span])
     inner.export.assert_not_called()
 
-    gate.export([suppressed, recorded])
-    inner.export.assert_called_once_with([recorded])
+    gate.export([disabled_span, recorded_span])
+    inner.export.assert_called_once_with([recorded_span])
 
 
 def test_concurrent_jobs_stamp_their_own_identity_on_spans() -> None:
@@ -1403,11 +1442,11 @@ def test_concurrent_jobs_stamp_their_own_identity_on_spans() -> None:
 
 
 def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
-    """Log counterpart: records are stamped/marked from their originating job
-    context and marked ones are dropped by the gated log exporter."""
+    """Log counterpart: records keep their full attribution for every
+    destination; Cloud upload is denied by the exportable-jobs registry."""
     from livekit.agents.telemetry.traces import (
-        _ATTR_EXPORT_SUPPRESSED,
         _GatedLogExporter,
+        _JobTelemetry,
         _MetadataLogProcessor,
     )
 
@@ -1421,25 +1460,25 @@ def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
             processor.on_emit(log_data)
         return log_data.log_record.attributes
 
-    enabled_ctx = _make_telemetry_job_ctx(room_id="room-a", job_id="job-a")
-    attrs = _emit(enabled_ctx)
-    assert attrs["room_id"] == "room-a" and attrs["job_id"] == "job-a"
-    assert _ATTR_EXPORT_SUPPRESSED not in attrs
-
+    # attribution is unconditional, recording options notwithstanding
     disabled_ctx = _make_telemetry_job_ctx(room_id="room-b", job_id="job-b", logs=False)
     attrs = _emit(disabled_ctx)
-    assert attrs.get(_ATTR_EXPORT_SUPPRESSED) is True
-    assert "room_id" not in attrs
+    assert attrs["room_id"] == "room-b" and attrs["job_id"] == "job-b"
 
+    export_jobs = {
+        "job-a": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True),
+        "job-b": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=False),
+    }
     inner = MagicMock()
-    gate = _GatedLogExporter(inner)
-    gate.enabled = True
-    suppressed = SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
-    recorded = SimpleNamespace(log_record=SimpleNamespace(attributes={"room_id": "room-a"}))
+    gate = _GatedLogExporter(inner, export_jobs)
+    disabled = SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
+    recorded = SimpleNamespace(
+        log_record=SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"})
+    )
 
-    gate.export([suppressed])
+    gate.export([disabled])
     inner.export.assert_not_called()
-    gate.export([recorded, suppressed])
+    gate.export([recorded, disabled])
     inner.export.assert_called_once_with([recorded])
 
 

@@ -42,6 +42,7 @@ from .telemetry import _upload_session_report, otel_metrics
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
+    _JobTelemetry,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -244,19 +245,12 @@ class JobContext:
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
-        # per-measurement metric attribution, set by init_recording(): the meter
-        # provider outlives the job, so each measurement carries the job's
-        # identity and session metadata (see otel_metrics._job_attrs)
-        self._otel_measurement_attrs: dict[str, Any] | None = None
-        # per-record span/log state, set by init_recording(): providers are
-        # shared across (possibly concurrent) jobs, so stamping and upload
-        # gating resolve from the originating job (see traces._job_telemetry_state)
-        self._otel_session_metadata: dict[str, Any] | None = None
-        self._otel_traces_enabled = False
-        self._otel_logs_enabled = False
-        # whether this job registered with the process-wide telemetry (so
-        # _on_cleanup only releases a registration this job actually made)
-        self._telemetry_configured = False
+        # per-job telemetry state, set by init_recording(): providers are shared
+        # across (possibly concurrent) jobs, so span/log/metric attribution and
+        # upload gating resolve from the originating job. None also means this
+        # job never registered with the process-wide telemetry, so _on_cleanup
+        # must not release another job's registration.
+        self._telemetry_state: _JobTelemetry | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -366,11 +360,11 @@ class JobContext:
                 self._stop_log_buffering()
 
         self._tempdir.cleanup()
-        # release only a registration this job made: _on_cleanup runs for every
-        # job, and in THREAD mode an unconfigured job's release would otherwise
-        # decrement a concurrent recorded job's registration and stop its export
-        if self._telemetry_configured:
-            _shutdown_telemetry()
+        # per-job release: _on_cleanup runs for every job, and in THREAD mode a
+        # concurrent recorded job must keep exporting — release() only removes
+        # this job's own registration (a no-op if it never configured telemetry)
+        if self._telemetry_state is not None:
+            _shutdown_telemetry(self.job.id)
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)
@@ -844,28 +838,15 @@ class JobContext:
             return
 
         logger.debug("configuring session recording")
-        user_metadata = self._otel_metadata(options)
-        self._otel_measurement_attrs = {
-            "room_id": self.job.room.sid,
-            "job_id": self.job.id,
-            **(user_metadata or {}),
-        }
-        session_metadata = _setup_cloud_tracer(
+        self._telemetry_state = _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
             agent_name=self.job.agent_name,
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=user_metadata,
+            metadata=self._otel_metadata(options),
         )
-        # per-record telemetry state: spans/logs are stamped and gated from the
-        # originating job's context (THREAD-mode jobs run concurrently on shared
-        # providers), and _on_cleanup releases only what this job registered
-        self._otel_session_metadata = session_metadata
-        self._otel_traces_enabled = options["traces"]
-        self._otel_logs_enabled = options["logs"]
-        self._telemetry_configured = True
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
         # relates to the job

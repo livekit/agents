@@ -88,17 +88,17 @@ def _job_attrs() -> dict[str, Any]:
     The meter provider has process lifetime (the OTel metrics global is
     set-once) and worker processes are reused across jobs, so per-job fields
     cannot live on the provider's resource. Instead, each measurement carries
-    the job's identity plus the same session metadata that is stamped on spans
-    and logs (simulation ids, redaction flag, ...), which is also correct for
-    concurrent jobs in THREAD mode. Returns a fresh dict — callers may add to it.
+    the same per-job attributes that are stamped on spans and logs (identity,
+    simulation ids, redaction flag, ...), which is also correct for concurrent
+    jobs in THREAD mode. Returns a fresh dict — callers may add to it.
     """
     from ..job import get_job_context  # local import: job.py imports this module
 
     ctx = get_job_context(required=False)
     if ctx is None:
         return {}
-    if ctx._otel_measurement_attrs is not None:
-        return dict(ctx._otel_measurement_attrs)
+    if (state := ctx._telemetry_state) is not None:
+        return dict(state.attributes)
     # recording was not initialized (disabled, or the crash path); keep identity
     return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
 
