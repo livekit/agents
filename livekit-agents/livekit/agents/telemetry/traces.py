@@ -344,12 +344,18 @@ def _setup_cloud_tracer(
         # Check if a tracer provider is not set and set one up
         # below shows how the ProxyTracerProvider is returned when none have been setup
         # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+        #
+        # shutdown_on_exit=False: the SDK registers atexit handlers that call
+        # provider.shutdown() → worker_thread.join(30s).  When the OTLP endpoint
+        # is unreachable (offline / no network), the worker threads may be stuck
+        # exporting and the join blocks process exit.  We manage shutdown
+        # explicitly via _shutdown_telemetry() with a bounded wall-clock timeout.
         tracer_provider: trace_api.TracerProvider
         if isinstance(
             tracer._tracer_provider,
             (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
         ):
-            tracer_provider = trace_sdk.TracerProvider(resource=resource)
+            tracer_provider = trace_sdk.TracerProvider(resource=resource, shutdown_on_exit=False)
             set_tracer_provider(tracer_provider)
         else:
             # attach the processor to the existing tracer provider
@@ -371,7 +377,7 @@ def _setup_cloud_tracer(
     # evaluations, and chat history, not just Python log export.
     logger_provider = get_logger_provider()
     if not isinstance(logger_provider, LoggerProvider):
-        logger_provider = LoggerProvider()
+        logger_provider = LoggerProvider(shutdown_on_exit=False)
         set_logger_provider(logger_provider)
 
     if enable_logs:
@@ -405,7 +411,9 @@ def _setup_cloud_tracer(
             },
         )
         reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
-        meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
+        meter_provider = SdkMeterProvider(
+            resource=resource, metric_readers=[reader], shutdown_on_exit=False
+        )
         metrics_api.set_meter_provider(meter_provider)
 
 
