@@ -90,7 +90,7 @@ async def connect(
         ws = await asyncio.wait_for(
             session.ws_connect(
                 websocket_url,
-                headers={"Authorization": f"Api-Key {api_key}"},
+                headers={"Authorization": f"Bearer {api_key}"},
                 protocols=(SUBPROTOCOL,),
             ),
             timeout,

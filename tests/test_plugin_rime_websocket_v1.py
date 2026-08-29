@@ -218,7 +218,7 @@ async def test_v1_streams_audio_before_end_and_maps_start_options() -> None:
 
     assert remaining[-1].is_final
     assert server.paths == ["/coda/v1/coda/ws"]
-    assert server.headers[0]["Authorization"] == "Api-Key test-key"
+    assert server.headers[0]["Authorization"] == "Bearer test-key"
     assert server.headers[0]["Sec-WebSocket-Protocol"] == "rime.v1.json"
     assert _payloads(server) == ["start", "text", "text", "end"]
     assert [request["text"] for request in server.requests if "text" in request] == [
