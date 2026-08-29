@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import logging
 import ssl
 from collections.abc import Iterator
 from pathlib import Path
@@ -145,6 +146,15 @@ def _observability_endpoint_arg(func: Any) -> dict[str, str]:
     return {"cloud_hostname": "test.livekit.cloud"}
 
 
+def _stub_access_token(mock_at: MagicMock) -> None:
+    """Make a patched api.AccessToken produce a fixed JWT."""
+    mock_token = MagicMock()
+    mock_token.with_observability_grants.return_value = mock_token
+    mock_token.with_ttl.return_value = mock_token
+    mock_token.to_jwt.return_value = "test-jwt"
+    mock_at.return_value = mock_token
+
+
 @contextlib.contextmanager
 def _patch_upload_deps() -> Iterator[MagicMock]:
     """Patch OTel logger provider and AccessToken. Yields the mock logger for assertions."""
@@ -156,12 +166,99 @@ def _patch_upload_deps() -> Iterator[MagicMock]:
         provider = mock_glp.return_value
         provider.get_logger.return_value = mock_logger
         mock_logger.provider = provider
-        mock_token = MagicMock()
-        mock_token.with_observability_grants.return_value = mock_token
-        mock_token.with_ttl.return_value = mock_token
-        mock_token.to_jwt.return_value = "test-jwt"
-        mock_at.return_value = mock_token
+        _stub_access_token(mock_at)
         yield mock_logger
+
+
+@contextlib.contextmanager
+def _fresh_telemetry_state() -> Iterator[None]:
+    """Swap in a fresh _CloudTelemetry and restore process-wide telemetry state.
+
+    _setup_cloud_tracer / _shutdown_telemetry mutate process-lifetime state (the
+    singleton, the _DynamicTracer provider slot, the root logger); tests must not
+    leak it into each other.
+    """
+    from livekit.agents.telemetry import traces as traces_mod
+
+    prev_cloud = traces_mod._cloud
+    prev_provider = traces_mod.tracer._tracer_provider
+    traces_mod._cloud = traces_mod._CloudTelemetry()
+    try:
+        yield
+    finally:
+        if (handler := traces_mod._cloud.log_handler) is not None:
+            logging.getLogger().removeHandler(handler)
+        traces_mod._cloud = prev_cloud
+        traces_mod.tracer.set_provider(prev_provider)
+
+
+@contextlib.contextmanager
+def _stub_cloud_tracer_deps() -> Iterator[SimpleNamespace]:
+    """Fresh telemetry state with auth, the OTLP exporters, the batch processors,
+    and the set-once OTel logger/meter globals stubbed out, so tests never touch
+    the network or the real process globals."""
+    from opentelemetry.metrics._internal import _ProxyMeterProvider
+
+    # stateful stand-ins for the set-once OTel globals; tests can pre-seed these
+    # with an "integrator" provider
+    meter_state: dict[str, Any] = {"provider": _ProxyMeterProvider()}
+    logger_state: dict[str, Any] = {"provider": MagicMock()}  # not an SDK LoggerProvider
+
+    with (
+        _fresh_telemetry_state(),
+        patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
+        patch(f"{_TRACES_MOD}.OTLPSpanExporter") as mock_span_exporter,
+        patch(f"{_TRACES_MOD}.OTLPLogExporter") as mock_log_exporter,
+        patch(f"{_TRACES_MOD}.OTLPMetricExporter") as mock_metric_exporter,
+        patch(f"{_TRACES_MOD}.BatchSpanProcessor") as mock_span_batch,
+        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor") as mock_log_batch,
+        patch(f"{_TRACES_MOD}.PeriodicExportingMetricReader"),
+        patch(f"{_TRACES_MOD}.SdkMeterProvider") as mock_meter_provider_cls,
+        patch(
+            f"{_TRACES_MOD}.get_logger_provider",
+            side_effect=lambda: logger_state["provider"],
+        ),
+        patch(
+            f"{_TRACES_MOD}.set_logger_provider",
+            side_effect=lambda p: logger_state.__setitem__("provider", p),
+        ) as mock_set_logger_provider,
+        patch(
+            f"{_TRACES_MOD}.metrics_api.get_meter_provider",
+            side_effect=lambda: meter_state["provider"],
+        ),
+        patch(
+            f"{_TRACES_MOD}.metrics_api.set_meter_provider",
+            side_effect=lambda p: meter_state.__setitem__("provider", p),
+        ) as mock_set_meter_provider,
+        patch(f"{_TRACES_MOD}.atexit"),
+    ):
+        _stub_access_token(mock_at)
+        yield SimpleNamespace(
+            span_exporter=mock_span_exporter,
+            log_exporter=mock_log_exporter,
+            metric_exporter=mock_metric_exporter,
+            span_batch=mock_span_batch,
+            log_batch=mock_log_batch,
+            meter_provider_cls=mock_meter_provider_cls,
+            set_logger_provider=mock_set_logger_provider,
+            set_meter_provider=mock_set_meter_provider,
+            meter_state=meter_state,
+            logger_state=logger_state,
+        )
+
+
+def _setup_cloud_tracer_for_job(job_id: str = "job-1", **kwargs: Any) -> None:
+    from livekit.agents.telemetry.traces import _setup_cloud_tracer
+
+    params: dict[str, Any] = {
+        "room_id": "room-1",
+        "job_id": job_id,
+        **_observability_endpoint_arg(_setup_cloud_tracer),
+        "enable_traces": True,
+        "enable_logs": True,
+    }
+    params.update(kwargs)
+    _setup_cloud_tracer(**params)
 
 
 async def _call_upload(
@@ -755,69 +852,38 @@ async def test_upload_session_report_omits_simulation_metadata_for_normal_sessio
 
 def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     """LoggerProvider should be set up even when enable_logs=False."""
-    from livekit.agents.telemetry.traces import _setup_cloud_tracer
-
     with (
-        patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
-        patch(f"{_TRACES_MOD}.get_logger_provider") as mock_glp,
-        patch(f"{_TRACES_MOD}.set_logger_provider") as mock_slp,
-        patch(f"{_TRACES_MOD}.OTLPLogExporter") as mock_exporter,
-        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor") as mock_blrp,
+        _stub_cloud_tracer_deps() as stubs,
         patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
-        patch(f"{_TRACES_MOD}.logging"),
     ):
-        mock_token = MagicMock()
-        mock_token.with_observability_grants.return_value = mock_token
-        mock_token.with_ttl.return_value = mock_token
-        mock_token.to_jwt.return_value = "test-jwt"
-        mock_at.return_value = mock_token
-        # Return a non-LoggerProvider so the code creates a new one
-        mock_glp.return_value = MagicMock()
-
-        _setup_cloud_tracer(
-            room_id="room-1",
-            job_id="job-1",
-            **_observability_endpoint_arg(_setup_cloud_tracer),
+        _setup_cloud_tracer_for_job(
             enable_traces=False,
             enable_logs=False,
             metadata={"lk.simulation.enabled": True},
         )
 
-    mock_slp.assert_called_once()
-    assert not any(k.startswith("lk.simulation.") for k in mock_resource_create.call_args.args[0])
+    stubs.set_logger_provider.assert_called_once()
+    service_resource_calls = [
+        call.args[0]
+        for call in mock_resource_create.call_args_list
+        if "service.name" in call.args[0]
+    ]
+    assert service_resource_calls
+    assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
     # OTLP exporter should NOT be created when enable_logs=False
-    mock_exporter.assert_not_called()
-    mock_blrp.assert_not_called()
+    stubs.log_exporter.assert_not_called()
+    stubs.log_batch.assert_not_called()
 
 
 def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
     """Run _setup_cloud_tracer under the given os.environ and return the dict
     passed to Resource.create."""
-    from livekit.agents.telemetry.traces import _setup_cloud_tracer
-
     with (
         patch.dict("os.environ", env, clear=True),
-        patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at,
-        patch(f"{_TRACES_MOD}.get_logger_provider", return_value=MagicMock()),
-        patch(f"{_TRACES_MOD}.set_logger_provider"),
-        patch(f"{_TRACES_MOD}.OTLPLogExporter"),
-        patch(f"{_TRACES_MOD}.BatchLogRecordProcessor"),
+        _stub_cloud_tracer_deps(),
         patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
-        patch(f"{_TRACES_MOD}.logging"),
     ):
-        mock_token = MagicMock()
-        mock_token.with_observability_grants.return_value = mock_token
-        mock_token.with_ttl.return_value = mock_token
-        mock_token.to_jwt.return_value = "test-jwt"
-        mock_at.return_value = mock_token
-
-        _setup_cloud_tracer(
-            room_id="room-1",
-            job_id="job-1",
-            **_observability_endpoint_arg(_setup_cloud_tracer),
-            enable_traces=False,
-            enable_logs=False,
-        )
+        _setup_cloud_tracer_for_job(enable_traces=False, enable_logs=False)
     # Resource.create is also called internally by LoggerProvider() with an
     # empty dict, so select the call that built the tracing resource (the one
     # carrying service.name) rather than relying on call ordering.
@@ -852,6 +918,249 @@ def test_setup_cloud_tracer_omits_empty_deployment() -> None:
     )
     assert attrs["lk.cloud_agent_id"] == "CA_test123"
     assert "lk.deployment_id" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# Group 3.5: telemetry ownership & process reuse (_CloudTelemetry)
+# ---------------------------------------------------------------------------
+
+
+def test_shutdown_telemetry_keeps_integrator_providers_alive() -> None:
+    """Providers the integrator configured at process start (Langfuse per the
+    tracing docs, Logfire, dd-trace) must survive per-job teardown: worker
+    processes are reused across jobs, so shutting them down would kill the
+    integrator's export for every later job."""
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
+    from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry, set_tracer_provider
+
+    integrator_tracer = MagicMock(spec=SdkTracerProvider)
+    integrator_logger = MagicMock(spec=LoggerProvider)
+    integrator_meter = MagicMock(spec=SdkMeterProvider)
+
+    with _stub_cloud_tracer_deps() as stubs:
+        set_tracer_provider(integrator_tracer)
+        stubs.logger_state["provider"] = integrator_logger
+        stubs.meter_state["provider"] = integrator_meter
+
+        _setup_cloud_tracer_for_job()
+
+        # sanity: the framework adopted the integrator's providers and attached
+        # its own processors to them
+        assert traces_mod.tracer._tracer_provider is integrator_tracer
+        integrator_tracer.add_span_processor.assert_called()
+        integrator_logger.add_log_record_processor.assert_called()
+
+        _shutdown_telemetry()
+
+        # per-job teardown flushes the framework's own exporters...
+        stubs.span_batch.return_value.force_flush.assert_called_once()
+        stubs.log_batch.return_value.force_flush.assert_called_once()
+
+    # ...but never shuts down anything the integrator owns
+    integrator_tracer.shutdown.assert_not_called()
+    integrator_logger.shutdown.assert_not_called()
+    integrator_meter.shutdown.assert_not_called()
+    # the framework did not build a competing meter provider either (there is no
+    # API to attach a reader to the integrator's)
+    stubs.meter_provider_cls.assert_not_called()
+
+
+def test_framework_created_providers_live_for_the_process() -> None:
+    """Providers the framework creates are reused by the next job in the process
+    (the OTel logger/meter globals are set-once) and shut down only at process
+    exit — not per job, which previously left job 2+ on dead providers."""
+    from opentelemetry.trace import NoOpTracerProvider
+
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry, set_tracer_provider
+
+    with _stub_cloud_tracer_deps() as stubs:
+        set_tracer_provider(NoOpTracerProvider())
+
+        # job 1
+        _setup_cloud_tracer_for_job(job_id="job-1")
+        created = traces_mod.tracer._tracer_provider
+        from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+
+        assert isinstance(created, SdkTracerProvider)
+
+        with patch.object(created, "shutdown") as mock_tracer_shutdown:
+            _shutdown_telemetry()
+
+            # job 2 in the same process: everything is reused, nothing rebuilt
+            _setup_cloud_tracer_for_job(job_id="job-2")
+            assert traces_mod.tracer._tracer_provider is created
+            _shutdown_telemetry()
+
+            stubs.span_exporter.assert_called_once()
+            stubs.log_exporter.assert_called_once()
+            stubs.set_logger_provider.assert_called_once()
+            stubs.set_meter_provider.assert_called_once()
+
+            # per-job teardown never shut anything down...
+            mock_tracer_shutdown.assert_not_called()
+            stubs.meter_provider_cls.return_value.shutdown.assert_not_called()
+            # ...but flushed the exporters at the end of each job
+            assert stubs.span_batch.return_value.force_flush.call_count == 2
+            assert stubs.meter_provider_cls.return_value.force_flush.call_count == 2
+
+            # process exit shuts down everything the framework created, once
+            traces_mod._cloud.shutdown_at_exit()
+            mock_tracer_shutdown.assert_called_once()
+            stubs.meter_provider_cls.return_value.shutdown.assert_called_once()
+
+
+def test_export_gates_follow_job_lifecycle() -> None:
+    """Export is enabled only while a job that asked for it is running: a job
+    with traces/logs disabled — and the gap between jobs — must not upload."""
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry
+
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job(job_id="job-1")
+        cloud = traces_mod._cloud
+        assert cloud._span_gate is not None and cloud._span_gate.enabled
+        assert cloud._log_gate is not None and cloud._log_gate.enabled
+
+        _shutdown_telemetry()
+        assert not cloud._span_gate.enabled
+        assert not cloud._log_gate.enabled
+
+        # a later job that disabled traces must not re-open the span gate
+        _setup_cloud_tracer_for_job(job_id="job-2", enable_traces=False)
+        assert not cloud._span_gate.enabled
+        assert cloud._log_gate.enabled
+        _shutdown_telemetry()
+
+
+def test_gated_exporters_drop_data_while_disabled() -> None:
+    from opentelemetry.sdk._logs.export import LogRecordExportResult
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from livekit.agents.telemetry.traces import _GatedLogExporter, _GatedSpanExporter
+
+    inner = MagicMock()
+    gate = _GatedSpanExporter(inner)
+    assert gate.export([]) is SpanExportResult.SUCCESS
+    inner.export.assert_not_called()
+    gate.enabled = True
+    gate.export([])
+    inner.export.assert_called_once()
+
+    inner = MagicMock()
+    log_gate = _GatedLogExporter(inner)
+    assert log_gate.export([]) is LogRecordExportResult.SUCCESS
+    inner.export.assert_not_called()
+    log_gate.enabled = True
+    log_gate.export([])
+    inner.export.assert_called_once()
+
+
+def test_shutdown_telemetry_is_idempotent_and_safe_without_setup() -> None:
+    """_on_cleanup runs for every job, including ones that never initialized
+    recording; and a second teardown must not double-flush."""
+    from livekit.agents.telemetry.traces import _shutdown_telemetry
+
+    with _stub_cloud_tracer_deps() as stubs:
+        _shutdown_telemetry()  # no configure ran — must be a no-op
+
+        _setup_cloud_tracer_for_job()
+        _shutdown_telemetry()
+        _shutdown_telemetry()
+        assert stubs.span_batch.return_value.force_flush.call_count == 1
+
+
+def test_concurrent_jobs_keep_exporting_until_the_last_release() -> None:
+    """THREAD-mode workers run multiple jobs in one process: the first job's
+    cleanup must not turn off export or detach the log handler while another
+    job is still running."""
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry
+
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job(job_id="job-a")
+        _setup_cloud_tracer_for_job(job_id="job-b")
+        cloud = traces_mod._cloud
+        root = logging.getLogger()
+
+        _shutdown_telemetry()  # job A ends; job B is still running
+        assert cloud._span_gate is not None and cloud._span_gate.enabled
+        assert cloud.log_handler is not None and cloud.log_handler in root.handlers
+
+        _shutdown_telemetry()  # job B ends
+        assert not cloud._span_gate.enabled
+        assert cloud.log_handler not in root.handlers
+
+
+def test_shutdown_telemetry_leaves_foreign_log_handlers_attached() -> None:
+    """Only the framework's own OTLP handler is detached from the root logger."""
+    from opentelemetry.sdk._logs import LoggingHandler
+
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _shutdown_telemetry
+
+    foreign_handler = LoggingHandler(logger_provider=MagicMock())
+    root = logging.getLogger()
+    root.addHandler(foreign_handler)
+    try:
+        with _stub_cloud_tracer_deps():
+            _setup_cloud_tracer_for_job()
+            ours = traces_mod._cloud.log_handler
+            assert ours is not None and ours in root.handlers
+
+            _shutdown_telemetry()
+            assert ours not in root.handlers
+        assert foreign_handler in root.handlers
+    finally:
+        root.removeHandler(foreign_handler)
+
+
+def test_flush_early_log_buffer_replays_into_framework_handler() -> None:
+    """Buffered crash logs replay into the framework's own OTLP handler — not
+    into an integrator's LoggingHandler that was installed on root first."""
+    from opentelemetry.sdk._logs import LoggingHandler
+
+    from livekit.agents.job import JobContext
+    from livekit.agents.telemetry.traces import _BufferingHandler
+
+    ctx = object.__new__(JobContext)
+    buffering = _BufferingHandler()
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "boom", None, None)
+    buffering.buffer.append(record)
+    ctx._early_log_handler = buffering
+
+    foreign_handler = MagicMock(spec=LoggingHandler)
+    framework_handler = MagicMock()
+    root = logging.getLogger()
+    root.addHandler(foreign_handler)  # like an integrator handler, installed first
+    root.addHandler(buffering)
+    root.addHandler(framework_handler)
+    try:
+        with patch("livekit.agents.job._cloud_log_handler", return_value=framework_handler):
+            ctx._flush_early_log_buffer(replay=True)
+    finally:
+        root.removeHandler(foreign_handler)
+        root.removeHandler(framework_handler)
+
+    framework_handler.emit.assert_called_once_with(record)
+    foreign_handler.emit.assert_not_called()
+    assert buffering not in root.handlers
+
+
+def test_meter_provider_skipped_when_integrator_set_a_custom_one() -> None:
+    """A non-SDK meter provider set by the integrator is left alone, and no
+    orphan reader is built (set_meter_provider would silently refuse ours)."""
+    with _stub_cloud_tracer_deps() as stubs:
+        stubs.meter_state["provider"] = MagicMock()  # custom, not Proxy/NoOp/SDK
+
+        _setup_cloud_tracer_for_job()
+
+    stubs.meter_provider_cls.assert_not_called()
+    stubs.set_meter_provider.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -39,7 +39,12 @@ from livekit.protocol import agent, models
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
-from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
+from .telemetry.traces import (
+    _BufferingHandler,
+    _cloud_log_handler,
+    _setup_cloud_tracer,
+    _shutdown_telemetry,
+)
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
@@ -276,14 +281,13 @@ class JobContext:
         if not replay:
             return
 
-        # find the OTLP LoggingHandler that _setup_cloud_tracer just added
-        from opentelemetry.sdk._logs import LoggingHandler
-
-        for h in logging.getLogger().handlers:
-            if isinstance(h, LoggingHandler):
-                for record in handler.buffer:
-                    h.emit(record)
-                break
+        # replay through the framework's own OTLP handler that _setup_cloud_tracer
+        # just attached — the integrator may have their own OTel LoggingHandler on
+        # the root logger, and the buffered records must not be routed into it
+        otlp_handler = _cloud_log_handler()
+        if otlp_handler is not None and otlp_handler in logging.getLogger().handlers:
+            for record in handler.buffer:
+                otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
