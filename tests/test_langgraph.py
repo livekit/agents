@@ -266,7 +266,12 @@ def test_message_chunk_usage_metadata_is_preserved():
     """Usage-only LangChain chunks must become LiveKit usage chunks."""
     chunk = AIMessageChunk(
         content="",
-        usage_metadata={"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
+        usage_metadata={
+            "input_tokens": 12,
+            "output_tokens": 7,
+            "total_tokens": 19,
+            "input_token_details": {"cache_read": 5, "cache_creation": 3},
+        },
     )
 
     result = _to_chat_chunk(chunk)
@@ -275,6 +280,9 @@ def test_message_chunk_usage_metadata_is_preserved():
     assert result.delta.content is None
     assert result.usage is not None
     assert result.usage.prompt_tokens == 12
+    assert result.usage.prompt_cached_tokens == 5
+    assert result.usage.cache_creation_tokens == 3
+    assert result.usage.cache_read_tokens == 5
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 19
 

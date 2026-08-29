@@ -243,9 +243,14 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         if getattr(msg, "id", None):
             message_id = msg.id  # type: ignore
         if usage_metadata := getattr(msg, "usage_metadata", None):
+            input_token_details = usage_metadata.get("input_token_details", {})
+            cache_read_tokens = input_token_details.get("cache_read", 0)
             usage = llm.CompletionUsage(
                 completion_tokens=usage_metadata.get("output_tokens", 0),
                 prompt_tokens=usage_metadata.get("input_tokens", 0),
+                prompt_cached_tokens=cache_read_tokens,
+                cache_creation_tokens=input_token_details.get("cache_creation", 0),
+                cache_read_tokens=cache_read_tokens,
                 total_tokens=usage_metadata.get("total_tokens", 0),
             )
     elif isinstance(msg, dict):
