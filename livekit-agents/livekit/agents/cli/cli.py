@@ -345,9 +345,12 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
             # (e.g. time.sleep) is interrupted and the handler runs right away
             signal.pthread_kill(main_thread_id, signal.SIGTERM)
         else:
-            # Windows: raise_signal targets this thread, so the handler only runs
-            # at the main thread's next bytecode boundary — best effort
-            signal.raise_signal(signal.SIGTERM)
+            # Windows has no pthread_kill; re-raise SIGINT rather than SIGTERM:
+            # CPython's C-level handler sets the SIGINT event that time.sleep()
+            # and other sigint-aware waits block on, so those are interrupted
+            # immediately. Other blocking calls only observe the handler at the
+            # main thread's next bytecode boundary — best effort there.
+            signal.raise_signal(signal.SIGINT)
 
     def _handle_exit(sig: int, frame: FrameType | None) -> None:
         nonlocal exit_raised, escalating, escalation_watchdog

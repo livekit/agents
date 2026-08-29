@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import signal
-import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -39,7 +38,8 @@ pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
 # ---------------------------------------------------------------------------
-# _ExitCli propagation through asyncio (the #6624 base-class fix)
+# _ExitCli propagation through asyncio — the SystemExit base class, adopted
+# from PR #6624, covering the #5856 (callback) and #6724 (task) landing cases
 # ---------------------------------------------------------------------------
 
 
@@ -85,13 +85,21 @@ def test_exit_cli_escapes_a_task() -> None:
             await asyncio.sleep(30)  # the worker's main task, still running
 
         main_task = loop.create_task(_main())
-        loop.call_soon(lambda: loop.create_task(_job_request_task()))
+        request_tasks: list[asyncio.Task[None]] = []
+        loop.call_soon(lambda: request_tasks.append(loop.create_task(_job_request_task())))
         loop.call_later(0.5, loop.stop)  # safety stop for the broken case
 
         with pytest.raises(_ExitCli):
             loop.run_until_complete(main_task)
     finally:
+        # drain the cancellation and retrieve the request task's exception so
+        # closing the loop doesn't emit destroyed-pending / never-retrieved noise
         main_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, _ExitCli):
+            loop.run_until_complete(main_task)
+        for task in request_tasks:
+            if task.done() and not task.cancelled():
+                task.exception()
         loop.close()
 
 
@@ -164,7 +172,7 @@ def _sigterm_main_thread_after(delay: float) -> threading.Timer:
     return timer
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal delivery")
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs signal.pthread_kill (POSIX)")
 def test_sigterm_triggers_graceful_shutdown() -> None:
     """One SIGTERM on a healthy loop: drain + aclose run and _run_worker returns."""
     server = _StubServer()
@@ -186,7 +194,7 @@ def test_sigterm_triggers_graceful_shutdown() -> None:
     assert elapsed < 5.0, f"shutdown took {elapsed:.1f}s — the exit signal was lost"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal delivery")
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs signal.pthread_kill (POSIX)")
 def test_sigterm_with_blocked_event_loop_escalates() -> None:
     """The #6724 repro: SIGTERM arrives while a job-request task blocks the event
     loop with synchronous work. The watchdog must preempt the blocking frame so
