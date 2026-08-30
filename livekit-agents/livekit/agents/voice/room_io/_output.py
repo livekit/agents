@@ -110,6 +110,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         # the faded tail on interruption (see _build_fade_out_frame)
         self._fade_history: deque[rtc.AudioFrame] = deque()
         self._fade_history_duration: float = 0.0
+        # when the last pushed fade tail will have drained from the audio source.
+        # The tail bypasses _forward_audio, so _source_pushed_duration never counts
+        # it; queued_duration reads must exclude whatever is left of it or the next
+        # segment's playback position is under-reported by up to the fade duration.
+        self._fade_tail_until: float = 0.0
         self._fade_history_max_duration = (
             queue_size_ms / 1000 + self._fade_out_duration + _FADE_HISTORY_MARGIN
         )
@@ -237,39 +242,59 @@ class _ParticipantAudioOutput(io.AudioOutput):
             0,
         )
 
-        if interrupted:
-            self._interruption_generation += 1
-            source_queued_duration = self._audio_source.queued_duration
-            queued_duration = source_queued_duration
-            while not self._audio_buf.empty():
-                self._audio_buf.recv_nowait()
-
-            pushed_duration = max(pushed_duration - queued_duration, 0)
-            self._audio_source.clear_queue()
-            wait_for_playout.cancel()
-
-            if self._fade_out_duration > 0:
-                fade_frame = _build_fade_out_frame(
-                    self._fade_history,
-                    unplayed_duration=source_queued_duration,
-                    fade_out_duration=self._fade_out_duration,
-                    sample_rate=self._source_sample_rate,
-                    num_channels=self._num_channels,
+        try:
+            if interrupted:
+                self._interruption_generation += 1
+                # exclude the previous segment's fade tail still draining in the
+                # source: it was pushed directly (bypassing _forward_audio), so it
+                # is counted in neither _source_pushed_duration nor _fade_history
+                fade_residual = max(self._fade_tail_until - time.time(), 0.0)
+                source_queued_duration = max(
+                    self._audio_source.queued_duration - fade_residual, 0.0
                 )
-                if fade_frame is not None:
-                    await self._audio_source.capture_frame(fade_frame)
-        else:
-            wait_for_interruption.cancel()
+                queued_duration = source_queued_duration
+                while not self._audio_buf.empty():
+                    self._audio_buf.recv_nowait()
 
-        self._fade_history.clear()
-        self._fade_history_duration = 0.0
+                pushed_duration = max(pushed_duration - queued_duration, 0)
+                self._audio_source.clear_queue()
+                self._fade_tail_until = 0.0
+                wait_for_playout.cancel()
 
-        self._pushed_duration = 0
-        self._source_pushed_duration = 0
-        self._source_discarded_duration = 0
-        self._interrupted_event.clear()
-        self._first_frame_event.clear()
-        self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
+                if self._fade_out_duration > 0:
+                    fade_frame = _build_fade_out_frame(
+                        self._fade_history,
+                        unplayed_duration=source_queued_duration,
+                        fade_out_duration=self._fade_out_duration,
+                        sample_rate=self._source_sample_rate,
+                        num_channels=self._num_channels,
+                    )
+                    if fade_frame is not None:
+                        self._fade_tail_until = time.time() + fade_frame.duration
+                        # a cancellation on this await (overlapping flush() or
+                        # aclose()) must not skip the reset + finish notification
+                        # in the finally block: _forward_audio keeps discarding
+                        # frames until _interrupted_event is cleared, and the
+                        # speech handle waits on on_playback_finished
+                        try:
+                            await self._audio_source.capture_frame(fade_frame)
+                        except asyncio.CancelledError:
+                            # unknown whether the tail landed in the source;
+                            # don't let a stale deadline shave the next segment
+                            self._fade_tail_until = 0.0
+                            raise
+            else:
+                wait_for_interruption.cancel()
+        finally:
+            self._fade_history.clear()
+            self._fade_history_duration = 0.0
+
+            self._pushed_duration = 0
+            self._source_pushed_duration = 0
+            self._source_discarded_duration = 0
+            self._interrupted_event.clear()
+            self._first_frame_event.clear()
+            self.on_playback_finished(playback_position=pushed_duration, interrupted=interrupted)
 
     async def _forward_audio(self) -> None:
         async for frame in self._audio_buf:
@@ -277,8 +302,15 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._forwarding_idle.clear()
             try:
                 if not self._playback_enabled.is_set():
-                    self._source_discarded_duration += self._audio_source.queued_duration
+                    # the leftover fade tail in the queue belongs to the previous
+                    # segment and was never counted as pushed; discarding it must
+                    # not shorten this segment's playback position
+                    fade_residual = max(self._fade_tail_until - time.time(), 0.0)
+                    self._source_discarded_duration += max(
+                        self._audio_source.queued_duration - fade_residual, 0.0
+                    )
                     self._audio_source.clear_queue()
+                    self._fade_tail_until = 0.0
                     # discarded queue is no longer in the source; drop fade history
                     # so a later interrupt cannot rebuild a tail from stale frames
                     self._fade_history.clear()

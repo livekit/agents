@@ -5,17 +5,27 @@ frames already handed to the ``rtc.AudioSource``: on interruption the playback
 position is ``end_of_history - unplayed_duration``, and a linear gain ramp
 (1 -> 0) is applied to the next ``fade_out_duration`` seconds from that position.
 
-These tests are hermetic — they exercise the pure builder only, no room or
-audio source involved.
+These tests are hermetic — the builder tests exercise the pure function, and the
+playout tests drive ``_ParticipantAudioOutput`` against a fake audio source; no
+room involved.
 """
 
 from __future__ import annotations
+
+import asyncio
+import time
+from collections import deque
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents.voice.room_io._output import _build_fade_out_frame
+from livekit.agents import utils
+from livekit.agents.voice.room_io._output import (
+    _build_fade_out_frame,
+    _ParticipantAudioOutput,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -144,3 +154,136 @@ def test_no_frame_when_nothing_to_fade(unplayed: float, fade: float, history_fra
         num_channels=1,
     )
     assert frame is None
+
+
+class _FakeAudioSource:
+    """Stand-in for rtc.AudioSource: records captures, supports a held capture."""
+
+    def __init__(self) -> None:
+        self.queued_duration: float = 0.0
+        self.captured: list[rtc.AudioFrame] = []
+        self.clear_queue_calls = 0
+        self.hold_capture: asyncio.Event | None = None
+        self.capture_reached = asyncio.Event()
+
+    def clear_queue(self) -> None:
+        self.clear_queue_calls += 1
+        self.queued_duration = 0.0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.capture_reached.set()
+        if self.hold_capture is not None:
+            await self.hold_capture.wait()
+        self.captured.append(frame)
+        self.queued_duration += frame.duration
+
+    async def wait_for_playout(self) -> None:
+        return
+
+
+def _make_output(
+    fade_out_duration: float,
+) -> tuple[_ParticipantAudioOutput, _FakeAudioSource, MagicMock]:
+    out = _ParticipantAudioOutput.__new__(_ParticipantAudioOutput)
+    src = _FakeAudioSource()
+    out._audio_source = src  # type: ignore[assignment]
+    out._source_sample_rate = SAMPLE_RATE
+    out._num_channels = 1
+    out._fade_out_duration = fade_out_duration
+    out._fade_history = deque()
+    out._fade_history_duration = 0.0
+    out._fade_history_max_duration = 0.2 + fade_out_duration + 0.1
+    out._fade_tail_until = 0.0
+    out._audio_buf = utils.aio.Chan()
+    out._flush_task = None
+    out._interrupted_event = asyncio.Event()
+    out._forwarding_task = None
+    out._pushed_duration = 0.0
+    out._source_pushed_duration = 0.0
+    out._source_discarded_duration = 0.0
+    out._interruption_generation = 0
+    out._playback_enabled = asyncio.Event()
+    out._playback_enabled.set()
+    out._forwarding_idle = asyncio.Event()
+    out._forwarding_idle.set()
+    out._first_frame_event = asyncio.Event()
+    finished = MagicMock()
+    out.on_playback_finished = finished  # type: ignore[method-assign]
+    out.on_playback_started = MagicMock()  # type: ignore[method-assign]
+    return out, src, finished
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fade_push_still_finishes_playout() -> None:
+    """A cancellation landing on the fade capture (overlapping flush()/aclose())
+    must not skip the state reset and on_playback_finished: _forward_audio keeps
+    discarding frames while _interrupted_event stays set, and the speech handle
+    waits on the finish notification."""
+    out, src, finished = _make_output(0.5)
+    out._fade_history.extend(_make_frame(1000, 0.1) for _ in range(10))
+    out._fade_history_duration = 1.0
+    out._pushed_duration = 2.0
+    out._source_pushed_duration = 2.0
+    src.queued_duration = 0.3
+    src.hold_capture = asyncio.Event()  # never set: capture blocks like a full source
+
+    out._interrupted_event.set()
+    task = asyncio.create_task(out._wait_for_playout())
+    await asyncio.wait_for(src.capture_reached.wait(), timeout=1.0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finished.assert_called_once()
+    kwargs = finished.call_args.kwargs
+    assert kwargs["interrupted"] is True
+    assert kwargs["playback_position"] == pytest.approx(1.7)
+    assert not out._interrupted_event.is_set()
+    # unknown whether the tail landed; the deadline must not shave the next segment
+    assert out._fade_tail_until == 0.0
+
+
+@pytest.mark.asyncio
+async def test_leftover_fade_tail_excluded_from_playback_position() -> None:
+    """A previous segment's fade tail still draining in the source was never
+    counted as pushed; subtracting it with the queued audio would under-report
+    this segment's playback position by up to the fade duration."""
+    out, src, finished = _make_output(0.5)  # fade enabled, but empty history -> no new tail
+    out._pushed_duration = 2.0
+    out._source_pushed_duration = 2.0
+    src.queued_duration = 0.7  # 0.3s of this segment + 0.4s fade leftover
+    out._fade_tail_until = time.time() + 0.4
+
+    out._interrupted_event.set()
+    await out._wait_for_playout()
+
+    kwargs = finished.call_args.kwargs
+    assert kwargs["interrupted"] is True
+    assert kwargs["playback_position"] == pytest.approx(1.7, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_pause_discard_excludes_leftover_fade_tail() -> None:
+    """The pause path adds queued_duration to _source_discarded_duration; the
+    leftover fade tail in that queue belongs to the previous segment and must
+    not shorten this segment's playback position."""
+    out, src, _ = _make_output(0.5)
+    out._pushed_duration = 1.0  # segment in progress
+    src.queued_duration = 0.5  # 0.1s of this segment + 0.4s fade leftover
+    out._fade_tail_until = time.time() + 0.4
+    out._playback_enabled.clear()  # paused
+
+    forward = asyncio.create_task(out._forward_audio())
+    out._audio_buf.send_nowait(_make_frame(1000, 0.05))
+    await asyncio.sleep(0.1)
+
+    assert out._source_discarded_duration == pytest.approx(0.1, abs=0.06)
+    assert out._fade_tail_until == 0.0
+
+    out._playback_enabled.set()
+    await asyncio.sleep(0.1)
+    assert src.captured  # the held frame resumed into the source
+
+    out._audio_buf.close()
+    await forward
