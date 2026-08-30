@@ -228,6 +228,15 @@ def test_ending_a_run_places_the_resampler_tail_before_the_writer_advances() -> 
     assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
 
 
+def test_ending_a_run_reanchors_the_next_segment_after_a_short_gap() -> None:
+    track = _Track(sample_rate=1000, t0=0.0)
+    track.push(0.0, _loud(100))
+    track.end_run()
+    track.push(0.15, _loud(100))  # the 50ms gap is below the drift tolerance
+
+    assert [pos for pos, _ in track._placed] == [0, 150]
+
+
 def test_a_stereo_source_is_mixed_down() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
     track.push(0.0, _loud(100, channels=2))
