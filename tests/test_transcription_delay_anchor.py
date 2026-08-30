@@ -10,9 +10,9 @@ clamped to ``now``) takes over when there is no VAD anchor to beat: no VAD at
 all, or a segment the VAD missed.
 
 ``turn_detection="stt"`` adds one exception: the provider owns the turn boundary
-there, so a *real* provider timestamp replaces the VAD anchor. A missing
-``end_time`` never does — the estimate collapses to the transcript-arrival
-instant, which would report a ~0 delay.
+there, so a *real* provider timestamp replaces the VAD anchor, as does an explicit
+``END_OF_SPEECH``. A transcript with a missing ``end_time`` does not — the estimate
+would collapse to the transcript-arrival instant and report a ~0 delay.
 
 Every test below runs under both turn detection modes; where the two disagree,
 the expectation is spelled out per mode rather than duplicated into a second
@@ -229,18 +229,22 @@ async def test_stt_end_of_speech_anchors_on_a_real_provider_timestamp() -> None:
     assert ar._user_turn_committed is True
 
 
-async def test_stt_end_of_speech_without_timestamps_keeps_the_vad_anchor() -> None:
-    """END_OF_SPEECH commonly carries no alternatives, so the estimate is just
-    ``now`` — the VAD anchor (refreshed on every INFERENCE_DONE while the user
-    speaks) is the better answer."""
+async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
+    """END_OF_SPEECH commonly carries no alternatives, leaving arrival time as the
+    only estimate — but unlike an untimestamped transcript it is an *explicit*
+    endpointing signal, so the provider is taken at its word and the anchor moves.
+
+    Contrast ``test_vad_anchor_survives_a_transcript_without_timestamps[stt]``,
+    where the same missing ``end_time`` on a FINAL_TRANSCRIPT keeps the VAD anchor:
+    there the provider said nothing about the boundary, here it said "now".
+    """
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
-    vad_anchor = now - 0.6
-    ar._last_speaking_time = vad_anchor
+    ar._last_speaking_time = now - 0.6
 
     await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
 
-    assert ar._last_speaking_time == vad_anchor
+    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
     assert ar._user_turn_committed is True
 
 
