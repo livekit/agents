@@ -88,6 +88,11 @@ class AudioOutputOptions:
     )
     track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
+    fade_out_on_interruption: float = 0.0
+    """Duration in seconds of a linear fade-out applied to the agent's audio when it is
+    interrupted, instead of cutting playback abruptly. Set to 0 to disable (default).
+    A value between 0.05 and 0.1 is recommended. This adds no playback latency: the
+    faded tail is rebuilt from already-generated audio at the current playback position."""
 
 
 @dataclass
