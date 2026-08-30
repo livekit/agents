@@ -1177,7 +1177,14 @@ class AudioRecognition:
         use_stt_speaking_time = (
             self._vad is None
             or self._last_speaking_time is None
-            or (self._turn_detection_mode == "stt" and has_stt_end_time)
+            or (
+                self._turn_detection_mode == "stt"
+                and (
+                    # on explicit signal, we'll use provider's eos time even if it's inferred
+                    # from when the event is received
+                    has_stt_end_time or ev.type == stt.SpeechEventType.END_OF_SPEECH
+                )
+            )
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
