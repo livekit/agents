@@ -56,6 +56,14 @@ _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
+# After VAD END_OF_SPEECH, the segment's voiced duration keeps feeding
+# current_speech_duration only this long — enough for a late STT final of that
+# same segment to see the metric the VAD path used for interruption.min_duration.
+# Past it, the stored value describes an older segment (e.g. a noise blip that
+# never produced a transcript, so the turn never committed and never cleared it),
+# and gating a VAD-missed barge-in against it would defeat the
+# on_final_transcript failsafe.
+_SPEECH_DURATION_STALE_AFTER = 2.0
 
 
 @dataclass
@@ -635,8 +643,17 @@ class AudioRecognition:
         ``on_vad_inference_done`` uses for ``interruption.min_duration``). Falls
         back to wall-clock elapsed when VAD has not reported a duration for this
         segment (e.g. STT-only turn detection). Returns None when no speech start
-        has been tracked.
+        has been tracked, or when the measured segment ended more than
+        ``_SPEECH_DURATION_STALE_AFTER`` ago — a transcript arriving that late
+        belongs to speech this measurement doesn't describe.
         """
+        if (
+            not self._speaking
+            and self._last_speaking_time is not None
+            and time.time() - self._last_speaking_time > _SPEECH_DURATION_STALE_AFTER
+        ):
+            return None
+
         if self._vad_speech_duration is not None:
             return self._vad_speech_duration
 

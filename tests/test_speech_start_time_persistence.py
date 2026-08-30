@@ -27,7 +27,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit.agents.vad import VADEvent, VADEventType
-from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.audio_recognition import (
+    _SPEECH_DURATION_STALE_AFTER,
+    AudioRecognition,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -286,6 +289,33 @@ class TestUserTurnStartPersistence:
         )
 
         assert seen == [pytest.approx(0.48), pytest.approx(0.51)]
+
+    @pytest.mark.asyncio
+    async def test_stale_blip_duration_does_not_gate_vad_missed_barge_in(self):
+        """A VAD blip that never produced a transcript must stop gating.
+
+        A short noise blip fires SOS/EOS with no transcript, so the turn never
+        commits and the blip's 0.2s measurement is never cleared. If VAD then
+        misses the user's real barge-in, the ``on_final_transcript`` failsafe
+        gates on ``current_speech_duration`` — past the late-final window it
+        must see unknown (None), not the blip's 0.2s, or the agent keeps
+        talking over the user.
+        """
+        audio_recognition = self._create_audio_recognition()
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.05)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=0.2, silence_duration=0.4)
+        )
+
+        # within the late-final window the blip's measurement still applies
+        assert audio_recognition.current_speech_duration == pytest.approx(0.2)
+
+        await asyncio.sleep(_SPEECH_DURATION_STALE_AFTER + 0.5)
+
+        assert audio_recognition.current_speech_duration is None
 
     @pytest.mark.asyncio
     async def test_stt_speaking_zero_vad_inference_keeps_duration_unknown(self):
