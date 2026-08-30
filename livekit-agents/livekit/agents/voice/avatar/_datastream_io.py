@@ -402,24 +402,29 @@ class DataStreamAudioReceiver(AudioReceiver):
             self.emit("clear_buffer")
             return "ok"
 
-        def _handle_stream_received(
-            reader: rtc.ByteStreamReader, remote_participant_id: str
-        ) -> None:
-            if (
-                not self._remote_participant
-                or remote_participant_id != self._remote_participant.identity
-            ):
-                return
-
-            self._stream_readers.append(reader)
-            self._stream_reader_changed.set()
-
         self._register_clear_buffer_rpc(
             self._room,
             caller_identity=self._remote_participant.identity,
             handler=_handle_clear_buffer,
         )
-        self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, _handle_stream_received)
+        self._room.register_byte_stream_handler(AUDIO_STREAM_TOPIC, self._handle_stream_received)
+
+    def _handle_stream_received(
+        self, reader: rtc.ByteStreamReader, remote_participant_id: str
+    ) -> None:
+        if (
+            not self._remote_participant
+            or remote_participant_id != self._remote_participant.identity
+        ):
+            return
+
+        # A new stream means the previous segment has ended. Close a reader whose
+        # trailer was lost so its receive loop can advance to the new segment.
+        if self._current_reader is not None:
+            self._current_reader.close()
+
+        self._stream_readers.append(reader)
+        self._stream_reader_changed.set()
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
         self._rpc_send_ch.send_nowait(
