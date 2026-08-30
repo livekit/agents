@@ -1323,7 +1323,10 @@ class AudioRecognition:
             # always use STT speaking time since turn detection mode is set to STT. we would want
             # alignment here since _last_speaking_time is used for turn detection timing
             if ev.speech_end_time is not None:
-                self._last_speaking_time = ev.speech_end_time
+                # clamped like the other anchors: a provider clock running ahead would
+                # otherwise push the anchor into the future and extend `extra_sleep`,
+                # delaying the turn commit by the skew
+                self._last_speaking_time = min(ev.speech_end_time, now)
             else:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time

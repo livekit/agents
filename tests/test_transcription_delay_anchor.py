@@ -253,6 +253,28 @@ async def test_stt_end_of_speech_prefers_the_provider_speech_end_time() -> None:
     assert ar._user_turn_committed is True
 
 
+async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
+    """A provider clock running ahead would push the anchor past ``now``. The
+    metrics survive that (both delays clamp at 0), but ``extra_sleep`` does not:
+    it adds ``last_speaking_time - now`` to the endpointing delay, so an
+    unclamped anchor delays the turn commit by the skew.
+    """
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+    ar._last_speaking_time = now - 0.6
+
+    await ar._on_stt_event(
+        stt.SpeechEvent(
+            type=stt.SpeechEventType.END_OF_SPEECH,
+            alternatives=[],
+            speech_end_time=now + 5.0,  # provider clock runs 5s ahead
+        )
+    )
+
+    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+    assert ar._last_speaking_time <= time.time()
+
+
 async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
     """END_OF_SPEECH commonly carries no alternatives, leaving arrival time as the
     only estimate — but unlike an untimestamped transcript it is an *explicit*
