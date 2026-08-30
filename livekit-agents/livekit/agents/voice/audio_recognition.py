@@ -1177,14 +1177,7 @@ class AudioRecognition:
         use_stt_speaking_time = (
             self._vad is None
             or self._last_speaking_time is None
-            or (
-                self._turn_detection_mode == "stt"
-                and (
-                    # on explicit signal, we'll use provider's eos time even if it's inferred
-                    # from when the event is received
-                    has_stt_end_time or ev.type == stt.SpeechEventType.END_OF_SPEECH
-                )
-            )
+            or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
@@ -1326,7 +1319,13 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if use_stt_speaking_time:
+
+            # always use STT speaking time since turn detection mode is set to STT. we would want
+            # alignment here since _last_speaking_time is used for turn detection timing
+            if ev.speech_end_time is not None:
+                self._last_speaking_time = ev.speech_end_time
+            else:
+                # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()

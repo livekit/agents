@@ -229,6 +229,30 @@ async def test_stt_end_of_speech_anchors_on_a_real_provider_timestamp() -> None:
     assert ar._user_turn_committed is True
 
 
+async def test_stt_end_of_speech_prefers_the_provider_speech_end_time() -> None:
+    """``speech_end_time`` is the provider's wall-clock speech end — the same
+    quantity a VAD anchor holds (``StreamAdapter`` builds it as
+    ``now - silence_duration - inference_duration``). It outranks the word
+    timestamps, which only bound the last recognized word.
+    """
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
+    ar._last_speaking_time = now - 0.6
+    speech_end_time = now - 0.4
+
+    await ar._on_stt_event(
+        stt.SpeechEvent(
+            type=stt.SpeechEventType.END_OF_SPEECH,
+            # word timestamps also present, and pointing somewhere else
+            alternatives=[stt.SpeechData(language="en", text="", confidence=1.0, end_time=9.0)],
+            speech_end_time=speech_end_time,
+        )
+    )
+
+    assert ar._last_speaking_time == speech_end_time
+    assert ar._user_turn_committed is True
+
+
 async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
     """END_OF_SPEECH commonly carries no alternatives, leaving arrival time as the
     only estimate — but unlike an untimestamped transcript it is an *explicit*
