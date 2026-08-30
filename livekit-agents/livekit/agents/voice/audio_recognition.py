@@ -1208,8 +1208,12 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech: fall back to the provider's
+                # estimate. Any vad anchor — the session's default vad included —
+                # is measured against the local clock and outranks it; the
+                # estimate collapses to `now` when the provider sends no
+                # timestamps, which reports a ~0 transcription_delay
                 self._last_speaking_time = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript
@@ -1265,8 +1269,12 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech: fall back to the provider's
+                # estimate. Any vad anchor — the session's default vad included —
+                # is measured against the local clock and outranks it; the
+                # estimate collapses to `now` when the provider sends no
+                # timestamps, which reports a ~0 transcription_delay
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -1316,8 +1324,12 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if self._vad is None or self._last_speaking_time is None:
+                # no vad, or vad missed this speech: fall back to the provider's
+                # estimate. Any vad anchor — the session's default vad included —
+                # is measured against the local clock and outranks it; the
+                # estimate collapses to `now` when the provider sends no
+                # timestamps, which reports a ~0 transcription_delay
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
