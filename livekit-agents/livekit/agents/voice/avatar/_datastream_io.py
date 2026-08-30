@@ -420,7 +420,9 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         # A new stream means the previous segment has ended. Close a reader whose
         # trailer was lost so its receive loop can advance to the new segment.
-        if self._current_reader is not None:
+        if self._stream_readers:
+            self._stream_readers[-1].close()
+        elif self._current_reader is not None:
             self._current_reader.close()
 
         self._stream_readers.append(reader)
