@@ -35,9 +35,6 @@ def _make_recognition(*, vad: object | None, input_started_at: float) -> AudioRe
     ar._session.amd = None
     ar._hooks = MagicMock()
     ar._vad = vad
-    # the session loads a default VAD when the user didn't pass one; it still
-    # produces a usable anchor, so this flag must not gate anchor precedence
-    ar._using_default_vad = True
     ar._turn_detection_mode = "vad"
     ar._user_turn_committed = False
     ar._vad_base_turn_detection = False
@@ -61,6 +58,7 @@ def _make_recognition(*, vad: object | None, input_started_at: float) -> AudioRe
     ar._last_language = None
     ar._last_final_transcript_time = None
     ar._turn_tracker = MagicMock()
+    ar._last_speaking_time = None
     ar._sample_rate = None
     ar._vad_ch = None
     ar._interruption_ch = None
@@ -159,3 +157,26 @@ async def test_preflight_transcript_keeps_the_vad_anchor() -> None:
     )
 
     assert ar._last_speaking_time == vad_anchor
+
+
+async def test_wired_vad_speaking_state_reaches_the_transcript_hooks() -> None:
+    """``speaking is False`` on the transcript hooks is what arms the
+    false-interruption resume timer (see ``on_final_transcript`` in
+    agent_activity). ``self._vad`` is the resolved, wired VAD — the session's
+    auto-loaded default included — and it drives ``_speaking``, so its state is
+    reported rather than ``None`` (which silently disables the resume path)."""
+    now = time.time()
+    ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0)
+    ar._speaking = False
+
+    await ar._on_stt_event(_final_transcript(end_time=0.0))
+
+    assert ar._hooks.on_final_transcript.call_args.kwargs["speaking"] is False
+
+    # without any vad (and without stt turn detection) there is no state to report
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0)
+    ar._speaking = False
+
+    await ar._on_stt_event(_final_transcript(end_time=0.0))
+
+    assert ar._hooks.on_final_transcript.call_args.kwargs["speaking"] is None

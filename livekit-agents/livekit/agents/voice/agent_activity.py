@@ -1152,7 +1152,6 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=wired_vad,
-            using_default_vad=self.using_default_vad,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
