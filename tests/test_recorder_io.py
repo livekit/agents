@@ -237,6 +237,16 @@ def test_ending_a_run_reanchors_the_next_segment_after_a_short_gap() -> None:
     assert [pos for pos, _ in track._placed] == [0, 150]
 
 
+def test_ending_a_resampled_run_twice_is_idempotent() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    track.push(1.0, _loud(2400, sample_rate=24000))
+    track.end_run()  # output playback ended
+    track.end_run()  # RecorderIO closed before another run began
+
+    block = track.take(0, 48000 * 2)
+    assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
 def test_a_stereo_source_is_mixed_down() -> None:
     track = _Track(sample_rate=1000, t0=0.0)
     track.push(0.0, _loud(100, channels=2))

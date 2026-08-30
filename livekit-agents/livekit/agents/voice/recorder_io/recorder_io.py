@@ -104,6 +104,8 @@ class _Track:
         """Place the resampler tail while its run can still be written."""
         if self._resampler is not None:
             self._place(self._resampler.flush())
+            self._resampler = None
+            self._source_rate = None
         self._run_start = None
         self._run_samples = 0
 
