@@ -85,6 +85,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._turn_detector_stream = stream_mock
     ar._turn_detector_prediction_fut = None
     ar._turn_detector_flushed = False
+    ar._turn_backchannel_over_agent = False
+    ar._stt_consumer_atask = None
     ar._turn_detector_late_prediction_warned = False
     ar._agent_speaking = False
     ar._interruption_enabled = False
@@ -583,7 +585,9 @@ class TestPredictionFutureLifecycle:
 
         assert ar._turn_detector_stream.predict.call_count == 0
         ar._hooks.on_eot_prediction.assert_not_called()
-        flush_warnings = [r for r in caplog.records if "already flushed" in r.getMessage()]
+        flush_warnings = [
+            r for r in caplog.records if "after turn has been committed" in r.getMessage()
+        ]
         assert len(flush_warnings) == 1
 
     async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
@@ -697,7 +701,7 @@ class TestVadMinSilenceRequirement:
         detector = MagicMock(spec=_StreamingTurnDetector)
 
         with pytest.raises(ValueError, match="min_silence_duration"):
-            ar.update_turn_detector(detector)
+            ar._update_turn_detector(detector)
 
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
