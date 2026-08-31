@@ -14,7 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions, vad
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions, stt, vad
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
@@ -46,6 +46,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._session = MagicMock()
     ar._hooks = hooks
     ar._stt = None  # realtime model, no STT
+    ar._stt_aligned_transcript = False
     ar._audio_transcript = ""
     ar._turn_detection_mode = None
     ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
@@ -503,3 +504,42 @@ async def test_a_backchannel_dropped_before_the_timeout_does_not_leak_forward(
     assert activity._paused_speech is None  # the speech resumed
     assert recognition._speech_start_time is None
     assert recognition._audio_transcript == ""  # nothing left to prepend
+
+
+async def test_an_stt_anchored_turn_supersedes_the_previous_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the resume timer is also armed from the stt hooks, so a session can anchor its next turn
+    # through _on_stt_event rather than a VAD start. The dropped verdict belongs to the turn
+    # that ended: read against the new one it would erase a real transcript
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    recognition._turn_detection_mode = "stt"
+    # the previous turn was decided and dropped
+    recognition._user_turn_dropped = True
+
+    # the next turn takes its anchor from the stt stream, never from a VAD start
+    onset = time.time()
+    await recognition._on_stt_event(
+        stt.SpeechEvent(
+            type=stt.SpeechEventType.START_OF_SPEECH,
+            alternatives=[stt.SpeechData(language="en", text="", start_time=onset)],
+        )
+    )
+    assert recognition._speech_start_time == pytest.approx(onset, abs=1.0)
+    assert recognition._user_turn_dropped is False
+
+    # a slow final for this new turn is still on its way when the resume fires
+    recognition._audio_transcript = "what the caller actually said"
+    activity.on_end_of_speech(None)
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert activity._paused_speech is None
+    assert recognition._audio_transcript == "what the caller actually said"
