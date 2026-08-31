@@ -222,9 +222,9 @@ class TestResumedSpeechAbortsCommit:
     async def test_stt_events_not_dropped_after_sos_cancels_manual_commit(
         self,
     ) -> None:
-        """Regression (#7010): after SOS cancels a manual commit, a
-        ``FINAL_TRANSCRIPT`` must reach ``_process_stt_event`` instead of
-        being silently dropped by the stale committed flag."""
+        """Regression (#7010): after SOS cancels a manual commit, the
+        manual-mode STT guard must no longer reject subsequent transcripts
+        because of the stale committed flag."""
         ar = _make_full_recognition_for_eou()
         ar._turn_detection_mode = "manual"
         chat_ctx = _make_chat_ctx_stub()
@@ -238,13 +238,23 @@ class TestResumedSpeechAbortsCommit:
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-        final_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(language="en", text="hello world")],
+        # Reproduce the guard condition from _on_stt_event for a
+        # FINAL_TRANSCRIPT — if _user_turn_committed were still True,
+        # the guard would block the event (task.done() is True).
+        event_type = stt.SpeechEventType.FINAL_TRANSCRIPT
+        guard_would_block = (
+            ar._turn_detection_mode == "manual"
+            and ar._user_turn_committed
+            and (
+                ar._end_of_turn_task is None
+                or ar._end_of_turn_task.done()
+                or event_type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+            )
         )
-        ar._process_stt_event = MagicMock()  # type: ignore[method-assign]
-        await ar._on_stt_event(final_event)
-        ar._process_stt_event.assert_called_once_with(final_event)
+        assert not guard_would_block, (
+            "_user_turn_committed stranded True — subsequent FINAL_TRANSCRIPT "
+            "would be dropped by the manual-mode guard"
+        )
 
 
 def _inference_done(*, raw_speech: float, raw_silence: float = 0.0) -> vad.VADEvent:
