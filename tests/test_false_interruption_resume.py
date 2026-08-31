@@ -14,7 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions, vad
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
@@ -385,3 +385,44 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_drops_the_turn_it_resumed_over(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a confirmed false interruption abandons the recognition turn that caused it; leaving that
+    # turn open lets the next real utterance inherit its anchor, because _on_vad_event only
+    # takes a new _speech_start_time while _vad_speech_started is still False
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    stale_start = time.time() - 12.0
+
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    # the VAD turn behind the interruption: opened, never transcribed
+    recognition._speech_start_time = stale_start
+    recognition._vad_speech_started = True
+    # a confirmed backchannel is what makes the turn drop rather than commit
+    recognition._turn_backchannel_over_agent = True
+    recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    await asyncio.sleep(MAX_DELAY + 0.3)
+    assert activity._paused_speech is None  # the speech resumed
+
+    # the later, real utterance
+    onset = time.time()
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.START_OF_SPEECH,
+            samples_index=0,
+            timestamp=onset,
+            speech_duration=0.1,
+            silence_duration=0.0,
+        )
+    )
+    await session.aclose()
+
+    assert recognition._speech_start_time == pytest.approx(onset - 0.1, abs=0.1)

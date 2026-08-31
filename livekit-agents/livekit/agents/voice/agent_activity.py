@@ -4531,12 +4531,18 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
             ):
+                if (recognition := self._audio_recognition) is not None:
+                    # the interruption was false, so the turn that raised it is abandoned: drop
+                    # it before the agent's next speech interval opens, or the next real
+                    # utterance inherits its speech-start anchor and buffered transcript
+                    recognition._clear_user_turn()
+
                 self._session._update_agent_state(
                     self._paused_speech.agent_state,
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
-                if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
+                if recognition is not None and self._paused_speech.agent_state == "speaking":
+                    recognition._on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()
