@@ -11,7 +11,8 @@ import livekit.rtc as rtc
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 from ...log import logger
-from ...utils import aio, log_exceptions
+from ...types import NOT_GIVEN, NotGivenOr
+from ...utils import aio, is_given, log_exceptions
 from ..io import AudioInput, VideoInput
 from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
@@ -285,7 +286,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         | NoiseCancellationSelector
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None,
-        auto_gain_control: bool = True,
+        auto_gain_control: NotGivenOr[bool] = NOT_GIVEN,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
     ) -> None:
@@ -305,11 +306,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._num_channels = num_channels
         self._frame_size_ms = frame_size_ms
         self._noise_cancellation = noise_cancellation
+        self._auto_gain_control = auto_gain_control
         self._pre_connect_audio_handler = pre_connect_audio_handler
         self._pre_connect_audio_publications: set[tuple[str, str]] = set()
         self._apm: rtc.AudioProcessingModule | None = None
-        if auto_gain_control:
-            self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
 
     @override
     def _process_frame(self, frame: rtc.AudioFrame) -> None:
@@ -325,6 +325,16 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 self._update_processor(noise_cancellation)
             else:
                 self._update_processor(None)
+
+        auto_gain_control = (
+            self._auto_gain_control
+            if is_given(self._auto_gain_control)
+            else noise_cancellation is None
+        )
+        if auto_gain_control and self._apm is None:
+            self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
+        elif not auto_gain_control:
+            self._apm = None
 
         return rtc.AudioStream.from_track(
             track=track,
