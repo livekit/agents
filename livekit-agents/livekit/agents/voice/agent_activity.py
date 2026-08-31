@@ -4531,6 +4531,10 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
             ):
+                if self._audio_recognition is not None:
+                    # the interrupting turn is discarded on resume; clear it fully so its
+                    # speech anchors don't leak into the next real user turn
+                    self._audio_recognition._clear_user_turn()
                 self._session._update_agent_state(
                     self._paused_speech.agent_state,
                     otel_context=self._paused_speech.handle._agent_turn_context,
