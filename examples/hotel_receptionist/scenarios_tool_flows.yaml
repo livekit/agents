@@ -2,7 +2,7 @@
 # to a deterministic end state and is graded on the final DB diff
 # (`userdata.expected_state`) in addition to agent_expectations. Open-ended and
 # adversarial scenarios graded on agent_expectations alone live in
-# scenarios_open_ended.yaml.
+# scenarios_guardrails_and_faq.yaml.
 #
 # Assumptions:
 #   - Seed date is pinned: HOTEL_TODAY=2026-06-08 (Mon). All dates are literals.
