@@ -54,8 +54,10 @@ class _RimeV1Server:
         self.request_connections: list[int] = []
         self.headers: list[dict[str, str]] = []
         self.paths: list[str] = []
-        self.text_received = asyncio.Event()
-        self.flush_received = asyncio.Event()
+        self.text_messages_received = 0
+        self._text_received_condition = asyncio.Condition()
+        self.request_received = asyncio.Event()
+        self.unexpected_requests: list[dict[str, Any]] = []
         self.connection_opened = asyncio.Event()
         self.connection_closed = asyncio.Event()
         self.closed_connections = 0
@@ -76,6 +78,15 @@ class _RimeV1Server:
     async def __aexit__(self, *exc: object) -> None:
         await self.session.close()
         await self._runner.cleanup()
+        assert not self.unexpected_requests, (
+            f"fake Rime v1 server received unexpected requests: {self.unexpected_requests!r}"
+        )
+
+    async def wait_for_text_messages(self, count: int) -> None:
+        async with self._text_received_condition:
+            await self._text_received_condition.wait_for(
+                lambda: self.text_messages_received >= count
+            )
 
     async def _handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(protocols=("rime.v1.json",))
@@ -95,6 +106,7 @@ class _RimeV1Server:
                 envelope = json.loads(message.data)
                 self.requests.append(envelope)
                 self.request_connections.append(connection)
+                self.request_received.set()
                 context_id = envelope.get("contextId", "")
                 if "start" in envelope:
                     await ws.send_json(
@@ -104,7 +116,9 @@ class _RimeV1Server:
                         }
                     )
                 elif "text" in envelope:
-                    self.text_received.set()
+                    async with self._text_received_condition:
+                        self.text_messages_received += 1
+                        self._text_received_condition.notify_all()
                     if self.fail_before_audio > 0:
                         self.fail_before_audio -= 1
                         await ws.send_json(
@@ -130,7 +144,16 @@ class _RimeV1Server:
                     else:
                         await ws.send_json({"contextId": context_id, "cancelled": {}})
                 elif "flush" in envelope:
-                    self.flush_received.set()
+                    self.unexpected_requests.append(envelope)
+                    await ws.send_json(
+                        {
+                            "contextId": context_id,
+                            "error": {
+                                "kind": "invalid_input",
+                                "message": "flush is not part of the Rime v1 protocol",
+                            },
+                        }
+                    )
         finally:
             self.closed_connections += 1
             self.connection_closed.set()
@@ -186,6 +209,7 @@ async def _collect(stream) -> list:
 
 
 def _payloads(server: _RimeV1Server) -> list[str]:
+    assert all("flush" not in request for request in server.requests)
     return [next(key for key in request if key != "contextId") for request in server.requests]
 
 
@@ -262,10 +286,10 @@ async def test_v1_buffers_fragments_into_complete_sentences() -> None:
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("This is the first sentence. ")
         with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(server.text_received.wait(), timeout=0.05)
+            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=0.05)
 
         stream.push_text("Second")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         stream.end_input()
         await _collect(stream)
         await stream.aclose()
@@ -322,7 +346,7 @@ async def test_v1_uses_custom_tokenizer_behavior() -> None:
     ]
 
 
-async def test_v1_nonfinal_flush_does_not_replace_end() -> None:
+async def test_v1_local_flush_drains_text_before_end() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -333,27 +357,27 @@ async def test_v1_nonfinal_flush_does_not_replace_end() -> None:
         await stream.aclose()
         await tts.aclose()
 
-    assert _payloads(server) == ["start", "text", "flush", "end"]
+    assert _payloads(server) == ["start", "text", "end"]
 
 
-async def test_v1_sends_nonfinal_flush_without_more_input() -> None:
+async def test_v1_local_flush_sends_text_without_control_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("first")
         stream.flush()
         try:
-            await asyncio.wait_for(server.flush_received.wait(), timeout=0.2)
+            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         finally:
             stream.end_input()
             await _collect(stream)
             await stream.aclose()
             await tts.aclose()
 
-    assert _payloads(server) == ["start", "text", "flush", "end"]
+    assert _payloads(server) == ["start", "text", "end"]
 
 
-async def test_v1_resumes_context_after_nonfinal_flush() -> None:
+async def test_v1_resumes_context_after_local_flush() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         metrics = []
@@ -361,14 +385,14 @@ async def test_v1_resumes_context_after_nonfinal_flush() -> None:
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("first")
         stream.flush()
-        await asyncio.wait_for(server.flush_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         stream.push_text("second")
         stream.end_input()
         events = await _collect(stream)
         await stream.aclose()
         await tts.aclose()
 
-    assert _payloads(server) == ["start", "text", "flush", "text", "end"]
+    assert _payloads(server) == ["start", "text", "text", "end"]
     assert [request["text"] for request in server.requests if "text" in request] == [
         "first ",
         "second ",
@@ -379,13 +403,13 @@ async def test_v1_resumes_context_after_nonfinal_flush() -> None:
     assert metrics[0].characters_count == len("firstsecond")
 
 
-async def test_v1_flush_pause_can_exceed_api_timeout() -> None:
+async def test_v1_input_pause_can_exceed_api_timeout() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
         stream.push_text("First sentence.")
         stream.flush()
-        await asyncio.wait_for(server.flush_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
 
         await asyncio.sleep(0.2)
 
@@ -395,16 +419,20 @@ async def test_v1_flush_pause_can_exceed_api_timeout() -> None:
         await stream.aclose()
         await tts.aclose()
 
-    assert _payloads(server) == ["start", "text", "flush", "text", "end"]
+    assert _payloads(server) == ["start", "text", "text", "end"]
     assert len({request["contextId"] for request in server.requests}) == 1
     assert events[-1].is_final
 
 
-async def test_v1_ignores_flush_before_first_text() -> None:
+async def test_v1_flush_before_first_text_sends_no_rime_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.flush()
+        await asyncio.wait_for(server.connection_opened.wait(), timeout=2)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(server.request_received.wait(), timeout=0.05)
+
         stream.push_text("first")
         stream.end_input()
         await _collect(stream)
@@ -412,6 +440,20 @@ async def test_v1_ignores_flush_before_first_text() -> None:
         await tts.aclose()
 
     assert _payloads(server) == ["start", "text", "end"]
+
+
+async def test_v1_end_input_drains_buffered_final_text_before_end() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("buffered final fragment")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert _payloads(server) == ["start", "text", "end"]
+    assert server.requests[1]["text"] == "buffered final fragment "
 
 
 async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
@@ -440,7 +482,7 @@ async def test_v1_overlapping_streams_use_separate_connections() -> None:
         tts = _v1_tts(server)
         first = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         first.push_text("First stream stays active. Pending")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
 
         second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         second.push_text("Second stream completes.")
@@ -503,7 +545,7 @@ async def test_v1_clean_interruption_cancels_and_reuses_socket() -> None:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("Please stop this synthesis now. Pending")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
         second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -523,7 +565,7 @@ async def test_v1_interruption_stays_cancelled_without_retry() -> None:
             conn_options=APIConnectOptions(max_retry=1, timeout=0.1, retry_interval=0)
         )
         stream.push_text("Please stop this synthesis now. Pending")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await asyncio.wait_for(stream.aclose(), timeout=0.5)
         await tts.aclose()
 
@@ -577,7 +619,7 @@ async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
         stream.push_text("Please stop this synthesis now. Pending")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
         second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -632,7 +674,7 @@ async def test_v1_rejects_malformed_cancelled_before_socket_reuse() -> None:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("Please stop this synthesis now. Pending")
-        await asyncio.wait_for(server.text_received.wait(), timeout=2)
+        await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
         empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -786,7 +828,6 @@ async def test_v1_connection_error_does_not_expose_transport_data(
     [
         ("start", {}),
         ("text", "hello"),
-        ("flush", {}),
         ("end", {}),
     ],
 )

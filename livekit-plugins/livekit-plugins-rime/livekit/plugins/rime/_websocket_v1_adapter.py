@@ -30,6 +30,10 @@ from .log import logger
 _Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
 
 
+class _TokenizerFlush:
+    """Drain the current local sentence tokenizer without ending Coda input."""
+
+
 @dataclass(frozen=True)
 class CodaV1SynthesisOptions:
     """Coda settings before conversion to the WebSocket v1 wire format."""
@@ -216,7 +220,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         return sentinel
 
     def flush(self) -> None:
-        """Speak pending text without finalizing the Rime synthesis context.
+        """Drain pending text without finalizing the Rime synthesis context.
 
         The stream accepts more text after this call. Rime does not send ``done``
         until :meth:`end_input` finalizes the context.
@@ -224,9 +228,9 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         if self._input_ch.closed:
             return
 
-        # The base method records every flush as a LiveKit segment boundary. Rime v1
-        # flush is non-final, so keep its private metric text and segment state intact.
-        # No other TTS adapter currently needs this non-final LiveKit flush behavior.
+        # The base method records every flush as a LiveKit segment boundary. This
+        # adapter keeps the Coda context, metric text, and segment state active while
+        # it drains the current local sentence tokenizer.
         self._enqueue_flush_sentinel()
 
     def end_input(self) -> None:
@@ -247,11 +251,11 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        async def _raw_input_events() -> AsyncIterable[str | _websocket_v1.Flush]:
+        async def _raw_input_events() -> AsyncIterable[str | _TokenizerFlush]:
             async for event in self._input_ch:
                 if isinstance(event, self._FlushSentinel):
                     if event is not self._end_flush_sentinel:
-                        yield _websocket_v1.Flush()
+                        yield _TokenizerFlush()
                 else:
                     yield event
 
@@ -288,13 +292,13 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
 
 
 async def _sentence_tokenized_input_events(
-    input_events: AsyncIterable[str | _websocket_v1.Flush],
+    input_events: AsyncIterable[str | _TokenizerFlush],
     *,
     sentence_tokenizer: tokenize.SentenceTokenizer,
     language: str,
-) -> AsyncIterable[str | _websocket_v1.Flush]:
-    """Convert text fragments to complete sentences while preserving flush order."""
-    output = utils.aio.Chan[str | _websocket_v1.Flush]()
+) -> AsyncIterable[str]:
+    """Convert text fragments to sentence units and drain on local flushes."""
+    output = utils.aio.Chan[str]()
 
     async def _drive_input() -> None:
         sentence_stream = sentence_tokenizer.stream(language=language)
@@ -316,10 +320,9 @@ async def _sentence_tokenized_input_events(
         try:
             forward_task = _start_forwarding()
             async for event in input_events:
-                if isinstance(event, _websocket_v1.Flush):
+                if isinstance(event, _TokenizerFlush):
                     sentence_stream.end_input()
                     await forward_task
-                    output.send_nowait(event)
                     sentence_stream = sentence_tokenizer.stream(language=language)
                     forward_task = _start_forwarding()
                 else:
