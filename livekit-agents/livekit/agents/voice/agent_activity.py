@@ -4516,7 +4516,7 @@ class AgentActivity(RecognitionHooks):
     def _start_false_interruption_timer(self, timeout: float) -> None:
         self._cancel_false_interruption_timer()
 
-        def _on_false_interruption() -> None:
+        def _on_false_interruption(*, turn_dropped: bool) -> None:
             if self._paused_speech is None or (
                 self._current_speech and self._current_speech is not self._paused_speech.handle
             ):
@@ -4532,10 +4532,19 @@ class AgentActivity(RecognitionHooks):
                 and not self._paused_speech.handle.done()
             ):
                 if (recognition := self._audio_recognition) is not None:
-                    # the interruption was false, so the turn that raised it is abandoned: drop
-                    # it before the agent's next speech interval opens, or the next real
-                    # utterance inherits its speech-start anchor and buffered transcript
-                    recognition._clear_user_turn()
+                    # the interruption was false, so the turn that raised it is abandoned: let
+                    # it go before the agent's next speech interval opens, or the next real
+                    # utterance inherits its speech-start anchor
+                    if turn_dropped:
+                        # a decision ran and dropped this turn, so nothing is still in flight
+                        # for it: discard the buffered transcript too, or a confirmed
+                        # backchannel prepends itself to the next utterance
+                        recognition._clear_user_turn()
+                    else:
+                        # the timeout fired with no decision open, and turn_detection="stt"
+                        # starts no bounce on VAD END_OF_SPEECH — a slow stt final for real
+                        # speech may still be on its way, so keep whatever can still commit
+                        recognition._release_user_turn_anchors()
 
                 self._session._update_agent_state(
                     self._paused_speech.agent_state,
@@ -4571,7 +4580,7 @@ class AgentActivity(RecognitionHooks):
             if settled.cancelled() or (recognition is not None and recognition._closing.is_set()):
                 return  # torn down instead of decided; closing releases the pause itself
 
-            _on_false_interruption()
+            _on_false_interruption(turn_dropped=True)
 
         def _on_timeout() -> None:
             self._false_interruption_timer = None
@@ -4586,7 +4595,7 @@ class AgentActivity(RecognitionHooks):
                 eot_task.add_done_callback(_on_turn_settled)
                 return
 
-            _on_false_interruption()
+            _on_false_interruption(turn_dropped=False)
 
         self._false_interruption_timer = self._session._loop.call_later(timeout, _on_timeout)
 

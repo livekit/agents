@@ -426,3 +426,40 @@ async def test_resume_drops_the_turn_it_resumed_over(monkeypatch: pytest.MonkeyP
     await session.aclose()
 
     assert recognition._speech_start_time == pytest.approx(onset - 0.1, abs=0.1)
+
+
+async def test_resume_without_a_turn_decision_keeps_a_late_transcript_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # turn_detection="stt" starts no eou bounce on VAD END_OF_SPEECH, so the resume timer fires
+    # with no decision open. The speech may have been real with a slow stt final still on its
+    # way: letting the turn go must release its anchor without taking the pipeline — and the
+    # transcript it can still commit — with it
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    recognition._speech_start_time = time.time() - 12.0
+    recognition._vad_speech_started = True
+    recognition._audio_transcript = "what the caller actually said"
+    pipeline = MagicMock()
+    pipeline.aclose = AsyncMock()
+    recognition._stt_pipeline = pipeline
+
+    # no _run_eou_detection: on an stt pipeline the bounce waits for the stt final
+    activity.on_end_of_speech(None)
+    assert recognition._end_of_turn_task is None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert activity._paused_speech is None  # the speech resumed
+    assert recognition._speech_start_time is None  # the anchor is released
+    # everything a late final needs to commit the turn survived
+    assert recognition._audio_transcript == "what the caller actually said"
+    assert recognition._stt_pipeline is pipeline
+    pipeline.aclose.assert_not_called()

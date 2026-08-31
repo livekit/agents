@@ -977,6 +977,23 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
+    def _release_user_turn_anchors(self) -> None:
+        """Release an open turn's anchors without discarding what could still arrive.
+
+        For a turn abandoned before any end-of-turn decision ran: its speech-start anchor
+        must not be inherited by the next utterance, but an stt final for this speech may
+        still be in flight. Unlike `_clear_user_turn`, the transcript, the accumulated
+        confidence, the turn detector's buffer and the stt pipeline are left alone, so a
+        late final can still commit the turn.
+        """
+        self._speech_start_time = None
+        self._vad_speech_started = False
+        self._last_emitted_prediction = None
+        self._turn_tracker = _UserTurnTracker()
+
+        # end any in-progress user_turn span so the next speech starts a fresh one
+        self._end_user_turn_span()
+
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
