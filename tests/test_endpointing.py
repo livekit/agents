@@ -1,5 +1,6 @@
 import pytest
 
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.exp_filter import ExpFilter
 from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
 
@@ -133,7 +134,7 @@ class TestDynamicEndpointing:
 
         ep.on_end_of_speech(ended_at=100.0)
         ep.on_start_of_speech(started_at=100.4)
-        ep.on_end_of_speech(ended_at=100.5, should_ignore=False)
+        ep.on_end_of_speech(ended_at=100.5)
         # min_delay should be updated via EMA: 0.5 * 0.4 + 0.5 * 0.3 = 0.35
         expected = 0.5 * 0.4 + 0.5 * initial_min
         assert ep.min_delay == pytest.approx(expected, rel=1e-5)
@@ -145,7 +146,7 @@ class TestDynamicEndpointing:
         ep.on_end_of_speech(ended_at=100.0)
         ep.on_start_of_agent_speech(started_at=100.6)
         ep.on_start_of_speech(started_at=101.5)
-        ep.on_end_of_speech(ended_at=102.0, should_ignore=False)
+        ep.on_end_of_speech(ended_at=102.0)
 
         assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
 
@@ -164,7 +165,8 @@ class TestDynamicEndpointing:
         # pause = 100.25 - 100.0 = 0.25
         # EMA: 0.5 * max(0.25, 0.3) + 0.5 * 0.3 = 0.3
         assert ep._overlapping is False
-        assert ep._agent_speech_started_at is None  # already used
+        assert ep._agent_speech_started_at == 100.2
+        assert ep._agent_speech_ended_at is None
         assert ep.min_delay == pytest.approx(0.3, rel=1e-5)
 
     def test_update_options(self) -> None:
@@ -222,17 +224,16 @@ class TestDynamicEndpointing:
         assert ep.min_delay == pytest.approx(0.5, rel=1e-5)
         assert ep.max_delay == pytest.approx(0.5, rel=1e-5)
 
-    def test_non_interruption_clears_agent_speech(self) -> None:
-        """Test that non-interruption utterance start clears agent speech timestamp."""
+    def test_user_end_preserves_active_agent_speech_start(self) -> None:
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
 
         ep.on_end_of_speech(ended_at=100.0)
         ep.on_start_of_agent_speech(started_at=100.5)
-        assert ep._agent_speech_started_at is not None
+        ep.on_start_of_speech(started_at=102.0, overlapping=True)
+        ep.on_end_of_speech(ended_at=103.0)
 
-        ep.on_start_of_speech(started_at=102.0)
-        ep.on_end_of_speech(ended_at=103.0, should_ignore=False)
-        assert ep._agent_speech_started_at is None
+        assert ep._agent_speech_started_at == 100.5
+        assert ep._agent_speech_ended_at is None
 
     def test_consecutive_interruptions_only_track_first(self) -> None:
         """Test that only the first interruption in a sequence updates min_delay."""
@@ -250,6 +251,21 @@ class TestDynamicEndpointing:
         assert ep._overlapping is True
         assert prev_val == (ep.min_delay, ep.max_delay)
 
+    def test_agent_start_is_not_reused_for_later_overlap(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.1, max_delay=1.0, alpha=0.5)
+
+        ep.on_end_of_speech(ended_at=100.0)
+        ep.on_start_of_agent_speech(started_at=100.2)
+        ep.on_start_of_speech(started_at=100.25, overlapping=True)
+        ep.on_end_of_speech(ended_at=100.3)
+
+        assert ep.min_delay == pytest.approx(0.175)
+
+        ep.on_start_of_speech(started_at=100.4, overlapping=True)
+        ep.on_end_of_speech(ended_at=100.5)
+
+        assert ep.min_delay == pytest.approx(0.175)
+
     def test_delayed_interruption_leaves_delays_unchanged(self) -> None:
         """Delayed (non-immediate) interruptions no longer learn any delay."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
@@ -257,7 +273,7 @@ class TestDynamicEndpointing:
         ep.on_end_of_speech(ended_at=100.0)
         ep.on_start_of_agent_speech(started_at=100.9)
         ep.on_start_of_speech(started_at=101.8)
-        ep.on_end_of_speech(ended_at=102.0, should_ignore=False)
+        ep.on_end_of_speech(ended_at=102.0)
 
         assert ep.min_delay == pytest.approx(0.3, rel=1e-5)
         assert ep.max_delay == pytest.approx(1.0, rel=1e-5)
@@ -319,8 +335,8 @@ class TestDynamicEndpointing:
         # max_delay is the fixed, updated ceiling
         assert ep.max_delay == pytest.approx(2.0, rel=1e-5)
 
-    def test_should_ignore_skips_filter_update(self) -> None:
-        """should_ignore=True with overlapping=True skips EMA updates and resets state."""
+    def test_confirmed_non_interruption_skips_filter_update(self) -> None:
+        """A confirmed non-interruption skips EMA updates and resets user state."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
 
         ep.on_end_of_speech(ended_at=100.0)
@@ -331,7 +347,7 @@ class TestDynamicEndpointing:
         prev_min = ep.min_delay
         prev_max = ep.max_delay
 
-        ep.on_end_of_speech(ended_at=101.8, should_ignore=True)
+        ep.on_end_of_speech(ended_at=101.8, interruption=False)
 
         # filters should not have been updated
         assert ep.min_delay == prev_min
@@ -342,21 +358,21 @@ class TestDynamicEndpointing:
         assert ep._overlapping is False
         assert ep._speaking is False
 
-    def test_should_ignore_without_overlapping_still_updates(self) -> None:
-        """should_ignore=True but overlapping=False follows the normal update path."""
+    def test_non_interruption_without_overlapping_still_updates(self) -> None:
+        """A non-interruption verdict without overlap follows the normal update path."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
         initial_min = ep.min_delay
 
         ep.on_end_of_speech(ended_at=100.0)
         ep.on_start_of_speech(started_at=100.4, overlapping=False)
-        ep.on_end_of_speech(ended_at=100.6, should_ignore=True)
+        ep.on_end_of_speech(ended_at=100.6, interruption=False)
 
-        # should_ignore only gates when overlapping, so min_delay should update (case 1)
+        # The verdict only gates when overlapping, so min_delay should update (case 1)
         expected = 0.5 * 0.4 + 0.5 * initial_min
         assert ep.min_delay == pytest.approx(expected, rel=1e-5)
 
-    def test_should_ignore_grace_period_overrides(self) -> None:
-        """User speech within grace period of agent speech overrides should_ignore=True."""
+    def test_non_interruption_grace_period_overrides(self) -> None:
+        """User speech within the grace period overrides a non-interruption verdict."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
 
         ep.on_end_of_speech(ended_at=100.0)
@@ -364,14 +380,14 @@ class TestDynamicEndpointing:
         # user starts speaking 0.1s after agent (within 0.25s grace period)
         ep.on_start_of_speech(started_at=100.6, overlapping=True)
 
-        ep.on_end_of_speech(ended_at=100.8, should_ignore=True)
+        ep.on_end_of_speech(ended_at=100.8, interruption=False)
 
-        # grace period should override should_ignore, so the interruption path runs
+        # The grace period overrides the verdict, so the interruption path runs
         # and state is properly cleaned up (not left as None)
         assert ep._utterance_ended_at == 100.8
         assert ep._speaking is False
 
-    def test_should_ignore_outside_grace_period(self) -> None:
+    def test_non_interruption_outside_grace_period(self) -> None:
         """User speech well after agent speech start is outside grace period."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
 
@@ -382,9 +398,9 @@ class TestDynamicEndpointing:
 
         prev_min = ep.min_delay
         prev_max = ep.max_delay
-        ep.on_end_of_speech(ended_at=101.5, should_ignore=True)
+        ep.on_end_of_speech(ended_at=101.5, interruption=False)
 
-        # outside grace period, should_ignore takes effect — no filter update
+        # Outside the grace period, the verdict takes effect — no filter update
         assert ep.min_delay == prev_min
         assert ep.max_delay == prev_max
         assert ep._utterance_started_at is None
@@ -433,6 +449,17 @@ class TestDynamicEndpointing:
 
         assert ep._overlapping is False
 
+    def test_duplicate_agent_speech_end_does_not_restore_consumed_marker(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
+
+        ep.on_start_of_agent_speech(started_at=100.0)
+        ep.on_end_of_agent_speech(ended_at=101.0)
+        ep.on_start_of_speech(started_at=101.5)
+        ep.on_end_of_speech(ended_at=102.0)
+        ep.on_end_of_agent_speech(ended_at=102.5)
+
+        assert ep._agent_speech_ended_at is None
+
     def test_overlapping_inferred_from_agent_speech(self) -> None:
         """When _agent_speech_started_at is set, on_end_of_speech takes the interruption path."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
@@ -459,49 +486,82 @@ class TestDynamicEndpointing:
         assert ep._speaking is False
 
     @pytest.mark.parametrize(
-        "label, agent_speech, overlapping, should_ignore, within_grace, expect_min_change, expect_max_change",
+        "label, agent_speech, overlapping, interruption, within_grace, expect_min_change, expect_max_change",
         [
             # --- No agent speech ---
             # Case 1: pause between utterances updates min_delay
-            ("no_agent/no_overlap/no_ignore", "none", False, False, False, True, False),
-            # should_ignore is ignored when not overlapping
-            ("no_agent/no_overlap/ignore", "none", False, True, False, True, False),
+            ("no_agent/no_overlap/unknown", "none", False, NOT_GIVEN, False, True, False),
+            # The verdict is ignored when speech is not overlapping
+            ("no_agent/no_overlap/non_interruption", "none", False, False, False, True, False),
             # --- Agent speech ended (on_end_of_agent_speech called) ---
             # agent finished speaking → normal path, but max is fixed → no change
-            ("agent_ended/no_overlap/no_ignore", "ended", False, False, False, False, False),
-            ("agent_ended/no_overlap/ignore", "ended", False, True, False, False, False),
-            # --- Agent speech active ---
-            # Inferred (delayed) interruption → no longer learns any delay
-            ("agent_active/no_overlap/no_ignore", "active", False, False, False, False, False),
-            # should_ignore ignored when not _overlapping
-            ("agent_active/no_overlap/ignore", "active", False, True, False, False, False),
-            # Explicit overlapping, immediate → case 2 updates min_delay
-            ("agent_active/overlap/no_ignore", "active", True, False, False, True, False),
-            # Backchannel: overlapping + should_ignore outside grace → skip
+            ("agent_ended/no_overlap/unknown", "ended", False, NOT_GIVEN, False, False, False),
             (
-                "agent_active/overlap/ignore/outside_grace",
-                "active",
-                True,
-                True,
+                "agent_ended/no_overlap/non_interruption",
+                "ended",
+                False,
+                False,
                 False,
                 False,
                 False,
             ),
-            # Grace period override: overlapping + should_ignore inside grace → case 2 still runs
-            ("agent_active/overlap/ignore/inside_grace", "active", True, True, True, True, False),
+            # --- Agent speech active ---
+            # Inferred (delayed) interruption → no longer learns any delay
+            (
+                "agent_active/no_overlap/unknown",
+                "active",
+                False,
+                NOT_GIVEN,
+                False,
+                False,
+                False,
+            ),
+            # A non-interruption verdict is ignored when not _overlapping
+            (
+                "agent_active/no_overlap/non_interruption",
+                "active",
+                False,
+                False,
+                False,
+                False,
+                False,
+            ),
+            # Explicit overlapping, immediate → case 2 updates min_delay
+            ("agent_active/overlap/unknown", "active", True, NOT_GIVEN, False, True, False),
+            ("agent_active/overlap/interruption", "active", True, True, False, True, False),
+            # Confirmed backchannel outside grace → skip
+            (
+                "agent_active/overlap/non_interruption/outside_grace",
+                "active",
+                True,
+                False,
+                False,
+                False,
+                False,
+            ),
+            # Grace period override: confirmed backchannel inside grace → case 2 still runs
+            (
+                "agent_active/overlap/non_interruption/inside_grace",
+                "active",
+                True,
+                False,
+                True,
+                True,
+                False,
+            ),
         ],
     )
-    def test_all_overlapping_and_should_ignore_combos(
+    def test_all_overlap_verdict_combinations(
         self,
         label: str,
         agent_speech: str,
         overlapping: bool,
-        should_ignore: bool,
+        interruption: NotGivenOr[bool],
         within_grace: bool,
         expect_min_change: bool,
         expect_max_change: bool,
     ) -> None:
-        """Exhaustive test of all agent_speech × overlapping × should_ignore combinations."""
+        """Test agent speech, overlap, and interruption verdict combinations."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
 
         # Previous utterance
@@ -521,9 +581,9 @@ class TestDynamicEndpointing:
                 # EMA: 0.5*0.35 + 0.5*0.3 = 0.325 → min changes
                 ep.on_start_of_agent_speech(started_at=100.15)
                 user_start = 100.35
-            elif overlapping and should_ignore:
+            elif overlapping and interruption is False:
                 # Outside grace: agent at 100.2, user at 101.5 (1.3s after agent)
-                # should_ignore + overlapping + outside grace → skip
+                # Confirmed non-interruption + overlapping + outside grace → skip
                 ep.on_start_of_agent_speech(started_at=100.2)
                 user_start = 101.5
             elif overlapping:
@@ -547,7 +607,7 @@ class TestDynamicEndpointing:
         prev_min = ep.min_delay
         prev_max = ep.max_delay
 
-        ep.on_end_of_speech(ended_at=user_start + 0.5, should_ignore=should_ignore)
+        ep.on_end_of_speech(ended_at=user_start + 0.5, interruption=interruption)
 
         min_changed = ep.min_delay != prev_min
         max_changed = ep.max_delay != prev_max
@@ -580,7 +640,7 @@ class TestDynamicEndpointing:
         ep.on_start_of_speech(started_at=102.5, overlapping=True)
         min_before_backchannel = ep.min_delay
         max_before_backchannel = ep.max_delay
-        ep.on_end_of_speech(ended_at=102.8, should_ignore=True)
+        ep.on_end_of_speech(ended_at=102.8, interruption=False)
 
         # backchannel ignored — delays unchanged
         assert ep.min_delay == min_before_backchannel
@@ -600,6 +660,40 @@ class TestDynamicEndpointing:
         # so between_utterance_delay = 0 → no update
         assert ep._speaking is False
         assert ep._agent_speech_started_at is None
+
+    @pytest.mark.parametrize(
+        ("interruption", "overlap_started_at"),
+        [
+            pytest.param(NOT_GIVEN, 0.5, id="unknown"),
+            pytest.param(True, 0.5, id="confirmed-interruption"),
+            pytest.param(False, 0.1, id="confirmed-backchannel-within-grace-period"),
+        ],
+    )
+    def test_agent_speech_after_overlap_is_not_learned_as_user_pause(
+        self,
+        interruption: NotGivenOr[bool],
+        overlap_started_at: float,
+    ) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.7)
+
+        ep.on_start_of_agent_speech(0.0)
+        ep.on_start_of_speech(overlap_started_at, overlapping=True)
+        ep.on_end_of_speech(overlap_started_at + 0.3, interruption=interruption)
+
+        assert ep._agent_speech_started_at == 0.0
+        assert ep._agent_speech_ended_at is None
+
+        ep.on_end_of_agent_speech(5.0)
+
+        assert ep._agent_speech_started_at == 0.0
+        assert ep._agent_speech_ended_at == 5.0
+
+        ep.on_start_of_speech(6.0)
+        ep.on_end_of_speech(8.0)
+
+        assert ep.min_delay == 0.3
+        assert ep._agent_speech_started_at is None
+        assert ep._agent_speech_ended_at is None
 
 
 class TestCreateEndpointing:
