@@ -1124,9 +1124,9 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._client_request_id = None
             self._server_request_id = None
-            # Release the STT's strong ownership now that cleanup is done.
+            # Release the STT's strong ownership only after session cleanup succeeds.
             stt = self._stt
-            if isinstance(stt, STT):
+            if self._session.closed and isinstance(stt, STT):
                 stt._streams.discard(self)
 
     def update_options(
