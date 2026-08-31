@@ -745,6 +745,11 @@ class LLM(llm.LLM):
         """
         Create a new instance of PerplexityAI LLM.
 
+        .. deprecated::
+            This helper uses Sonar Chat Completions. Install
+            ``livekit-plugins-perplexity`` and use ``perplexity.responses.LLM``
+            for the Perplexity Agent API.
+
         ``api_key`` must be set to your Perplexity API key, either using the argument or by setting
         the ``PERPLEXITY_API_KEY`` environmental variable.
         """

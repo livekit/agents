@@ -53,6 +53,10 @@ class LLM(OpenAILLM):
         """
         Create a new instance of Perplexity LLM.
 
+        .. deprecated::
+            This client uses Sonar Chat Completions. Use
+            ``perplexity.responses.LLM`` for the Perplexity Agent API.
+
         ``api_key`` must be set to your Perplexity API key, either using the argument or by
         setting the ``PERPLEXITY_API_KEY`` environmental variable.
         """
