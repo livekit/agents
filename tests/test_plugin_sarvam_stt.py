@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -495,3 +497,49 @@ async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
     await stt.aclose()  # must not raise on an already-closed stream
 
     assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A finished stream the caller dropped must not take its session to the GC.
+
+    Regression test for the WeakSet hole in the original fix: with weak
+    tracking, a completed ``SpeechStream`` can be collected before
+    ``STT.aclose()`` snapshots the set, leaving its per-stream
+    ``aiohttp.ClientSession`` unreachable and unclosed. Strong ownership keeps
+    the stream (and its session) reachable until ``aclose`` closes it.
+    """
+
+    async def _immediate_run(self: object) -> None:
+        del self  # return immediately: the stream task finishes on its own
+
+    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _immediate_run)
+
+    stt = sarvam_stt.STT(api_key="sk_test")
+    stream = stt.stream()
+    session = stream._session
+    stream_ref = weakref.ref(stream)
+    del stream  # drop the caller's reference; only the STT's tracking remains
+
+    # Let the stream task and the base metrics task finish so the stream is at
+    # the mercy of the collector (its done-callback cycle needs gc.collect()).
+    for _ in range(50):
+        if stream_ref() is None:
+            break
+        await asyncio.sleep(0)
+    gc.collect()
+
+    if stream_ref() is None:
+        # Weak tracking: the stream really was collected -- the leak scenario.
+        assert len(stt._streams) == 0
+    else:
+        # Strong ownership: the STT retains the finished stream on purpose.
+        assert len(stt._streams) == 1
+
+    assert not session.closed, "session must still be open and owned by the STT"
+
+    await stt.aclose()
+
+    assert session.closed, "STT.aclose() must close the session of a stream the caller dropped"
