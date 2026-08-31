@@ -32,6 +32,8 @@ from livekit.plugins.sarvam.tts import (
     _decode_telephony,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 async def _cleanup_leaked_keepalive_tasks() -> AsyncIterator[None]:
