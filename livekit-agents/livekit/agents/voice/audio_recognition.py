@@ -283,6 +283,9 @@ class AudioRecognition:
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
         self._final_transcript_confidence: list[float] = []
+        # set by the end-of-turn decision; read by the false-interruption resume, which has to
+        # know whether this turn was decided and dropped or is simply still open
+        self._user_turn_dropped = False
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
@@ -989,6 +992,7 @@ class AudioRecognition:
         self._speech_start_time = None
         self._vad_speech_started = False
         self._last_emitted_prediction = None
+        self._user_turn_dropped = False
         self._turn_tracker = _UserTurnTracker()
 
         # end any in-progress user_turn span so the next speech starts a fresh one
@@ -1004,6 +1008,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._user_turn_dropped = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1377,6 +1382,7 @@ class AudioRecognition:
             if not self._vad_speech_started:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
+                self._user_turn_dropped = False
 
             self._cancel_transcription_timeout()
 
@@ -1767,6 +1773,9 @@ class AudioRecognition:
                     self._turn_detector_stream.flush(reason="turn committed")
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
+
+            # a dropped turn keeps accumulating, so nothing else records the verdict
+            self._user_turn_dropped = not committed
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
