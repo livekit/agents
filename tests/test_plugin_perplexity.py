@@ -2,10 +2,33 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.plugins import openai
 from livekit.plugins.perplexity import LLM, __version__
 from livekit.plugins.perplexity.llm import PERPLEXITY_BASE_URL
 
 pytestmark = pytest.mark.plugin("perplexity")
+
+MIGRATION_TARGET = "perplexity.responses.LLM"
+
+
+def test_legacy_plugin_llm_warns_with_migration_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    with pytest.warns(DeprecationWarning) as warning_info:
+        LLM()
+
+    assert MIGRATION_TARGET in str(warning_info[0].message)
+
+
+def test_legacy_openai_factory_warns_with_migration_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    with pytest.warns(DeprecationWarning) as warning_info:
+        openai.LLM.with_perplexity(model="sonar-pro")
+
+    assert MIGRATION_TARGET in str(warning_info[0].message)
 
 
 def test_default_model_and_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

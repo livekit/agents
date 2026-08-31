@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -744,9 +745,16 @@ class LLM(llm.LLM):
         """
         Create a new instance of PerplexityAI LLM.
 
-        ``api_key`` must be set to your TogetherAI API key, either using the argument or by setting
+        ``api_key`` must be set to your Perplexity API key, either using the argument or by setting
         the ``PERPLEXITY_API_KEY`` environmental variable.
         """
+        warnings.warn(
+            "`openai.LLM.with_perplexity()` uses Sonar Chat Completions and is deprecated. "
+            "Install `livekit-plugins-perplexity` and use `perplexity.responses.LLM` for "
+            "the Perplexity Agent API.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         api_key = api_key or os.environ.get("PERPLEXITY_API_KEY")
         if api_key is None:

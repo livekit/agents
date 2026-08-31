@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 import httpx
 import openai
@@ -55,6 +56,12 @@ class LLM(OpenAILLM):
         ``api_key`` must be set to your Perplexity API key, either using the argument or by
         setting the ``PERPLEXITY_API_KEY`` environmental variable.
         """
+        warnings.warn(
+            "`perplexity.LLM` uses Sonar Chat Completions and is deprecated. "
+            "Use `perplexity.responses.LLM` for the Perplexity Agent API.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         api_key = api_key if is_given(api_key) else os.environ.get("PERPLEXITY_API_KEY", "")
         if not api_key:
             raise ValueError(
