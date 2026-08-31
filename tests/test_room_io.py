@@ -819,6 +819,35 @@ async def test_audio_input_waits_for_previous_track_before_changing_gain() -> No
     assert not apm_created_before_cancel
 
 
+@pytest.mark.asyncio
+async def test_audio_input_discards_gain_metadata_when_forwarding_never_starts() -> None:
+    room = _FakeRoom()
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=NOT_GIVEN,
+        pre_connect_audio_handler=None,
+    )
+    stream.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    try:
+        with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream):
+            assert stream._on_track_available(track, publication, participant)
+            assert stream._forward_atask is not None
+            stream._forward_atask.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stream._forward_atask
+            await asyncio.sleep(0)
+
+        assert not stream._stream_auto_gain_control
+    finally:
+        await stream.aclose()
+
+
 # -- audio output tests -------------------------------------------------------
 
 

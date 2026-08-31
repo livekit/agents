@@ -176,6 +176,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         """Hook for subclasses to process frames in-place before forwarding."""
         pass
 
+    def _on_forward_task_done(self, stream: rtc.VideoStream | rtc.AudioStream) -> None:
+        pass
+
     @abstractmethod
     def _create_stream(
         self, track: rtc.RemoteTrack, participant: rtc.Participant
@@ -221,15 +224,17 @@ class _ParticipantInputStream(Generic[T], ABC):
             return False
 
         self._close_stream()
-        self._stream = self._create_stream(track, participant)
+        stream = self._create_stream(track, participant)
+        self._stream = stream
         self._track = track
         self._publication = publication
         forward_task = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, track, publication, participant)
+            self._forward_task(self._forward_atask, stream, track, publication, participant)
         )
         self._forward_atask = forward_task
         self._forward_tasks.add(forward_task)
         forward_task.add_done_callback(self._forward_tasks.discard)
+        forward_task.add_done_callback(lambda _task: self._on_forward_task_done(stream))
         return True
 
     def _on_track_unsubscribed(
@@ -316,6 +321,10 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
     def _process_frame(self, frame: rtc.AudioFrame) -> None:
         if self._apm is not None:
             self._apm.process_stream(frame)
+
+    @override
+    def _on_forward_task_done(self, stream: rtc.VideoStream | rtc.AudioStream) -> None:
+        self._stream_auto_gain_control.pop(cast(rtc.AudioStream, stream), None)
 
     @override
     def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
