@@ -124,7 +124,10 @@ class RoomIO:
                 auto_gain_control=(
                     input_audio_options.auto_gain_control
                     if utils.is_given(input_audio_options.auto_gain_control)
-                    else input_audio_options.noise_cancellation is None
+                    else (
+                        input_audio_options.noise_cancellation is None
+                        or callable(input_audio_options.noise_cancellation)
+                    )
                 ),
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )

@@ -319,7 +319,8 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     [
         (None, NOT_GIVEN, True),
         (rtc.NoiseCancellationOptions(module_id="bvc", options={}), NOT_GIVEN, False),
-        (lambda _params: None, NOT_GIVEN, False),
+        (lambda _params: None, NOT_GIVEN, True),
+        (lambda _params: None, False, False),
         (rtc.NoiseCancellationOptions(module_id="bvc", options={}), True, True),
         (None, False, False),
     ],

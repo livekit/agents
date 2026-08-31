@@ -68,7 +68,8 @@ class AudioInputOptions:
     ) = None
     auto_gain_control: NotGivenOr[bool] = NOT_GIVEN
     """Enable automatic gain control (AGC) on the input audio.
-    If not given, enabled only when noise cancellation is not configured."""
+    If not given, disabled when noise cancellation is configured directly.
+    Set explicitly when using a noise cancellation selector."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
