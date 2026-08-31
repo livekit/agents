@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, vad
+from livekit.agents import LanguageCode, stt, vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -199,6 +199,52 @@ class TestResumedSpeechAbortsCommit:
             await task
         assert task.cancelled()
         ar._hooks.on_end_of_turn.assert_not_called()
+
+    async def test_sos_clears_stranded_committed_flag(self) -> None:
+        """Regression (#7010): ``START_OF_SPEECH`` must clear
+        ``_user_turn_committed`` when it cancels the manual EOU task."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detection_mode = "manual"
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None and not task.done()
+        ar._user_turn_committed = True
+
+        await ar._on_vad_event(_start_of_speech())
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert task.cancelled()
+        assert ar._user_turn_committed is False
+
+    async def test_stt_events_not_dropped_after_sos_cancels_manual_commit(
+        self,
+    ) -> None:
+        """Regression (#7010): after SOS cancels a manual commit, a
+        ``FINAL_TRANSCRIPT`` must reach ``_process_stt_event`` instead of
+        being silently dropped by the stale committed flag."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detection_mode = "manual"
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None
+        ar._user_turn_committed = True
+
+        await ar._on_vad_event(_start_of_speech())
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        final_event = stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[stt.SpeechData(language="en", text="hello world")],
+        )
+        ar._process_stt_event = MagicMock()  # type: ignore[method-assign]
+        await ar._on_stt_event(final_event)
+        ar._process_stt_event.assert_called_once_with(final_event)
 
 
 def _inference_done(*, raw_speech: float, raw_silence: float = 0.0) -> vad.VADEvent:
