@@ -69,15 +69,6 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
     return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
 
 
-def _wire_language(language: str) -> str:
-    """Normalize a language to the code the realtime API accepts.
-
-    It takes ISO-639-1 or ISO-639-3 and rejects the whole session on anything else, including
-    the region-tagged tags `LanguageCode` happily produces ("ru-RU"), so the region comes off.
-    """
-    return LanguageCode(language).language
-
-
 class VADOptions(TypedDict, total=False):
     vad_silence_threshold_secs: float | None
     """Silence threshold in seconds for VAD. Default to 1.5"""
@@ -99,7 +90,7 @@ class STTOptions:
     api_key: str
     base_url: str
     language_code: LanguageCode | None
-    secondary_languages: NotGivenOr[list[str]]
+    secondary_languages: NotGivenOr[list[LanguageCode]]
     include_language_detection: NotGivenOr[bool]
     tag_audio_events: bool
     include_timestamps: bool
@@ -240,7 +231,9 @@ class STT(stt.STT):
             api_key=elevenlabs_api_key,
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             language_code=LanguageCode(language_code) if language_code else None,
-            secondary_languages=secondary_languages,
+            secondary_languages=[LanguageCode(language) for language in secondary_languages]
+            if is_given(secondary_languages)
+            else NOT_GIVEN,
             include_language_detection=include_language_detection,
             tag_audio_events=tag_audio_events,
             sample_rate=sample_rate,
@@ -404,7 +397,7 @@ class STT(stt.STT):
             stt=self,
             opts=self._opts,
             conn_options=conn_options,
-            language=language if is_given(language) else self._opts.language_code,
+            language=LanguageCode(language) if is_given(language) else self._opts.language_code,
             http_session=self._ensure_session(),
         )
         self._streams.add(stream)
@@ -420,7 +413,7 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
-        language: str | None,
+        language: LanguageCode | None,
         http_session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -668,12 +661,14 @@ class SpeechStream(stt.SpeechStream):
             if (min_silence_duration_ms := server_vad.get("min_silence_duration_ms")) is not None:
                 params.append(f"min_silence_duration_ms={min_silence_duration_ms}")
 
+        # the realtime API takes a bare ISO-639-1/639-3 code and rejects the session on a
+        # region-tagged one ("ru-RU"), so both language params go on the wire without the region
         if self._language:
-            params.append(f"language_code={quote(_wire_language(self._language))}")
+            params.append(f"language_code={quote(self._language.language)}")
 
         if is_given(self._opts.secondary_languages):
             params.extend(
-                f"secondary_languages={quote(_wire_language(language))}"
+                f"secondary_languages={quote(language.language)}"
                 for language in self._opts.secondary_languages
             )
 

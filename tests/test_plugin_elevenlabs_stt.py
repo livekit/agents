@@ -37,15 +37,18 @@ def _new_stream(
     language: str | None = "en",
     include_timestamps: bool = False,
     include_language_detection=NOT_GIVEN,
-    secondary_languages=NOT_GIVEN,
+    secondary_languages: list[str] | Any = NOT_GIVEN,
 ) -> elevenlabs_stt.SpeechStream:
+    # mirrors what STT.__init__ stores: both language options are normalized on the way in
     stream = object.__new__(elevenlabs_stt.SpeechStream)
     stream._opts = elevenlabs_stt.STTOptions(
         model_id="scribe_v2_realtime",
         api_key="test-key",
         base_url=elevenlabs_stt.API_BASE_URL_V1,
         language_code=None,
-        secondary_languages=secondary_languages,
+        secondary_languages=[LanguageCode(code) for code in secondary_languages]
+        if secondary_languages is not NOT_GIVEN
+        else NOT_GIVEN,
         include_language_detection=include_language_detection,
         tag_audio_events=True,
         include_timestamps=include_timestamps,
@@ -56,7 +59,7 @@ def _new_stream(
         enable_logging=True,
         previous_text=None,
     )
-    stream._language = language
+    stream._language = LanguageCode(language) if language else None
     stream._event_ch = _EventSink()
     stream._speaking = False
     stream._start_time_offset = 0.0
@@ -295,7 +298,7 @@ def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
 async def test_connect_ws_normalizes_the_primary_language() -> None:
     # LanguageCode keeps the region ("en-US") but the realtime API rejects it, so the primary
     # language goes on the wire through the same normalization the secondary ones get
-    stream = _new_stream(language=LanguageCode("en_US"), secondary_languages=["ru-RU"])
+    stream = _new_stream(language="en_US", secondary_languages=["ru-RU"])
 
     url = await _connect_ws_url(stream)
 
@@ -328,6 +331,21 @@ async def test_connect_ws_omits_secondary_languages_when_not_given() -> None:
     url = await _connect_ws_url(_new_stream(language="en"))
 
     assert "secondary_languages=" not in url
+
+
+def test_secondary_languages_are_normalized_on_the_options() -> None:
+    instance = elevenlabs_stt.STT(
+        api_key="test-key",
+        model="scribe_v2_realtime",
+        language_code="en_US",
+        secondary_languages=["ru_RU", "french", "spa"],
+    )
+
+    assert instance._opts.language_code == LanguageCode("en-US")
+    assert instance._opts.secondary_languages == ["ru-RU", "fr", "es"]
+    assert all(
+        isinstance(code, LanguageCode) for code in cast(list, instance._opts.secondary_languages)
+    )
 
 
 def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFixture) -> None:
