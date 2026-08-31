@@ -729,7 +729,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_perplexity(
         *,
-        model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
+        model: str | PerplexityChatModels = "sonar-pro",
         api_key: str | None = None,
         base_url: str = "https://api.perplexity.ai",
         client: openai.AsyncClient | None = None,
