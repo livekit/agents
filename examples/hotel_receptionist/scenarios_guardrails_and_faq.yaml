@@ -3,7 +3,7 @@
 # judgment calls with no deterministic end state. Graded on agent_expectations
 # only — no `expected_state` — so they exercise guardrails and conversational
 # behavior rather than evaluating simulation quality. The scoped tool-based
-# scenarios graded on the final DB diff live in scenarios_tool_flows.yaml.
+# scenarios graded on the final DB diff live in scenarios_tool_accuracy.yaml.
 #
 # Assumptions:
 #   - Seed date is pinned: HOTEL_TODAY=2026-06-08 (Mon). All dates are literals.
