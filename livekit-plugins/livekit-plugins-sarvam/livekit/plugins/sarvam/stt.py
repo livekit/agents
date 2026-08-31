@@ -864,6 +864,17 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        """Close every stream this instance created.
+
+        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        and only ``SpeechStream.aclose()`` closes it. Without this the sessions
+        outlive the STT. ``stt_streaming.py`` in this package already does the same.
+        """
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+
 
 class SpeechStream(stt.SpeechStream):
     """Sarvam.ai streaming speech-to-text implementation."""
