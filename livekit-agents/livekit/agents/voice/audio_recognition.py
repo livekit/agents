@@ -712,6 +712,13 @@ class AudioRecognition:
         events_to_emit = list(self._transcript_buffer)
         self._transcript_buffer.clear()
         for ev in events_to_emit:
+            if ev.type == stt.SpeechEventType.END_OF_SPEECH and ev.speech_end_time is None:
+                # Preserve the provider's original turn-end arrival when an adaptive
+                # interruption gate releases buffered events later. Anchoring the EOU
+                # bounce to replay time creates a fresh endpointing window in which a
+                # subsequently buffered START_OF_SPEECH can cancel a turn that had
+                # already ended at the provider.
+                ev = replace(ev, speech_end_time=ev.created_at)
             logger.trace("re-emitting held STT event", extra={"event": ev.type})
             self._process_stt_event(ev)
 

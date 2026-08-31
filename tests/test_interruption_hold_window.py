@@ -180,9 +180,23 @@ def test_flushing_held_transcripts_preserves_provider_order() -> None:
     recognition._flush_held_transcripts()
 
     emitted = [call.args[0] for call in recognition._process_stt_event.call_args_list]  # type: ignore[attr-defined]
-    assert emitted == events
+    assert emitted[:2] == events[:2]
+    assert emitted[2].type == SpeechEventType.END_OF_SPEECH
+    assert emitted[2].created_at == events[2].created_at
+    assert emitted[2].speech_end_time == events[2].created_at
     assert not recognition._transcript_buffer
     assert not recognition._transcript_gate_active
+
+
+def test_flushing_held_end_of_speech_preserves_original_arrival_time() -> None:
+    recognition = _make_recognition(vad_sos=5.0)
+    end_of_speech = SpeechEvent(type=SpeechEventType.END_OF_SPEECH, created_at=5.2)
+    recognition._transcript_buffer.append(end_of_speech)
+
+    recognition._flush_held_transcripts()
+
+    emitted = recognition._process_stt_event.call_args.args[0]  # type: ignore[attr-defined]
+    assert emitted.speech_end_time == end_of_speech.created_at
 
 
 def test_new_overlap_rearms_a_released_gate() -> None:
