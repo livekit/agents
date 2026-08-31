@@ -39,10 +39,6 @@ CANCEL_TIMEOUT = 1.0
 NUM_CHANNELS = 1
 
 
-class Flush:
-    """A non-final LiveKit input flush."""
-
-
 @dataclass(frozen=True)
 class SynthesisOptions:
     speaker: str
@@ -140,7 +136,7 @@ async def run_context(
     *,
     context_id: str,
     options: SynthesisOptions,
-    input_events: AsyncIterable[str | Flush],
+    input_events: AsyncIterable[str],
     output_emitter: tts.AudioEmitter,
     timeout: float,
     mark_started: Callable[[], None],
@@ -156,11 +152,6 @@ async def run_context(
 
     async def _send() -> None:
         async for event in input_events:
-            if isinstance(event, Flush):
-                if state.active:
-                    await _send_envelope(ws, context_id, "flush", {})
-                continue
-
             if not event:
                 continue
             if not state.active:
@@ -191,9 +182,9 @@ async def run_context(
         if input_complete.is_set():
             return
         while True:
-            # A live context can remain silent while it waits for more text after a
-            # flush. Start and terminal watchdogs enforce bounded waits where
-            # the protocol requires progress.
+            # A live context can remain silent during an input pause. Start and
+            # terminal watchdogs enforce bounded waits where the protocol requires
+            # progress.
             envelope = await _receive_envelope(ws, timeout=None)
             server_activity.set()
             payload = _payload(envelope)

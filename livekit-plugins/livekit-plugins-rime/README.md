@@ -41,17 +41,17 @@ custom tokenizer must emit complete sentence units that are safe for Coda text n
 One LiveKit stream uses one continuous Rime synthesis context. These stream methods map to the
 Rime lifecycle as follows:
 
-| LiveKit method | Rime operation | Result |
+| LiveKit method | Local action | Rime operation |
 | --- | --- | --- |
-| `stream.flush()` | `flush` | Speak pending text and keep the context open. |
-| `stream.end_input()` | `end` | Finalize input and wait for `done`. |
-| `stream.aclose()` | `cancel` | Cancel synthesis if the context is still active. |
+| `stream.push_text()` | Buffer and sentence-tokenize text. | Send `text` for each completed sentence. |
+| `stream.flush()` | Drain the current tokenizer and keep the context open. | Send no control message. |
+| `stream.end_input()` | Drain final text and finalize input. | Send `end`. |
+| `stream.aclose()` | Stop active synthesis. | Send `cancel` when needed. |
 
-You can send more text after `flush()`. A flush does not cause a `done` event and does not start a
-new synthesis context. A flush drains the current sentence tokenizer before it asks Coda to speak
-pending text. Later text continues in the same Coda context with a new tokenizer stream. The
-tokenizer normally sends complete sentences. Calling `flush()` commits any buffered fragment,
-including an incomplete sentence. Call `flush()` only after a complete sentence or a stable clause.
+You can send more text after `flush()`. The same Coda context remains active, and an input pause
+needs no wire message. Only `end_input()` ends normal input and causes Coda to send `done`.
+Each outgoing `text` value must be a stable sentence-sized unit. Calling `flush()` drains any
+buffered fragment, so call it only after a complete sentence or a stable clause.
 
 The first v1 implementation has these limits:
 
