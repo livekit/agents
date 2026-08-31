@@ -66,8 +66,9 @@ class AudioInputOptions:
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None
     ) = None
-    auto_gain_control: bool = True
-    """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
+    auto_gain_control: NotGivenOr[bool] = NOT_GIVEN
+    """Enable automatic gain control (AGC) on the input audio.
+    If not given, enabled only when noise cancellation is not configured."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
