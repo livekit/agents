@@ -736,21 +736,87 @@ async def test_audio_input_resolves_auto_gain_control(
         auto_gain_control=auto_gain_control,
         pre_connect_audio_handler=None,
     )
-    track, _, participant = _make_track_available_args()
+    stream.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
 
     with (
         patch("livekit.rtc.AudioProcessingModule") as create_apm,
-        patch("livekit.rtc.AudioStream.from_track", return_value=_MockAudioStream()),
+        patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream),
     ):
-        stream._create_stream(track, participant)
+        assert stream._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
 
-    if expected_auto_gain_control:
-        assert stream._apm is create_apm.return_value
-        create_apm.assert_called_once_with(auto_gain_control=True)
-    else:
-        assert stream._apm is None
-        create_apm.assert_not_called()
+        if expected_auto_gain_control:
+            assert stream._apm is create_apm.return_value
+            create_apm.assert_called_once_with(auto_gain_control=True)
+        else:
+            assert stream._apm is None
+            create_apm.assert_not_called()
+
+        rtc_stream.end()
+        assert stream._forward_atask is not None
+        await stream._forward_atask
+
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_waits_for_previous_track_before_changing_gain() -> None:
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={})
+    selections = iter([nc_options, None])
+    stream = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=lambda _params: next(selections),
+        auto_gain_control=NOT_GIVEN,
+        pre_connect_audio_handler=None,
+    )
+    stream.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+    old_stream = _NonClosingMockAudioStream()
+    new_stream = _MockAudioStream()
+    cancel_started = asyncio.Event()
+    allow_cancel = asyncio.Event()
+    cancel_and_wait = utils.aio.cancel_and_wait
+
+    async def delayed_cancel(*tasks: asyncio.Future) -> None:
+        cancel_started.set()
+        await allow_cancel.wait()
+        await cancel_and_wait(*tasks)
+
+    apm_created_before_cancel = False
+    try:
+        with (
+            patch("livekit.rtc.AudioProcessingModule") as create_apm,
+            patch(
+                "livekit.rtc.AudioStream.from_track",
+                side_effect=[old_stream, new_stream],
+            ),
+        ):
+            assert stream._on_track_available(old_track, publication, participant)
+            await asyncio.wait_for(old_stream.started.wait(), timeout=1)
+
+            with patch(
+                "livekit.agents.voice.room_io._input.aio.cancel_and_wait",
+                side_effect=delayed_cancel,
+            ):
+                publication.track = new_track
+                assert stream._on_track_available(new_track, publication, participant)
+                await asyncio.wait_for(cancel_started.wait(), timeout=1)
+                apm_created_before_cancel = create_apm.called
+                allow_cancel.set()
+                await asyncio.wait_for(new_stream.started.wait(), timeout=1)
+
+            create_apm.assert_called_once_with(auto_gain_control=True)
+    finally:
+        allow_cancel.set()
+        await stream.aclose()
+
+    assert not apm_created_before_cancel
 
 
 # -- audio output tests -------------------------------------------------------

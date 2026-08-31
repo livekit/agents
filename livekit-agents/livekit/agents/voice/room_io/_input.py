@@ -310,6 +310,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         self._pre_connect_audio_handler = pre_connect_audio_handler
         self._pre_connect_audio_publications: set[tuple[str, str]] = set()
         self._apm: rtc.AudioProcessingModule | None = None
+        self._stream_auto_gain_control: dict[rtc.AudioStream, bool] = {}
 
     @override
     def _process_frame(self, frame: rtc.AudioFrame) -> None:
@@ -331,12 +332,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             if is_given(self._auto_gain_control)
             else noise_cancellation is None
         )
-        if auto_gain_control and self._apm is None:
-            self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
-        elif not auto_gain_control:
-            self._apm = None
-
-        return rtc.AudioStream.from_track(
+        stream = rtc.AudioStream.from_track(
             track=track,
             sample_rate=self._sample_rate,
             num_channels=self._num_channels,
@@ -344,6 +340,8 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             noise_cancellation=noise_cancellation,
             auto_close_noise_cancellation=False,
         )
+        self._stream_auto_gain_control[stream] = auto_gain_control
+        return stream
 
     @override
     async def _forward_task(
@@ -354,8 +352,14 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
+        auto_gain_control = self._stream_auto_gain_control.pop(stream)
         if old_task:
             await aio.cancel_and_wait(old_task)
+
+        if auto_gain_control and self._apm is None:
+            self._apm = rtc.AudioProcessingModule(auto_gain_control=True)
+        elif not auto_gain_control:
+            self._apm = None
 
         pre_connect_key = (participant.identity, publication.sid)
         if (
