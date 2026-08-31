@@ -888,6 +888,7 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
+        self._session_update_tasks: set[asyncio.Task[None]] = set()
 
     def update_options(
         self,
@@ -923,7 +924,11 @@ class SpeechStream(stt.SpeechStream):
                 "type": "session.update",
                 "settings": settings,
             }
-            asyncio.ensure_future(self._send_session_update(update_msg))
+            # Hold the task: the loop only weakly references it, and a collected one
+            # means self._opts moved on while the server was never told.
+            task = asyncio.create_task(self._send_session_update(update_msg))
+            self._session_update_tasks.add(task)
+            task.add_done_callback(self._session_update_tasks.discard)
 
     def _on_end_of_speech(self) -> None:
         if self._pending_extra is not None:
@@ -1060,6 +1065,9 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(*tasks)
         finally:
             self._ws = None
+            if self._session_update_tasks:
+                await utils.aio.gracefully_cancel(*self._session_update_tasks)
+                self._session_update_tasks.clear()
             if ws is not None:
                 await ws.close()
             if vad_stream is not None:
