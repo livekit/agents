@@ -154,6 +154,7 @@ class TTS(tts.TTS):
 
         # One persistent connection shared across streams (see _Connection).
         self.__current_connection: _Connection | None = None
+        self._prewarm_task: asyncio.Task[None] | None = None
         self.__conn_lock = asyncio.Lock()
 
     @property
@@ -251,13 +252,20 @@ class TTS(tts.TTS):
                 logger.debug(f"Soniox TTS prewarm failed: {e}")
 
         try:
-            asyncio.create_task(_task(), name="soniox-tts-prewarm")
+            self._prewarm_task = asyncio.create_task(_task(), name="soniox-tts-prewarm")
         except RuntimeError:
             # No running event loop (e.g. called outside async context) — skip.
             pass
 
     async def aclose(self) -> None:
         """Close all streams and the persistent connection."""
+        # Cancel first: the prewarm task calls _current_connection, which opens a new
+        # connection when there is none. A prewarm still in flight here would otherwise
+        # reconnect after close, leaving a live WebSocket nothing owns.
+        if self._prewarm_task is not None:
+            await utils.aio.cancel_and_wait(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
@@ -579,6 +587,7 @@ class _Connection:
         self._send_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
         self._is_current = True
         self._closed = False
 
@@ -597,11 +606,21 @@ class _Connection:
     def has_stream(self, stream_id: str) -> bool:
         return stream_id in self._streams
 
+    def _schedule_close(self, name: str) -> None:
+        """Close in the background, holding on to the task.
+
+        The event loop only keeps a weak reference to a bare task, so a discarded
+        one can be collected before it runs and the WebSocket would stay open.
+        """
+        if self._close_task is not None and not self._close_task.done():
+            return
+        self._close_task = asyncio.create_task(self.aclose(), name=name)
+
     def mark_non_current(self) -> None:
         """Flag this connection to be replaced; self-closes once idle."""
         self._is_current = False
         if not self._streams and not self._closed:
-            asyncio.create_task(self.aclose(), name="soniox-tts-conn-drain-close")
+            self._schedule_close("soniox-tts-conn-drain-close")
 
     async def connect(self) -> None:
         """Open the WebSocket and start the send/recv/keepalive loops."""
@@ -646,7 +665,7 @@ class _Connection:
         self._streams.pop(stream_id, None)
         # If flagged non-current and idle, self-close.
         if not self._is_current and not self._streams and not self._closed:
-            asyncio.create_task(self.aclose(), name="soniox-tts-conn-drain-close")
+            self._schedule_close("soniox-tts-conn-drain-close")
 
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         if self._closed or stream_id not in self._streams:
@@ -721,7 +740,7 @@ class _Connection:
             self._fail_all(APIConnectionError("Soniox TTS send loop error"))
         finally:
             if not self._closed:
-                asyncio.create_task(self.aclose(), name="soniox-tts-conn-fail-close")
+                self._schedule_close("soniox-tts-conn-fail-close")
 
     async def _recv_loop(self) -> None:
         try:
@@ -823,7 +842,7 @@ class _Connection:
             self._fail_all(APIConnectionError("Soniox TTS recv loop error"))
         finally:
             if not self._closed:
-                asyncio.create_task(self.aclose(), name="soniox-tts-conn-fail-close")
+                self._schedule_close("soniox-tts-conn-fail-close")
 
     async def _keepalive_loop(self) -> None:
         try:
