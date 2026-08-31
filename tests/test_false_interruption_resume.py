@@ -385,3 +385,81 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_discards_the_stale_recognition_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a VAD-only turn that never commits is dropped by the resume; its speech anchors must not
+    # survive into the next real utterance's started_speaking_at (#7063).
+    # the VAD END_OF_SPEECH that armed the resume already released _vad_speech_started and
+    # _speaking, so this is the state the timer really fires in — only the anchor is left.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    recognition._speech_start_time = t0 - 1.0
+    recognition._audio_transcript = "abandoned"
+    activity._audio_recognition = recognition
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert recognition._speech_start_time is None
+    assert recognition._audio_transcript == ""
+
+
+async def test_resume_keeps_the_anchors_of_a_live_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # in stt turn detection an stt end of speech arms this timer while VAD is still inside a
+    # speech segment (audio_recognition warns "stt end of speech received while vad is still
+    # in a speech segment"). those anchors belong to the utterance in progress, so the resume
+    # must leave them alone rather than discard a turn that is still being spoken.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    recognition._speech_start_time = t0 - 1.0
+    recognition._vad_speech_started = True  # vad never ended this segment
+    activity._audio_recognition = recognition
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert recognition._speech_start_time == t0 - 1.0
+    assert recognition._vad_speech_started is True
+
+
+async def test_resume_keeps_the_stt_stream_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a late final is the only thing that can still interrupt the resumed speech when the
+    # barge-in was real and VAD missed it, so discarding the turn must not tear down the
+    # provider stream and drop the audio it is still decoding.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    recognition._speech_start_time = t0 - 1.0
+    recognition._update_stt = MagicMock()  # type: ignore[method-assign]
+    activity._audio_recognition = recognition
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert recognition._speech_start_time is None
+    recognition._update_stt.assert_not_called()
