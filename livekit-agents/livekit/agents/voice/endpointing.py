@@ -133,7 +133,7 @@ class DynamicEndpointing(BaseEndpointing):
         # end still belongs to the previous utterance. Move it just before agent speech
         # to exclude this overlap from dynamic endpointing statistics.
         if (
-            self._agent_speech_started_at is None
+            not self._agent_speaking
             and self._speaking
             and self._utterance_started_at is not None
             and self._utterance_ended_at is not None

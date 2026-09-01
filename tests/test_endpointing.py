@@ -295,6 +295,21 @@ class TestDynamicEndpointing:
         ep.on_end_of_speech(ended_at=100.5)
         assert ep.min_delay == pytest.approx(0.3, rel=1e-5)
 
+    def test_agent_start_while_user_speaks_replaces_completed_agent_interval(self) -> None:
+        ep = DynamicEndpointing(min_delay=0.3, max_delay=1.4, alpha=0.7)
+
+        ep.on_end_of_speech(ended_at=0.0)
+        ep.on_start_of_agent_speech(started_at=0.2)
+        ep.on_end_of_agent_speech(ended_at=0.6)
+        ep.on_start_of_speech(started_at=1.0)
+        ep.on_start_of_agent_speech(started_at=1.2)
+
+        assert ep._utterance_ended_at == pytest.approx(1.199)
+
+        ep.on_end_of_speech(ended_at=1.4)
+
+        assert ep.min_delay == pytest.approx(0.3)
+
     def test_update_options_preserves_filter_alpha(self) -> None:
         """Changing delays should not overwrite the EMA smoothing coefficient."""
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0, alpha=0.5)
@@ -435,7 +450,7 @@ class TestDynamicEndpointing:
 
         assert ep._overlapping is True
         assert ep._utterance_started_at == 100.1
-        assert ep._utterance_ended_at == 99.5
+        assert ep._utterance_ended_at == pytest.approx(100.299)
 
     def test_agent_speech_resume_does_not_restore_overlap_after_user_ends(self) -> None:
         ep = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
