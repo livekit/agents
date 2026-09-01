@@ -3664,12 +3664,15 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
-                if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error("expected to receive only one AgentTask from the tool executions")
-                    ignore_task_switch = True
-                    # TODO(long): should we mark the function call as failed to notify the LLM?
-
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    if new_agent_task is not None:
+                        logger.error(
+                            "expected to receive only one AgentTask from the tool executions"
+                        )
+                        ignore_task_switch = True
+                        # TODO(long): should we mark the function call as failed to notify the LLM?
+                    else:
+                        new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -3687,7 +3690,11 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
-            if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
+            if (
+                fnc_executed_ev.has_tool_reply
+                and not fnc_executed_ev.has_agent_handoff
+                and not speech_handle.interrupted
+            ):
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
