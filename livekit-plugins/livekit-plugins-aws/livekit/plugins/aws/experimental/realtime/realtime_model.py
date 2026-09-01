@@ -536,7 +536,6 @@ class RealtimeSession(  # noqa: F811
         self._audio_input_task = None
         self._stream_response = None
         self._bedrock_client = None
-        self._http_client: AWSCRTHTTPClient | None = None
         self._pending_tools: set[str] = set()
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
@@ -613,11 +612,8 @@ class RealtimeSession(  # noqa: F811
         See https://github.com/livekit/agents/issues/6994.
 
         Sonic streams bidirectionally, so the transport has to be the CRT client.
-        0.11 defaults to aiohttp, which does not support duplex. The session keeps
-        one transport, because every CRT client opens its own native event loop.
+        0.11 defaults to aiohttp, which does not support duplex.
         """
-        if self._http_client is None:
-            self._http_client = AWSCRTHTTPClient()
         kwargs: dict[str, Any] = {
             "endpoint_uri": (
                 f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com"
@@ -625,7 +621,7 @@ class RealtimeSession(  # noqa: F811
             "region": self._realtime_model._opts.region,
             "aws_credentials_identity_resolver": _get_credentials_resolver(),
             "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
-            "transport": self._http_client,
+            "transport": AWSCRTHTTPClient(),
         }
         if _BEDROCK_CONFIG_USES_RESOLVE:
             config = await _BedrockRuntimeConfig.resolve(**kwargs)
@@ -793,7 +789,7 @@ class RealtimeSession(  # noqa: F811
             except Exception as e:
                 logger.debug(f"[SESSION] Error closing stream (expected): {e}")
 
-        # Step 6: Reset state for new session (the transport carries over)
+        # Step 6: Reset state for new session
         self._stream_response = None
         self._bedrock_client = None
         self._event_builder = seb(
@@ -2396,13 +2392,6 @@ class RealtimeSession(  # noqa: F811
             tasks.append(self._main_atask)
 
         await asyncio.gather(*tasks, return_exceptions=True)
-
-        # smithy-http < 0.5 has no close(); there the pool goes when the client does
-        if self._http_client is not None:
-            if close := getattr(self._http_client, "close", None):
-                await close()
-            self._http_client = None
-
         logger.debug(
             "chat context at session end", extra={"lk.pii.chat_ctx_items": self._chat_ctx.items}
         )
