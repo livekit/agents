@@ -26,6 +26,7 @@ dependencies = [
     "livekit-agents>=1.7.1",
     "aiobotocore>=3.0.0",
     "aws_sdk_transcribe_streaming>=0.2.0; python_version >= '3.12'",
+    "awscrt>=0.23.0; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]

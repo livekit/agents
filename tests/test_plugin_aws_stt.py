@@ -21,6 +21,16 @@ pytestmark = [
 ]
 
 
+def test_aws_stt_uses_crt_http_client() -> None:
+    """AWS Transcribe streaming requires a duplex-capable CRT transport.
+
+    The SDK stopped installing `awscrt` transitively in 0.11.0, so the plugin
+    declares it explicitly and must always select AWSCRTHTTPClient when available.
+    """
+    assert aws_stt._AWS_SDK_AVAILABLE
+    assert aws_stt._AWS_HTTP_CLIENT_CLS.__name__ == "AWSCRTHTTPClient"
+
+
 class _FakeAudioStream:
     def __init__(self) -> None:
         self.events: list[Any] = []
@@ -189,4 +199,28 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
     finally:
         if not stream._task.done():
             await stream.aclose()
+        await provider.aclose()
+
+
+async def test_aws_stream_propagates_setup_exception(monkeypatch: pytest.MonkeyPatch):
+    """If start_stream_transcription fails before tasks are created, the original
+    AWS exception must propagate instead of being masked by an UnboundLocalError."""
+
+    class _FailingClient:
+        def __init__(self, *, config: Any) -> None:
+            pass
+
+        async def start_stream_transcription(self, *, input: Any) -> Any:
+            raise RuntimeError("AWS setup failed")
+
+    monkeypatch.setattr(aws_stt, "TranscribeStreamingClient", _FailingClient)
+
+    provider = aws_stt.STT(region="us-east-1", sample_rate=16000)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+
+    try:
+        with pytest.raises(RuntimeError, match="AWS setup failed"):
+            await asyncio.wait_for(anext(stream), timeout=1.0)
+    finally:
+        await stream.aclose()
         await provider.aclose()
