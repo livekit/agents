@@ -143,6 +143,20 @@ async def test_a_segment_in_flight_holds_the_timeline() -> None:
     assert output.pending_since is None
 
 
+async def test_finishing_output_marks_its_recorder_run_ended() -> None:
+    recorder = MagicMock(recording=True)
+    output = RecorderAudioOutput(
+        recording_io=recorder,
+        audio_output=None,
+        on_played=lambda _started_at, _frame: None,
+    )
+
+    await output.capture_frame(_tone(0.1))
+    output.on_playback_finished(playback_position=0.1, interrupted=False)
+
+    recorder._end_run.assert_called_once_with(channel=1)
+
+
 # ---------------------------------------------------------------------------
 # _Track: the absolute timeline
 # ---------------------------------------------------------------------------
@@ -201,6 +215,35 @@ def test_a_source_below_the_recording_rate_is_resampled_in_place() -> None:
     assert np.all(block[:48000] == 0.0)
     # 100ms of audio, twice as many samples at the recording rate; the samples the resampler
     # still held when the run ended are part of it
+    assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
+def test_ending_a_run_places_the_resampler_tail_before_the_writer_advances() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    track.push(1.0, _loud(2400, sample_rate=24000))  # 100ms at 24kHz
+    track.end_run()
+
+    block = track.take(0, 48000 * 2)
+    assert np.all(block[:48000] == 0.0)
+    assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
+def test_ending_a_run_reanchors_the_next_segment_after_a_short_gap() -> None:
+    track = _Track(sample_rate=1000, t0=0.0)
+    track.push(0.0, _loud(100))
+    track.end_run()
+    track.push(0.15, _loud(100))  # the 50ms gap is below the drift tolerance
+
+    assert [pos for pos, _ in track._placed] == [0, 150]
+
+
+def test_ending_a_resampled_run_twice_is_idempotent() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    track.push(1.0, _loud(2400, sample_rate=24000))
+    track.end_run()  # output playback ended
+    track.end_run()  # RecorderIO closed before another run began
+
+    block = track.take(0, 48000 * 2)
     assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
 
 
