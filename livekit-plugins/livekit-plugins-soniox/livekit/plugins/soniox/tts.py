@@ -249,10 +249,14 @@ class TTS(tts.TTS):
             try:
                 await self._current_connection(timeout=20.0)
             except Exception as e:
-                logger.debug(f"Soniox TTS prewarm failed: {e}")
+                logger.debug("Soniox TTS prewarm failed", exc_info=e)
 
         try:
-            self._prewarm_task = asyncio.create_task(_task(), name="soniox-tts-prewarm")
+            # Don't replace a prewarm still in flight: the old task would lose its only
+            # reference, and aclose() cancels just the latest one, so it could open a
+            # connection after shutdown. utils.ConnectionPool.prewarm guards the same way.
+            if self._prewarm_task is None or self._prewarm_task.done():
+                self._prewarm_task = asyncio.create_task(_task(), name="soniox-tts-prewarm")
         except RuntimeError:
             # No running event loop (e.g. called outside async context) — skip.
             pass
