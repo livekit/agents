@@ -283,7 +283,7 @@ class RunContext(Generic[Userdata_T]):
             fnc_call_out = FunctionCallOutput(
                 name=fnc_call.name,
                 call_id=fnc_call.call_id,
-                output=str(message or ""),
+                output="" if message is None else str(message),
                 is_error=False,
             )
         else:
