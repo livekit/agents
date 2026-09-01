@@ -4348,25 +4348,31 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
                 self._session._tool_items_added([sanitized_out.fnc_call_out])
 
-                if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error(
-                        "expected to receive only one Agent from the tool executions",
-                    )
-                    ignore_task_switch = True
-
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    if new_agent_task is not None:
+                        logger.error(
+                            "expected to receive only one Agent from the tool executions",
+                        )
+                        ignore_task_switch = True
+                    else:
+                        new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
+            tool_reply_expected = (
+                fnc_executed_ev.has_tool_reply and not fnc_executed_ev.has_agent_handoff
+            )
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
 
-            if len(new_fnc_outputs) > 0:
+            # Sending results to an outgoing realtime session may trigger its automatic
+            # tool reply, so let the handoff close that session without syncing them.
+            if len(new_fnc_outputs) > 0 and not fnc_executed_ev.has_agent_handoff:
                 # wait all speeches played before updating the tool output and generating the response
                 # most realtime models don't support generating multiple responses at the same time
                 while self._current_speech or self._speech_q:
@@ -4384,7 +4390,7 @@ class AgentActivity(RecognitionHooks):
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev.has_tool_reply
+                    and tool_reply_expected
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -4422,7 +4428,6 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
-            tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
