@@ -44,13 +44,13 @@ class CodaV1SynthesisOptions:
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
     def _to_protocol(self) -> _websocket_v1.SynthesisOptions:
-        if not is_given(self.language) or not is_given(self.sampling_rate):
-            raise APIError("Rime v1 requires Coda language and sample_rate", retryable=False)
+        if not is_given(self.language):
+            raise APIError("Rime v1 requires a Coda language", retryable=False)
 
         return _websocket_v1.SynthesisOptions(
             speaker=self.speaker,
             language=self.language,
-            sampling_rate=self.sampling_rate,
+            sampling_rate=self.sampling_rate if is_given(self.sampling_rate) else None,
             time_scale_factor=(
                 self.time_scale_factor if is_given(self.time_scale_factor) else None
             ),
@@ -197,6 +197,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
+        self._sample_rate = tts_instance.sample_rate
         super().__init__(tts=tts_instance, conn_options=conn_options)
         self._pool = pool
         self._options = options
@@ -264,6 +265,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                 ws,
                 context_id=utils.shortuuid(),
                 options=self._options,
+                sample_rate=self._sample_rate,
                 input_events=input_events,
                 output_emitter=output_emitter,
                 timeout=self._conn_options.timeout,

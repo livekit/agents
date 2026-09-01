@@ -227,6 +227,7 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options() ->
             stream.push_text("LiveKit today. Next")
             first = await asyncio.wait_for(first_event, timeout=2)
             assert first.frame.data
+            assert first.frame.sample_rate == 22050
 
             stream.push_text(" sentence.")
             stream.end_input()
@@ -255,6 +256,40 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options() ->
             "timeScaleFactor": 1.2,
         },
     }
+
+
+async def test_v1_uses_service_default_sample_rate() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        try:
+            stream.push_text("hello")
+            stream.end_input()
+            events = await _collect(stream)
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+
+    assert tts.sample_rate == 24000
+    assert events[0].frame.sample_rate == 24000
+    assert server.requests[0]["start"]["audioParameters"] == {"audioFormat": "audio/pcm"}
+
+
+async def test_v1_stream_keeps_sample_rate_after_parent_update() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, sample_rate=22050)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        tts.update_options(sample_rate=16000)
+        try:
+            stream.push_text("hello")
+            stream.end_input()
+            events = await _collect(stream)
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+
+    assert server.requests[0]["start"]["audioParameters"]["samplingRate"] == 22050
+    assert events[0].frame.sample_rate == 22050
 
 
 async def test_v1_rejects_wrong_ready_protocol() -> None:
