@@ -112,7 +112,10 @@ async def test_lost_trailer_is_recovered_by_the_next_stream():
         await receiver.aclose()
 
 
-async def test_lost_trailer_after_clear_buffer_is_recovered_too():
+async def test_clear_buffer_ends_the_segment_without_waiting_for_the_trailer():
+    """The cleared segment's data is discarded anyway, so AudioSegmentEnd must
+    arrive right away — no next stream header and no idle timeout needed, even
+    if the trailer was lost."""
     receiver, on_stream, clear = await _start_receiver()
     try:
         first = _FakeReader("s1")
@@ -122,11 +125,35 @@ async def test_lost_trailer_after_clear_buffer_is_recovered_too():
 
         # interruption: clear_buffer lands, then the stream's trailer is lost
         assert clear(SimpleNamespace(caller_identity=SENDER)) == "ok"
+        assert isinstance(await _next(receiver), AudioSegmentEnd)
+
+        # the receiver is ready for the next utterance
+        second = _FakeReader("s2")
+        on_stream(second, SENDER)
+        second.push(CHUNK)
+        assert isinstance(await _next(receiver), rtc.AudioFrame)
+        second.close()
+        assert isinstance(await _next(receiver), AudioSegmentEnd)
+    finally:
+        await receiver.aclose()
+
+
+async def test_clear_buffer_with_a_healthy_trailer_still_ends_one_segment():
+    """A trailer that does arrive after clear_buffer must not produce a second
+    AudioSegmentEnd or disturb the next segment."""
+    receiver, on_stream, clear = await _start_receiver()
+    try:
+        first = _FakeReader("s1")
+        on_stream(first, SENDER)
+        first.push(CHUNK)
+        assert isinstance(await _next(receiver), rtc.AudioFrame)
+
+        assert clear(SimpleNamespace(caller_identity=SENDER)) == "ok"
+        first.close()  # healthy interruption: the trailer still arrives
+        assert isinstance(await _next(receiver), AudioSegmentEnd)
 
         second = _FakeReader("s2")
         on_stream(second, SENDER)
-        assert isinstance(await _next(receiver), AudioSegmentEnd)
-
         second.push(CHUNK)
         assert isinstance(await _next(receiver), rtc.AudioFrame)
         second.close()

@@ -367,9 +367,10 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False
-        # Set when a new stream header arrives with a reader still open. The sender never
-        # overlaps streams, so this proves the current reader's trailer was lost — end it
-        # instead of blocking forever (the "avatar stops receiving audio" wedge).
+        # Set when the current reader's trailer no longer matters: a new stream header
+        # arrived with a reader still open (the sender never overlaps streams, so the
+        # trailer was lost — the "avatar stops receiving audio" wedge), or clear_buffer
+        # discarded the segment. Ends the reader instead of blocking forever.
         self._current_reader_superseded: asyncio.Event = asyncio.Event()
 
         self._rpc_send_ch = utils.aio.Chan[PlaybackFinishedEvent | _PlaybackStartedEvent]()
@@ -402,6 +403,8 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             if self._current_reader:
                 self._current_reader_cleared = True
+                # post-clear data is discarded, so don't wait for a trailer that may be lost
+                self._current_reader_superseded.set()
 
             # clear the audio internal buffer
             while not self._data_ch.empty():
@@ -551,7 +554,8 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         A queued chunk or trailer always wins the race, so a healthy segment is
         unchanged. The segment ends early only when the reader is superseded by a newer
-        stream, or stays idle for ``STREAM_IDLE_TIMEOUT`` (the last-segment case).
+        stream or a clear_buffer, or stays idle for ``STREAM_IDLE_TIMEOUT``
+        (the last-segment case).
         """
         superseded = asyncio.ensure_future(self._current_reader_superseded.wait())
         try:
@@ -575,6 +579,13 @@ class DataStreamAudioReceiver(AudioReceiver):
                     continue
 
                 next_chunk.cancel()
+                if self._current_reader_cleared:
+                    # expected after clear_buffer: the rest of the stream is discarded anyway
+                    logger.debug(
+                        "audio stream ended early after clear_buffer",
+                        extra={"stream_id": reader.info.stream_id},
+                    )
+                    return
                 reason = (
                     "superseded by a newer stream"
                     if superseded in done
