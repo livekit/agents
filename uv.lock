@@ -51,7 +51,6 @@ members = [
     "livekit-plugins-gradium",
     "livekit-plugins-groq",
     "livekit-plugins-hamming",
-    "livekit-plugins-hedra",
     "livekit-plugins-hume",
     "livekit-plugins-inworld",
     "livekit-plugins-keyframe",
@@ -2035,9 +2034,6 @@ groq = [
 hamming = [
     { name = "livekit-plugins-hamming" },
 ]
-hedra = [
-    { name = "livekit-plugins-hedra" },
-]
 hume = [
     { name = "livekit-plugins-hume" },
 ]
@@ -2209,7 +2205,6 @@ requires-dist = [
     { name = "livekit-plugins-gradium", marker = "extra == 'gradium'", editable = "livekit-plugins/livekit-plugins-gradium" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-hamming", marker = "extra == 'hamming'", editable = "livekit-plugins/livekit-plugins-hamming" },
-    { name = "livekit-plugins-hedra", marker = "extra == 'hedra'", editable = "livekit-plugins/livekit-plugins-hedra" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
     { name = "livekit-plugins-inworld", marker = "extra == 'inworld'", editable = "livekit-plugins/livekit-plugins-inworld" },
     { name = "livekit-plugins-keyframe", marker = "extra == 'keyframe'", editable = "livekit-plugins/livekit-plugins-keyframe" },
@@ -2272,7 +2267,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hedra", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2929,7 +2924,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
-    { name = "google-cloud-speech", specifier = ">=2,<3" },
+    { name = "google-cloud-speech", specifier = ">=2.36,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2.32,<3" },
     { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=2.13" },
     { name = "livekit-agents", editable = "livekit-agents" },
@@ -2980,16 +2975,6 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
-
-[[package]]
-name = "livekit-plugins-hedra"
-source = { editable = "livekit-plugins/livekit-plugins-hedra" }
-dependencies = [
-    { name = "livekit-agents" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-hume"
