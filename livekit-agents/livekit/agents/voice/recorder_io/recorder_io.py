@@ -306,8 +306,14 @@ class RecorderIO:
                     end = round((item.until - self._t0) * self._sample_rate)
                     held = end - round(MAX_RESAMPLER_LAG * self._sample_rate)
                     for track in tracks:
-                        if (through := track.placed_through) is not None:
-                            end = min(end, max(through, held))
+                        if (through := track.placed_through) is None:
+                            continue
+                        if through >= held:
+                            end = min(end, through)
+                        else:
+                            # the source stopped delivering; place what it holds before
+                            # the cursor moves past the run it belongs to
+                            track.end_run()
                     if end <= cursor:
                         continue
 

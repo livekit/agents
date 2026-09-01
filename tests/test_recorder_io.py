@@ -264,6 +264,24 @@ def test_the_writer_waits_for_samples_the_resampler_still_holds() -> None:
     assert np.count_nonzero(block) == len(block)  # no gap where the held-back samples belong
 
 
+def test_ending_a_stalled_run_leaves_its_tail_where_the_cursor_can_reach_it() -> None:
+    """When a source stops, the writer ends its run before it moves past it, so the samples
+    the resampler still holds land at the cursor instead of behind it."""
+    track = _Track(sample_rate=48000, t0=0.0)
+    for i in range(10):  # 500ms of 24kHz input, then the source goes quiet
+        track.push(i * 0.05, _loud(1200, sample_rate=24000))
+
+    cursor = track.placed_through
+    assert cursor is not None
+    written = track.take(0, cursor)  # the writer has written everything placed so far
+    track.end_run()
+    tail = track.take(cursor, cursor + 48000)
+
+    # all 500ms survives: what was placed, plus the tail the resampler was holding
+    assert np.count_nonzero(written) + np.count_nonzero(tail) == pytest.approx(24000, abs=50)
+    assert track.dropped_samples == 0
+
+
 def test_a_track_holding_nothing_back_does_not_hold_the_writer() -> None:
     track = _Track(sample_rate=48000, t0=0.0)
     assert track.placed_through is None  # nothing pushed yet
