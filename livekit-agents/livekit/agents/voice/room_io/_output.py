@@ -68,6 +68,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._source_discarded_duration: float = 0.0
         self._interruption_generation = 0
 
+        # the playhead sits at `_source_pushed_duration - queued_duration`; `_dry_at` is when
+        # the source runs out if nothing more is pushed, which dates a run that has ended
+        self._run_offset: float = 0.0
+        self._dry_at: float | None = None
+
         self._playback_enabled = asyncio.Event()
         self._playback_enabled.set()
         # set only when _forward_audio is neither holding nor submitting a frame
@@ -148,6 +153,22 @@ class _ParticipantAudioOutput(io.AudioOutput):
         super().resume()
         self._playback_enabled.set()
 
+    def _report_run(
+        self, *, offset: float, ended_at: float, resumes_at: float | None = None
+    ) -> None:
+        """Report the open run, and begin the next past any audio that never played."""
+        if self._dry_at is not None:
+            # a run cannot outlast the audio the source held, however late the caller noticed
+            ended_at = min(ended_at, self._dry_at)
+
+        duration = offset - self._run_offset
+        if duration > 0:
+            self.on_playback_progressed(
+                started_at=ended_at - duration, offset=self._run_offset, duration=duration
+            )
+        self._run_offset = offset if resumes_at is None else resumes_at
+        self._dry_at = None
+
     async def _wait_for_playout(self) -> None:
         wait_for_interruption = asyncio.create_task(self._interrupted_event.wait())
 
@@ -181,10 +202,18 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._audio_buf.recv_nowait()
 
             pushed_duration = max(pushed_duration - queued_duration, 0)
+            # the playhead stops where the cleared queue begins
+            self._report_run(
+                offset=self._source_pushed_duration - queued_duration, ended_at=time.time()
+            )
             self._audio_source.clear_queue()
             wait_for_playout.cancel()
         else:
             wait_for_interruption.cancel()
+            # the source drained, so everything pushed has played
+            self._report_run(offset=self._source_pushed_duration, ended_at=time.time())
+
+        self._run_offset = 0.0
 
         self._pushed_duration = 0
         self._source_pushed_duration = 0
@@ -199,14 +228,19 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._forwarding_idle.clear()
             try:
                 if not self._playback_enabled.is_set():
-                    self._source_discarded_duration += self._audio_source.queued_duration
+                    queued = self._audio_source.queued_duration
+                    self._source_discarded_duration += queued
+                    # the dropped queue never plays, so the next run resumes past it
+                    self._report_run(
+                        offset=self._source_pushed_duration - queued,
+                        ended_at=time.time(),
+                        resumes_at=self._source_pushed_duration,
+                    )
                     self._audio_source.clear_queue()
                     await self._playback_enabled.wait()
                     # drop a paused frame when its original segment was interrupted.
                     if interruption_generation != self._interruption_generation:
                         continue
-                    # TODO(long): preserve or report cleared frames so RecorderIO can reconstruct
-                    # discarded mid-stream audio instead of only correcting playback duration.
                     # TODO(long): ignore frames from previous syllable
 
                 if self._interrupted_event.is_set() or self._pushed_duration == 0:
@@ -219,8 +253,13 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 if not self._first_frame_event.is_set():
                     self._first_frame_event.set()
                     self.on_playback_started(created_at=time.time())
+                if self._dry_at is not None and time.time() >= self._dry_at:
+                    # the source ran out before this frame arrived
+                    self._report_run(offset=self._source_pushed_duration, ended_at=self._dry_at)
+
                 self._source_pushed_duration += frame.duration
                 await self._audio_source.capture_frame(frame)
+                self._dry_at = time.time() + self._audio_source.queued_duration
             finally:
                 self._forwarding_idle.set()
 

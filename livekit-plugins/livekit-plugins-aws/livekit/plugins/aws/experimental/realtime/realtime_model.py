@@ -15,11 +15,23 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import boto3
-from aws_sdk_bedrock_runtime.client import (
-    BedrockRuntimeClient,
-    InvokeModelWithBidirectionalStreamOperationInput,
-)
-from aws_sdk_bedrock_runtime.config import Config, HTTPAuthSchemeResolver, SigV4AuthScheme
+
+try:
+    from aws_sdk_bedrock_runtime.client import (
+        AsyncBedrockRuntimeClient as _BedrockRuntimeClient,
+        InvokeModelWithBidirectionalStreamOperationInput,
+    )
+    from aws_sdk_bedrock_runtime.config import AsyncBedrockRuntimeConfig as _BedrockRuntimeConfig
+
+    _BEDROCK_CONFIG_USES_RESOLVE = True
+except ImportError:  # aws-sdk-bedrock-runtime < 0.10
+    from aws_sdk_bedrock_runtime.client import (
+        BedrockRuntimeClient as _BedrockRuntimeClient,
+        InvokeModelWithBidirectionalStreamOperationInput,
+    )
+    from aws_sdk_bedrock_runtime.config import Config as _BedrockRuntimeConfig
+
+    _BEDROCK_CONFIG_USES_RESOLVE = False
 from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
@@ -33,6 +45,7 @@ from aws_sdk_bedrock_runtime.models import (
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
+from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
@@ -589,17 +602,36 @@ class RealtimeSession(  # noqa: F811
         )
 
     @utils.log_exceptions(logger=logger)
-    def _initialize_client(self) -> None:
-        """Instantiate the Bedrock runtime client"""
-        config = Config(
-            endpoint_uri=f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com",
-            region=self._realtime_model._opts.region,
-            aws_credentials_identity_resolver=_get_credentials_resolver(),
-            auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
-            user_agent_extra="x-client-framework:livekit-plugins-aws[realtime]",
-        )
-        self._bedrock_client = BedrockRuntimeClient(config=config)
+    async def _initialize_client(self) -> None:
+        """Instantiate the Bedrock runtime client.
+
+        aws-sdk-bedrock-runtime 0.10 renamed ``Config`` / ``BedrockRuntimeClient``
+        to the async types and requires ``await AsyncBedrockRuntimeConfig.resolve``.
+        0.11 then dropped the old names entirely. Keep both construction paths so
+        the locked 0.7 extra and a fresh pip install of 0.11 both import.
+        See https://github.com/livekit/agents/issues/6994.
+
+        Sonic streams bidirectionally, so the transport has to be the CRT client.
+        0.11 defaults to aiohttp, which does not support duplex.
+        """
+        kwargs: dict[str, Any] = {
+            "endpoint_uri": (
+                f"https://bedrock-runtime.{self._realtime_model._opts.region}.amazonaws.com"
+            ),
+            "region": self._realtime_model._opts.region,
+            "aws_credentials_identity_resolver": _get_credentials_resolver(),
+            "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
+            "transport": AWSCRTHTTPClient(),
+        }
+        if _BEDROCK_CONFIG_USES_RESOLVE:
+            config = await _BedrockRuntimeConfig.resolve(**kwargs)
+        else:
+            from aws_sdk_bedrock_runtime.config import HTTPAuthSchemeResolver, SigV4AuthScheme
+
+            kwargs["auth_scheme_resolver"] = HTTPAuthSchemeResolver()
+            kwargs["auth_schemes"] = {"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")}
+            config = _BedrockRuntimeConfig(**kwargs)
+        self._bedrock_client = _BedrockRuntimeClient(config=config)
 
     def _calculate_session_duration(self) -> float:
         """Calculate session duration based on credential expiry and AWS 8-min limit."""
@@ -889,7 +921,7 @@ class RealtimeSession(  # noqa: F811
         try:
             if not self._bedrock_client:
                 logger.info("Creating Bedrock client")
-                self._initialize_client()
+                await self._initialize_client()
             assert self._bedrock_client is not None, "bedrock_client is None"
 
             logger.info("Initializing Bedrock stream")

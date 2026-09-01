@@ -15,7 +15,7 @@ class MistralFormatData:
 
 
 def to_conversations_ctx(
-    chat_ctx: llm.ChatContext,
+    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], MistralFormatData]:
     """Convert ChatContext to Mistral Conversations API entry format.
 
@@ -64,6 +64,9 @@ def to_conversations_ctx(
                     "result": tool_output.output,
                 }
             )
+
+    if inject_dummy_user_message and entries and entries[-1].get("role") == "assistant":
+        entries.append({"type": "message.input", "role": "user", "content": "(empty)"})
 
     return entries, MistralFormatData(instructions=instructions)
 

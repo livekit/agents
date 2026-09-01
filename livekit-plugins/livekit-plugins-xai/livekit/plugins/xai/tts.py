@@ -156,12 +156,16 @@ class TTS(tts.TTS):
                 ),
                 timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            aiohttp.ClientConnectionResetError,
-            asyncio.TimeoutError,
-        ) as e:
-            raise APIConnectionError("failed to connect to xAI") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to xAI") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(f"failed to connect to xAI ({type(e).__name__})") from None
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:

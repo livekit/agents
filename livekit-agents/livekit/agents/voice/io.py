@@ -124,11 +124,28 @@ class PlaybackStartedEvent:
 
 
 @dataclass
+class PlaybackProgressedEvent:
+    """A stretch of the current segment that has played.
+
+    Reported once the audio can no longer be discarded, so it is never revised.
+    """
+
+    started_at: float
+    """The timestamp (time.time()) at which this stretch began to play"""
+    offset: float
+    """Where it starts in the audio captured for the current segment"""
+    duration: float
+    """How much of it played"""
+
+
+@dataclass
 class AudioOutputCapabilities:
     pause: bool
 
 
-class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started"]]):
+class AudioOutput(
+    ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started", "playback_progressed"]]
+):
     def __init__(
         self,
         *,
@@ -167,6 +184,7 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
         if next_in_chain is not None:
             next_in_chain.on("playback_finished", self._forward_next_playback_finished)
             next_in_chain.on("playback_started", self._forward_next_playback_started)
+            next_in_chain.on("playback_progressed", self._forward_next_playback_progressed)
 
     def _forward_next_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
         self.on_playback_finished(
@@ -178,6 +196,11 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
     def _forward_next_playback_started(self, ev: PlaybackStartedEvent) -> None:
         self.on_playback_started(created_at=ev.created_at)
 
+    def _forward_next_playback_progressed(self, ev: PlaybackProgressedEvent) -> None:
+        self.on_playback_progressed(
+            started_at=ev.started_at, offset=ev.offset, duration=ev.duration
+        )
+
     @property
     def label(self) -> str:
         return self.__label
@@ -188,6 +211,17 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
 
     def on_playback_started(self, *, created_at: float) -> None:
         self.emit("playback_started", PlaybackStartedEvent(created_at=created_at))
+
+    def on_playback_progressed(self, *, started_at: float, offset: float, duration: float) -> None:
+        """Report a stretch of the current segment that has played.
+
+        Sinks that own their playback device report one run at a time; one that reports
+        nothing is described by its segment endpoints instead.
+        """
+        self.emit(
+            "playback_progressed",
+            PlaybackProgressedEvent(started_at=started_at, offset=offset, duration=duration),
+        )
 
     def on_playback_finished(
         self,
@@ -242,6 +276,11 @@ class AudioOutput(ABC, rtc.EventEmitter[Literal["playback_finished", "playback_s
     def _pending_playback_count(self) -> int:
         """Number of captured segments that haven't reported playback_finished yet."""
         return self.__playback_segments_count - self.__playback_finished_count
+
+    @property
+    def captured_playout_segments(self) -> int:
+        """Number of playback segments accepted by ``capture_frame``."""
+        return self.__playback_segments_count
 
     @property
     def sample_rate(self) -> int | None:
@@ -336,6 +375,7 @@ class _AudioSinkProxy(AudioOutput):
         if old is not None:
             old.off("playback_finished", self._forward_next_playback_finished)
             old.off("playback_started", self._forward_next_playback_started)
+            old.off("playback_progressed", self._forward_next_playback_progressed)
             if self._pending_playback_count > 0:
                 # stop audio still playing on the old sink
                 old.clear_buffer()
@@ -347,6 +387,7 @@ class _AudioSinkProxy(AudioOutput):
 
         new.on("playback_finished", self._forward_next_playback_finished)
         new.on("playback_started", self._forward_next_playback_started)
+        new.on("playback_progressed", self._forward_next_playback_progressed)
         if self._attached:
             new.on_attached()
 

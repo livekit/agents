@@ -98,6 +98,7 @@ class STTOptions:
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
     endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
+    custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -165,6 +166,7 @@ class STT(stt.STT):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -206,6 +208,7 @@ class STT(stt.STT):
                 and accuracy when detecting end-of-speech. Only supported with chirp_3.
                 Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
                 ENDPOINTING_SENSITIVITY_SHORT, ENDPOINTING_SENSITIVITY_SUPERSHORT (default: None)
+            custom_prompt_config (CustomPromptConfig): custom prompt configuration for recognition (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
         if is_given(endpointing_sensitivity) and model != "chirp_3":
@@ -234,6 +237,12 @@ class STT(stt.STT):
             enable_word_time_offsets = enable_word_time_offsets
         else:
             enable_word_time_offsets = True
+
+        if is_given(custom_prompt_config) and model != "chirp_3":
+            logger.warning(
+                "custom_prompt_config is only supported with the chirp_3 model; ignoring."
+            )
+            custom_prompt_config = NOT_GIVEN
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -289,6 +298,7 @@ class STT(stt.STT):
             speech_start_timeout=speech_start_timeout,
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
+            custom_prompt_config=custom_prompt_config,
         )
         # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
         self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
@@ -404,6 +414,9 @@ class STT(stt.STT):
                     enable_word_time_offsets=config.enable_word_time_offsets,
                     enable_word_confidence=config.enable_word_confidence,
                     profanity_filter=config.profanity_filter,
+                    custom_prompt_config=config.custom_prompt_config
+                    if is_given(config.custom_prompt_config)
+                    else None,
                 ),
                 denoiser_config=config.denoiser_config
                 if is_given(config.denoiser_config)
@@ -509,6 +522,7 @@ class STT(stt.STT):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -574,6 +588,26 @@ class STT(stt.STT):
                 endpointing_sensitivity = NOT_GIVEN
             else:
                 self._config.endpointing_sensitivity = endpointing_sensitivity
+        if is_given(custom_prompt_config):
+            if self._config.model != "chirp_3":
+                logger.warning(
+                    "custom_prompt_config is only supported with the chirp_3 model; ignoring."
+                )
+                custom_prompt_config = NOT_GIVEN
+            else:
+                self._config.custom_prompt_config = custom_prompt_config
+        elif (
+            is_given(model)
+            and self._config.model != "chirp_3"
+            and is_given(self._config.custom_prompt_config)
+        ):
+            # model was switched away from chirp_3; a previously configured prompt is no
+            # longer valid for the new model and must not be sent with it.
+            logger.warning(
+                "model changed away from chirp_3; clearing previously configured "
+                "custom_prompt_config."
+            )
+            self._config.custom_prompt_config = NOT_GIVEN
 
         for stream in self._streams:
             stream.update_options(
@@ -590,6 +624,7 @@ class STT(stt.STT):
                 speech_start_timeout=speech_start_timeout,
                 speech_end_timeout=speech_end_timeout,
                 endpointing_sensitivity=endpointing_sensitivity,
+                custom_prompt_config=custom_prompt_config,
             )
 
     def _get_merged_keywords(self) -> list[tuple[str, float]]:
@@ -683,6 +718,7 @@ class SpeechStream(stt.SpeechStream):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -719,6 +755,16 @@ class SpeechStream(stt.SpeechStream):
             self._config.speech_end_timeout = speech_end_timeout
         if is_given(endpointing_sensitivity):
             self._config.endpointing_sensitivity = endpointing_sensitivity
+        if is_given(custom_prompt_config):
+            self._config.custom_prompt_config = custom_prompt_config
+        elif (
+            is_given(model)
+            and self._config.model != "chirp_3"
+            and is_given(self._config.custom_prompt_config)
+        ):
+            # model was switched away from chirp_3; a previously configured prompt is no
+            # longer valid for the new model and must not be sent with it.
+            self._config.custom_prompt_config = NOT_GIVEN
 
         self._reconnect_event.set()
 
@@ -766,6 +812,9 @@ class SpeechStream(stt.SpeechStream):
                         enable_spoken_punctuation=self._config.spoken_punctuation,
                         enable_word_confidence=self._config.enable_word_confidence,
                         profanity_filter=self._config.profanity_filter,
+                        custom_prompt_config=self._config.custom_prompt_config
+                        if is_given(self._config.custom_prompt_config)
+                        else None,
                     ),
                     denoiser_config=self._config.denoiser_config
                     if is_given(self._config.denoiser_config)
