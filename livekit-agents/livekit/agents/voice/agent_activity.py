@@ -4449,6 +4449,11 @@ class AgentActivity(RecognitionHooks):
                 "thinking" if self._background_speeches else "listening"
             )
 
+    def _disallow_interruptions(self, speech_handle: SpeechHandle) -> None:
+        speech_handle.allow_interruptions = False
+        if self._paused_speech is not None and self._paused_speech.handle is speech_handle:
+            self._reconcile_playout_pause(speech_handle)
+
     def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
         """Record that ``speech_handle`` is paused.
 
