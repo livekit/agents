@@ -513,6 +513,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     # RPC round-trip.
     push_pending = False
     push_running = False
+    push_task: asyncio.Task[None] | None = None
 
     async def _push_to(identity: str, payload: str) -> None:
         try:
@@ -543,11 +544,12 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             push_running = False
 
     async def push_cart() -> None:
-        nonlocal push_pending
+        nonlocal push_pending, push_task
         push_pending = True
         if push_running:
             return
-        asyncio.create_task(_push_runner())
+        # hold the task: the loop only weakly references it
+        push_task = asyncio.create_task(_push_runner())
 
     userdata.order.on_change = push_cart
 
