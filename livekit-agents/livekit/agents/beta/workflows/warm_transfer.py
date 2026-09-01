@@ -487,6 +487,8 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             allow_interruptions=allow_interruptions,
             extra_instructions=extra_instructions,
         )
+        # the supervisor joins through a connector, not SIP
+        self._human_agent_identity = "human-agent-connector"
 
     def _setup_origination(self, **_: object) -> None:
         pass  # dials via the Twilio connector; no SIP config needed
