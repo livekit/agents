@@ -43,7 +43,7 @@ NUM_CHANNELS = 1
 class SynthesisOptions:
     speaker: str
     language: str
-    sampling_rate: int
+    sampling_rate: int | None = None
     time_scale_factor: float | None = None
 
 
@@ -132,6 +132,7 @@ async def run_context(
     *,
     context_id: str,
     options: SynthesisOptions,
+    sample_rate: int,
     input_events: AsyncIterable[str],
     output_emitter: tts.AudioEmitter,
     timeout: float,
@@ -165,7 +166,7 @@ async def run_context(
             context_started.set()
             output_emitter.initialize(
                 request_id=context_id,
-                sample_rate=options.sampling_rate,
+                sample_rate=sample_rate,
                 num_channels=NUM_CHANNELS,
                 mime_type="audio/pcm",
                 stream=True,
@@ -200,7 +201,7 @@ async def run_context(
                 state.request_id = request_id
                 output_emitter.initialize(
                     request_id=request_id,
-                    sample_rate=options.sampling_rate,
+                    sample_rate=sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type="audio/pcm",
                     stream=True,
@@ -272,7 +273,7 @@ async def run_context(
         if not state.emitter_initialized:
             output_emitter.initialize(
                 request_id=context_id,
-                sample_rate=options.sampling_rate,
+                sample_rate=sample_rate,
                 num_channels=NUM_CHANNELS,
                 mime_type="audio/pcm",
                 stream=True,
@@ -303,8 +304,9 @@ class _ContextState:
 def _start_payload(options: SynthesisOptions) -> dict[str, Any]:
     audio_parameters: dict[str, Any] = {
         "audioFormat": "audio/pcm",
-        "samplingRate": options.sampling_rate,
     }
+    if options.sampling_rate is not None:
+        audio_parameters["samplingRate"] = options.sampling_rate
     if options.time_scale_factor is not None:
         audio_parameters["timeScaleFactor"] = options.time_scale_factor
 

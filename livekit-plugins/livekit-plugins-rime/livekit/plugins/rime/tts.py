@@ -20,7 +20,7 @@ import copy
 import json
 import os
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal, overload
 from urllib.parse import urlencode
 
@@ -54,6 +54,9 @@ MIST_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
 RIME_WS_BASE_URL = "wss://users-ws.rime.ai"
 NUM_CHANNELS = 1
+CODA_DEFAULT_SAMPLE_RATE = 24000
+MIST_V2_DEFAULT_SAMPLE_RATE = 22050
+MIST_V3_DEFAULT_SAMPLE_RATE = 24000
 
 
 @dataclass
@@ -100,6 +103,22 @@ def _timeout_for_model(model: TTSModels | str) -> int:
     if model == "coda":
         return CODA_MODEL_TIMEOUT
     return MIST_MODEL_TIMEOUT
+
+
+def _default_sample_rate(model: TTSModels | str) -> int:
+    if model == "coda":
+        return CODA_DEFAULT_SAMPLE_RATE
+    if model == "mistv3":
+        return MIST_V3_DEFAULT_SAMPLE_RATE
+    return MIST_V2_DEFAULT_SAMPLE_RATE
+
+
+def _requested_sample_rate(options: _TTSOptions) -> NotGivenOr[int]:
+    if options.model == "coda" and options.coda_options is not None:
+        return options.coda_options.sample_rate
+    if _is_mist_model(options.model) and options.mist_options is not None:
+        return options.mist_options.sample_rate
+    return NOT_GIVEN
 
 
 def _model_params(opts: _TTSOptions) -> dict[str, object]:
@@ -155,7 +174,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         speaker: str = "astra",
         lang: TTSLangs | str = "eng",
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
-        sample_rate: int = 22050,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -175,7 +194,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
-        sample_rate: int = 22050,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -203,8 +222,8 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Supported by all models; the only speed param that works over WebSocket
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
-        # Mistv2 options
-        sample_rate: int = 22050,
+        # Supported by all models
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -249,21 +268,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         else:
             resolved_base_url = RIME_WS_BASE_URL if use_websocket else RIME_BASE_URL
 
-        super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=use_websocket,
-                aligned_transcript=use_websocket and websocket_v1_url is None,
-            ),
-            sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
-        resolved_api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
-        if not resolved_api_key:
-            raise ValueError(
-                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
-            )
-        self._api_key = resolved_api_key
-
         if websocket_v1_url is not None:
             resolved_model = "coda"
             model_is_explicit = False
@@ -276,6 +280,24 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             model_is_explicit = False
 
         _check_time_scale_factor_supported(resolved_model, time_scale_factor)
+        resolved_sample_rate = (
+            sample_rate if is_given(sample_rate) else _default_sample_rate(resolved_model)
+        )
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=use_websocket,
+                aligned_transcript=use_websocket and websocket_v1_url is None,
+            ),
+            sample_rate=resolved_sample_rate,
+            num_channels=NUM_CHANNELS,
+        )
+        self._requested_sample_rate = sample_rate
+        resolved_api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
+        if not resolved_api_key:
+            raise ValueError(
+                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
+            )
+        self._api_key = resolved_api_key
 
         if not is_given(speaker):
             if not model_is_explicit:
@@ -368,10 +390,12 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             "speaker": self._opts.speaker,
             "modelId": self._opts.model,
             "audioFormat": "pcm",
-            "samplingRate": self._sample_rate,
             "segment": self._segment,
             **_model_params(self._opts),
         }
+        requested_sample_rate = self._requested_sample_rate
+        if is_given(requested_sample_rate):
+            params["samplingRate"] = requested_sample_rate
         encoded = {
             k: ("true" if v else "false") if isinstance(v, bool) else v for k, v in params.items()
         }
@@ -432,7 +456,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         return CodaV1SynthesisOptions(
             speaker=self._opts.speaker,
             language=str(coda.lang) if is_given(coda.lang) else NOT_GIVEN,
-            sampling_rate=coda.sample_rate,
+            sampling_rate=self._requested_sample_rate,
             time_scale_factor=coda.time_scale_factor,
         )
 
@@ -518,11 +542,16 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             elif _is_mist_model(model) and self._opts.mist_options is None:
                 self._opts.mist_options = _MistOptions()
 
+            if is_given(self._requested_sample_rate):
+                if model == "coda" and self._opts.coda_options is not None:
+                    self._opts.coda_options.sample_rate = self._requested_sample_rate
+                elif _is_mist_model(model) and self._opts.mist_options is not None:
+                    self._opts.mist_options.sample_rate = self._requested_sample_rate
+
         if is_given(speaker):
             self._opts.speaker = speaker
         if is_given(sample_rate):
-            self._sample_rate = sample_rate
-
+            self._requested_sample_rate = sample_rate
         if self._opts.model == "coda" and self._opts.coda_options is not None:
             if is_given(repetition_penalty):
                 self._opts.coda_options.repetition_penalty = repetition_penalty
@@ -557,6 +586,13 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             if is_given(time_scale_factor):
                 self._opts.mist_options.time_scale_factor = time_scale_factor
 
+        requested_sample_rate = self._requested_sample_rate
+        self._sample_rate = (
+            requested_sample_rate
+            if is_given(requested_sample_rate)
+            else _default_sample_rate(self._opts.model)
+        )
+
         if prev_ws_url is not None and self._ws_url() != prev_ws_url:
             assert self._ws3_pool is not None
             self._ws3_pool.invalidate()
@@ -566,9 +602,10 @@ class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(self, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        self._sample_rate = tts.sample_rate
+        self._opts = copy.deepcopy(tts._opts)
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         payload: dict[str, object] = {
@@ -578,13 +615,11 @@ class ChunkedStream(tts.ChunkedStream):
             **_model_params(self._opts),
         }
         format = "audio/pcm"
-        if self._opts.model == "coda" and self._opts.coda_options is not None:
-            if is_given(self._opts.coda_options.sample_rate):
-                payload["samplingRate"] = self._opts.coda_options.sample_rate
-        elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
+        requested_sample_rate = _requested_sample_rate(self._opts)
+        if is_given(requested_sample_rate):
+            payload["samplingRate"] = requested_sample_rate
+        if _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
-            if is_given(mist_opts.sample_rate):
-                payload["samplingRate"] = mist_opts.sample_rate
             if self._opts.model == "mistv2" and is_given(mist_opts.reduce_latency):
                 payload["reduceLatency"] = mist_opts.reduce_latency
 
@@ -610,7 +645,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=self._tts.sample_rate,
+                    sample_rate=self._sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type=format,
                 )
