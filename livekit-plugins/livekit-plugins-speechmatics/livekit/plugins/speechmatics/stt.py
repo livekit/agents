@@ -183,47 +183,38 @@ class STT(stt.STT):
 
             output_locale: Output locale for the STT model, e.g. `en-GB`. Optional.
 
-            include_partials: Include partial segment fragments (words) in the output
-                of AddPartialSegment messages. Partial fragments from the STT will
-                always be used for speaker activity detection. This setting is used
-                only for the formatted text output of individual segments. Optional.
+            include_partials: Emit interim word fragments from AddPartialSegment
+                messages. Affects only the formatted segment text — partials are always
+                used internally for speaker activity detection. Optional.
 
-            enable_diarization: Enable speaker diarization. When enabled, the STT
-                engine will determine and attribute words to unique speakers.
-                Overrides preset if provided. Defaults to True.
+            enable_diarization: Attribute words to distinct speakers. Defaults to True.
 
-            additional_vocab: List of additional vocabulary entries to increase the
-                weight of specific words in the transcription model. Defaults to [].
+            additional_vocab: Vocabulary entries that bias the model toward specific
+                words. Defaults to [].
 
+            speaker_sensitivity: Diarization sensitivity between 0.0 and 1.0; higher
+                values separate similar-sounding speakers more aggressively. Optional.
 
-            speaker_sensitivity: Diarization sensitivity. A higher value increases the
-                sensitivity of diarization and helps when two or more speakers have
-                similar voices. Overrides preset if provided. Optional.
+            max_speakers: Upper bound on the number of distinct speakers (2–100).
+                Optional.
 
-            max_speakers: Maximum number of speakers to detect during diarization.
-                When set, the STT engine will limit the number of unique speakers
-                identified. Overrides preset if provided. Optional.
+            speaker_active_format: Formatter for speaker-attributed text, with `text`
+                and `speaker_id` placeholders, e.g. `@{speaker_id}: {text}`. Defaults to
+                the raw transcript.
 
-            speaker_active_format: Formatter for active speaker output. The attributes
-                `text` and `speaker_id` are available. Example: `@{speaker_id}: {text}`.
-                Defaults to transcription output.
+            prefer_current_speaker: Bias closely-spaced words toward the same speaker.
+                Optional.
 
-            prefer_current_speaker: When True, groups of words close together are given
-                extra weight to be identified as the same speaker. Overrides preset if
-                provided. Optional.
-
-            known_speakers: List of known speaker labels and identifiers. When supplied,
-                the STT engine uses them to attribute words to specific speakers across
-                sessions. Defaults to [].
+            known_speakers: Known speaker identifiers, used to attribute words to the
+                same speakers across sessions. Defaults to [].
 
             sample_rate: Audio sample rate in Hz. Defaults to 16000.
 
             audio_encoding: Audio encoding format. Defaults to `AudioEncoding.PCM_S16LE`.
 
-            vad: Optional external Voice Activity Detector. When provided, each audio
-                frame is forwarded to the VAD and `finalize()` is called whenever the
-                VAD reports end of speech. None is auto-loaded when omitted.
-                Defaults to NOT_GIVEN.
+            vad: External Voice Activity Detector, used only in `EXTERNAL` turn-detection
+                mode where its end-of-speech drives `finalize()`. Ignored otherwise;
+                nothing is auto-loaded. Defaults to NOT_GIVEN.
 
             **kwargs: Catches deprecated parameters. A warning is logged for any
                 recognised deprecated name.
@@ -373,12 +364,10 @@ class STT(stt.STT):
         return config
 
     def finalize(self) -> None:
-        """Finalize the turn (from external VAD).
+        """Force the current turn to end, flushing buffered words as final segments.
 
-        When using an external VAD, such as Silero, this should be called
-        when the VAD detects the end of a speech turn. This will force the
-        finalization of the words in the STT buffer and emit them as final
-        segments.
+        Only takes effect in `EXTERNAL` turn-detection mode; in `DEFAULT` mode the
+        service endpoints on its own and this is a no-op.
         """
 
         # Iterate over the streams
@@ -696,8 +685,7 @@ class SpeechStream(stt.RecognizeStream):
         """Handle AddSegment / AddPartialSegment events.
 
         agent-STT sends a singular `segment` (`transcript`/`speaker`) plus message-level
-        `metadata`, unlike the voice SDK's `segments` list — `Segment.from_message`
-        bridges that shape.
+        `metadata`; `Segment.from_message` parses it into a SpeechData event.
         """
         opts = self._stt._stt_options
 
