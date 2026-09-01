@@ -70,8 +70,7 @@ class _RimeV1Server:
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await self._site.start()
         port = self._runner.addresses[0][1]
-        self.base_url = f"http://127.0.0.1:{port}/coda/v1/coda"
-        self.websocket_url = f"ws://127.0.0.1:{port}/coda/v1/coda/ws"
+        self.websocket_url = f"ws://127.0.0.1:{port}/coda/ws"
         self.session = aiohttp.ClientSession()
         return self
 
@@ -241,7 +240,7 @@ async def test_v1_streams_audio_before_end_and_maps_start_options() -> None:
             await tts.aclose()
 
     assert remaining[-1].is_final
-    assert server.paths == ["/coda/v1/coda/ws"]
+    assert server.paths == ["/coda/ws"]
     assert server.headers[0]["Authorization"] == "Bearer test-key"
     assert server.headers[0]["Sec-WebSocket-Protocol"] == "rime.v1.json"
     assert _payloads(server) == ["start", "text", "text", "end"]
