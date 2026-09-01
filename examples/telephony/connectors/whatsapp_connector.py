@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import uuid
 from collections.abc import Coroutine
 
@@ -97,7 +98,9 @@ async def handle_call_event(lkapi: api.LiveKitAPI, call: dict, phone_number_id: 
             if e.code == api.TwirpErrorCode.ALREADY_EXISTS:
                 logger.info(f"Call {call_id} was already connected")
             else:
-                logger.error(f"Failed to connect call {call_id}: {e.code}: {e.message}")
+                logger.error(
+                    f"Failed to connect call {call_id}: {e.code}: {redact_numbers(e.message)}"
+                )
 
     elif event == "terminate":
         # Tell LiveKit to clean up the connector session and the room.
@@ -112,7 +115,7 @@ async def handle_call_event(lkapi: api.LiveKitAPI, call: dict, phone_number_id: 
             )
             logger.info(f"Disconnected call {call_id}")
         except api.TwirpError as e:
-            logger.info(f"Call {call_id} was already cleaned up: {e.message}")
+            logger.info(f"Call {call_id} was already cleaned up: {e.code}")
 
     else:
         logger.warning(f"Unhandled call event {event} for {call_id}")
@@ -147,8 +150,18 @@ async def accept_call(
             # Meta redelivers webhooks, so a second accept for the same call is expected.
             logger.info(f"Call {call_id} was already accepted")
         else:
-            logger.error(f"Failed to accept call {call_id}: {e.code}: {e.message}")
+            logger.error(f"Failed to accept call {call_id}: {e.code}: {redact_numbers(e.message)}")
         return None
+
+
+def mask(number: str) -> str:
+    """Keep phone numbers out of logs, matching the other telephony examples."""
+    return f"...{number[-4:]}" if len(number) > 4 else "****"
+
+
+def redact_numbers(text: str) -> str:
+    """Mask phone-number-like digit runs inside provider payloads before logging."""
+    return re.sub(r"\+?\d{7,15}", lambda m: mask(m.group()), text)
 
 
 def signature_valid(raw: bytes, header: str) -> bool:
@@ -171,7 +184,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
     """Meta requires a fast 200, so call handling runs as a background task."""
     raw = await request.read()
 
-    if WHATSAPP_APP_SECRET and not signature_valid(
+    if request.app["verify_signatures"] and not signature_valid(
         raw, request.headers.get("X-Hub-Signature-256", "")
     ):
         logger.warning("Rejected webhook with a bad signature")
@@ -181,7 +194,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
         body = json.loads(raw)
     except ValueError:
         # Respond 200 anyway. An error response makes Meta redeliver the same payload.
-        logger.warning(f"Ignoring unparseable webhook body: {raw[:200]!r}")
+        logger.warning(f"Ignoring unparseable webhook body: {redact_numbers(repr(raw[:200]))}")
         return web.Response(text="ok")
 
     lkapi: api.LiveKitAPI = request.app["lkapi"]
@@ -192,9 +205,9 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 continue
             value = change.get("value", {})
             for error in value.get("errors", []):
-                logger.warning(f"WhatsApp reported an error: {error}")
+                logger.warning(f"WhatsApp reported an error: {redact_numbers(str(error))}")
             for status in value.get("statuses", []):
-                logger.info(f"Status update: {status}")
+                logger.info(f"Status update: {redact_numbers(str(status))}")
             # Prefer the number ID the event arrived on; multi-number apps get several.
             phone_number_id = (
                 value.get("metadata", {}).get("phone_number_id") or WHATSAPP_PHONE_NUMBER_ID or ""
@@ -208,8 +221,9 @@ async def handle_webhook(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
-def build_app() -> web.Application:
+def build_app(verify_signatures: bool) -> web.Application:
     app = web.Application()
+    app["verify_signatures"] = verify_signatures
     app["tasks"] = set()
     app.router.add_get("/whatsapp/webhook", handle_verification)
     app.router.add_post("/whatsapp/webhook", handle_webhook)
@@ -217,6 +231,10 @@ def build_app() -> web.Application:
     async def _lkapi_ctx(app: web.Application):
         app["lkapi"] = api.LiveKitAPI()
         yield
+        # The server has stopped accepting requests. Let in-flight call
+        # handling finish before closing the client it depends on.
+        if app["tasks"]:
+            await asyncio.gather(*list(app["tasks"]), return_exceptions=True)
         await app["lkapi"].aclose()
 
     app.cleanup_ctx.append(_lkapi_ctx)
@@ -247,16 +265,21 @@ async def dial(to_number: str) -> None:
             )
         except api.TwirpError as e:
             # Meta rejections ride along in the message, including the fbtrace_id.
-            logger.error(f"Dial failed: {e.code}: {e.message}")
+            logger.error(f"Dial failed: {e.code}: {redact_numbers(e.message)}")
             raise SystemExit(1) from None
-    logger.info(f"Dialing {to_number}: call {res.whatsapp_call_id}, room {res.room_name}")
+    logger.info(f"Dialing {mask(to_number)}: call {res.whatsapp_call_id}, room {res.room_name}")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description="WhatsApp connector example")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("serve", help="run the Meta webhook server")
+    serve_parser = sub.add_parser("serve", help="run the Meta webhook server")
+    serve_parser.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help="run without webhook signature verification (local testing only)",
+    )
     dial_parser = sub.add_parser("dial", help="place an outbound call")
     dial_parser.add_argument(
         "--to", required=True, help="number to call, with country code and no plus sign"
@@ -268,7 +291,16 @@ def main() -> None:
             logger.warning(
                 "WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_API_KEY is not set; accepting calls will fail"
             )
-        web.run_app(build_app(), port=PORT)
+        verify = bool(WHATSAPP_APP_SECRET) and not args.allow_unverified
+        if not verify:
+            if not args.allow_unverified:
+                logger.error(
+                    "Set WHATSAPP_APP_SECRET to verify webhook signatures,"
+                    " or pass --allow-unverified for local testing"
+                )
+                raise SystemExit(1)
+            logger.warning("Webhook signature verification is disabled")
+        web.run_app(build_app(verify), port=PORT)
     else:
         asyncio.run(dial(args.to))
 
