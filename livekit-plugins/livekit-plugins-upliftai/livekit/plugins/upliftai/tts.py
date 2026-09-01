@@ -484,15 +484,26 @@ class WebSocketClient:
 
         elif message_type == "error":
             request_id = data.get("requestId", "unknown")
-            # use only the structured fields — never serialize the raw payload,
-            # which may echo request text into unredacted logs/span attributes
+            # the provider-authored message may echo request content: keep it out
+            # of log bodies and exception messages (both are re-logged unredacted
+            # by the SDK retry loop) — static text + lk.pii attribute only
             error_code = data.get("code", "unknown")
             error_msg = data.get("message") or "unknown error"
-            logger.error(f"Error for {request_id}: [{error_code}] {error_msg}")
+            logger.error(
+                "TTS synthesis error",
+                extra={
+                    "request_id": request_id,
+                    "error_code": error_code,
+                    "lk.pii.error_message": error_msg,
+                },
+            )
 
             if request_id in self.audio_callbacks:
                 await self.audio_callbacks[request_id].put(
-                    APIError(f"TTS error [{error_code}]: {error_msg}")
+                    APIError(
+                        f"TTS synthesis failed (code: {error_code})",
+                        body={"message": error_msg},
+                    )
                 )
                 del self.audio_callbacks[request_id]
                 if request_id in self.active_requests:
