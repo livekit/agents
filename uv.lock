@@ -2661,6 +2661,7 @@ realtime = [
     { name = "aws-sdk-bedrock-runtime" },
     { name = "aws-sdk-signers" },
     { name = "boto3" },
+    { name = "smithy-http", extra = ["awscrt"] },
 ]
 
 [package.metadata]
@@ -2671,6 +2672,7 @@ requires-dist = [
     { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.2.0" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12' and extra == 'realtime'" },
 ]
 provides-extras = ["realtime"]
 
@@ -2929,7 +2931,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "google-auth", specifier = ">=2,<3" },
-    { name = "google-cloud-speech", specifier = ">=2,<3" },
+    { name = "google-cloud-speech", specifier = ">=2.36,<3" },
     { name = "google-cloud-texttospeech", specifier = ">=2.32,<3" },
     { name = "google-genai", marker = "python_full_version >= '3.10'", specifier = ">=2.13" },
     { name = "livekit-agents", editable = "livekit-agents" },

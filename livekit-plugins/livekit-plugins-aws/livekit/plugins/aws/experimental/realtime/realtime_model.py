@@ -45,6 +45,7 @@ from aws_sdk_bedrock_runtime.models import (
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
+from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
@@ -609,6 +610,9 @@ class RealtimeSession(  # noqa: F811
         0.11 then dropped the old names entirely. Keep both construction paths so
         the locked 0.7 extra and a fresh pip install of 0.11 both import.
         See https://github.com/livekit/agents/issues/6994.
+
+        Sonic streams bidirectionally, so the transport has to be the CRT client.
+        0.11 defaults to aiohttp, which does not support duplex.
         """
         kwargs: dict[str, Any] = {
             "endpoint_uri": (
@@ -617,6 +621,7 @@ class RealtimeSession(  # noqa: F811
             "region": self._realtime_model._opts.region,
             "aws_credentials_identity_resolver": _get_credentials_resolver(),
             "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
+            "transport": AWSCRTHTTPClient(),
         }
         if _BEDROCK_CONFIG_USES_RESOLVE:
             config = await _BedrockRuntimeConfig.resolve(**kwargs)
