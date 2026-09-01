@@ -160,11 +160,6 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super()._reset_input_turn_state()
         self._response_spoke = False
 
-    def _on_reconnect_connection_state_discarded(self) -> None:
-        for task in tuple(self._say_tasks):
-            task.cancel()
-        self._pending_say_event_ids.clear()
-
     async def aclose(self) -> None:
         tasks = list(self._say_tasks)
         for task in tasks:
@@ -301,6 +296,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         fut: asyncio.Future[llm.GenerationCreatedEvent],
     ) -> None:
         """Collect text, send force_message, then wait for response.created (or timeout/cancel)."""
+        force_message_sent = False
         try:
             full_text = text if isinstance(text, str) else "".join([c async for c in text])
             if fut.done():
@@ -318,6 +314,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     },
                 }
             )
+            force_message_sent = True
             # only tag response.created after the force_message is on the wire (FIFO)
             self._ensure_pending_say_tag(event_id)
 
@@ -345,9 +342,10 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 # success or send-path exception: tag already consumed on success
                 self._drop_pending_say_tag(event_id)
         except asyncio.CancelledError:
-            # Closing or reconnecting cancels connection-bound say work.
+            # aclose() cancels _say_task; always resolve fut so callers do not hang
             self._response_created_futures.pop(event_id, None)
-            self._drop_pending_say_tag(event_id)
+            if force_message_sent:
+                self._discard_say(event_id)
             if not fut.done():
                 fut.cancel()
             raise

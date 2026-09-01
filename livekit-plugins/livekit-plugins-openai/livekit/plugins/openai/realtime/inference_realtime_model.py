@@ -19,12 +19,6 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils.misc import is_given
-from openai.types.beta.realtime.session import (
-    InputAudioNoiseReduction,
-    InputAudioTranscription,
-    TurnDetection,
-)
 from openai.types.realtime import (
     AudioTranscription,
     NoiseReductionType,
@@ -32,28 +26,12 @@ from openai.types.realtime import (
     RealtimeReasoning,
 )
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
-from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from openai.types.realtime.realtime_session_create_response import Tracing
 from openai.types.realtime.realtime_truncation import RealtimeTruncation
 
-from .realtime_model import (
-    DEFAULT_VOICE,
-    RealtimeModel,
-    RealtimeSession,
-    process_base_url,
-)
+from .realtime_model import DEFAULT_VOICE, RealtimeModel, RealtimeSession
 
 InferenceClass = Literal["priority", "standard", "low"]
-
-_XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
-_XAI_DEFAULT_TURN_DETECTION = ServerVad(
-    type="server_vad",
-    threshold=0.5,
-    prefix_padding_ms=300,
-    silence_duration_ms=200,
-    create_response=True,
-    interrupt_response=True,
-)
 
 
 @dataclass
@@ -65,10 +43,7 @@ class _InferenceOptions:
 
 
 class InferenceRealtimeModel(RealtimeModel):
-    """OpenAI-compatible realtime model authenticated through LiveKit Inference.
-
-    The gateway may reject transcription models that are not priced for LiveKit Inference.
-    """
+    """OpenAI-compatible realtime model authenticated through LiveKit Inference."""
 
     def __init__(
         self,
@@ -79,17 +54,13 @@ class InferenceRealtimeModel(RealtimeModel):
         api_key: str | None = None,
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
-        voice: NotGivenOr[str] = NOT_GIVEN,
+        voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
-        input_audio_transcription: NotGivenOr[
-            AudioTranscription | InputAudioTranscription | None
-        ] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
-            NoiseReductionType | NoiseReduction | InputAudioNoiseReduction | None
+            NoiseReductionType | NoiseReduction | None
         ] = NOT_GIVEN,
-        turn_detection: NotGivenOr[
-            RealtimeAudioInputTurnDetection | TurnDetection | None
-        ] = NOT_GIVEN,
+        turn_detection: NotGivenOr[RealtimeAudioInputTurnDetection | None] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Tracing | None] = NOT_GIVEN,
@@ -98,7 +69,6 @@ class InferenceRealtimeModel(RealtimeModel):
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
@@ -119,23 +89,13 @@ class InferenceRealtimeModel(RealtimeModel):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
-        is_xai = model.startswith("xai/")
-        resolved_voice = voice if is_given(voice) else "eve" if is_xai else DEFAULT_VOICE
-        resolved_transcription = input_audio_transcription
-        resolved_turn_detection = turn_detection
-        if is_xai:
-            if not is_given(resolved_transcription):
-                resolved_transcription = _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
-            if not is_given(resolved_turn_detection):
-                resolved_turn_detection = _XAI_DEFAULT_TURN_DETECTION
-
         super().__init__(
             model=model,
-            voice=resolved_voice,
+            voice=voice,
             modalities=modalities,
-            input_audio_transcription=resolved_transcription,
+            input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=resolved_turn_detection,
+            turn_detection=turn_detection,
             tool_choice=tool_choice,
             speed=speed,
             tracing=tracing,
@@ -146,7 +106,6 @@ class InferenceRealtimeModel(RealtimeModel):
             http_session=http_session,
             max_session_duration=max_session_duration,
             conn_options=conn_options,
-            temperature=temperature,
         )
         self._inference_opts = _InferenceOptions(
             provider=provider,
@@ -178,11 +137,12 @@ class InferenceRealtimeSession(RealtimeSession):
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
+        url, _ = super()._create_ws_url_and_headers()
         headers = get_inference_headers(inference_class=opts.inference_class)
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
-        return process_base_url(self._opts.base_url, self._opts.model), headers
+        return url, headers
 
     def _wrap_session_update(self, event_id: str, session: Any) -> dict[str, Any]:
         event = super()._wrap_session_update(event_id, session)
