@@ -138,6 +138,13 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
             },
             "speed_alpha",
         ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "temperature": 0.7,
+            },
+            "generation controls",
+        ),
     ],
 )
 def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) -> None:
@@ -145,3 +152,12 @@ def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) 
 
     with pytest.raises(ValueError, match=message):
         TTS(api_key="test-key", **kwargs)
+
+
+def test_v1_rejects_generation_controls_on_update() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(api_key="test-key", websocket_url="wss://example.com/coda/ws")
+
+    with pytest.raises(ValueError, match="generation controls"):
+        tts.update_options(top_p=0.8)

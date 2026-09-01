@@ -41,10 +41,6 @@ class CodaV1SynthesisOptions:
     speaker: str
     language: NotGivenOr[str] = NOT_GIVEN
     sampling_rate: NotGivenOr[int] = NOT_GIVEN
-    repetition_penalty: NotGivenOr[float] = NOT_GIVEN
-    temperature: NotGivenOr[float] = NOT_GIVEN
-    top_p: NotGivenOr[float] = NOT_GIVEN
-    max_tokens: NotGivenOr[int] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
     def _to_protocol(self) -> _websocket_v1.SynthesisOptions:
@@ -55,12 +51,6 @@ class CodaV1SynthesisOptions:
             speaker=self.speaker,
             language=self.language,
             sampling_rate=self.sampling_rate,
-            repetition_penalty=(
-                self.repetition_penalty if is_given(self.repetition_penalty) else None
-            ),
-            temperature=self.temperature if is_given(self.temperature) else None,
-            top_p=self.top_p if is_given(self.top_p) else None,
-            max_tokens=self.max_tokens if is_given(self.max_tokens) else None,
             time_scale_factor=(
                 self.time_scale_factor if is_given(self.time_scale_factor) else None
             ),

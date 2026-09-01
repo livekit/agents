@@ -212,16 +212,12 @@ def _payloads(server: _RimeV1Server) -> list[str]:
     return [next(key for key in request if key != "contextId") for request in server.requests]
 
 
-async def test_v1_streams_audio_before_end_and_maps_start_options() -> None:
+async def test_v1_streams_audio_before_end_and_maps_supported_start_options() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(
             server,
             lang="eng",
             sample_rate=22050,
-            repetition_penalty=1.1,
-            temperature=0.5,
-            top_p=0.9,
-            max_tokens=200,
             time_scale_factor=1.2,
         )
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -257,12 +253,6 @@ async def test_v1_streams_audio_before_end_and_maps_start_options() -> None:
             "audioFormat": "audio/pcm",
             "samplingRate": 22050,
             "timeScaleFactor": 1.2,
-        },
-        "codaParameters": {
-            "repetitionPenalty": 1.1,
-            "temperature": 0.5,
-            "topP": 0.9,
-            "maxTokens": 200,
         },
     }
 

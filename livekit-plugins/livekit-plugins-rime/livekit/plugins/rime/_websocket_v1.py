@@ -44,10 +44,6 @@ class SynthesisOptions:
     speaker: str
     language: str
     sampling_rate: int
-    repetition_penalty: float | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    max_tokens: int | None = None
     time_scale_factor: float | None = None
 
 
@@ -312,25 +308,12 @@ def _start_payload(options: SynthesisOptions) -> dict[str, Any]:
     if options.time_scale_factor is not None:
         audio_parameters["timeScaleFactor"] = options.time_scale_factor
 
-    coda_parameters: dict[str, Any] = {}
-    for name, value in (
-        ("repetitionPenalty", options.repetition_penalty),
-        ("temperature", options.temperature),
-        ("topP", options.top_p),
-        ("maxTokens", options.max_tokens),
-    ):
-        if value is not None:
-            coda_parameters[name] = value
-
-    payload: dict[str, Any] = {
+    return {
         "speaker": options.speaker,
         "language": options.language,
         "text": "",
         "audioParameters": audio_parameters,
     }
-    if coda_parameters:
-        payload["codaParameters"] = coda_parameters
-    return payload
 
 
 async def _send_envelope(
