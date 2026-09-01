@@ -505,36 +505,32 @@ class AudioRecognition:
         This can occur while the generation remains active, such as when playout is paused.
         """
         self._cancel_backchannel_boundary()
+        agent_was_speaking = self._agent_speaking
 
-        if self._agent_speaking:
+        if agent_was_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
+        # Replayed STT events must observe the post-playout state.
+        self._agent_speaking = False
+
         if not self._adaptive_interruption_active:
             self._flush_held_transcripts()
             self._overlap_open = False
-            self._agent_speaking = False
             self._agent_speech_started_at = None
             return
 
-        if self._agent_speaking:
+        if agent_was_speaking:
             # close any unresolved overlap before resetting the detector
             self._on_end_of_overlap_speech(ended_at=ended_at, agent_ended=True)
 
         self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
-        if self._agent_speaking and self._transcript_gate_active:
-            logger.trace(
-                "flushing held transcripts",
-                extra={
-                    "vad_speech_started_at": self._active_vad_speech_started_at,
-                },
-            )
-            self._flush_held_transcripts(
-                resolved_at=ended_at,
-                vad_speech_started_at=self._active_vad_speech_started_at,
-            )
-
         self._overlap_open = False
-        self._agent_speaking = False
+
+        self._flush_held_transcripts(
+            resolved_at=ended_at,
+            vad_speech_started_at=self._active_vad_speech_started_at,
+        )
+
         self._agent_speech_started_at = None
 
     def _on_start_of_speech(
@@ -698,6 +694,18 @@ class AudioRecognition:
         vad_speech_started_at: float | None = None,
     ) -> None:
         """Stop holding transcripts and emit the retained events in provider order."""
+        gate_was_active = self._transcript_gate_active
+        if gate_was_active or self._transcript_buffer:
+            logger.trace(
+                "flushing held transcripts",
+                extra={
+                    "event_count": len(self._transcript_buffer),
+                    "gate_was_active": gate_was_active,
+                    "resolved_at": resolved_at,
+                    "vad_speech_started_at": vad_speech_started_at,
+                },
+            )
+
         self._transcript_gate_active = False
         if resolved_at is not None:
             self._trim_held_transcripts(
