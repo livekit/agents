@@ -43,6 +43,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
+        secondary_languages=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
         previous_text=None,
