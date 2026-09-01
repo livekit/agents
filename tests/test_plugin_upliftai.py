@@ -265,13 +265,24 @@ async def test_error_payload_not_serialized_into_exception() -> None:
     q = await asyncio.wait_for(_register_queue(client, "req-pii"), timeout=1)
     secret = "customer said something private"
     await client._on_message(
-        {"type": "error", "requestId": "req-pii", "code": "synthesis_failed", "echo": secret}
+        {
+            "type": "error",
+            "requestId": "req-pii",
+            "code": "synthesis_failed",
+            "message": f"could not synthesize: {secret}",
+            "echo": secret,
+        }
     )
 
     err = q.get_nowait()
     assert isinstance(err, APIError)
-    assert secret not in str(err), "raw payload leaked into exception message"
+    # neither the raw payload nor the provider-authored message may reach the
+    # exception string, which the SDK re-logs unredacted (REVIEW.md lk.pii rule)
+    assert secret not in str(err), "provider content leaked into exception message"
     assert "synthesis_failed" in str(err), "error code should be preserved for debugging"
+    assert isinstance(err.body, dict) and secret in err.body["message"], (
+        "provider message should stay programmatically accessible via body"
+    )
 
 
 async def _register_queue(client, request_id: str) -> asyncio.Queue:
