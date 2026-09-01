@@ -347,6 +347,123 @@ class TestMediaResolution:
         assert config.generation_config.media_resolution is None
 
 
+class TestThinkingConfig:
+    @staticmethod
+    async def _single_response_async_iter():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+        )
+
+    @classmethod
+    async def _capture_config(
+        cls, *, model: str, thinking_config: types.ThinkingConfigOrDict
+    ) -> types.GenerateContentConfig:
+        captured: dict = {}
+
+        async def fake_stream(**kwargs):
+            captured["config"] = kwargs.get("config")
+            return cls._single_response_async_iter()
+
+        llm_ = LLM(model=model, api_key="test", thinking_config=thinking_config)
+        with patch.object(
+            llm_._client.aio.models,
+            "generate_content_stream",
+            AsyncMock(side_effect=fake_stream),
+        ):
+            stream = llm_.chat(chat_ctx=llm.ChatContext.empty())
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        return captured["config"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "thinking_config,expected_level,expected_include_thoughts",
+        [
+            (
+                types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.MINIMAL, include_thoughts=True
+                ),
+                types.ThinkingLevel.MINIMAL,
+                True,
+            ),
+            (
+                {
+                    "thinking_level": "high",
+                    "thinking_budget": 0,
+                    "include_thoughts": False,
+                },
+                types.ThinkingLevel.HIGH,
+                False,
+            ),
+        ],
+    )
+    async def test_gemma_4_passes_supported_thinking_levels(
+        self,
+        thinking_config: types.ThinkingConfigOrDict,
+        expected_level: types.ThinkingLevel,
+        expected_include_thoughts: bool,
+    ):
+        config = await self._capture_config(
+            model="gemma-4-31b-it",
+            thinking_config=thinking_config,
+        )
+
+        assert config.thinking_config is not None
+        assert config.thinking_config.thinking_level == expected_level
+        assert config.thinking_config.include_thoughts is expected_include_thoughts
+        assert config.thinking_config.thinking_budget is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "thinking_config,expected_include_thoughts",
+        [
+            ({}, None),
+            ({"include_thoughts": True}, True),
+            (types.ThinkingConfig(include_thoughts=False), False),
+        ],
+    )
+    async def test_gemma_4_preserves_config_without_thinking_level(
+        self,
+        thinking_config: types.ThinkingConfigOrDict,
+        expected_include_thoughts: bool | None,
+    ):
+        config = await self._capture_config(model="gemma-4-31b-it", thinking_config=thinking_config)
+
+        assert config.thinking_config is not None
+        assert config.thinking_config.thinking_level is None
+        assert config.thinking_config.include_thoughts is expected_include_thoughts
+
+    def test_gemma_4_rejects_thinking_budget(self):
+        llm_ = LLM(
+            model="gemma-4-31b-it",
+            api_key="test",
+            thinking_config={"thinking_budget": 0},
+        )
+
+        with pytest.raises(ValueError, match="does not support thinking_budget"):
+            llm_.chat(chat_ctx=llm.ChatContext.empty())
+
+    @pytest.mark.parametrize("level", ["low", "medium"])
+    def test_gemma_4_rejects_unsupported_thinking_levels(self, level: str):
+        llm_ = LLM(
+            model="gemma-4-31b-it",
+            api_key="test",
+            thinking_config={"thinking_level": level},
+        )
+
+        with pytest.raises(ValueError, match="only supports thinking_level 'minimal' or 'high'"):
+            llm_.chat(chat_ctx=llm.ChatContext.empty())
+
+
 class TestMixedToolsRequestConstruction:
     """Combining built-in (provider) tools with function tools is only supported on the
     Gemini 3 Developer API (not Vertex). These tests drive ``chat()`` against a stubbed

@@ -46,6 +46,16 @@ def _is_gemini_3_model(model: str) -> bool:
     return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
 
 
+def _is_gemma_4_model(model: str) -> bool:
+    """Check if model is Gemma 4 series."""
+    return model.lower().startswith("gemma-4-")
+
+
+def _supports_thinking_level(model: str) -> bool:
+    """Check if model configures thinking with a level rather than a token budget."""
+    return _is_gemini_3_model(model) or _is_gemma_4_model(model)
+
+
 def _function_calling_config(
     tool_choice: NotGivenOr[ToolChoice], function_tools: Iterable[str]
 ) -> types.FunctionCallingConfig | None:
@@ -364,7 +374,8 @@ class LLM(llm.LLM):
 
         # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
-            is_gemini_3 = _is_gemini_3_model(self._opts.model)
+            supports_thinking_level = _supports_thinking_level(self._opts.model)
+            is_gemma_4 = _is_gemma_4_model(self._opts.model)
             is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
@@ -378,21 +389,54 @@ class LLM(llm.LLM):
                 _budget = thinking_cfg.thinking_budget
                 _level = getattr(thinking_cfg, "thinking_level", None)
 
-            if is_gemini_3:
-                # Gemini 3: only support thinking_level
-                if _budget is not None and _level is None:
-                    logger.warning(
-                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
-                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
-                    )
-                if _level is None:
-                    # If no thinking_level is provided, use the fastest thinking level
-                    if is_gemini_3_flash:
-                        _level = "minimal"
+            if supports_thinking_level:
+                # Gemini 3 and Gemma 4 use thinking_level rather than thinking_budget.
+                if is_gemma_4:
+                    if _budget is not None and _level is None:
+                        raise ValueError(
+                            f"Model {self._opts.model} does not support thinking_budget. "
+                            "Please use thinking_level ('minimal' or 'high') instead."
+                        )
+
+                    if _level is not None:
+                        level_value = (
+                            _level.value if isinstance(_level, types.ThinkingLevel) else _level
+                        )
+                        if level_value.lower() not in {"minimal", "high"}:
+                            raise ValueError(
+                                f"Model {self._opts.model} only supports thinking_level "
+                                "'minimal' or 'high'."
+                            )
+
+                    # Preserve include_thoughts and let the API choose its default when no
+                    # thinking_level was provided. If a valid level accompanies a legacy
+                    # budget, drop only the unsupported budget.
+                    if isinstance(thinking_cfg, dict):
+                        extra["thinking_config"] = {
+                            key: value
+                            for key, value in thinking_cfg.items()
+                            if key != "thinking_budget"
+                        }
                     else:
-                        _level = "low"
-                # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                extra["thinking_config"] = {"thinking_level": _level}
+                        extra["thinking_config"] = cast(
+                            types.ThinkingConfig, thinking_cfg
+                        ).model_copy(update={"thinking_budget": None})
+                else:
+                    if _budget is not None and _level is None:
+                        logger.warning(
+                            f"Model {self._opts.model} is Gemini 3 which does not support "
+                            "thinking_budget. Please use thinking_level ('low' or 'high') "
+                            "instead. Ignoring thinking_budget."
+                        )
+
+                    if _level is None:
+                        # If no thinking_level is provided, use the fastest thinking level.
+                        if is_gemini_3_flash:
+                            _level = "minimal"
+                        else:
+                            _level = "low"
+                    # Use thinking_level only (pass as dict since SDK may not have this field yet)
+                    extra["thinking_config"] = {"thinking_level": _level}
 
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget
