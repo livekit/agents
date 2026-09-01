@@ -140,6 +140,48 @@ class _RealtimeOptions:
     instructions: NotGivenOr[str] = NOT_GIVEN
 
 
+class PhonicSessionConfigUpdate(TypedDict, total=False):
+    """Config fields that can be changed mid-session via :meth:`RealtimeModel.update_config` /
+    :meth:`RealtimeSession.update_config`. Connection-level fields (``api_key``, ``model``,
+    ``conn_options``, ``base_url``) and ``instructions`` (managed through the Agent handoff) are
+    intentionally excluded."""
+
+    phonic_agent: str
+    voice: str
+    welcome_message: str | None
+    generate_welcome_message: bool | None
+    project: str | None
+    default_language: str
+    additional_languages: list[str]
+    multilingual_mode: Literal["auto", "request"]
+    audio_speed: float
+    phonic_tools: list[str]
+    boosted_keywords: list[str]
+    min_words_to_interrupt: int
+    generate_no_input_poke_text: bool
+    no_input_poke_sec: float
+    no_input_poke_text: str
+    no_input_end_conversation_sec: float
+    websocket_timeout_sec: int
+    intelligence_level: IntelligenceLevel
+    is_welcome_message_interruptible: bool
+    vad_prebuffer_duration_ms: int
+    vad_min_speech_duration_ms: int
+    vad_min_silence_duration_ms: int
+    vad_threshold: float
+    enable_assistant_backchannel: bool
+    assistant_backchannel_aggressiveness: float
+    pronunciation_dictionary: list[PronunciationEntry]
+    template_variables: dict[str, str]
+    enable_redaction: bool
+    mcp_servers: list[str]
+    observability_integrations: list[ObservabilityIntegration]
+    configuration_endpoint: ConfigurationEndpoint | None
+    additional_params: dict[str, typing.Any]
+    configs_for_tools: list[PhonicToolConfig]
+    forbid_speech_after_tool_call: list[str]
+
+
 @dataclass
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
@@ -376,6 +418,18 @@ class RealtimeModel(llm.RealtimeModel):
         self,
     ) -> None:
         logger.warning("update_options is not supported by the Phonic realtime model.")
+
+    async def update_config(self, config: PhonicSessionConfigUpdate) -> None:
+        """Change one or more Phonic config fields on the active session(s) mid-conversation (e.g.
+        switch ``default_language`` when advancing to the next task). Forwards to
+        :meth:`RealtimeSession.update_config`, which applies the change immediately via a Phonic
+        ``reset``. No-op (with a warning) when there is no active session."""
+        sessions = list(self._sessions)
+        if not sessions:
+            logger.warning("Phonic update_config called but there is no active session")
+            return
+        for sess in sessions:
+            await sess.update_config(config)
 
     async def aclose(self) -> None:
         pass
@@ -635,11 +689,17 @@ class RealtimeSession(llm.RealtimeSession):
         if is_given(chat_ctx):
             self._chat_ctx = chat_ctx.copy()
 
+        await self._send_mid_session_reset()
+
+    async def _send_mid_session_reset(self) -> None:
+        """Rebuild the Phonic config from the current options, instructions, tools and conversation
+        history and send a ``reset`` so a mid-session change (an Agent handoff via
+        :meth:`_update_session` or a config change via :meth:`update_config`) takes effect. No-op if
+        the socket isn't open yet."""
         system_prompt = self._opts.instructions if is_given(self._opts.instructions) else ""
-        if is_given(chat_ctx):
-            turn_history = self._build_turn_history(chat_ctx)
-            if turn_history:
-                system_prompt += CONVERSATION_HISTORY_PREFIX + turn_history
+        turn_history = self._build_turn_history(self._chat_ctx)
+        if turn_history:
+            system_prompt += CONVERSATION_HISTORY_PREFIX + turn_history
 
         if self._socket:
             logger.info("Sending mid-session reset to Phonic")
@@ -648,6 +708,51 @@ class RealtimeSession(llm.RealtimeSession):
                 tools_payload=self._build_tools_payload(),
             )
             await self._socket.send_reset(ResetPayload(config=config_options))
+
+    async def update_config(self, config: PhonicSessionConfigUpdate) -> None:
+        """Change one or more Phonic config fields mid-session (e.g. ``default_language``, ``voice``,
+        ``boosted_keywords``, no-input-poke settings). The merged config is applied immediately by
+        sending a Phonic ``reset``; fields left unset keep their current values. Instructions and
+        tools are driven by the Agent handoff (``update_instructions``/``update_tools``) and are not
+        accepted here.
+
+        Typically called around a task advance — e.g. ``update_config({"default_language": "es"})``
+        — to switch the language (or any other field) for the next reply. When the default language
+        changes and the caller doesn't set ``additional_languages``, the previous default is rotated
+        into ``additional_languages`` (and the new default removed) so the language set stays intact
+        — the API rejects a default that also appears in ``additional_languages``."""
+        changes: dict[str, typing.Any] = dict(config)
+
+        new_default = changes.get("default_language")
+        if (
+            new_default is not None
+            and new_default != self._opts.default_language
+            and "additional_languages" not in changes
+        ):
+            previous_default = self._opts.default_language
+            merged = ([previous_default] if is_given(previous_default) else []) + (
+                list(self._opts.additional_languages)
+                if is_given(self._opts.additional_languages)
+                else []
+            )
+            deduped: list[str] = []
+            for lang in merged:
+                if lang != new_default and lang not in deduped:
+                    deduped.append(lang)
+            changes["additional_languages"] = deduped
+
+        for key, value in changes.items():
+            setattr(self._opts, key, value)
+
+        if not self._config_sent:
+            # Not connected yet — the initial config send will pick up the merged values.
+            return
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
+        self._close_current_generation(interrupted=True)
+        self._pending_user_text = None
+        await self._send_mid_session_reset()
 
     def _serialize_phonic_tool(self, name: str) -> dict | str:
         """A phonic_tools entry: an inline built-in object when it's a built-in with a config in
