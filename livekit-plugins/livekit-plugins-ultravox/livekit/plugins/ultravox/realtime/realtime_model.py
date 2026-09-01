@@ -12,7 +12,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import AsyncIterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -34,6 +34,7 @@ from .events import (
     ClientToolInvocationEvent,
     ClientToolResultEvent,
     DebugEvent,
+    ForcedAgentMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
     PongEvent,
@@ -181,6 +182,7 @@ class RealtimeModel(llm.RealtimeModel):
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
                 per_response_tool_choice=False,
+                supports_say=True,
             )
         )
 
@@ -297,6 +299,9 @@ class RealtimeSession(
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
         self._chat_ctx = llm.ChatContext.empty()
+
+        # Prevent GC of in-flight say() tasks; cancelled on close.
+        self._say_tasks: set[asyncio.Task[None]] = set()
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
@@ -563,6 +568,70 @@ class RealtimeSession(
 
         return fut
 
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Speak verbatim text via Ultravox ``ForcedAgentMessage``.
+
+        The server speaks the exact text without LLM processing and enforces
+        ``uninterruptible: true`` so user speech cannot barge in.
+        """
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by say()")
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generation_fut = fut
+        # Without this, a leftover timestamp from the generation we just superseded would let say() resolve before its text goes out.
+        self._pending_generation_epoch = None
+
+        task = asyncio.create_task(self._say_task(text, fut), name="ultravox-say")
+        self._say_tasks.add(task)
+        task.add_done_callback(self._say_tasks.discard)
+        return fut
+
+    async def _say_task(
+        self,
+        text: str | AsyncIterable[str],
+        fut: asyncio.Future[llm.GenerationCreatedEvent],
+    ) -> None:
+        """Collect the text, send the ForcedAgentMessage, then wait for the response."""
+        try:
+            collected = text if isinstance(text, str) else "".join([c async for c in text])
+            # Superseded or cancelled while draining? Never speak stale (and uninterruptible) text.
+            if self._pending_generation_fut is not fut or fut.cancelled():
+                return
+            self._pending_generation_epoch = time.perf_counter()
+            self._send_forced_agent_message(collected)
+        except Exception as exc:
+            if self._pending_generation_fut is fut:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if not fut.done():
+                fut.set_exception(exc)
+            return
+
+        done, _ = await asyncio.wait({fut}, timeout=5.0)
+        is_current = self._pending_generation_fut is fut
+        if is_current:
+            self._pending_generation_fut = None
+            self._pending_generation_epoch = None
+        if not done:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError("say() timed out waiting for generation_created event.")
+                )
+        elif fut.cancelled() and is_current:
+            # The message was sent and then cancelled: barge in so Ultravox stops.
+            self._send_client_event(
+                UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+            )
+
+    def _send_forced_agent_message(self, text: str) -> None:
+        self._send_client_event(ForcedAgentMessageEvent(content=text, uninterruptible=True))
+
     def interrupt(self) -> None:
         """Interrupt the current generation."""
         # Only send barge-in if there's an active generation to interrupt
@@ -597,6 +666,9 @@ class RealtimeSession(
         self._closed = True
         self._msg_ch.close()
         self._session_should_close.set()
+
+        if self._say_tasks:
+            await utils.aio.cancel_and_wait(*self._say_tasks)
 
         await utils.aio.cancel_and_wait(self._main_atask)
 

@@ -245,7 +245,6 @@ class AudioRecognition:
         endpointing: BaseEndpointing,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        using_default_vad: bool,
         interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
@@ -263,7 +262,6 @@ class AudioRecognition:
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
-        self._using_default_vad = using_default_vad
         self._stt_model = stt_model
         self._stt_provider = stt_provider
         self._stt_aligned_transcript = stt_aligned_transcript
@@ -1171,6 +1169,16 @@ class AudioRecognition:
             if has_stt_end_time and self._input_started_at is not None
             else now
         )
+        # Prefer the provider's speaking time when there is no VAD anchor to beat:
+        # no VAD at all, or the VAD missed this segment. In STT turn detection the
+        # provider owns the turn boundary, so its timestamp wins there too
+        # one issue to note: without `end_time` the estimate collapses to `now`
+        # which would report a ~0 transcription_delay for STT mode.
+        use_stt_speaking_time = (
+            self._vad is None
+            or self._last_speaking_time is None
+            or (self._turn_detection_mode == "stt" and has_stt_end_time)
+        )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1185,8 +1193,7 @@ class AudioRecognition:
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             if self._session.amd is not None:
@@ -1208,8 +1215,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript
@@ -1241,8 +1247,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             transcript = ev.alternatives[0].text
@@ -1265,8 +1270,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -1283,8 +1287,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
@@ -1316,8 +1319,16 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+
+            # always use STT speaking time since turn detection mode is set to STT. we would want
+            # alignment here since _last_speaking_time is used for turn detection timing
+            if ev.speech_end_time is not None:
+                # clamped like the other anchors: a provider clock running ahead would
+                # otherwise push the anchor into the future and extend `extra_sleep`,
+                # delaying the turn commit by the skew
+                self._last_speaking_time = min(ev.speech_end_time, now)
+            else:
+                # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
