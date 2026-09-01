@@ -19,6 +19,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from livekit.agents.utils.misc import is_given
 from openai.types.realtime import (
     AudioTranscription,
     NoiseReductionType,
@@ -26,12 +27,23 @@ from openai.types.realtime import (
     RealtimeReasoning,
 )
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from openai.types.realtime.realtime_session_create_response import Tracing
 from openai.types.realtime.realtime_truncation import RealtimeTruncation
 
 from .realtime_model import DEFAULT_VOICE, RealtimeModel, RealtimeSession
 
 InferenceClass = Literal["priority", "standard", "low"]
+
+_XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
+_XAI_DEFAULT_TURN_DETECTION = ServerVad(
+    type="server_vad",
+    threshold=0.5,
+    prefix_padding_ms=300,
+    silence_duration_ms=200,
+    create_response=True,
+    interrupt_response=True,
+)
 
 
 @dataclass
@@ -54,7 +66,7 @@ class InferenceRealtimeModel(RealtimeModel):
         api_key: str | None = None,
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
-        voice: str = DEFAULT_VOICE,
+        voice: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
         input_audio_noise_reduction: NotGivenOr[
@@ -89,13 +101,23 @@ class InferenceRealtimeModel(RealtimeModel):
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
 
+        is_xai = model.startswith("xai/")
+        resolved_voice = voice if is_given(voice) else "eve" if is_xai else DEFAULT_VOICE
+        resolved_transcription = input_audio_transcription
+        resolved_turn_detection = turn_detection
+        if is_xai:
+            if not is_given(resolved_transcription):
+                resolved_transcription = _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
+            if not is_given(resolved_turn_detection):
+                resolved_turn_detection = _XAI_DEFAULT_TURN_DETECTION
+
         super().__init__(
             model=model,
-            voice=voice,
+            voice=resolved_voice,
             modalities=modalities,
-            input_audio_transcription=input_audio_transcription,
+            input_audio_transcription=resolved_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,
-            turn_detection=turn_detection,
+            turn_detection=resolved_turn_detection,
             tool_choice=tool_choice,
             speed=speed,
             tracing=tracing,

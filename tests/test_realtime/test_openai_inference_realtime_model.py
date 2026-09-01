@@ -183,3 +183,44 @@ def test_new_api_does_not_expose_deprecated_temperature() -> None:
     parameters = inspect.signature(InferenceRealtimeModel).parameters
 
     assert "temperature" not in parameters
+
+
+async def test_xai_models_use_gateway_compatible_defaults(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-latest",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+
+    event = session._msg_ch.recv_nowait()
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+
+    assert model._opts.voice == "eve"
+    assert dumped["session"]["audio"]["input"]["transcription"]["model"] == "grok-transcribe"
+    assert dumped["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad"
+    await session.aclose()
+
+
+async def test_xai_gateway_defaults_can_be_overridden(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-latest",
+        api_key="key",
+        api_secret="secret",
+        voice="Ara",
+        input_audio_transcription=None,
+        turn_detection=None,
+    )
+    session = model.session()
+
+    event = session._msg_ch.recv_nowait()
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+
+    assert model._opts.voice == "Ara"
+    assert dumped["session"]["audio"]["input"].get("transcription") is None
+    assert dumped["session"]["audio"]["input"].get("turn_detection") is None
+    await session.aclose()
