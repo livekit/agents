@@ -10,6 +10,7 @@ from livekit.agents.voice.io import (
     AudioOutput,
     AudioOutputCapabilities,
     PlaybackFinishedEvent,
+    PlaybackProgressedEvent,
     _AudioSinkProxy,
 )
 
@@ -186,6 +187,40 @@ async def test_swap_routes_playback_events_from_new_leaf() -> None:
     leaf_b.on_playback_finished(playback_position=1.0, interrupted=False)
     assert len(received) == 1
     assert received[0].playback_position == 1.0
+
+
+async def test_swap_routes_playback_progress_from_new_leaf() -> None:
+    """A wrapper above a swapped leaf keeps hearing where the audio went."""
+    leaf_a = FakeAudioOutput()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    leaf_a.on_playback_progressed(started_at=100.0, offset=0.0, duration=0.5)
+    proxy.set_next_in_chain(leaf_b)
+    leaf_b.on_playback_progressed(started_at=101.0, offset=0.0, duration=0.25)
+
+    assert [(ev.started_at, ev.duration) for ev in received] == [(100.0, 0.5), (101.0, 0.25)]
+
+
+async def test_swap_stops_playback_progress_from_the_old_leaf() -> None:
+    leaf_a = FakeAudioOutput()
+    leaf_b = FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    proxy.set_next_in_chain(leaf_b)
+    leaf_a.on_playback_progressed(started_at=100.0, offset=0.0, duration=0.5)
+
+    assert received == []
 
 
 @pytest.mark.asyncio
