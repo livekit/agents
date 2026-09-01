@@ -487,6 +487,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
+                # A pooled websocket may still hold audio/done from an interrupted
+                # previous context; ignore messages tagged with another context id.
+                if segment_id is not None and segment_id != cartesia_context_id:
+                    continue
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
