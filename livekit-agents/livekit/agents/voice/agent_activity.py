@@ -1239,6 +1239,10 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        # a parked preemptive generation is never scheduled, so the wait below would never
+        # end. drop it here rather than in the callers: the flag above is what stops a new
+        # one from being created, and it is only true from this point on.
+        self._cancel_preemptive_generation()
         if blocked_tasks:
             self._add_drain_blocked_tasks(blocked_tasks)
         self._wake_up_scheduling_task()
@@ -1351,12 +1355,6 @@ class AgentActivity(RecognitionHooks):
             if self._closed:
                 # already closed by the session close
                 return None
-
-            # a parked preemptive generation is never scheduled nor cancelled by the
-            # pause path, so drop it before waiting for the speech tasks to drain -
-            # otherwise a speculative reply started before an uninterruptible message
-            # would leave the handoff waiting forever (same as drain/aclose/interrupt).
-            self._cancel_preemptive_generation()
 
             span = tracer.start_span(
                 "pause_agent_activity",
@@ -2567,10 +2565,6 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
-                # This turn is discarded, so the speculative reply started for it can
-                # never be scheduled. Drop it now; leaving it parked would block the
-                # next pause/handoff until the session is closed.
-                self._cancel_preemptive_generation()
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 

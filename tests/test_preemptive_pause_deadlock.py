@@ -1,19 +1,4 @@
-"""A parked preemptive generation must never block an AgentTask handoff.
-
-Regression test for livekit/agents#6858: when the caller's turn ends while an
-uninterruptible message is playing, ``_user_turn_completed_task`` discards the
-turn but used to leave the speculative reply parked in
-``_preemptive_generation``. ``AgentActivity.pause()`` (the path an awaited
-``AgentTask`` takes) waits for all outstanding speech work, so the never
-scheduled, never cancelled reply left the handoff hanging until the session
-closed.
-
-Two independent guards fix this:
-
-- the discard path drops the speculative reply it can never schedule, and
-- ``pause()`` cancels any parked generation before waiting, like
-  ``drain()``/``aclose()``/``interrupt()`` already do.
-"""
+"""A parked preemptive generation must never block an agent handoff."""
 
 from __future__ import annotations
 
@@ -121,14 +106,14 @@ async def _start_session() -> tuple[_GatedLLM, AgentSession[None]]:
     return llm, session
 
 
-async def test_discarded_turn_drops_parked_preemptive_reply() -> None:
-    """The uninterruptible-speech discard path cancels its own speculative reply."""
+async def test_handoff_after_a_turn_discarded_for_uninterruptible_speech() -> None:
+    """The reported case: a turn discarded mid-speech must not hang the next handoff."""
     llm, session = await _start_session()
     activity = session._activity
     assert activity is not None
 
     try:
-        # 1. the caller starts talking, so a speculative reply is started
+        # the caller starts talking, so a speculative reply is started
         assert session.current_speech is None
         activity.on_preemptive_generation(
             _PreemptiveGenerationInfo(
@@ -139,11 +124,11 @@ async def test_discarded_turn_drops_parked_preemptive_reply() -> None:
         )
         assert activity._preemptive_generation is not None
 
-        # 2. the agent starts an uninterruptible message (e.g. a transfer hold)
+        # the agent starts an uninterruptible message (e.g. a transfer hold)
         session.generate_reply(instructions="ask them to hold", allow_interruptions=False)
         await _wait_until(lambda: session.current_speech is not None)
 
-        # 3. the caller's turn ends while that message is still playing
+        # the caller's turn ends while that message is still playing
         activity.on_end_of_turn(_end_of_turn("can you tell me the rate"))
         await _wait_until(
             lambda: (
@@ -152,14 +137,11 @@ async def test_discarded_turn_drops_parked_preemptive_reply() -> None:
             )
         )
 
-        # the discarded turn must not leave its reply parked
-        assert activity._preemptive_generation is None
-
-        # 4. the uninterruptible message finishes; nothing is left to block a handoff
+        # the uninterruptible message finishes; the discarded turn's reply is still parked
         llm.release()
         await _wait_until(lambda: session.current_speech is None)
 
-        # 5. awaiting an AgentTask pauses the activity and must not hang
+        # awaiting an AgentTask pauses the activity and must not hang
         await asyncio.wait_for(
             session._update_activity(
                 Agent(instructions="hand off"),
@@ -169,19 +151,19 @@ async def test_discarded_turn_drops_parked_preemptive_reply() -> None:
             ),
             timeout=TIMEOUT,
         )
+        assert activity._preemptive_generation is None
     finally:
         await asyncio.gather(session.aclose(), return_exceptions=True)
 
 
 async def test_pause_clears_a_parked_preemptive_reply() -> None:
-    """pause() drops any parked generation before waiting, like drain/aclose/interrupt."""
+    """pause() drops any parked generation before waiting for the speech tasks."""
     _, session = await _start_session()
     activity = session._activity
     assert activity is not None
 
     try:
-        # park a speculative reply without any turn discard (the state the old code
-        # could leave behind)
+        # park a speculative reply without any turn discard
         activity.on_preemptive_generation(
             _PreemptiveGenerationInfo(
                 new_transcript="what is the rate",
@@ -204,4 +186,42 @@ async def test_pause_clears_a_parked_preemptive_reply() -> None:
         # the parked reply is gone, so a later resume cannot resurrect it
         assert activity._preemptive_generation is None
     finally:
+        await asyncio.gather(session.aclose(), return_exceptions=True)
+
+
+async def test_reply_parked_while_pausing_does_not_block_the_handoff() -> None:
+    """A reply started after the handoff begins is still dropped before the drain wait.
+
+    The cancel has to sit where scheduling is marked paused: anywhere earlier leaves an
+    await in between, and a transcript arriving in that window parks a fresh reply that
+    nothing will schedule. ``on_exit`` is the widest such window.
+    """
+    llm = _GatedLLM()
+    session: AgentSession[None] = AgentSession(llm=llm)
+
+    class _TalkingExit(Agent):
+        async def on_exit(self) -> None:
+            activity = session._activity
+            assert activity is not None
+            activity.on_preemptive_generation(
+                _PreemptiveGenerationInfo(
+                    new_transcript="what is the rate",
+                    transcript_confidence=1.0,
+                    started_speaking_at=time.time(),
+                )
+            )
+            assert activity._preemptive_generation is not None
+
+    await session.start(agent=_TalkingExit(instructions="qualify the caller"))
+    activity = session._activity
+    assert activity is not None
+
+    try:
+        await asyncio.wait_for(
+            session._update_activity(Agent(instructions="hand off")),
+            timeout=TIMEOUT,
+        )
+        assert activity._preemptive_generation is None
+    finally:
+        llm.release()
         await asyncio.gather(session.aclose(), return_exceptions=True)
