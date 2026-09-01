@@ -154,10 +154,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         websocket_url: str,
         speaker: str = "astra",
         lang: TTSLangs | str = "eng",
-        repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,
-        top_p: NotGivenOr[float] = NOT_GIVEN,
-        max_tokens: NotGivenOr[int] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: int = 22050,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -228,6 +224,12 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 raise ValueError("websocket_url enables WebSocket streaming; omit use_websocket")
             if is_given(speed_alpha):
                 raise ValueError("speed_alpha is not supported by the Rime v1 WebSocket protocol")
+            if any(
+                is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
+            ):
+                raise ValueError(
+                    "Coda generation controls are not supported by the Rime v1 WebSocket protocol"
+                )
             if any(
                 is_given(value)
                 for value in (
@@ -431,10 +433,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             speaker=self._opts.speaker,
             language=str(coda.lang) if is_given(coda.lang) else NOT_GIVEN,
             sampling_rate=coda.sample_rate,
-            repetition_penalty=coda.repetition_penalty,
-            temperature=coda.temperature,
-            top_p=coda.top_p,
-            max_tokens=coda.max_tokens,
             time_scale_factor=coda.time_scale_factor,
         )
 
@@ -491,6 +489,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 )
             ):
                 raise ValueError("Coda v1 cannot be updated with ws3 or Mist options")
+            if any(
+                is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
+            ):
+                raise ValueError("Coda v1 does not support generation controls")
         elif is_given(websocket_url):
             raise ValueError("websocket_url can only update a TTS constructed with websocket_url")
 
