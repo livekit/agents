@@ -4,6 +4,7 @@ from livekit.plugins.google.llm import (
     _is_gemini_3_flash_model,
     _is_gemini_3_model,
     _requires_thought_signatures,
+    _supports_thinking_level,
 )
 
 pytestmark = pytest.mark.unit
@@ -29,6 +30,7 @@ class TestGeminiModelDetection:
             # Gemini 1.5 models - should return False
             ("gemini-1.5-pro", False),
             # Other models - should return False
+            ("gemma-4-31b-it", False),
             ("gpt-4", False),
             ("claude-3", False),
         ],
@@ -57,6 +59,22 @@ class TestGeminiModelDetection:
     @pytest.mark.parametrize(
         "model,expected",
         [
+            # level models - should return True
+            ("gemini-3-pro-preview", True),
+            ("gemma-4-31b-it", True),
+            ("GEMMA-4-31B-IT", True),  # case insensitive
+            # budget models - should return False
+            ("gemini-2.5-flash", False),
+            ("gemma-3-27b-it", False),
+            ("gemma-40-31b-it", False),
+        ],
+    )
+    def test_supports_thinking_level(self, model: str, expected: bool):
+        assert _supports_thinking_level(model) == expected
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
             # Gemini 3 models - should return True (requires thought signatures)
             ("gemini-3-pro-preview", True),
             ("gemini-3-flash-preview", True),
@@ -76,6 +94,7 @@ class TestGeminiModelDetection:
             # Gemini 1.5 models - should return False
             ("gemini-1.5-pro", False),
             # Other models - should return False
+            ("gemma-4-31b-it", False),
             ("gpt-4", False),
             ("claude-3", False),
         ],
