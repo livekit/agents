@@ -64,6 +64,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .generation import remove_instructions
 from .ivr import IVRActivity
 from .keyterm_detection import (
     KeytermDetector,
@@ -1528,7 +1529,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return handle
 
-    def add_conversation_item(self, item: llm.ChatMessage) -> bool:
+    async def add_conversation_item(self, item: llm.ChatMessage) -> bool:
         """Add a conversation item to the session history and the active agent's context.
 
         Inserts ``item`` into ``session.history`` and, when an agent is running,
@@ -1536,8 +1537,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         listeners (transcript capture, analytics, etc.) observe the item the
         same way they observe items produced by the normal audio pipeline.
 
+        With a realtime model, the item is first pushed to the live model
+        context and only a successful push commits the item locally.  A failed
+        push raises ``llm.RealtimeError`` and leaves the session untouched, so
+        retrying with the same item id works.  Realtime models without a
+        mutable chat context raise ``llm.RealtimeError``.
+
         The call is idempotent: if an item with the same ``id`` already exists
         in the session history the method returns ``False`` and does nothing.
+
+        Items added before ``start()`` reach the session history and the event
+        only — they are never backfilled into the agent's context.
 
         Args:
             item: The ChatMessage to add.
@@ -1547,6 +1557,31 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         if self._chat_ctx.get_by_id(item.id) is not None:
             return False
+
+        rt_session: llm.RealtimeSession | None = (
+            self._activity._rt_session if self._activity is not None else None
+        )
+        if isinstance(self.llm, llm.RealtimeModel) and rt_session is not None:
+            if not self.llm.capabilities.mutable_chat_context:
+                raise llm.RealtimeError(
+                    "add_conversation_item is not supported by realtime models"
+                    " without a mutable chat context"
+                )
+
+            assert self._agent is not None, "an active realtime session implies a running agent"
+
+            # push-then-commit: on a failed push nothing was mutated locally,
+            # so the caller can retry with the same item id
+            candidate = self._agent._chat_ctx.copy()
+            if candidate.get_by_id(item.id) is None:
+                candidate.insert(item)
+            remove_instructions(candidate)
+            await rt_session.update_chat_ctx(candidate)
+
+            if self._agent._chat_ctx.get_by_id(item.id) is None:
+                self._agent._chat_ctx.insert(item)
+            self._conversation_item_added(item)
+            return True
 
         if self._agent is not None and self._agent._chat_ctx.get_by_id(item.id) is None:
             self._agent._chat_ctx.insert(item)
