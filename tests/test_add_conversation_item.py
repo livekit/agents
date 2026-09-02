@@ -188,14 +188,17 @@ async def test_add_conversation_item_realtime_dedup_by_id() -> None:
 
         msg = ChatMessage(role="user", content=["rt dedup"])
         assert await session.add_conversation_item(msg) is True
-        pushed = rt_session.chat_ctx.get_by_id(msg.id)
-        assert pushed is not None
+        assert rt_session.chat_ctx.get_by_id(msg.id) is not None
 
         assert await session.add_conversation_item(msg) is False
 
         assert session.history.get_by_id(msg.id) is not None
-        assert rt_session.chat_ctx.get_by_id(msg.id) is pushed
-        assert agent.chat_ctx.get_by_id(msg.id) is pushed
+        provider_item = rt_session.chat_ctx.get_by_id(msg.id)
+        agent_item = agent.chat_ctx.get_by_id(msg.id)
+        assert isinstance(provider_item, ChatMessage)
+        assert isinstance(agent_item, ChatMessage)
+        assert (provider_item.role, provider_item.text_content) == ("user", "rt dedup")
+        assert (agent_item.role, agent_item.text_content) == ("user", "rt dedup")
         assert [e.item.id for e in received] == [msg.id]
 
 
@@ -266,3 +269,184 @@ async def test_add_conversation_item_realtime_push_failure_leaves_state_clean() 
         assert session.history.get_by_id(msg.id) is not None
         assert rt_session.chat_ctx.get_by_id(msg.id) is not None
         assert [e.item.id for e in received] == [msg.id]
+
+
+async def test_add_conversation_item_realtime_serializes_distinct_items() -> None:
+    """Overlapping additions retain every distinct item in provider and local contexts."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        agent = SimpleAgent()
+        await session.start(agent)
+        rt_session = model.active_session
+
+        release_update = asyncio.Event()
+        rt_session.block_update_chat_ctx = release_update
+        rt_session.update_chat_ctx_entered.clear()
+        first = ChatMessage(role="user", content=["first concurrent item"])
+        second = ChatMessage(role="user", content=["second concurrent item"])
+
+        first_task = asyncio.create_task(session.add_conversation_item(first))
+        await rt_session.update_chat_ctx_entered.wait()
+        second_started = asyncio.Event()
+
+        async def add_second() -> bool:
+            second_started.set()
+            return await session.add_conversation_item(second)
+
+        second_task = asyncio.create_task(add_second())
+        await second_started.wait()
+        release_update.set()
+
+        assert await asyncio.gather(first_task, second_task) == [True, True]
+        for item in (first, second):
+            assert rt_session.chat_ctx.get_by_id(item.id) is not None
+            assert agent.chat_ctx.get_by_id(item.id) is not None
+            assert session.history.get_by_id(item.id) is not None
+
+
+async def test_add_conversation_item_realtime_serializes_same_id() -> None:
+    """Overlapping same-ID additions commit and emit exactly once."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        agent = SimpleAgent()
+        await session.start(agent)
+        rt_session = model.active_session
+
+        received: list[ConversationItemAddedEvent] = []
+        session.on("conversation_item_added", received.append)
+
+        release_update = asyncio.Event()
+        rt_session.block_update_chat_ctx = release_update
+        rt_session.update_chat_ctx_entered.clear()
+        item = ChatMessage(role="user", content=["same concurrent item"])
+
+        first_task = asyncio.create_task(session.add_conversation_item(item))
+        await rt_session.update_chat_ctx_entered.wait()
+        second_started = asyncio.Event()
+
+        async def add_same_item() -> bool:
+            second_started.set()
+            return await session.add_conversation_item(item)
+
+        second_task = asyncio.create_task(add_same_item())
+        await second_started.wait()
+        release_update.set()
+
+        assert sorted(await asyncio.gather(first_task, second_task)) == [False, True]
+        assert sum(entry.id == item.id for entry in rt_session.chat_ctx.items) == 1
+        assert sum(entry.id == item.id for entry in agent.chat_ctx.items) == 1
+        assert sum(entry.id == item.id for entry in session.history.items) == 1
+        assert [event.item.id for event in received] == [item.id]
+
+
+async def test_add_conversation_item_uses_agent_realtime_model() -> None:
+    """An agent-level realtime override receives the added item."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    agent = Agent(instructions="agent override", llm=model)
+    async with AgentSession() as session:
+        await session.start(agent)
+        item = ChatMessage(role="user", content=["agent-level realtime"])
+
+        assert await session.add_conversation_item(item) is True
+        assert model.active_session.chat_ctx.get_by_id(item.id) is not None
+        assert agent.chat_ctx.get_by_id(item.id) is not None
+        assert session.history.get_by_id(item.id) is not None
+
+
+async def test_add_conversation_item_uses_agent_realtime_capabilities() -> None:
+    """An immutable agent-level realtime override rejects the item without side effects."""
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(audio_output=False, mutable_chat_context=False)
+    )
+    agent = Agent(instructions="agent override", llm=model)
+    async with AgentSession() as session:
+        await session.start(agent)
+        item = ChatMessage(role="user", content=["agent-level immutable"])
+        received: list[ConversationItemAddedEvent] = []
+        session.on("conversation_item_added", received.append)
+
+        with pytest.raises(llm.RealtimeError):
+            await session.add_conversation_item(item)
+
+        assert model.active_session.chat_ctx.get_by_id(item.id) is None
+        assert agent.chat_ctx.get_by_id(item.id) is None
+        assert session.history.get_by_id(item.id) is None
+        assert received == []
+
+
+async def test_add_conversation_item_realtime_is_atomic_during_handoff() -> None:
+    """A handoff cannot split an addition across the old and new agent contexts."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        await session.start(SimpleAgent())
+        rt_session = model.active_session
+
+        original_update_chat_ctx = rt_session.update_chat_ctx
+        release_update = asyncio.Event()
+        first_update_entered = asyncio.Event()
+        handoff_update_completed = asyncio.Event()
+        update_count = 0
+        new_only: ChatMessage | None = None
+
+        async def pause_first_update(chat_ctx: llm.ChatContext) -> None:
+            nonlocal update_count
+            update_count += 1
+            if update_count == 1:
+                first_update_entered.set()
+                await release_update.wait()
+            await original_update_chat_ctx(chat_ctx)
+            if new_only is not None and chat_ctx.get_by_id(new_only.id) is not None:
+                handoff_update_completed.set()
+
+        rt_session.update_chat_ctx = pause_first_update
+        added = ChatMessage(role="user", content=["added during handoff"])
+        add_task = asyncio.create_task(session.add_conversation_item(added))
+        await first_update_entered.wait()
+
+        new_only = ChatMessage(role="user", content=["new agent context"])
+        new_agent = Agent(
+            instructions="replacement agent",
+            chat_ctx=llm.ChatContext([new_only]),
+        )
+        session.update_agent(new_agent)
+        for _ in range(10):
+            await asyncio.sleep(0)
+        release_update.set()
+
+        assert await add_task is True
+        await handoff_update_completed.wait()
+        assert rt_session.chat_ctx.get_by_id(new_only.id) is not None
+        assert new_agent.chat_ctx.get_by_id(new_only.id) is not None
+        assert session.history.get_by_id(added.id) is not None
+
+
+async def test_add_conversation_item_realtime_echo_before_failure_is_not_committed() -> None:
+    """A provider echo before a failed push cannot mutate local state."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        agent = SimpleAgent()
+        await session.start(agent)
+        rt_session = model.active_session
+
+        received: list[ConversationItemAddedEvent] = []
+        session.on("conversation_item_added", received.append)
+        item = ChatMessage(role="user", content=["echo then fail"])
+
+        async def echo_then_fail(chat_ctx: llm.ChatContext) -> None:
+            pushed = chat_ctx.get_by_id(item.id)
+            assert pushed is not None
+            rt_session.emit(
+                "remote_item_added",
+                llm.RemoteItemAddedEvent(previous_item_id=None, item=pushed),
+            )
+            raise llm.RealtimeError("push failed after echo")
+
+        rt_session.update_chat_ctx = echo_then_fail
+
+        with pytest.raises(llm.RealtimeError):
+            await session.add_conversation_item(item)
+
+        assert rt_session.chat_ctx.get_by_id(item.id) is None
+        assert agent.chat_ctx.get_by_id(item.id) is None
+        assert session.history.get_by_id(item.id) is None
+        assert received == []

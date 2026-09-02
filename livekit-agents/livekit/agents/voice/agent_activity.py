@@ -1976,7 +1976,10 @@ class AgentActivity(RecognitionHooks):
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder
         local_chat_ctx = self._agent._chat_ctx
-        if local_chat_ctx.get_by_id(ev.item.id) is not None:
+        if (
+            local_chat_ctx.get_by_id(ev.item.id) is not None
+            or ev.item.id in self._session._locally_pushed_conversation_item_ids
+        ):
             return
 
         # only add placeholders for server-initiated items (responses, function calls),

@@ -67,6 +67,9 @@ class FakeRealtimeSession(RealtimeSession):
         self.aclose_error: Exception | None = None
         # test hook to fail bring-up (raised from update_chat_ctx during _update_session)
         self.update_error: Exception | None = None
+        # test hooks to pause update_chat_ctx after it has been entered
+        self.update_chat_ctx_entered = asyncio.Event()
+        self.block_update_chat_ctx: asyncio.Event | None = None
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -80,6 +83,9 @@ class FakeRealtimeSession(RealtimeSession):
         self.updated_instructions = instructions
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        self.update_chat_ctx_entered.set()
+        if self.block_update_chat_ctx is not None:
+            await self.block_update_chat_ctx.wait()
         if self.update_error is not None:
             raise self.update_error
         self._chat_ctx = chat_ctx
