@@ -828,7 +828,7 @@ def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "wss://api.rimetts.com/coda/ws",
+        "wss://api.rime.ai/coda/ws",
         "ws://127.0.0.1:8080/coda/ws",
         "ws://[::1]:8080/coda/ws",
     ],
@@ -842,10 +842,10 @@ def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "ws://api.rimetts.com/coda/ws",
+        "ws://api.rime.ai/coda/ws",
         "ws://192.168.1.20/coda/ws",
         "ws://localhost:8080/coda/ws",
-        "http://api.rimetts.com/coda/ws",
+        "http://api.rime.ai/coda/ws",
     ],
 )
 def test_v1_rejects_insecure_remote_websocket_url(websocket_url: str) -> None:
