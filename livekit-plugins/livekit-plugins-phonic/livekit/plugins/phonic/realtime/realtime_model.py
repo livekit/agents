@@ -140,11 +140,12 @@ class _RealtimeOptions:
     instructions: NotGivenOr[str] = NOT_GIVEN
 
 
-class PhonicSessionConfigUpdate(TypedDict, total=False):
-    """The config fields that can be changed mid-session via :meth:`RealtimeModel.update_options` /
-    :meth:`RealtimeSession.update_options` (passed as the ``config`` argument). Connection-level
-    fields (``api_key``, ``model``, ``conn_options``, ``base_url``) and ``instructions`` (managed
-    through the Agent handoff) are intentionally excluded."""
+class PhonicConfig(TypedDict, total=False):
+    """Phonic config fields that can be changed mid-session via :meth:`RealtimeModel.update_options`
+    / :meth:`RealtimeSession.update_options` (passed as the ``config`` argument) — every field is
+    optional so an update carries only what changes. Connection-level fields (``api_key``,
+    ``model``, ``conn_options``, ``base_url``) and ``instructions`` (managed through the Agent
+    handoff) are excluded."""
 
     phonic_agent: str
     voice: str
@@ -414,7 +415,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
-    def update_options(self, *, config: NotGivenOr[PhonicSessionConfigUpdate] = NOT_GIVEN) -> None:
+    def update_options(self, *, config: NotGivenOr[PhonicConfig] = NOT_GIVEN) -> None:
         """Change Phonic config fields on the active session(s) mid-conversation (e.g. switch
         ``default_language`` when advancing to the next task). ``config`` is any subset of the
         session config; it is applied immediately via a Phonic ``reset``.
@@ -595,9 +596,9 @@ class RealtimeSession(llm.RealtimeSession):
         if sent_tool_call_output and not forbid_speech:
             self._start_new_assistant_turn()
 
-    def _serialize_tools(self, tools: list[llm.Tool]) -> list[dict]:
+    def _serialize_tools(self) -> list[dict]:
         tool_definitions: list[dict] = []
-        for tool_schema in llm.ToolContext(tools).parse_function_tools("openai", strict=True):
+        for tool_schema in self._tools.parse_function_tools("openai", strict=True):
             cfg = self._configs_for_tools.get(tool_schema["function"]["name"], {})
             tool_definitions.append(
                 {
@@ -621,15 +622,10 @@ class RealtimeSession(llm.RealtimeSession):
             )
         return tool_definitions
 
-    async def update_tools(self, tools: list[llm.Tool]) -> None:
-        if self._config_sent:
-            logger.warning(
-                "update_tools called after config was already sent. "
-                "Phonic does not support updating tools mid-session."
-            )
-            return
-
-        self._tools = llm.ToolContext(tools)
+    def _rebuild_tool_definitions(self) -> None:
+        """Rebuild the per-tool config map and serialized tool definitions from the current options
+        and tools. Call after tools or tool-related config (configs_for_tools /
+        forbid_speech_after_tool_call / phonic_tools) change."""
         self._configs_for_tools = {
             c["name"]: c
             for c in (
@@ -650,7 +646,18 @@ class RealtimeSession(llm.RealtimeSession):
                     self._configs_for_tools[name] = typing.cast(
                         PhonicToolConfig, {**cfg, "forbid_speech_after_tool_call": True}
                     )
-        self._tool_definitions = self._serialize_tools(tools)
+        self._tool_definitions = self._serialize_tools()
+
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
+        if self._config_sent:
+            logger.warning(
+                "update_tools called after config was already sent. "
+                "Phonic does not support updating tools mid-session."
+            )
+            return
+
+        self._tools = llm.ToolContext(tools)
+        self._rebuild_tool_definitions()
         self._tools_ready.set()
 
     async def _update_session(
@@ -682,7 +689,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._opts.instructions = instructions
         if is_given(tools):
             self._tools = llm.ToolContext(tools)
-            self._tool_definitions = self._serialize_tools(tools)
+            self._tool_definitions = self._serialize_tools()
         if is_given(chat_ctx):
             self._chat_ctx = chat_ctx.copy()
 
@@ -790,7 +797,7 @@ class RealtimeSession(llm.RealtimeSession):
         self,
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        config: NotGivenOr[PhonicSessionConfigUpdate] = NOT_GIVEN,
+        config: NotGivenOr[PhonicConfig] = NOT_GIVEN,
     ) -> None:
         # tool_choice is the base update_options param (the framework sends it every turn); Phonic
         # does not support it and ignores it. Config changes come in via `config`.
@@ -801,21 +808,23 @@ class RealtimeSession(llm.RealtimeSession):
         # Rotate the previous default into additional_languages when switching default_language so
         # it stays usable (and drop the new default, which the API forbids there), unless the caller
         # set additional_languages explicitly.
-        new_default = changes.get("default_language")
+        new_default_language = changes.get("default_language")
         if (
-            new_default is not None
-            and new_default != self._opts.default_language
+            new_default_language is not None
+            and new_default_language != self._opts.default_language
             and "additional_languages" not in changes
         ):
-            previous_default = self._opts.default_language
-            merged = ([previous_default] if is_given(previous_default) else []) + (
+            previous_default_language = self._opts.default_language
+            merged = (
+                [previous_default_language] if is_given(previous_default_language) else []
+            ) + (
                 list(self._opts.additional_languages)
                 if is_given(self._opts.additional_languages)
                 else []
             )
             deduped: list[str] = []
             for lang in merged:
-                if lang != new_default and lang not in deduped:
+                if lang != new_default_language and lang not in deduped:
                     deduped.append(lang)
             changes["additional_languages"] = deduped
 
@@ -825,7 +834,15 @@ class RealtimeSession(llm.RealtimeSession):
                 setattr(self._opts, name, value)
                 changed = True
 
-        if not changed or not self._config_sent:
+        if not changed:
+            return
+
+        # Tool-related fields are cached in _configs_for_tools/_tool_definitions; rebuild them so the
+        # reset carries the new tool behavior rather than the previously-serialized one.
+        if changes.keys() & {"configs_for_tools", "forbid_speech_after_tool_call", "phonic_tools"}:
+            self._rebuild_tool_definitions()
+
+        if not self._config_sent:
             return
 
         # update_options is synchronous; coalesce into a single background reset (the options are
