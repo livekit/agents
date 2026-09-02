@@ -1152,7 +1152,6 @@ class AgentActivity(RecognitionHooks):
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=wired_vad,
-            using_default_vad=self.using_default_vad,
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
@@ -1240,6 +1239,10 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        # a parked preemptive generation is never scheduled, so the wait below would never
+        # end. drop it here rather than in the callers: the flag above is what stops a new
+        # one from being created, and it is only true from this point on.
+        self._cancel_preemptive_generation()
         if blocked_tasks:
             self._add_drain_blocked_tasks(blocked_tasks)
         self._wake_up_scheduling_task()

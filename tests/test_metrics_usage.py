@@ -49,3 +49,27 @@ def test_collector_aggregates_cache_creation_tokens() -> None:
     llm_usage = usage[0]
     assert isinstance(llm_usage, LLMModelUsage)
     assert llm_usage.input_cache_creation_tokens == 50
+
+
+def test_llm_metrics_defaults_reasoning_to_zero() -> None:
+    m = _llm_metrics()
+    assert m.reasoning_tokens == 0
+
+
+def test_llm_metrics_carries_reasoning_tokens() -> None:
+    m = _llm_metrics(reasoning_tokens=64)
+    assert m.reasoning_tokens == 64
+
+
+def test_collector_aggregates_reasoning_tokens() -> None:
+    collector = ModelUsageCollector()
+    collector.collect(_llm_metrics(completion_tokens=100, reasoning_tokens=64))
+    collector.collect(_llm_metrics(completion_tokens=50, reasoning_tokens=8))
+
+    usage = collector.flatten()
+    assert len(usage) == 1
+    llm_usage = usage[0]
+    assert isinstance(llm_usage, LLMModelUsage)
+    assert llm_usage.output_reasoning_tokens == 72
+    # reasoning is a subset of the output tokens, never added on top of them
+    assert llm_usage.output_tokens == 150

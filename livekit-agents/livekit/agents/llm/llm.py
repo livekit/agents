@@ -43,6 +43,12 @@ class CompletionUsage(BaseModel):
     """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
     """The number of tokens read from the cache."""
+    reasoning_tokens: int = 0
+    """The number of completion tokens spent on hidden reasoning.
+    Already counted in ``completion_tokens``; do not add it to totals. Only reported by
+    providers that break reasoning out separately (e.g. OpenAI-compatible responses
+    carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
+    """
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
     service_tier: str | None = None
@@ -382,6 +388,7 @@ class LLMStream(ABC):
             prompt_tokens=usage.prompt_tokens if usage else 0,
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
+            reasoning_tokens=usage.reasoning_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
             metadata=Metadata(
@@ -408,6 +415,10 @@ class LLMStream(ABC):
                     trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
                 },
             )
+            if metrics.reasoning_tokens:
+                self._llm_request_span.set_attribute(
+                    trace_types.ATTR_GEN_AI_USAGE_REASONING_TOKENS, metrics.reasoning_tokens
+                )
             if completion_start_time:
                 self._llm_request_span.set_attribute(
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'

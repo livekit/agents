@@ -1295,7 +1295,6 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -1334,7 +1333,6 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
         endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1391,7 +1389,6 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1781,7 +1778,6 @@ async def test_flush_held_transcripts_emits_buffered_events() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1807,7 +1803,6 @@ async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1844,7 +1839,6 @@ async def test_true_verdict_releases_late_transcripts() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1888,7 +1882,6 @@ async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1917,7 +1910,6 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -1954,7 +1946,6 @@ async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_time
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1987,7 +1978,6 @@ async def test_clear_user_turn_resets_transcription_timeout() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )

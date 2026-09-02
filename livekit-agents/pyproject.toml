@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "certifi>=2025.6.15",
-    "livekit==1.1.15",
+    "livekit==1.1.17",
     "livekit-api>=1.2.0,<2",
     "livekit-local-inference>=0.2.7",
     "livekit-protocol>=1.1.21,<2",
@@ -91,7 +91,6 @@ gnani = ["livekit-plugins-gnani>=1.7.1"]
 google = ["livekit-plugins-google>=1.7.1"]
 groq = ["livekit-plugins-groq>=1.7.1"]
 hamming = ["livekit-plugins-hamming>=1.7.1"]
-hedra = ["livekit-plugins-hedra>=1.7.1"]
 hume = ["livekit-plugins-hume>=1.7.1"]
 inworld = ["livekit-plugins-inworld>=1.7.1"]
 keyframe = ["livekit-plugins-keyframe>=1.7.1"]

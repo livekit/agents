@@ -562,6 +562,75 @@ async def test_universal_3_5_pro_leaves_continuous_partials_unset():
 
 
 # ---------------------------------------------------------------------------
+# universal-3-6-pro: u3-rt-pro parameter family
+#
+# universal-3-6-pro is the next U3 Pro release: server-side it has the same
+# parameter support as universal-3-5-pro and differs only in which ASR
+# deployment serves the session. So it accepts the u3-pro-gated params and
+# inherits the family's connect-time defaults.
+# ---------------------------------------------------------------------------
+
+
+async def test_universal_3_6_pro_is_accepted():
+    """universal-3-6-pro is a valid model selection."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-3-6-pro")
+    assert stt.model == "universal-3-6-pro"
+    assert stt._opts.speech_model == "universal-3-6-pro"
+
+
+async def test_universal_3_6_pro_accepts_u3_pro_params():
+    """universal-3-6-pro shares the u3-rt-pro parameter family."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="universal-3-6-pro",
+        prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
+        interruption_delay=300,
+        voice_focus="near-field",
+        mode="max_accuracy",
+        language_codes=["en", "es"],
+    )
+    assert stt._opts.speech_model == "universal-3-6-pro"
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
+    assert stt._opts.interruption_delay == 300
+    assert stt._opts.voice_focus == "near-field"
+    assert stt._opts.mode == "max_accuracy"
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_universal_3_6_pro_connect_config_uses_u3_pro_defaults():
+    """The connect query names universal-3-6-pro and applies the U3 Pro family's
+    connect-time defaults (100ms min/max turn silence, language detection on)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-6-pro")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["speech_model"] == ["universal-3-6-pro"]
+    assert query["min_turn_silence"] == ["100"]
+    assert query["max_turn_silence"] == ["100"]
+    assert query["language_detection"] == ["true"]
+
+
+# ---------------------------------------------------------------------------
 # voice_focus / voice_focus_threshold
 #
 # Voice Focus isolates the primary voice and suppresses background noise.
@@ -708,7 +777,7 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
     """voice_focus is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, voice_focus="far-field")
         assert stt._opts.voice_focus == "far-field"
 
@@ -764,7 +833,7 @@ async def test_mode_allowed_for_all_u3_pro_family_models():
     """mode is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, mode="min_latency")
         assert stt._opts.mode == "min_latency"
 
@@ -1049,7 +1118,7 @@ async def test_language_codes_allowed_for_all_u3_pro_family_models():
     """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
         assert stt._opts.language_codes == ["en", "es"]
 
@@ -1441,7 +1510,13 @@ async def test_carryover_on_by_default_for_u3_pro_family():
     """chat_context carryover is on by default on models that support it."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "u3-pro",
+    ):
         stt = STT(api_key="test-key", model=model)
         assert stt.capabilities.chat_context is True
 

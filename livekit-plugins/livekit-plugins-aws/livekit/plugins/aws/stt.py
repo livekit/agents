@@ -36,13 +36,10 @@ from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-
-    try:
-        from aws_sdk_transcribe_streaming.config import Config
-    except ImportError:
-        # aws-sdk-transcribe-streaming 0.10 renamed the exported class to lowercase.
-        from aws_sdk_transcribe_streaming.config import config as Config
+    from aws_sdk_transcribe_streaming.client import (
+        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
+    )
+    from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
@@ -229,12 +226,23 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
-        self._http_client = AWSCRTHTTPClient()
+        self._http_client: AWSCRTHTTPClient | None = None
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
 
+    async def aclose(self) -> None:
+        await super().aclose()
+        if self._http_client is not None:
+            await self._http_client.close()
+
     async def _run(self) -> None:
         while True:
+            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
+            # of the finished stream cannot carry a second StartStreamTranscription
+            if self._http_client is not None:
+                await self._http_client.close()
+            self._http_client = AWSCRTHTTPClient()
+
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
                 # Use a credentials resolver for explicit credentials
@@ -264,7 +272,7 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
-                config=Config(**config_kwargs)
+                config=await Config.resolve(transport=self._http_client, **config_kwargs)
             )
 
             live_config = {
