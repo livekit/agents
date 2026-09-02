@@ -89,9 +89,9 @@ class ProviderToolCall(BaseModel):
 
     type: Literal["provider_tool_call"] = "provider_tool_call"
     phase: Literal["started", "done"]
-    call_id: str
     name: str
     arguments: str = ""
+    call_id: str
     result: str | None = None
     """Tool result, populated on ``phase="done"`` when the provider returns one."""
 
