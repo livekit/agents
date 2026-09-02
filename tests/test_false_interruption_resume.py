@@ -385,3 +385,67 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_discards_the_uncommitted_recognition_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 7063: the false turn's open user_turn span and _user_turn_start anchor must
+    # not survive the resume. _ensure_user_turn_span returns a recording span
+    # as-is, so the next real utterance would inherit the abandoned turn's start
+    # and commit with a started_speaking_at seconds before it was spoken.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    activity._audio_recognition = recognition
+
+    order: list[str] = []
+    recognition._clear_user_turn = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda: order.append("clear")
+    )
+    audio_output = session.output.audio
+    assert audio_output is not None
+    original_resume = audio_output.resume
+
+    def _record_resume() -> None:
+        order.append("resume")
+        original_resume()
+
+    monkeypatch.setattr(audio_output, "resume", _record_resume)
+
+    events: list[bool] = []
+    session.on("agent_false_interruption", lambda ev: events.append(ev.resumed))
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    assert events == [True]
+    # the dead turn is discarded before agent audio resumes
+    assert order == ["clear", "resume"]
+
+
+async def test_resume_keeps_the_anchors_of_live_user_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # if the user is speaking when the timer fires (e.g. VAD activity that the
+    # min_duration gate kept from resetting the timer), the recognition anchors
+    # belong to a live utterance and must survive the resume
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = True
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_not_called()

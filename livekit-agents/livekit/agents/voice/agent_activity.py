@@ -4528,6 +4528,17 @@ class AgentActivity(RecognitionHooks):
                 self._paused_speech = None
                 return
 
+            # the interruption was judged false, so the uncommitted recognition
+            # turn it opened is dead. Discard it before agent speech resumes:
+            # the open user_turn span and its _user_turn_start anchor otherwise
+            # survive, and the next real utterance reuses them
+            # (_ensure_user_turn_span returns a recording span as-is), committing
+            # with a started_speaking_at that predates the resumed agent speech.
+            # Skip while the user is speaking right now — those anchors belong
+            # to a live utterance, not to the discarded turn.
+            if self._audio_recognition is not None and not self._audio_recognition._speaking:
+                self._audio_recognition._clear_user_turn()
+
             resumed = False
             if (
                 self._session.options.interruption["resume_false_interruption"]
