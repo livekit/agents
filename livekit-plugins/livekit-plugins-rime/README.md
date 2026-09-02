@@ -26,7 +26,7 @@ import os
 from livekit.plugins import rime
 
 tts = rime.TTS(
-    websocket_url="wss://api.rimetts.com/coda/ws",
+    websocket_url="wss://api.rime.ai/coda/ws",
     speaker="astra",
     api_key=os.environ["RIME_API_KEY"],
 )
