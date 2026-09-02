@@ -977,7 +977,7 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
-    def _clear_user_turn(self) -> None:
+    def _clear_user_turn(self, *, reset_stt: bool = True) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -999,6 +999,13 @@ class AudioRecognition:
         self._end_user_turn_span()
         self._stt_request_ids = []
         self._reset_transcription_timeout()
+
+        if not reset_stt:
+            # keep the live STT stream: the false-interruption resume discards
+            # the turn bookkeeping, but audio the provider is still decoding
+            # must be able to deliver a late final (a real barge-in that VAD
+            # dropped still interrupts the resumed speech)
+            return
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt

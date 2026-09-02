@@ -402,10 +402,24 @@ async def test_resume_discards_the_uncommitted_recognition_turn(
     recognition = _recognition(activity, last_speaking_time=time.time())
     activity._audio_recognition = recognition
 
+    # the false turn left an open span and a stale start anchor behind
+    stale_start = time.time() - 12.0
+    recognition._user_turn_start = stale_start
+    stale_span = MagicMock()
+    stale_span.is_recording.return_value = True
+    recognition._user_turn_span = stale_span
+    stt_pipeline = MagicMock()
+    stt_pipeline.aclose = AsyncMock()
+    recognition._stt_pipeline = stt_pipeline
+
     order: list[str] = []
-    recognition._clear_user_turn = MagicMock(  # type: ignore[method-assign]
-        side_effect=lambda: order.append("clear")
-    )
+    original_clear = recognition._clear_user_turn
+
+    def _record_clear(**kwargs: bool) -> None:
+        order.append("clear")
+        original_clear(**kwargs)
+
+    recognition._clear_user_turn = _record_clear  # type: ignore[method-assign]
     audio_output = session.output.audio
     assert audio_output is not None
     original_resume = audio_output.resume
@@ -421,11 +435,19 @@ async def test_resume_discards_the_uncommitted_recognition_turn(
 
     activity._start_false_interruption_timer(0.01)
     await asyncio.sleep(0.1)
-    await session.aclose()
 
     assert events == [True]
     # the dead turn is discarded before agent audio resumes
     assert order == ["clear", "resume"]
+    # the span is closed and the anchor dropped, so the next utterance starts fresh
+    stale_span.end.assert_called_once()
+    assert recognition._user_turn_start is None
+    # the live STT stream is kept: a late final for a real barge-in must still arrive
+    assert recognition._stt_pipeline is stt_pipeline
+    stt_pipeline.aclose.assert_not_called()
+
+    recognition._stt_pipeline = None  # teardown owns the real pipeline lifecycle
+    await session.aclose()
 
 
 async def test_resume_keeps_the_anchors_of_live_user_speech(

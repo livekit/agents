@@ -4534,10 +4534,12 @@ class AgentActivity(RecognitionHooks):
             # survive, and the next real utterance reuses them
             # (_ensure_user_turn_span returns a recording span as-is), committing
             # with a started_speaking_at that predates the resumed agent speech.
-            # Skip while the user is speaking right now — those anchors belong
-            # to a live utterance, not to the discarded turn.
+            # Skip while the user is speaking right now: those anchors belong
+            # to a live utterance, not to the discarded turn. reset_stt=False
+            # keeps the live STT stream so audio still being decoded can deliver
+            # a late final and interrupt the resumed speech.
             if self._audio_recognition is not None and not self._audio_recognition._speaking:
-                self._audio_recognition._clear_user_turn()
+                self._audio_recognition._clear_user_turn(reset_stt=False)
 
             resumed = False
             if (
