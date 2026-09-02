@@ -4538,16 +4538,17 @@ class AgentActivity(RecognitionHooks):
             # to a live utterance, not to the discarded turn. A live VAD segment
             # counts as speaking even when _speaking is already False, because a
             # premature STT END_OF_SPEECH clears _speaking while VAD is still
-            # mid-segment (the flushed VAD is expected to correct it with a new
-            # SOS). reset_stt=False keeps the live STT stream so audio still
-            # being decoded can deliver a late final and interrupt the resumed
-            # speech.
-            if (
-                self._audio_recognition is not None
-                and not self._audio_recognition._speaking
-                and not self._audio_recognition._vad_speech_started
+            # mid-segment. That same EOS flushes the VAD without an
+            # END_OF_SPEECH, so a flush-abandoned segment (_vad_speech_flushed,
+            # no fresh SOS since) is dead, not live: without that distinction a
+            # correct STT ending would suppress the cleanup forever.
+            # reset_stt=False keeps the live STT stream so audio still being
+            # decoded can deliver a late final and interrupt the resumed speech.
+            if (recognition := self._audio_recognition) is not None and not (
+                recognition._speaking
+                or (recognition._vad_speech_started and not recognition._vad_speech_flushed)
             ):
-                self._audio_recognition._clear_user_turn(reset_stt=False)
+                recognition._clear_user_turn(reset_stt=False)
 
             resumed = False
             if (

@@ -335,6 +335,10 @@ class AudioRecognition:
         self.__stt_context: BaseModel | None = None
 
         self._vad_speech_started: bool = False
+        # a premature STT END_OF_SPEECH flushes the VAD stream mid-segment; the flush
+        # emits no END_OF_SPEECH, so _vad_speech_started alone cannot say whether the
+        # segment is still live. Set at the flush, cleared by the next VAD SOS.
+        self._vad_speech_flushed: bool = False
 
         self._transcription_timeout_handle: asyncio.TimerHandle | None = None
         self._turn_speech_duration: float = 0.0
@@ -986,6 +990,7 @@ class AudioRecognition:
         self._speech_start_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
+        self._vad_speech_flushed = False
         self._user_turn_committed = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
@@ -1315,6 +1320,12 @@ class AudioRecognition:
                     else:
                         self._update_vad(self._vad)
 
+                    # the flush ends the segment without an END_OF_SPEECH, so
+                    # _vad_speech_started stays True with nothing left to clear
+                    # it; mark the segment as abandoned until a fresh SOS proves
+                    # the user is actually still speaking
+                    self._vad_speech_flushed = True
+
                     logger.warning(
                         "stt end of speech received while vad is still in a speech segment, "
                         "flushing vad",
@@ -1364,6 +1375,8 @@ class AudioRecognition:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
+            # a fresh SOS supersedes any flush-abandoned segment: the user is speaking
+            self._vad_speech_flushed = False
             if not self._vad_speech_started:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True

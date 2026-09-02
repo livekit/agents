@@ -100,6 +100,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._last_final_transcript_time = None
     ar._speech_start_time = None
     ar._vad_speech_started = False
+    ar._vad_speech_flushed = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
     ar._vad = None
@@ -496,3 +497,29 @@ async def test_resume_keeps_the_anchors_of_a_live_vad_segment(
     await session.aclose()
 
     recognition._clear_user_turn.assert_not_called()
+
+
+async def test_resume_discards_a_flush_abandoned_vad_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the premature-STT-EOS flush emits no VAD END_OF_SPEECH, so
+    # _vad_speech_started stays True with nothing left to clear it. When STT was
+    # right and no speech follows, that stuck flag must not suppress the
+    # discard, or the stale-anchor bug returns on this path.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = False
+    recognition._vad_speech_started = True
+    recognition._vad_speech_flushed = True  # STT END_OF_SPEECH flushed the segment
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_called_once_with(reset_stt=False)
