@@ -47,6 +47,7 @@ class _FakeOutputStream:
 class _FakeTranscribeStream:
     def __init__(self) -> None:
         self.input_stream = _FakeAudioStream()
+        self.config: Any = None
 
     async def await_output(self) -> tuple[None, _FakeOutputStream]:
         return None, _FakeOutputStream()
@@ -69,7 +70,7 @@ def _make_stream(
 
     class _FakeTranscribeClient:
         def __init__(self, *, config: Any) -> None:
-            self.config = config
+            transcribe_stream.config = config
 
         async def start_stream_transcription(self, *, input: Any) -> _FakeTranscribeStream:
             return transcribe_stream
@@ -190,3 +191,29 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
         if not stream._task.done():
             await stream.aclose()
         await provider.aclose()
+
+
+async def test_aws_stream_pins_the_crt_transport(monkeypatch: pytest.MonkeyPatch):
+    provider, stream, transcribe_stream = _make_stream(monkeypatch)
+    closes = 0
+    crt_close = stream._http_client.close
+
+    async def counting_close() -> None:
+        nonlocal closes
+        closes += 1
+        await crt_close()
+
+    monkeypatch.setattr(stream._http_client, "close", counting_close)
+
+    try:
+        stream.push_frame(_frame(100))
+        await asyncio.wait_for(transcribe_stream.input_stream.event_sent.wait(), timeout=1.0)
+
+        # StartStreamTranscription is bidirectional, which only the CRT transport carries
+        assert transcribe_stream.config.transport is stream._http_client
+        assert closes == 0
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+    assert closes == 1
