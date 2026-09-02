@@ -140,49 +140,6 @@ class _RealtimeOptions:
     instructions: NotGivenOr[str] = NOT_GIVEN
 
 
-class PhonicConfig(TypedDict, total=False):
-    """Phonic config fields that can be changed mid-session via :meth:`RealtimeModel.update_options`
-    / :meth:`RealtimeSession.update_options` (passed as the ``config`` argument) — every field is
-    optional so an update carries only what changes. Connection-level fields (``api_key``,
-    ``model``, ``conn_options``, ``base_url``) and ``instructions`` (managed through the Agent
-    handoff) are excluded."""
-
-    phonic_agent: str
-    voice: str
-    welcome_message: str | None
-    generate_welcome_message: bool | None
-    project: str | None
-    default_language: str
-    additional_languages: list[str]
-    multilingual_mode: Literal["auto", "request"]
-    audio_speed: float
-    phonic_tools: list[str]
-    boosted_keywords: list[str]
-    min_words_to_interrupt: int
-    generate_no_input_poke_text: bool
-    no_input_poke_sec: float
-    no_input_poke_text: str
-    no_input_end_conversation_sec: float
-    websocket_timeout_sec: int
-    intelligence_level: IntelligenceLevel
-    is_welcome_message_interruptible: bool
-    vad_prebuffer_duration_ms: int
-    vad_min_speech_duration_ms: int
-    vad_min_silence_duration_ms: int
-    vad_threshold: float
-    enable_assistant_backchannel: bool
-    assistant_backchannel_aggressiveness: float
-    pronunciation_dictionary: list[PronunciationEntry]
-    template_variables: dict[str, str]
-    enable_redaction: bool
-    mcp_servers: list[str]
-    observability_integrations: list[ObservabilityIntegration]
-    configuration_endpoint: ConfigurationEndpoint | None
-    additional_params: dict[str, typing.Any]
-    configs_for_tools: list[PhonicToolConfig]
-    forbid_speech_after_tool_call: list[str]
-
-
 @dataclass
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
@@ -415,18 +372,88 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
-    def update_options(self, *, config: NotGivenOr[PhonicConfig] = NOT_GIVEN) -> None:
+    def update_options(
+        self,
+        *,
+        phonic_agent: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        welcome_message: NotGivenOr[str | None] = NOT_GIVEN,
+        generate_welcome_message: NotGivenOr[bool | None] = NOT_GIVEN,
+        project: NotGivenOr[str | None] = NOT_GIVEN,
+        default_language: NotGivenOr[str] = NOT_GIVEN,
+        additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
+        audio_speed: NotGivenOr[float] = NOT_GIVEN,
+        phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
+        boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
+        generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
+        no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
+        no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
+        no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
+        intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
+        vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        enable_assistant_backchannel: NotGivenOr[bool] = NOT_GIVEN,
+        assistant_backchannel_aggressiveness: NotGivenOr[float] = NOT_GIVEN,
+        pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
+        template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
+        observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
+        configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
+        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
+        forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
+    ) -> None:
         """Change Phonic config fields on the active session(s) mid-conversation (e.g. switch
-        ``default_language`` when advancing to the next task). ``config`` is any subset of the
-        session config; it is applied immediately via a Phonic ``reset``.
+        ``default_language`` when advancing to the next task). Only the fields you pass are changed;
+        each is applied immediately via a Phonic ``reset``.
 
-        When ``default_language`` changes and ``additional_languages`` isn't in ``config``, the
-        previous default is rotated into ``additional_languages`` (and the new default removed) so
-        the language set stays intact — the API rejects a default that also appears there."""
-        if not is_given(config):
-            return
+        When ``default_language`` changes and ``additional_languages`` isn't passed, the previous
+        default is rotated into ``additional_languages`` (and the new default removed) so the
+        language set stays intact — the API rejects a default that also appears there."""
         for sess in self._sessions:
-            sess.update_options(config=config)
+            sess.update_options(
+                phonic_agent=phonic_agent,
+                voice=voice,
+                welcome_message=welcome_message,
+                generate_welcome_message=generate_welcome_message,
+                project=project,
+                default_language=default_language,
+                additional_languages=additional_languages,
+                multilingual_mode=multilingual_mode,
+                audio_speed=audio_speed,
+                phonic_tools=phonic_tools,
+                boosted_keywords=boosted_keywords,
+                min_words_to_interrupt=min_words_to_interrupt,
+                generate_no_input_poke_text=generate_no_input_poke_text,
+                no_input_poke_sec=no_input_poke_sec,
+                no_input_poke_text=no_input_poke_text,
+                no_input_end_conversation_sec=no_input_end_conversation_sec,
+                websocket_timeout_sec=websocket_timeout_sec,
+                intelligence_level=intelligence_level,
+                is_welcome_message_interruptible=is_welcome_message_interruptible,
+                vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
+                vad_min_speech_duration_ms=vad_min_speech_duration_ms,
+                vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+                vad_threshold=vad_threshold,
+                enable_assistant_backchannel=enable_assistant_backchannel,
+                assistant_backchannel_aggressiveness=assistant_backchannel_aggressiveness,
+                pronunciation_dictionary=pronunciation_dictionary,
+                template_variables=template_variables,
+                enable_redaction=enable_redaction,
+                mcp_servers=mcp_servers,
+                observability_integrations=observability_integrations,
+                configuration_endpoint=configuration_endpoint,
+                additional_params=additional_params,
+                configs_for_tools=configs_for_tools,
+                forbid_speech_after_tool_call=forbid_speech_after_tool_call,
+            )
 
     async def aclose(self) -> None:
         pass
@@ -797,13 +824,85 @@ class RealtimeSession(llm.RealtimeSession):
         self,
         *,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
-        config: NotGivenOr[PhonicConfig] = NOT_GIVEN,
+        phonic_agent: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        welcome_message: NotGivenOr[str | None] = NOT_GIVEN,
+        generate_welcome_message: NotGivenOr[bool | None] = NOT_GIVEN,
+        project: NotGivenOr[str | None] = NOT_GIVEN,
+        default_language: NotGivenOr[str] = NOT_GIVEN,
+        additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
+        multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
+        audio_speed: NotGivenOr[float] = NOT_GIVEN,
+        phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
+        boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+        min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
+        generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
+        no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
+        no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
+        no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+        websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
+        intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
+        vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+        enable_assistant_backchannel: NotGivenOr[bool] = NOT_GIVEN,
+        assistant_backchannel_aggressiveness: NotGivenOr[float] = NOT_GIVEN,
+        pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
+        template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
+        observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
+        configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
+        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
+        forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         # tool_choice is the base update_options param (the framework sends it every turn); Phonic
-        # does not support it and ignores it. Config changes come in via `config`.
-        if not is_given(config):
+        # does not support it and ignores it. Every other field is an optional config change.
+        changes: dict[str, typing.Any] = {
+            name: value
+            for name, value in (
+                ("phonic_agent", phonic_agent),
+                ("voice", voice),
+                ("welcome_message", welcome_message),
+                ("generate_welcome_message", generate_welcome_message),
+                ("project", project),
+                ("default_language", default_language),
+                ("additional_languages", additional_languages),
+                ("multilingual_mode", multilingual_mode),
+                ("audio_speed", audio_speed),
+                ("phonic_tools", phonic_tools),
+                ("boosted_keywords", boosted_keywords),
+                ("min_words_to_interrupt", min_words_to_interrupt),
+                ("generate_no_input_poke_text", generate_no_input_poke_text),
+                ("no_input_poke_sec", no_input_poke_sec),
+                ("no_input_poke_text", no_input_poke_text),
+                ("no_input_end_conversation_sec", no_input_end_conversation_sec),
+                ("websocket_timeout_sec", websocket_timeout_sec),
+                ("intelligence_level", intelligence_level),
+                ("is_welcome_message_interruptible", is_welcome_message_interruptible),
+                ("vad_prebuffer_duration_ms", vad_prebuffer_duration_ms),
+                ("vad_min_speech_duration_ms", vad_min_speech_duration_ms),
+                ("vad_min_silence_duration_ms", vad_min_silence_duration_ms),
+                ("vad_threshold", vad_threshold),
+                ("enable_assistant_backchannel", enable_assistant_backchannel),
+                ("assistant_backchannel_aggressiveness", assistant_backchannel_aggressiveness),
+                ("pronunciation_dictionary", pronunciation_dictionary),
+                ("template_variables", template_variables),
+                ("enable_redaction", enable_redaction),
+                ("mcp_servers", mcp_servers),
+                ("observability_integrations", observability_integrations),
+                ("configuration_endpoint", configuration_endpoint),
+                ("additional_params", additional_params),
+                ("configs_for_tools", configs_for_tools),
+                ("forbid_speech_after_tool_call", forbid_speech_after_tool_call),
+            )
+            if is_given(value)
+        }
+        if not changes:
             return
-        changes: dict[str, typing.Any] = dict(config)
 
         # Rotate the previous default into additional_languages when switching default_language so
         # it stays usable (and drop the new default, which the API forbids there), unless the caller
