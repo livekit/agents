@@ -82,6 +82,8 @@ MAX_MESSAGE_SIZE = 1024
 MAX_MESSAGES = 40
 DEFAULT_MAX_SESSION_RESTART_ATTEMPTS = 3
 DEFAULT_MAX_SESSION_RESTART_DELAY = 10
+TOOL_RECYCLE_GENERATION_TIMEOUT = 2.0
+TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT = 1.0
 RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
     "InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
     "System instability detected. Please retry your request.",
@@ -553,6 +555,9 @@ class RealtimeSession(  # noqa: F811
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
+        self._tool_recycle_task: asyncio.Task[None] | None = None
+        self._active_tool_names: set[str] = set()
+        self._is_shutting_down = False
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -691,24 +696,54 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Session duration limit reached ({duration:.0f}s), initiating recycle"
             )
 
-            # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN)
+            # Step 1: Wait for assistant to finish speaking (AUDIO contentEnd with END_TURN).
+            # An interrupted turn may never send END_TURN, so bound this wait by the
+            # same audio-idle grace period used by deferred tool recycling.
             if not self._audio_end_turn_received:
                 logger.info(
                     "[SESSION] Waiting for assistant to finish speaking (AUDIO END_TURN)..."
                 )
+                generation_created_time = getattr(
+                    self._current_generation, "_created_timestamp", time.time()
+                )
+                idle_since = (
+                    self._last_audio_output_time
+                    if self._last_audio_output_time > 0.0
+                    else generation_created_time
+                )
                 while not self._audio_end_turn_received:
-                    await asyncio.sleep(0.1)
-                logger.debug("[SESSION] Assistant finished speaking")
+                    if not self._is_sess_active.is_set():
+                        logger.debug("[SESSION] Session no longer active, skipping recycle")
+                        return
 
-            # Step 2: Wait for audio to fully stop (no new audio for 1 second)
+                    last_audio_time = self._last_audio_output_time
+                    if last_audio_time > idle_since:
+                        idle_since = last_audio_time
+
+                    if time.time() - idle_since >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT:
+                        logger.warning(
+                            "[SESSION] Timed out waiting for AUDIO END_TURN after an idle "
+                            "period, proceeding with recycle"
+                        )
+                        break
+
+                    await asyncio.sleep(min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT))
+                else:
+                    logger.debug("[SESSION] Assistant finished speaking")
+
+            # Step 2: Wait for audio to fully stop (no new audio for the idle grace period)
             logger.debug("[SESSION] Waiting for audio to fully stop...")
             last_audio_time = self._last_audio_output_time
             while True:
-                await asyncio.sleep(0.1)
+                poll_interval = min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT)
+                await asyncio.sleep(poll_interval)
                 if self._last_audio_output_time == last_audio_time:
-                    await asyncio.sleep(0.9)
+                    await asyncio.sleep(max(0.0, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT - poll_interval))
                     if self._last_audio_output_time == last_audio_time:
-                        logger.debug("[SESSION] No new audio for 1s, proceeding with recycle")
+                        logger.debug(
+                            "[SESSION] No new audio for the idle grace period, proceeding "
+                            "with recycle"
+                        )
                         break
                 else:
                     logger.debug("[SESSION] New audio detected, continuing to wait...")
@@ -771,6 +806,8 @@ class RealtimeSession(  # noqa: F811
                 try:
                     await self._response_task
                 except asyncio.CancelledError:
+                    if getattr(self, "_is_shutting_down", False):
+                        raise
                     pass
 
         # Step 4: Cancel audio input task (blocked on channel, won't exit naturally)
@@ -779,6 +816,8 @@ class RealtimeSession(  # noqa: F811
             try:
                 await self._audio_input_task
             except asyncio.CancelledError:
+                if getattr(self, "_is_shutting_down", False):
+                    raise
                 pass
 
         # Step 5: Close the stream (close events already sent in _session_recycle_timer)
@@ -1012,12 +1051,14 @@ class RealtimeSession(  # noqa: F811
                         extra={"lk.pii.user_text": f"{interactive_user_text[:60]}..."},
                     )
 
+            tool_configuration = self._serialize_tool_config()
+            active_tool_names = set(self._tools.function_tools)
             init_events, history_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._realtime_model._opts.voice,
                 sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
                 system_content=self._instructions,
                 chat_ctx=restart_ctx,
-                tool_configuration=self._serialize_tool_config(),
+                tool_configuration=tool_configuration,
                 max_tokens=self._realtime_model._opts.max_tokens,
                 top_p=self._realtime_model._opts.top_p,
                 temperature=self._realtime_model._opts.temperature,
@@ -1027,6 +1068,7 @@ class RealtimeSession(  # noqa: F811
             # Step 1: Send session init events (session start, prompt start, system prompt)
             for event in init_events:
                 await self._send_raw_event(event)
+            self._active_tool_names = active_tool_names
 
             # Start session recycling timer
             self._session_start_time = time.time()
@@ -1052,6 +1094,7 @@ class RealtimeSession(  # noqa: F811
             # interactive contentStart events simultaneously.
             await asyncio.sleep(0.05)
             self._is_sess_active.set()
+            self._schedule_tool_recycle()
 
             # Step 6: If we popped a user message from history, send it as
             # interactive text now to trigger Nova Sonic to respond.
@@ -1143,6 +1186,8 @@ class RealtimeSession(  # noqa: F811
                 response_id=response_id,
                 _done_fut=asyncio.get_running_loop().create_future(),
             )
+            self._last_audio_output_time = 0.0
+            self._audio_end_turn_received = False
             generation_created = True
         else:
             logger.debug(
@@ -1911,9 +1956,7 @@ class RealtimeSession(  # noqa: F811
         The recycle is deferred to avoid conflicts with in-flight tool
         results that are still being delivered to the current session.
         """
-        old_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
         self._tools = llm.ToolContext(tools)
-        new_tools = set(self._tools.function_tools.keys()) if self._tools.function_tools else set()
 
         if self._tools.function_tools:
             if self._tools_ready is None:
@@ -1921,19 +1964,30 @@ class RealtimeSession(  # noqa: F811
             if not self._tools_ready.done():
                 self._tools_ready.set_result(True)
                 logger.debug("Tool list has been injected (initial)")
-                return
+                if not self._is_sess_active.is_set():
+                    return
 
-        # If tools actually changed and session is active, schedule a deferred recycle.
-        # We defer because update_tools is often called from within a tool execution
-        # callback, and the tool result is still being delivered to the current session.
-        if old_tools != new_tools and self._is_sess_active.is_set():
-            logger.info(
-                f"[SESSION] Tools changed (added={new_tools - old_tools}, "
-                f"removed={old_tools - new_tools}), scheduling deferred session recycle"
-            )
-            asyncio.create_task(self._deferred_tool_recycle())
-        else:
+        self._schedule_tool_recycle()
+
+    def _schedule_tool_recycle(self) -> None:
+        """Schedule a recycle when the local tools differ from the active session."""
+        if not self._is_sess_active.is_set():
             logger.debug("Tool list updated locally")
+            return
+
+        new_tools = set(self._tools.function_tools)
+        if new_tools == self._active_tool_names:
+            logger.debug("Tool list matches the active session")
+            return
+
+        logger.info(
+            f"[SESSION] Tools changed (added={new_tools - self._active_tool_names}, "
+            f"removed={self._active_tool_names - new_tools}), scheduling deferred session recycle"
+        )
+        if self._tool_recycle_task is None or self._tool_recycle_task.done():
+            self._tool_recycle_task = asyncio.create_task(
+                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+            )
 
     async def _deferred_tool_recycle(self) -> None:
         """Wait for in-flight tool results to be delivered, then recycle."""
@@ -1941,21 +1995,110 @@ class RealtimeSession(  # noqa: F811
         # before we tear down the session.
         await asyncio.sleep(0.15)
 
-        if not self._is_sess_active.is_set():
-            logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+        while True:
+            generation = self._current_generation
+            if generation and generation._done_fut:
+                logger.debug("[SESSION] Waiting for active generation before tool recycle")
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(generation._done_fut),
+                        timeout=TOOL_RECYCLE_GENERATION_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[SESSION] Timeout waiting for active generation, proceeding with tool recycle"
+                    )
+                    if not self._is_sess_active.is_set():
+                        logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+                        return
+
+                    if set(self._tools.function_tools) == self._active_tool_names:
+                        logger.debug("[SESSION] Tool changes were restored before tool recycle")
+                        return
+
+                    if self._current_generation is generation:
+                        generation_created_time = getattr(
+                            generation, "_created_timestamp", time.time()
+                        )
+                        while (
+                            self._current_generation is generation
+                            and not self._audio_end_turn_received
+                        ):
+                            if not self._is_sess_active.is_set():
+                                logger.debug(
+                                    "[SESSION] Session no longer active, skipping tool recycle"
+                                )
+                                return
+
+                            if set(self._tools.function_tools) == self._active_tool_names:
+                                logger.debug(
+                                    "[SESSION] Tool changes were restored before tool recycle"
+                                )
+                                return
+
+                            last_audio_time = self._last_audio_output_time
+                            idle_since = (
+                                last_audio_time
+                                if last_audio_time > 0.0
+                                else generation_created_time
+                            )
+                            if time.time() - idle_since >= TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT:
+                                break
+
+                            await asyncio.sleep(min(0.1, TOOL_RECYCLE_AUDIO_IDLE_TIMEOUT))
+
+                        if self._current_generation is generation:
+                            if not self._is_sess_active.is_set():
+                                logger.debug(
+                                    "[SESSION] Session no longer active, skipping tool recycle"
+                                )
+                                return
+
+                            if set(self._tools.function_tools) == self._active_tool_names:
+                                logger.debug(
+                                    "[SESSION] Tool changes were restored before tool recycle"
+                                )
+                                return
+
+                            self._close_current_generation()
+
+                # A new generation can start after the one we waited for closes. Keep
+                # waiting so a tool recycle never tears down that newer response.
+                if (
+                    self._current_generation is not None
+                    and self._current_generation is not generation
+                ):
+                    continue
+
+            if not self._is_sess_active.is_set():
+                logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+                return
+
+            if set(self._tools.function_tools) == self._active_tool_names:
+                logger.debug("[SESSION] Tool changes were restored before recycle")
+                return
+
+            logger.info("[SESSION] Recycling session for updated tools")
+            # Clear pending tools so stale results from update_chat_ctx are ignored
+            self._pending_tools.clear()
+            # Drain and discard any queued tool results
+            while True:
+                try:
+                    discarded = self._tool_results_ch.recv_nowait()
+                    logger.debug(
+                        f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}"
+                    )
+                except utils.aio.channel.ChanEmpty:
+                    break
+            await self._graceful_session_recycle()
+
+    async def _wait_for_tool_recycle(self) -> None:
+        """Wait for a queued tool-set recycle before starting a reply."""
+        recycle_task = self._tool_recycle_task
+        if recycle_task is None or recycle_task.done():
             return
 
-        logger.info("[SESSION] Recycling session for updated tools")
-        # Clear pending tools so stale results from update_chat_ctx are ignored
-        self._pending_tools.clear()
-        # Drain and discard any queued tool results
-        while True:
-            try:
-                discarded = self._tool_results_ch.recv_nowait()
-                logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
-            except utils.aio.channel.ChanEmpty:
-                break
-        await self._graceful_session_recycle()
+        await asyncio.shield(recycle_task)
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Live update of inference options is not supported by Sonic yet."""
@@ -2187,6 +2330,7 @@ class RealtimeSession(  # noqa: F811
             # Send text message asynchronously
             async def _send_text() -> None:
                 try:
+                    await self._wait_for_tool_recycle()
                     # Wait for the bidirectional stream to be fully established
                     # (HTTP 200 received) and audio input flowing.
                     await self._stream_ready.wait()
@@ -2336,7 +2480,20 @@ class RealtimeSession(  # noqa: F811
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
         logger.info("attempting to shutdown agent session")
-        if not self._is_sess_active.is_set():
+
+        self._is_shutting_down = True
+        was_active = self._is_sess_active.is_set()
+        recycle_task = self._tool_recycle_task
+        recycle_in_progress = False
+        if recycle_task is not None and not recycle_task.done():
+            recycle_in_progress = True
+            recycle_task.cancel()
+            try:
+                await recycle_task
+            except asyncio.CancelledError:
+                pass
+
+        if not was_active and not recycle_in_progress and not self._is_sess_active.is_set():
             logger.info("agent session already inactive")
             return
 
@@ -2372,11 +2529,15 @@ class RealtimeSession(  # noqa: F811
                 pass
 
         if self._response_task:
-            try:
-                await asyncio.wait_for(self._response_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                logger.warning("shutdown of output event loop timed out-- cancelling")
-                self._response_task.cancel()
+            if not self._response_task.done():
+                try:
+                    await asyncio.wait_for(self._response_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    logger.warning("shutdown of output event loop timed out-- cancelling")
+                    self._response_task.cancel()
+                except asyncio.CancelledError:
+                    if not self._response_task.cancelled():
+                        raise
             tasks.append(self._response_task)
 
         # must cancel the audio input task before closing the input stream
