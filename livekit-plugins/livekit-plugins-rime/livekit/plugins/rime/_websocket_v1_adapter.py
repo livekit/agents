@@ -30,8 +30,8 @@ from .log import logger
 _Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
 
 
-class _TokenizerFlush:
-    """Drain the current local sentence tokenizer without ending Coda input."""
+class _DrainTokenizer:
+    """Release buffered text from the current local sentence tokenizer."""
 
 
 @dataclass(frozen=True)
@@ -202,27 +202,29 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         self._pool = pool
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
-        self._end_flush_sentinel: object | None = None
+        self._end_input_sentinel: object | None = None
 
-    def _enqueue_flush_sentinel(self) -> tts.SynthesizeStream._FlushSentinel:
+    def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream._FlushSentinel:
         sentinel = self._FlushSentinel()
         self._input_ch.send_nowait(sentinel)
         self._input_buffer.append(sentinel)
         return sentinel
 
     def flush(self) -> None:
-        """Drain pending text without finalizing the Rime synthesis context.
+        """Drain the local tokenizer without ending Coda input.
 
-        The stream accepts more text after this call. Rime does not send ``done``
-        until :meth:`end_input` finalizes the context.
+        This implements the LiveKit stream interface. It does not send a Rime
+        protocol message because the Rime v1 protocol has no ``flush`` operation.
+        Any released text is sent through the current context as a normal ``text``
+        message. The stream accepts more text after this call.
         """
         if self._input_ch.closed:
             return
 
-        # The base method records every flush as a LiveKit segment boundary. This
-        # adapter keeps the Coda context, metric text, and segment state active while
-        # it drains the current local sentence tokenizer.
-        self._enqueue_flush_sentinel()
+        # Do not call super().flush(), which records a LiveKit segment boundary. Keep
+        # the Coda context, metric text, and segment state active while the local
+        # sentence tokenizer drains.
+        self._enqueue_tokenizer_drain()
 
     def end_input(self) -> None:
         """Finalize Rime input and let the stream wait for the provider ``done`` event."""
@@ -233,7 +235,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             self._mtc_pending_texts.append(self._mtc_text)
             self._mtc_text = ""
 
-        self._end_flush_sentinel = self._enqueue_flush_sentinel()
+        self._end_input_sentinel = self._enqueue_tokenizer_drain()
         self._input_ch.close()
         self._input_ended = True
 
@@ -242,11 +244,11 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        async def _raw_input_events() -> AsyncIterable[str | _TokenizerFlush]:
+        async def _raw_input_events() -> AsyncIterable[str | _DrainTokenizer]:
             async for event in self._input_ch:
                 if isinstance(event, self._FlushSentinel):
-                    if event is not self._end_flush_sentinel:
-                        yield _TokenizerFlush()
+                    if event is not self._end_input_sentinel:
+                        yield _DrainTokenizer()
                 else:
                     yield event
 
@@ -284,12 +286,12 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
 
 
 async def _sentence_tokenized_input_events(
-    input_events: AsyncIterable[str | _TokenizerFlush],
+    input_events: AsyncIterable[str | _DrainTokenizer],
     *,
     sentence_tokenizer: tokenize.SentenceTokenizer,
     language: str,
 ) -> AsyncIterable[str]:
-    """Convert text fragments to sentence units and drain on local flushes."""
+    """Convert text fragments to sentence units and handle local drain requests."""
     output = utils.aio.Chan[str]()
 
     async def _drive_input() -> None:
@@ -312,7 +314,7 @@ async def _sentence_tokenized_input_events(
         try:
             forward_task = _start_forwarding()
             async for event in input_events:
-                if isinstance(event, _TokenizerFlush):
+                if isinstance(event, _DrainTokenizer):
                     sentence_stream.end_input()
                     await forward_task
                     sentence_stream = sentence_tokenizer.stream(language=language)

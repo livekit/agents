@@ -44,7 +44,7 @@ Rime lifecycle as follows:
 | LiveKit method | Local action | Rime operation |
 | --- | --- | --- |
 | `stream.push_text()` | Buffer and sentence-tokenize text. | Send `text` for each completed sentence. |
-| `stream.flush()` | Drain the current tokenizer and keep the context open. | Send no control message. |
+| `stream.flush()` | Release the current tokenizer buffer and keep the context open. | Send released content as `text`; no `flush` operation exists. |
 | `stream.end_input()` | Drain final text and finalize input. | Send `end`. |
 | `stream.aclose()` | Stop active synthesis. | Send `cancel` when needed. |
 
