@@ -825,6 +825,36 @@ def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
     _assert_exception_is_safe(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "wss://api.rimetts.com/coda/ws",
+        "ws://127.0.0.1:8080/coda/ws",
+        "ws://[::1]:8080/coda/ws",
+    ],
+)
+def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    _websocket_v1.validate_websocket_url(websocket_url)
+
+
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "ws://api.rimetts.com/coda/ws",
+        "ws://192.168.1.20/coda/ws",
+        "ws://localhost:8080/coda/ws",
+        "http://api.rimetts.com/coda/ws",
+    ],
+)
+def test_v1_rejects_insecure_remote_websocket_url(websocket_url: str) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    with pytest.raises(ValueError):
+        _websocket_v1.validate_websocket_url(websocket_url)
+
+
 async def test_v1_connection_error_does_not_expose_transport_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
