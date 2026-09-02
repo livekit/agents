@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 import weakref
@@ -49,6 +50,65 @@ _CHUNK_DURATION = 0.08
 _CHUNK_BYTES = int(_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES * _CHUNK_DURATION)
 _MAX_MESSAGE_BYTES = 1024 * 1024
 _MAX_COMPLETED_TURNS = 128
+_SUPPORTED_LANGUAGES = (
+    "Arabic",
+    "Bengali",
+    "Dutch",
+    "English",
+    "French",
+    "German",
+    "Hebrew",
+    "Hindi",
+    "Indonesian",
+    "Italian",
+    "Japanese",
+    "Kannada",
+    "Korean",
+    "Malay",
+    "Mandarin Chinese",
+    "Marathi",
+    "Polish",
+    "Portuguese",
+    "Spanish",
+    "Tagalog",
+    "Tamil",
+    "Telugu",
+    "Thai",
+    "Turkish",
+    "Vietnamese",
+)
+_LANGUAGE_NAMES = {language.casefold(): language for language in _SUPPORTED_LANGUAGES}
+_LANGUAGE_CODES = {
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "de": "German",
+    "en": "English",
+    "es": "Spanish",
+    "fil": "Tagalog",
+    "fr": "French",
+    "he": "Hebrew",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "it": "Italian",
+    "iw": "Hebrew",
+    "ja": "Japanese",
+    "kn": "Kannada",
+    "ko": "Korean",
+    "ms": "Malay",
+    "mr": "Marathi",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "th": "Thai",
+    "tl": "Tagalog",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "zh": "Mandarin Chinese",
+}
+_RETRYABLE_CLOSE_CODES = frozenset((1011, 1013))
+_NON_RETRYABLE_CLOSE_CODES = frozenset((1000, 1008))
 
 
 @dataclass(slots=True)
@@ -82,7 +142,7 @@ class STT(stt.STT[Any]):
             model: Muse Voice Transcribe model identifier.
             url: Realtime Muse ASR WebSocket endpoint. Must use ``wss://``.
             keywords: Static recognition keywords sent when each stream starts.
-            language_bias: Static language hints sent when each stream starts.
+            language_bias: Static supported language names sent when each stream starts.
             http_session: Optional aiohttp session. By default, the LiveKit HTTP
                 context session is used.
         """
@@ -112,11 +172,11 @@ class STT(stt.STT[Any]):
                 keyterms=False,
             )
         )
-        self._api_key = resolved_key
+        self._api_key = self._normalize_access_token(resolved_key)
         self._model = model.strip()
         self._url = url
         self._keywords = self._normalize_hints(keywords, name="keywords")
-        self._language_bias = self._normalize_hints(language_bias, name="language_bias")
+        self._language_bias = self._normalize_language_bias(language_bias)
         self._http_session = http_session
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
         self._closed = False
@@ -130,6 +190,29 @@ class STT(stt.STT[Any]):
                 raise ValueError(f"{name} entries must be non-empty")
             if hint not in normalized:
                 normalized.append(hint)
+        return normalized
+
+    @staticmethod
+    def _normalize_access_token(api_key: str) -> str:
+        parts = api_key.split(None, 1)
+        if parts and parts[0].casefold() == "bearer":
+            if len(parts) != 2 or not parts[1].strip():
+                raise ValueError("Meta Model API key must include a token after Bearer")
+            return f"Bearer {parts[1].strip()}"
+        return f"Bearer {api_key}"
+
+    @staticmethod
+    def _normalize_language_bias(values: list[str] | None) -> list[str]:
+        normalized: list[str] = []
+        for value in values or ():
+            documented_name = _LANGUAGE_NAMES.get(value.strip().casefold())
+            if documented_name is None:
+                supported = ", ".join(_SUPPORTED_LANGUAGES)
+                raise ValueError(
+                    f"unsupported language_bias entry {value!r}; supported: {supported}"
+                )
+            if documented_name not in normalized:
+                normalized.append(documented_name)
         return normalized
 
     @property
@@ -187,10 +270,22 @@ class STT(stt.STT[Any]):
 
     @staticmethod
     def _normalize_language_hint(language: str) -> str:
-        primary = language.strip().replace("_", "-").split("-", 1)[0].lower()
-        if not primary.isalpha() or len(primary) not in (2, 3):
-            raise ValueError("language must be a two- or three-letter language code")
-        return primary
+        value = language.strip()
+        if not value:
+            raise ValueError("language must be non-empty")
+
+        documented_name = _LANGUAGE_NAMES.get(value.casefold())
+        if documented_name is not None:
+            return documented_name
+
+        primary = value.replace("_", "-").split("-", 1)[0].casefold()
+        mapped_name = _LANGUAGE_CODES.get(primary)
+        if mapped_name is None:
+            supported = ", ".join(_SUPPORTED_LANGUAGES)
+            raise ValueError(
+                f"unsupported Muse Voice language {language!r}; supported: {supported}"
+            )
+        return mapped_name
 
     async def aclose(self) -> None:
         self._closed = True
@@ -226,9 +321,11 @@ class SpeechStream(stt.RecognizeStream):
         self._completed_turn_order: deque[str] = deque()
         self._audio_consumed = False
         self._end_stream_sent = False
+        self._last_audio_processed_ms = 0.0
 
     async def _run(self) -> None:
         self._end_stream_sent = False
+        self._last_audio_processed_ms = 0.0
         ws: aiohttp.ClientWebSocketResponse | None = None
         tasks: list[asyncio.Task[None]] = []
         try:
@@ -287,7 +384,11 @@ class SpeechStream(stt.RecognizeStream):
         try:
             await ws.send_str(json.dumps(self._handshake(), separators=(",", ":")))
             raw = await asyncio.wait_for(ws.receive(), timeout=self._conn_options.timeout)
-            message = self._parse_ws_message(raw, phase="handshake")
+            message = self._parse_ws_message(
+                raw,
+                phase="handshake",
+                close_code=ws.close_code,
+            )
             self._accept_handshake(message)
         except asyncio.CancelledError:
             await self._close_quietly(ws)
@@ -380,7 +481,6 @@ class SpeechStream(stt.RecognizeStream):
                 ) from None
             duration = len(packet) / (_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES)
             sent_duration += duration
-            self._emit_usage(duration)
 
         async for item in self._input_ch:
             if isinstance(item, self._FlushSentinel):
@@ -423,12 +523,7 @@ class SpeechStream(stt.RecognizeStream):
                 close_code = raw.data if isinstance(raw.data, int) else ws.close_code
                 if self._end_stream_sent and close_code == 1000:
                     return
-                raise APIStatusError(
-                    "Meta Muse realtime ASR connection closed unexpectedly",
-                    status_code=close_code or -1,
-                    body=None,
-                    retryable=not self._audio_consumed,
-                )
+                raise self._close_error(close_code, phase="stream")
             if raw.type == aiohttp.WSMsgType.CLOSING:
                 continue
             if raw.type == aiohttp.WSMsgType.ERROR:
@@ -450,7 +545,22 @@ class SpeechStream(stt.RecognizeStream):
             elif event_type == "speechComplete":
                 self._speech_complete(message)
             elif event_type == "audioProgress":
-                continue
+                self._audio_progress(message)
+
+    def _audio_progress(self, message: dict[str, Any]) -> None:
+        processed_ms = message.get("audioProcessedMs")
+        if (
+            isinstance(processed_ms, bool)
+            or not isinstance(processed_ms, (int, float))
+            or not math.isfinite(processed_ms)
+            or processed_ms < 0
+        ):
+            raise self._protocol_error("audioProgress event has invalid audioProcessedMs")
+        if processed_ms <= self._last_audio_processed_ms:
+            return
+        delta_seconds = (processed_ms - self._last_audio_processed_ms) / 1000
+        self._last_audio_processed_ms = float(processed_ms)
+        self._emit_usage(delta_seconds)
 
     def _speech_start(self, message: dict[str, Any]) -> None:
         turn_id = self._required_turn_id(message, event="speechStart")
@@ -605,14 +715,34 @@ class SpeechStream(stt.RecognizeStream):
             retryable=False,
         )
 
+    @staticmethod
+    def _close_error(close_code: int | None, *, phase: str) -> APIStatusError:
+        code = close_code or -1
+        if code in _NON_RETRYABLE_CLOSE_CODES:
+            retryable = False
+        elif code in _RETRYABLE_CLOSE_CODES:
+            retryable = True
+        else:
+            retryable = True
+        return APIStatusError(
+            f"Meta Muse realtime ASR closed during {phase}",
+            status_code=code,
+            body=None,
+            retryable=retryable,
+        )
+
     @classmethod
-    def _parse_ws_message(cls, raw: aiohttp.WSMessage, *, phase: str) -> dict[str, Any]:
+    def _parse_ws_message(
+        cls,
+        raw: aiohttp.WSMessage,
+        *,
+        phase: str,
+        close_code: int | None = None,
+    ) -> dict[str, Any]:
         if raw.type != aiohttp.WSMsgType.TEXT or not isinstance(raw.data, str):
             if raw.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
-                raise APIConnectionError(
-                    f"Meta Muse realtime ASR closed during {phase}",
-                    retryable=phase == "handshake",
-                )
+                raw_close_code = raw.data if isinstance(raw.data, int) else close_code
+                raise cls._close_error(raw_close_code, phase=phase)
             raise cls._protocol_error(f"unexpected message type during {phase}")
         try:
             message = json.loads(raw.data)

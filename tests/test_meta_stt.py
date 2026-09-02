@@ -194,8 +194,8 @@ def test_construction_capabilities_and_package_exports(monkeypatch: pytest.Monke
         api_key="explicit-key", http_session=cast(aiohttp.ClientSession, _FakeSession([]))
     )
 
-    assert provider._api_key == "environment-key"
-    assert explicit._api_key == "explicit-key"
+    assert provider._api_key == "Bearer environment-key"
+    assert explicit._api_key == "Bearer explicit-key"
     assert meta.__version__
     assert meta.STT is meta_stt.STT
     assert meta.SpeechStream is meta_stt.SpeechStream
@@ -226,27 +226,40 @@ def test_rejects_non_secure_or_relative_websocket_urls(url: str) -> None:
         meta.STT(api_key="test-key", url=url)
 
 
+def test_normalizes_bearer_access_token() -> None:
+    assert meta.STT._normalize_access_token("secret") == "Bearer secret"
+    assert meta.STT._normalize_access_token("bearer secret") == "Bearer secret"
+    assert meta.STT._normalize_access_token("Bearer   secret ") == "Bearer secret"
+
+    with pytest.raises(ValueError, match="token after Bearer"):
+        meta.STT(api_key="Bearer")
+
+
 def test_normalizes_and_validates_static_hints() -> None:
     provider = meta.STT(
         api_key="test-key",
         keywords=[" Muse ", "Muse"],
-        language_bias=[" en ", "en"],
+        language_bias=[" english ", "English", "French"],
         http_session=cast(aiohttp.ClientSession, _FakeSession([])),
     )
     assert provider._keywords == ["Muse"]
-    assert provider._language_bias == ["en"]
+    assert provider._language_bias == ["English", "French"]
 
     with pytest.raises(ValueError, match="keywords entries"):
         meta.STT(api_key="test-key", keywords=[" "])
-    with pytest.raises(ValueError, match="language_bias entries"):
+    with pytest.raises(ValueError, match="unsupported language_bias entry"):
         meta.STT(api_key="test-key", language_bias=[""])
+    with pytest.raises(ValueError, match="unsupported language_bias entry"):
+        meta.STT(api_key="test-key", language_bias=["en"])
 
 
-def test_normalizes_stream_language_to_primary_subtag() -> None:
-    assert meta.STT._normalize_language_hint("pt_BR") == "pt"
-    assert meta.STT._normalize_language_hint("EN-us") == "en"
+def test_maps_stream_language_to_documented_language_name() -> None:
+    assert meta.STT._normalize_language_hint("pt_BR") == "Portuguese"
+    assert meta.STT._normalize_language_hint("EN-us") == "English"
+    assert meta.STT._normalize_language_hint("zh-CN") == "Mandarin Chinese"
+    assert meta.STT._normalize_language_hint("fil-PH") == "Tagalog"
 
-    with pytest.raises(ValueError, match="language code"):
+    with pytest.raises(ValueError, match="unsupported Muse Voice language"):
         meta.STT._normalize_language_hint("not a language")
 
 
@@ -268,7 +281,7 @@ async def test_handshake_precedes_audio_and_matches_contract() -> None:
     provider = meta.STT(
         api_key="explicit-secret",
         keywords=["Muse", "Muse"],
-        language_bias=["en", "fr"],
+        language_bias=["English", "French"],
         http_session=cast(aiohttp.ClientSession, session),
     )
     stream = provider.stream(language="fr-FR", conn_options=_TEST_OPTIONS)
@@ -286,19 +299,19 @@ async def test_handshake_precedes_audio_and_matches_contract() -> None:
 
     assert json.loads(websocket.sent_text[0]) == {
         "mode": "ENDPOINTING",
-        "authorization": {"accessToken": "explicit-secret"},
+        "authorization": {"accessToken": "Bearer explicit-secret"},
         "audioEncoding": "PCM_24KHZ",
         "model": "muse-voice-transcribe-1.0",
         "partialMode": "CUMULATIVE",
         "emitAudioProgress": True,
         "keywords": ["Muse"],
-        "languageBias": ["en", "fr"],
+        "languageBias": ["English", "French"],
     }
     url, kwargs = session.connect_calls[0]
     assert url == "wss://api.meta.ai/v1/asr/realtime"
     assert "explicit-secret" not in url
     assert "explicit-secret" not in repr(kwargs)
-    assert [event.recognition_usage.audio_duration for event in events] == [0.08]
+    assert [event.recognition_usage.audio_duration for event in events] == []
 
     await stream.aclose()
     await provider.aclose()
@@ -314,14 +327,7 @@ async def test_packetizes_pcm16_into_80ms_chunks_and_preserves_tail() -> None:
 
     assert [len(packet) for packet in websocket.sent_bytes] == [3840, 3840, 100]
     assert websocket.sent_bytes == [b"x" * 3840, b"x" * 3840, b"x" * 100]
-    usage = [
-        event.recognition_usage.audio_duration
-        for event in events
-        if event.type == stt.SpeechEventType.RECOGNITION_USAGE
-        and event.recognition_usage is not None
-    ]
-    assert usage == pytest.approx([0.08, 0.08, 100 / 48_000])
-    assert sum(usage) == pytest.approx((3840 * 2 + 100) / 48_000)
+    assert all(event.recognition_usage is None for event in events)
     await provider.aclose()
 
 
@@ -337,12 +343,7 @@ async def test_resamples_48khz_mono_input_to_24khz_wire_audio() -> None:
 
     assert sum(map(len, websocket.sent_bytes)) == 24_000 * 2 // 5
     assert [len(packet) for packet in websocket.sent_bytes] == [3840, 3840, 1920]
-    usage = [
-        event.recognition_usage.audio_duration
-        for event in events
-        if event.recognition_usage is not None
-    ]
-    assert sum(usage) == pytest.approx(0.2)
+    assert all(event.recognition_usage is None for event in events)
     await stream.aclose()
     await provider.aclose()
 
@@ -367,13 +368,7 @@ async def test_flush_sends_tail_without_ending_and_audio_can_continue() -> None:
     assert [json.loads(message).get("type") for message in websocket.sent_text].count(
         "endStream"
     ) == 1
-    usage = [
-        event.recognition_usage.audio_duration
-        for event in events
-        if event.type == stt.SpeechEventType.RECOGNITION_USAGE
-        and event.recognition_usage is not None
-    ]
-    assert sum(usage) == pytest.approx(4840 / 48_000)
+    assert all(event.recognition_usage is None for event in events)
 
     await stream.aclose()
     await provider.aclose()
@@ -450,9 +445,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     assert [len(packet) for packet in websocket.packets] == [3840, 3840, 3840]
     assert clock.sleeps == pytest.approx([0.05, 0.05])
     assert websocket.text == ['{"type":"endStream"}']
-    assert [
-        event.recognition_usage.audio_duration for event in stream._event_ch.events
-    ] == pytest.approx([0.08, 0.08, 0.08])
+    assert stream._event_ch.events == []
 
 
 async def test_audio_progress_does_not_duplicate_sent_byte_usage() -> None:
@@ -558,6 +551,50 @@ async def test_interleaved_turns_are_globally_serialized() -> None:
     await provider.aclose()
 
 
+async def test_usage_uses_positive_audio_progress_deltas() -> None:
+    websocket = _websocket(
+        [
+            {"type": "audioProgress", "audioProcessedMs": 80},
+            {"type": "audioProgress", "audioProcessedMs": 200},
+            {"type": "audioProgress", "audioProcessedMs": 200},
+            {"type": "audioProgress", "audioProcessedMs": 150},
+            {"type": "audioProgress", "audioProcessedMs": 350.5},
+        ]
+    )
+    provider = meta.STT(
+        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+    )
+
+    events, _ = await _collect(provider, b"x" * 3840)
+
+    usage = [
+        event.recognition_usage.audio_duration
+        for event in events
+        if event.recognition_usage is not None
+    ]
+    assert usage == pytest.approx([0.08, 0.12, 0.1505])
+    assert sum(usage) == pytest.approx(0.3505)
+    await provider.aclose()
+
+
+@pytest.mark.parametrize("processed_ms", [True, -1, float("nan"), float("inf"), "80", None])
+async def test_invalid_audio_progress_is_non_retryable(processed_ms: object) -> None:
+    websocket = _websocket([{"type": "audioProgress", "audioProcessedMs": processed_ms}])
+    provider = meta.STT(
+        api_key="test-key", http_session=cast(aiohttp.ClientSession, _FakeSession([websocket]))
+    )
+    stream = provider.stream(conn_options=_TEST_OPTIONS)
+    stream.end_input()
+
+    with pytest.raises(APIError, match="invalid audioProcessedMs") as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.retryable is False
+    await stream.aclose()
+    await provider.aclose()
+
+
 async def test_empty_turnless_transcript_outside_speech_is_ignored() -> None:
     websocket = _websocket(
         [{"type": "transcript", "transcript": "", "final": False, "audioProcessedMs": 1000}]
@@ -652,11 +689,45 @@ async def test_pre_audio_connection_failure_retries_without_losing_input() -> No
 
     assert len(session.connect_calls) == 2
     assert websocket.sent_bytes == [b"x" * 3840]
-    assert [
-        event.recognition_usage.audio_duration
-        for event in events
-        if event.recognition_usage is not None
-    ] == [0.08]
+    assert all(event.recognition_usage is None for event in events)
+    await provider.aclose()
+
+
+async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
+    first = _FakeWebSocket([_close_message(1008, "unsafe close reason")])
+    session = _FakeSession([first, _websocket()])
+    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    stream = provider.stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+    )
+    stream.end_input()
+
+    with pytest.raises(APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.status_code == 1008
+    assert exc_info.value.retryable is False
+    assert "unsafe close reason" not in str(exc_info.value)
+    assert len(session.connect_calls) == 1
+    await stream.aclose()
+    await provider.aclose()
+
+
+@pytest.mark.parametrize("close_code", [1011, 1013])
+async def test_transient_close_during_handshake_retries(close_code: int) -> None:
+    first = _FakeWebSocket([_close_message(close_code, "unsafe close reason")])
+    second = _websocket()
+    session = _FakeSession([first, second])
+    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+
+    events, _ = await _collect(
+        provider,
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+    )
+
+    assert events == []
+    assert len(session.connect_calls) == 2
     await provider.aclose()
 
 
@@ -677,6 +748,33 @@ async def test_empty_input_retry_sends_end_stream_on_every_attempt() -> None:
         assert [json.loads(message).get("type") for message in websocket.sent_text].count(
             "endStream"
         ) == 1
+    await provider.aclose()
+
+
+@pytest.mark.parametrize("close_code", [1011, 1013])
+async def test_transient_close_after_audio_consumption_is_not_retried(close_code: int) -> None:
+    websocket = _FakeWebSocket(
+        [
+            _text_message({"sessionId": "session-1"}),
+            _close_message(close_code, "unsafe close reason"),
+        ]
+    )
+    session = _FakeSession([websocket, _websocket()])
+    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
+    stream = provider.stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+    )
+    stream.push_frame(_frame(b"x" * 3840))
+    stream.end_input()
+
+    with pytest.raises(APIError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.retryable is False
+    assert "unsafe close reason" not in str(exc_info.value)
+    assert len(session.connect_calls) == 1
+    await stream.aclose()
     await provider.aclose()
 
 
