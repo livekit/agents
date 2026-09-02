@@ -4535,10 +4535,18 @@ class AgentActivity(RecognitionHooks):
             # (_ensure_user_turn_span returns a recording span as-is), committing
             # with a started_speaking_at that predates the resumed agent speech.
             # Skip while the user is speaking right now: those anchors belong
-            # to a live utterance, not to the discarded turn. reset_stt=False
-            # keeps the live STT stream so audio still being decoded can deliver
-            # a late final and interrupt the resumed speech.
-            if self._audio_recognition is not None and not self._audio_recognition._speaking:
+            # to a live utterance, not to the discarded turn. A live VAD segment
+            # counts as speaking even when _speaking is already False, because a
+            # premature STT END_OF_SPEECH clears _speaking while VAD is still
+            # mid-segment (the flushed VAD is expected to correct it with a new
+            # SOS). reset_stt=False keeps the live STT stream so audio still
+            # being decoded can deliver a late final and interrupt the resumed
+            # speech.
+            if (
+                self._audio_recognition is not None
+                and not self._audio_recognition._speaking
+                and not self._audio_recognition._vad_speech_started
+            ):
                 self._audio_recognition._clear_user_turn(reset_stt=False)
 
             resumed = False

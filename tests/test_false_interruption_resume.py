@@ -471,3 +471,28 @@ async def test_resume_keeps_the_anchors_of_live_user_speech(
     await session.aclose()
 
     recognition._clear_user_turn.assert_not_called()
+
+
+async def test_resume_keeps_the_anchors_of_a_live_vad_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # stt turn detection: a premature STT END_OF_SPEECH sets _speaking False while
+    # VAD is still mid-segment (the flushed VAD corrects it with a new SOS). The
+    # discard must treat that live segment as speech, or it wipes the transcript
+    # and timing of an utterance that is still going.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = False
+    recognition._vad_speech_started = True
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_not_called()
