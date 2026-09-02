@@ -226,16 +226,23 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
-        self._http_client = AWSCRTHTTPClient()
+        self._http_client: AWSCRTHTTPClient | None = None
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
 
     async def aclose(self) -> None:
         await super().aclose()
-        await self._http_client.close()
+        if self._http_client is not None:
+            await self._http_client.close()
 
     async def _run(self) -> None:
         while True:
+            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
+            # of the finished stream cannot carry a second StartStreamTranscription
+            if self._http_client is not None:
+                await self._http_client.close()
+            self._http_client = AWSCRTHTTPClient()
+
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
                 # Use a credentials resolver for explicit credentials

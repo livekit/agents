@@ -36,21 +36,31 @@ class _FakeAudioStream:
 
 
 class _FakeOutputStream:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+
     def __aiter__(self) -> _FakeOutputStream:
         return self
 
     async def __anext__(self) -> Any:
+        if self._error is not None:
+            error, self._error = self._error, None
+            raise error
         await asyncio.Event().wait()
         raise StopAsyncIteration
 
 
 class _FakeTranscribeStream:
-    def __init__(self) -> None:
+    def __init__(self, output_error: Exception | None = None) -> None:
         self.input_stream = _FakeAudioStream()
-        self.config: Any = None
+        self.configs: list[Any] = []
+        self.restarted = asyncio.Event()
+        self._output_error = output_error
 
     async def await_output(self) -> tuple[None, _FakeOutputStream]:
-        return None, _FakeOutputStream()
+        # the error is one-shot, so only the first attempt fails
+        error, self._output_error = self._output_error, None
+        return None, _FakeOutputStream(error)
 
 
 def _frame(duration_ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -65,12 +75,16 @@ def _frame(duration_ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
 
 def _make_stream(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    output_error: Exception | None = None,
 ) -> tuple[aws_stt.STT, aws_stt.SpeechStream, _FakeTranscribeStream]:
-    transcribe_stream = _FakeTranscribeStream()
+    transcribe_stream = _FakeTranscribeStream(output_error)
 
     class _FakeTranscribeClient:
         def __init__(self, *, config: Any) -> None:
-            transcribe_stream.config = config
+            transcribe_stream.configs.append(config)
+            if len(transcribe_stream.configs) > 1:
+                transcribe_stream.restarted.set()
 
         async def start_stream_transcription(self, *, input: Any) -> _FakeTranscribeStream:
             return transcribe_stream
@@ -193,27 +207,39 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
         await provider.aclose()
 
 
-async def test_aws_stream_pins_the_crt_transport(monkeypatch: pytest.MonkeyPatch):
-    provider, stream, transcribe_stream = _make_stream(monkeypatch)
-    closes = 0
-    crt_close = stream._http_client.close
+async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    closed: list[Any] = []
+    crt_close = aws_stt.AWSCRTHTTPClient.close
 
-    async def counting_close() -> None:
-        nonlocal closes
-        closes += 1
-        await crt_close()
+    async def tracking_close(self: Any) -> None:
+        closed.append(self)
+        await crt_close(self)
 
-    monkeypatch.setattr(stream._http_client, "close", counting_close)
+    monkeypatch.setattr(aws_stt.AWSCRTHTTPClient, "close", tracking_close)
+
+    provider, stream, transcribe_stream = _make_stream(
+        monkeypatch,
+        output_error=aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        ),
+    )
 
     try:
         stream.push_frame(_frame(100))
-        await asyncio.wait_for(transcribe_stream.input_stream.event_sent.wait(), timeout=1.0)
+        await asyncio.wait_for(transcribe_stream.restarted.wait(), timeout=1.0)
 
+        first, second = transcribe_stream.configs
         # StartStreamTranscription is bidirectional, which only the CRT transport carries
-        assert transcribe_stream.config.transport is stream._http_client
-        assert closes == 0
+        assert isinstance(first.transport, aws_stt.AWSCRTHTTPClient)
+        # AWS finishes the stream on its idle timeout, and the pooled connection dies with
+        # it, so the restarted attempt needs a transport of its own
+        assert second.transport is not first.transport
+        assert second.transport is stream._http_client
+        assert closed == [first.transport]
     finally:
         await stream.aclose()
         await provider.aclose()
 
-    assert closes == 1
+    assert closed == [first.transport, second.transport]
