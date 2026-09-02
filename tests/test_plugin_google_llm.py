@@ -546,24 +546,29 @@ class TestThinkingConfigRequestConstruction:
         return captured["config"].thinking_config
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "level",
-        [
-            types.ThinkingLevel.MINIMAL,
-            types.ThinkingLevel.LOW,
-            types.ThinkingLevel.MEDIUM,
-            types.ThinkingLevel.HIGH,
-        ],
-    )
-    async def test_gemma_4_level_reaches_the_request(self, level: types.ThinkingLevel) -> None:
-        """Gemma 4 takes a level, and every level the SDK knows is sent as given: the API
-        decides which ones a model accepts, not the plugin."""
+    @pytest.mark.parametrize("model", ["gemma-4-31b-it", "models/gemma-4-31b-it"])
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH])
+    async def test_gemma_4_level_reaches_the_request(
+        self, model: str, level: types.ThinkingLevel
+    ) -> None:
+        """Gemma 4 takes the level it documents, under a bare or a qualified model name."""
         thinking_config = await self._capture_thinking_config(
-            "gemma-4-31b-it", types.ThinkingConfig(thinking_level=level)
+            model, types.ThinkingConfig(thinking_level=level)
         )
 
         assert thinking_config is not None
         assert thinking_config.thinking_level == level
+
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.LOW, types.ThinkingLevel.MEDIUM])
+    def test_gemma_4_rejects_undocumented_levels(self, level: types.ThinkingLevel) -> None:
+        """Gemma 4 answers 'low' and 'medium' with 400 INVALID_ARGUMENT, so the session fails at
+        construction instead of on the first turn."""
+        with pytest.raises(ValueError, match="only supports thinking_level"):
+            LLM(
+                model="gemma-4-31b-it",
+                api_key="test",
+                thinking_config=types.ThinkingConfig(thinking_level=level),
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemma-4-31b-it"])
@@ -581,6 +586,7 @@ class TestThinkingConfigRequestConstruction:
         "model,expected_level",
         [
             ("gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
+            ("models/gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
             ("gemini-3-pro-preview", types.ThinkingLevel.LOW),
             # no default is invented for a model whose accepted levels are unknown
             ("gemma-4-31b-it", None),

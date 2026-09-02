@@ -45,6 +45,7 @@ class TestGeminiModelDetection:
             ("gemini-3-flash-preview", True),
             ("gemini-3-flash", True),
             ("GEMINI-3-FLASH", True),  # case insensitive
+            ("models/gemini-3-flash-preview", True),  # qualified name
             # Gemini 3 Pro models - should return False
             ("gemini-3-pro-preview", False),
             ("gemini-3-pro", False),
@@ -63,6 +64,8 @@ class TestGeminiModelDetection:
             ("gemini-3-pro-preview", True),
             ("gemma-4-31b-it", True),
             ("GEMMA-4-31B-IT", True),  # case insensitive
+            ("models/gemma-4-31b-it", True),  # qualified name
+            ("publishers/google/models/gemma-4-26b-a4b-it", True),
             # budget models - should return False
             ("gemini-2.5-flash", False),
             ("gemma-3-27b-it", False),
