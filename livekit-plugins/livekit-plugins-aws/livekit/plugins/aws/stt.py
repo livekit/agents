@@ -16,6 +16,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,7 +37,12 @@ from .utils import DEFAULT_REGION
 
 try:
     from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-    from aws_sdk_transcribe_streaming.config import Config
+
+    try:
+        from aws_sdk_transcribe_streaming.config import Config
+    except ImportError:
+        # aws-sdk-transcribe-streaming 0.10 renamed the exported class to lowercase.
+        from aws_sdk_transcribe_streaming.config import config as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
@@ -224,6 +230,8 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._credentials = credentials
         self._http_client = AWSCRTHTTPClient()
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
 
     async def _run(self) -> None:
         while True:
@@ -329,7 +337,12 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
+                                self._audio_duration += frame.duration
+                                self._maybe_emit_recognition_usage()
+                            elif isinstance(frame, self._FlushSentinel):
+                                self._emit_recognition_usage()
                     finally:
+                        self._emit_recognition_usage()
                         # Send empty frame to close (required by AWS Transcribe)
                         try:
                             await audio_stream.send(
@@ -392,10 +405,33 @@ class SpeechStream(stt.SpeechStream):
                         await asyncio.wait_for(tasks[1], timeout=3.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
+                    except BadRequestException:
+                        # Already handled above (e.g. idle-timeout retry). Swallow so
+                        # re-awaiting the failed task here cannot override `continue`.
+                        pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):
                     await gather_future
+
+    def _maybe_emit_recognition_usage(self) -> None:
+        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
+            self._emit_recognition_usage()
+
+    def _emit_recognition_usage(self) -> None:
+        if self._audio_duration <= 0.0:
+            return
+
+        audio_duration = self._audio_duration
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                )
+            )
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         if not transcript_event.transcript or not transcript_event.transcript.results:

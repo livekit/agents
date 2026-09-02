@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import weakref
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
+from urllib.parse import quote
 
 import aiohttp
 
@@ -46,6 +48,25 @@ from .models import STTRealtimeSampleRates
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
+
+def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
+    """Aggregate ElevenLabs per-word logprobs into a [0, 1] transcription confidence.
+
+    Scribe returns a natural-log probability (``logprob``) per token; we average the
+    spoken-word logprobs and exponentiate to a probability (the geometric mean of the
+    token probabilities). Returns ``0.0`` when no per-word logprobs are available.
+    """
+    if not words:
+        return 0.0
+    logprobs = [
+        w["logprob"]
+        for w in words
+        if w.get("type") == "word" and isinstance(w.get("logprob"), (int, float))
+    ]
+    if not logprobs:
+        return 0.0
+    return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
 
 
 class VADOptions(TypedDict, total=False):
@@ -74,8 +95,10 @@ class STTOptions:
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
     keyterms: NotGivenOr[list[str]]
+    secondary_languages: NotGivenOr[list[str]]
     no_verbatim: bool
     enable_logging: bool
+    previous_text: str | None
 
 
 class STT(stt.STT):
@@ -94,8 +117,10 @@ class STT(stt.STT):
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
         model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,  # Deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
+        previous_text: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of ElevenLabs STT.
@@ -115,14 +140,21 @@ class STT(stt.STT):
                 be selected based on parameters provided.
             model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
-                Each keyterm can contain at most 5 words and must be less than 50 characters.
-                Maximum of 100 keyterms. Only supported for Scribe v2 batch recognition
-                (not realtime streaming). Usage incurs additional costs.
+                Supported for both Scribe v2 (batch) and Scribe v2 realtime. Batch accepts up to
+                1000 keyterms of at most 50 characters each; realtime accepts up to 50 keyterms of
+                at most 20 characters each. Usage incurs additional costs.
+            secondary_languages (NotGivenOr[list[str]]): A list of language codes to constrain
+                speech prediction to, in addition to `language_code`. Useful for bilingual
+                applications where the audio switches between a primary and a limited set of
+                secondary languages. Only supported for Scribe v2 realtime. When omitted, the
+                model predicts from its full set of supported languages.
             no_verbatim (NotGivenOr[bool]): When True, the model removes filler words, false starts
                 and disfluencies from the transcript, producing cleaner output. Supported for both
                 Scribe v2 (batch) and Scribe v2 realtime. Default is False.
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
+            previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
+                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
         if is_given(model_id):
@@ -152,6 +184,21 @@ class STT(stt.STT):
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
 
+        resolved_previous_text = previous_text if is_given(previous_text) else None
+        if not use_realtime and resolved_previous_text is not None:
+            logger.warning(
+                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+            )
+            resolved_previous_text = None
+
+        resolved_secondary_languages = secondary_languages
+        if not use_realtime and is_given(secondary_languages):
+            logger.warning(
+                "`secondary_languages` is only supported for Scribe v2 realtime model "
+                "and will be ignored"
+            )
+            resolved_secondary_languages = NOT_GIVEN
+
         super().__init__(
             capabilities=STTCapabilities(
                 streaming=use_realtime,
@@ -177,8 +224,10 @@ class STT(stt.STT):
             include_timestamps=include_timestamps,
             model_id=model,
             keyterms=keyterms,
+            secondary_languages=resolved_secondary_languages,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
+            previous_text=resolved_previous_text,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -284,6 +333,7 @@ class STT(stt.STT):
                     speaker_id=speaker_id,
                     start_time=start_time,
                     end_time=end_time,
+                    confidence=_speech_confidence(words),
                     words=[
                         TimedString(
                             text=word.get("text", ""),
@@ -304,6 +354,7 @@ class STT(stt.STT):
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(tag_audio_events):
@@ -315,11 +366,26 @@ class STT(stt.STT):
         if is_given(keyterms):
             self._opts.keyterms = keyterms
 
+        if is_given(secondary_languages):
+            if self._opts.model_id == "scribe_v2_realtime":
+                self._opts.secondary_languages = secondary_languages
+            else:
+                logger.warning(
+                    "`secondary_languages` is only supported for Scribe v2 realtime model "
+                    "and will be ignored"
+                )
+                secondary_languages = NOT_GIVEN
+
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
 
         for stream in self._streams:
-            stream.update_options(server_vad=server_vad, no_verbatim=no_verbatim)
+            stream.update_options(
+                server_vad=server_vad,
+                no_verbatim=no_verbatim,
+                keyterms=keyterms,
+                secondary_languages=secondary_languages,
+            )
 
     def stream(
         self,
@@ -356,6 +422,7 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
+        self._last_partial_text = ""
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -366,12 +433,20 @@ class SpeechStream(stt.SpeechStream):
         *,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
+        secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
+            self._reconnect_event.set()
+        if is_given(keyterms):
+            self._opts.keyterms = keyterms
+            self._reconnect_event.set()
+        if is_given(secondary_languages):
+            self._opts.secondary_languages = secondary_languages
             self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -445,9 +520,19 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
 
-                        if has_ended:
-                            self._audio_duration_collector.flush()
-                            has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": "",
+                                    "commit": True,
+                                    "sample_rate": self._opts.sample_rate,
+                                }
+                            )
+                        )
+                        has_ended = False
 
                 closing_ws = True
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -490,6 +575,20 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._last_partial_text = ""
+                if self._opts.previous_text:
+                    # Must be the first input_audio_chunk on the connection.
+                    await ws.send_str(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": "",
+                                "commit": False,
+                                "sample_rate": self._opts.sample_rate,
+                                "previous_text": self._opts.previous_text,
+                            }
+                        )
+                    )
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -554,6 +653,15 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.no_verbatim:
             params.append("no_verbatim=true")
 
+        if is_given(self._opts.keyterms):
+            params.extend(f"keyterms={quote(keyterm)}" for keyterm in self._opts.keyterms)
+
+        if is_given(self._opts.secondary_languages):
+            params.extend(
+                f"secondary_languages={quote(language)}"
+                for language in self._opts.secondary_languages
+            )
+
         query_string = "&".join(params)
 
         # Convert HTTPS URL to WSS
@@ -596,6 +704,7 @@ class SpeechStream(stt.SpeechStream):
             text=text,
             start_time=start_time + self.start_time_offset,
             end_time=end_time + self.start_time_offset,
+            confidence=_speech_confidence(words),
         )
         if words:
             speech_data.words = [
@@ -609,9 +718,11 @@ class SpeechStream(stt.SpeechStream):
             ]
 
         if message_type == "partial_transcript":
-            logger.debug("Received message type partial_transcript: %s", data)
+            logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
-            if text:
+            if text and text != self._last_partial_text:
+                self._last_partial_text = text
+
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
                     self._event_ch.send_nowait(
@@ -632,6 +743,8 @@ class SpeechStream(stt.SpeechStream):
         ):
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
+            self._last_partial_text = ""
+
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
@@ -690,7 +803,11 @@ class SpeechStream(stt.SpeechStream):
         ):
             pass
         else:
-            logger.warning("ElevenLabs STT unknown message type: %s, data: %s", message_type, data)
+            logger.warning(
+                "ElevenLabs STT unknown message type: %s",
+                message_type,
+                extra={"lk.pii.data": data},
+            )
 
 
 def _synthesize_url(opts: STTOptions) -> str:

@@ -299,6 +299,28 @@ def _is_fatal_error(error: object | None) -> bool:
     return isinstance(code, str) and code in _FATAL_ERROR_CODES
 
 
+def _server_turn_taking_enabled(
+    turn_detection: RealtimeAudioInputTurnDetection | None,
+) -> bool:
+    """Whether the server both detects turns and answers them."""
+    return turn_detection is not None and turn_detection.create_response is not False
+
+
+def _warn_on_half_disabled_turn_taking(
+    turn_detection: RealtimeAudioInputTurnDetection | None,
+) -> None:
+    """Warn when the caller hands turn taking to the client but leaves interruption on the server."""
+    if (
+        turn_detection is not None
+        and turn_detection.create_response is False
+        and turn_detection.interrupt_response is not False
+    ):
+        logger.warning(
+            "create_response=False hands turn taking to the client, but the server still "
+            "cancels its response on user speech, pass interrupt_response=False as well"
+        )
+
+
 class RealtimeModel(llm.RealtimeModel):
     @overload
     def __init__(
@@ -453,10 +475,13 @@ class RealtimeModel(llm.RealtimeModel):
             )
 
         modalities = modalities if is_given(modalities) else ["text", "audio"]
+        resolved_turn_detection = to_turn_detection(turn_detection)
+        _warn_on_half_disabled_turn_taking(resolved_turn_detection)
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
-                turn_detection=turn_detection is not None,
+                turn_detection=_server_turn_taking_enabled(resolved_turn_detection),
+                can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
                 audio_output="audio" in modalities,
@@ -500,7 +525,7 @@ class RealtimeModel(llm.RealtimeModel):
             modalities=modalities,
             input_audio_transcription=to_audio_transcription(input_audio_transcription),
             input_audio_noise_reduction=to_noise_reduction(input_audio_noise_reduction),
-            turn_detection=to_turn_detection(turn_detection),
+            turn_detection=resolved_turn_detection,
             api_key=api_key,
             base_url=base_url_val,
             is_azure=is_azure,
@@ -671,10 +696,13 @@ class RealtimeModel(llm.RealtimeModel):
         if not is_given(input_audio_transcription):
             input_audio_transcription = AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
 
+        # capture intent before applying the azure default, so the framework can still
+        # auto-disable server-side turn detection when the user didn't configure it
+        can_disable_turn_detection = not is_given(turn_detection)
         if not is_given(turn_detection):
             turn_detection = AZURE_DEFAULT_TURN_DETECTION
 
-        return RealtimeModel(
+        model = RealtimeModel(
             voice=voice,
             modalities=modalities,
             input_audio_transcription=input_audio_transcription,
@@ -691,6 +719,8 @@ class RealtimeModel(llm.RealtimeModel):
             base_url=base_url,
             max_session_duration=max_session_duration,
         )
+        model._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        return model
 
     def update_options(
         self,
@@ -717,13 +747,20 @@ class RealtimeModel(llm.RealtimeModel):
             self._opts.voice = voice
 
         if is_given(turn_detection):
+            # a derived capability has to follow the option it is derived from
             self._opts.turn_detection = to_turn_detection(turn_detection)
+            self._capabilities.turn_detection = _server_turn_taking_enabled(
+                self._opts.turn_detection
+            )
+            # only the model warns: it re-runs the update on every session it owns
+            _warn_on_half_disabled_turn_taking(self._opts.turn_detection)
 
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
 
         if is_given(input_audio_transcription):
             self._opts.input_audio_transcription = to_audio_transcription(input_audio_transcription)
+            self._capabilities.user_transcription = self._opts.input_audio_transcription is not None
 
         if is_given(input_audio_noise_reduction):
             self._opts.input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
@@ -746,7 +783,9 @@ class RealtimeModel(llm.RealtimeModel):
         for sess in self._sessions:
             sess.update_options(
                 voice=voice,
-                turn_detection=self._opts.turn_detection,
+                # only propagate when the caller set it, so a session that opted out of
+                # server-side turn detection isn't force-synced back on by an unrelated update
+                turn_detection=self._opts.turn_detection if is_given(turn_detection) else NOT_GIVEN,
                 tool_choice=tool_choice,
                 input_audio_transcription=self._opts.input_audio_transcription,
                 input_audio_noise_reduction=self._opts.input_audio_noise_reduction,
@@ -767,8 +806,8 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
-        sess = RealtimeSession(self)
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -841,11 +880,23 @@ class RealtimeSession(
     - openai_client_event_queued: expose the raw client events sent to the OpenAI Realtime API
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+    ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         # per-session copy of opts so update_options can diff against session's own state
-        self._opts = replace(realtime_model._opts)
+        self._opts = replace(
+            realtime_model._opts,
+            turn_detection=None if turn_detection_disabled else realtime_model._opts.turn_detection,
+        )
+        # this session's own copy: turn detection can be off here and on for the model
+        self._capabilities = replace(
+            realtime_model.capabilities,
+            turn_detection=False
+            if turn_detection_disabled
+            else realtime_model.capabilities.turn_detection,
+        )
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -860,12 +911,14 @@ class RealtimeSession(
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
+        # future per in-flight chat ctx event, so a rejection settles the one it answers
+        self._chat_ctx_event_futures: dict[str, asyncio.Future] = {}
+
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
 
-        # accumulates partial input-audio transcripts per (item_id, content_index)
-        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+        self._reset_input_turn_state()
 
         self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -882,6 +935,20 @@ class RealtimeSession(
     def send_event(self, event: RealtimeClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _reset_input_turn_state(self) -> None:
+        """Per-turn input state, keyed by item_id and valid only within one connection.
+
+        Every field here must be discarded on reconnect: the server assigns new item ids,
+        so a stale entry can never be matched again.
+        """
+        # accumulates partial input-audio transcripts per (item_id, content_index)
+        self._input_transcript_accumulators: dict[str, dict[int, str]] = {}
+
+        # when serverside VAD detected speech onset, per item_id. Correlating through the
+        # item keeps each turn paired with its own start; a single "last speech started"
+        # value cannot, because a late transcript would consume the next turn's value.
+        self._input_speech_started_at: dict[str, float] = {}
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -904,7 +971,9 @@ class RealtimeSession(
             if tools:
                 events.append(self._create_tools_update_event(tools))
 
-            # chat context
+            # chat context. the turn state goes first, since what it settles belongs in the
+            # mirror that is replayed below
+            self._reset_input_turn_state()
             chat_ctx = self.chat_ctx.copy(
                 exclude_function_call=True,
                 exclude_instructions=True,
@@ -914,7 +983,6 @@ class RealtimeSession(
             )
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            self._input_transcript_accumulators.clear()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
 
             try:
@@ -1057,12 +1125,8 @@ class RealtimeSession(
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
 
-                    if lk_oai_debug:
-                        msg_copy = msg.copy()
-                        if msg_copy["type"] == "input_audio_buffer.append":
-                            msg_copy = {**msg_copy, "audio": "..."}
-
-                        logger.debug(f">>> {msg_copy}")
+                    if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
+                        logger.debug(">>>", extra={"lk.pii.event": msg})
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1114,7 +1178,7 @@ class RealtimeSession(
                         if event_copy["type"] == "response.output_audio.delta":
                             event_copy = {**event_copy, "delta": "..."}
 
-                        logger.debug(f"<<< {event_copy}")
+                        logger.debug("<<<", extra={"lk.pii.event": event_copy})
 
                     if event["type"] == "input_audio_buffer.speech_started":
                         self._handle_input_audio_buffer_speech_started(
@@ -1173,7 +1237,9 @@ class RealtimeSession(
                     elif event["type"] == "error":
                         self._handle_error(RealtimeErrorEvent.construct(**event))
                     elif lk_oai_debug:
-                        logger.debug(f"unhandled event: {event['type']}", extra={"event": event})
+                        logger.debug(
+                            f"unhandled event: {event['type']}", extra={"lk.pii.event": event}
+                        )
                 except Exception as e:
                     # terminal server errors (e.g. insufficient_quota) must break the recv
                     # loop so _main_task stops reconnecting; every other handler failure is
@@ -1182,7 +1248,7 @@ class RealtimeSession(
                         raise
                     if event["type"] == "response.output_audio.delta":
                         event["delta"] = event["delta"][:10] + "..."
-                    logger.exception("failed to handle event", extra={"event": event})
+                    logger.exception("failed to handle event", extra={"lk.pii.event": event})
 
         tasks = [
             asyncio.create_task(_recv_task(), name="_recv_task"),
@@ -1278,6 +1344,10 @@ class RealtimeSession(
         )
 
     @property
+    def capabilities(self) -> llm.RealtimeCapabilities:
+        return self._capabilities
+
+    @property
     def chat_ctx(self) -> llm.ChatContext:
         return self._remote_chat_ctx.to_chat_ctx()
 
@@ -1353,12 +1423,14 @@ class RealtimeSession(
                 audio_input.turn_detection = turn_detection
                 has_audio_config = True
             self._opts.turn_detection = turn_detection
+            self._capabilities.turn_detection = _server_turn_taking_enabled(turn_detection)
 
         if is_given(input_audio_transcription):
             if self._opts.input_audio_transcription != input_audio_transcription:
                 audio_input.transcription = input_audio_transcription
                 has_audio_config = True
             self._opts.input_audio_transcription = input_audio_transcription
+            self._capabilities.user_transcription = input_audio_transcription is not None
 
         if is_given(input_audio_noise_reduction):
             input_audio_noise_reduction = to_noise_reduction(input_audio_noise_reduction)
@@ -1395,30 +1467,45 @@ class RealtimeSession(
 
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
+            self._chat_ctx_event_futures = {}
 
             for ev in events:
                 futs.append(f := asyncio.Future[None]())
                 if isinstance(ev, ConversationItemDeleteEvent):
                     self._item_delete_future[ev.item_id] = f
-                elif isinstance(ev, ConversationItemCreateEvent):
+                else:
                     assert ev.item.id is not None
                     self._item_create_future[ev.item.id] = f
+
+                # an updated item sends a delete and a create under the same id, so only the
+                # event id tells a rejection which of the two it answers
+                if ev.event_id:
+                    self._chat_ctx_event_futures[ev.event_id] = f
                 self.send_event(ev)
 
             if not futs:
                 return
             try:
-                await asyncio.wait_for(asyncio.gather(*futs, return_exceptions=True), timeout=5.0)
+                results = await asyncio.wait_for(
+                    asyncio.gather(*futs, return_exceptions=True), timeout=5.0
+                )
             except asyncio.TimeoutError:
-                # clean up timed-out futures so late server responses don't hit
-                # InvalidStateError when calling set_result on cancelled futures
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+            finally:
+                self._chat_ctx_event_futures = {}
                 for ev in events:
                     if isinstance(ev, ConversationItemDeleteEvent):
                         self._item_delete_future.pop(ev.item_id, None)
-                    elif isinstance(ev, ConversationItemCreateEvent):
+                    else:
                         assert ev.item.id is not None
                         self._item_create_future.pop(ev.item.id, None)
-                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+
+            # a rejected item is not worth failing the turn over
+            if rejected := [str(r) for r in results if isinstance(r, BaseException)]:
+                logger.warning(
+                    f"{self._realtime_model._provider_label} rejected part of a chat context update",  # noqa: E501
+                    extra={"errors": rejected},
+                )
 
     def _create_update_chat_ctx_events(
         self, chat_ctx: llm.ChatContext
@@ -1760,8 +1847,10 @@ class RealtimeSession(
             yield frame
 
     def _handle_input_audio_buffer_speech_started(
-        self, _: InputAudioBufferSpeechStartedEvent
+        self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
+        if event.item_id:
+            self._input_speech_started_at[event.item_id] = time.time()
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_audio_buffer_speech_stopped(
@@ -1863,6 +1952,15 @@ class RealtimeSession(
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         assert event.item.id is not None, "item.id is None"
 
+        if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
+            # the server can anchor to an item it just deleted; the item belongs at the tail
+            logger.warning(
+                f"{self._realtime_model._provider_label} anchored an item to one it is no longer "
+                "tracking, appending it instead",
+                extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
+            )
+            event.previous_item_id = self._remote_chat_ctx.tail_id
+
         try:
             lk_item = openai_item_to_livekit_item(event.item)
             self._remote_chat_ctx.insert(event.previous_item_id, lk_item)
@@ -1876,8 +1974,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_create_future.pop(event.item.id, None):
-            if fut.cancelled():
-                logger.error(f"item create future for `{event.item.id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item create future for `{event.item.id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -1885,6 +1983,7 @@ class RealtimeSession(
         assert event.item_id is not None, "item_id is None"
 
         self._input_transcript_accumulators.pop(event.item_id, None)
+        self._input_speech_started_at.pop(event.item_id, None)
 
         try:
             self._remote_chat_ctx.delete(event.item_id)
@@ -1894,8 +1993,8 @@ class RealtimeSession(
             )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
-            if fut.cancelled():
-                logger.error(f"item delete future for `{event.item_id}` was already cancelled")
+            if fut.done():
+                logger.error(f"item delete future for `{event.item_id}` was already settled")
             else:
                 fut.set_result(None)
 
@@ -1945,6 +2044,7 @@ class RealtimeSession(
                 transcript=event.transcript,
                 is_final=True,
                 confidence=confidence,
+                turn_started_at=self._input_speech_started_at.pop(event.item_id, None),
             ),
         )
 
@@ -1958,12 +2058,16 @@ class RealtimeSession(
 
         # close any open partial stream so consumers waiting for is_final don't hang
         partial = self._clear_transcript_accumulator(event.item_id, event.content_index or 0)
+        turn_started_at = self._input_speech_started_at.pop(event.item_id, None)
         if partial is None:
             return
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
-                item_id=event.item_id, transcript=partial, is_final=True
+                item_id=event.item_id,
+                transcript=partial,
+                is_final=True,
+                turn_started_at=turn_started_at,
             ),
         )
 
@@ -2209,7 +2313,32 @@ class RealtimeSession(
             logger.debug("Unknown response status: %s", event.response.status)
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
+        if event_id := event.error.event_id:
+            # a rejected item event gets no deleted/added reply, so fail its future rather than
+            # leave update_chat_ctx to stall inside the speech that awaits it
+            if fut := self._chat_ctx_event_futures.pop(event_id, None):
+                if not fut.done():
+                    # a duplicate id means the item is already there, as the create wanted
+                    if event.error.code == "item_create_duplicate_item_id":
+                        fut.set_result(None)
+                    else:
+                        fut.set_exception(llm.RealtimeError(event.error.message))
+                # a terminal one still has to end the session, whatever it came in reply to
+                if not _is_fatal_error(event.error):
+                    return
+            # a rejected response.create gets no response.created; fail its future now
+            # instead of orphaning it until the 10s timeout (still emitted/raised below)
+            elif fut := self._response_created_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message, code=event.error.code))
+
         if event.error.message.startswith("Cancellation failed"):
+            return
+
+        if event.error.code == "input_audio_buffer_commit_empty" and (
+            self._opts.turn_detection is not None
+        ):
+            # the server VAD commits each segment itself, ours lands on an emptied buffer
             return
 
         provider_label = self._realtime_model._provider_label

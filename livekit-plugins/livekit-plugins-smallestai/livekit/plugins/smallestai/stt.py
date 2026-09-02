@@ -97,6 +97,12 @@ class _STTOptions:
     word_timestamps: bool
     diarize: bool
     eou_timeout_ms: int  # end-of-utterance silence timeout in ms; valid range 100–10000ms
+    endpointing: bool  # finalize transcripts on trailing silence detection
+    keywords: list[tuple[str, float]]  # (keyword, intensifier) pairs; streaming only
+    format: bool  # punctuation/capitalization formatting; streaming only
+    sentence_timestamps: bool  # include sentence-level "utterances"; streaming only
+    redact_pii: bool  # mask names, addresses, phone numbers; streaming only
+    redact_pci: bool  # mask card numbers, CVVs, zip codes, account numbers; streaming only
     base_url: str
 
 
@@ -111,6 +117,12 @@ class STT(stt.STT):
         word_timestamps: bool = True,
         diarize: bool = False,
         eou_timeout_ms: int = 100,
+        endpointing: bool = True,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: bool = True,
+        sentence_timestamps: bool = False,
+        redact_pii: bool = False,
+        redact_pci: bool = False,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = SMALLEST_STT_BASE_URL,
@@ -136,13 +148,39 @@ class STT(stt.STT):
             diarize: Enable speaker diarization. When True, each word includes a
                 speaker ID (integer during streaming, string label in batch).
                 Defaults to False.
-            eou_timeout_ms: Milliseconds of silence before the server considers an
-                utterance complete and emits a final transcript. Must be between 100 and
-                10000ms. Defaults to 100ms (the minimum) so that server-side EOU adds
-                minimal latency alongside LiveKit's own end-of-turn detection. If omitted,
-                the server applies an 800ms default. Note: the Smallest AI API will soon
-                support disabling server-side EOU entirely, which will allow LiveKit's
-                end-of-turn detection to be used exclusively.
+            eou_timeout_ms: Silence (ms) before the server finalizes an utterance.
+                Range 100-10000ms; defaults to 100ms so server-side EOU adds minimal
+                latency on top of LiveKit's own end-of-turn detection (falls back to
+                the server's 800ms default if omitted). Acts as a ceiling when
+                ``endpointing`` is enabled; the sole finalization trigger when disabled.
+            endpointing: Finalize on trailing silence instead of waiting on
+                ``eou_timeout_ms`` alone. Defaults to True; disable to rely solely on
+                ``eou_timeout_ms``.
+            keywords: Boost recognition via ``(keyword, intensifier)`` tuples, e.g.
+                ``[("NVIDIA", 2.0), ("Jensen Huang", 1.0)]``. Intensifier ~1.0 (mild) to
+                ~5.0 (strong); avoid values above 5 (hallucination risk). Streaming only,
+                up to 10,000 keywords per session. Defaults to no boosting.
+            format: Apply punctuation and capitalization to streaming transcripts.
+                Defaults to True; disable for raw, lowercase, unpunctuated text — useful
+                for LLM/NLP pipelines or search indexing. Streaming only.
+            sentence_timestamps: Include sentence-level timing in streaming
+                transcripts, exposed as an ``"utterances"`` list (``text``/``start``/
+                ``end``, plus ``speaker`` when ``diarize`` is enabled) in
+                ``SpeechData.metadata["utterances"]``. Defaults to False. In batch
+                transcription this is automatic whenever ``word_timestamps`` is
+                enabled — no separate flag needed.
+            redact_pii: Mask PII (names, addresses, phone numbers) in streaming
+                transcripts with placeholder tokens (e.g. ``[FIRSTNAME_1]``,
+                ``[PHONENUMBER_1]``); matches are also listed in
+                ``SpeechData.metadata["redacted_entities"]``. Defaults to False.
+                Reliable only for ``language="en"``/``"hi"`` — other languages accept
+                the flag but may redact inconsistently. Streaming only.
+            redact_pci: Mask payment card info (card numbers, CVVs, ZIP codes, account
+                numbers) in streaming transcripts with placeholder tokens (e.g.
+                ``[CREDITCARDCVV_1]``, ``[ACCOUNTNUMBER_1]``); matches are also listed
+                in ``SpeechData.metadata["redacted_entities"]``. Defaults to False.
+                Reliable only for ``language="en"``/``"hi"`` — other languages accept
+                the flag but may redact inconsistently. Streaming only.
             api_key: Smallest AI API key. Falls back to the SMALLEST_API_KEY
                 environment variable if not provided.
             http_session: An existing aiohttp ClientSession to reuse.
@@ -173,6 +211,12 @@ class STT(stt.STT):
             word_timestamps=word_timestamps,
             diarize=diarize,
             eou_timeout_ms=eou_timeout_ms,
+            endpointing=endpointing,
+            keywords=list(keywords) if is_given(keywords) else [],
+            format=format,
+            sentence_timestamps=sentence_timestamps,
+            redact_pii=redact_pii,
+            redact_pci=redact_pci,
             base_url=base_url,
         )
         self._session = http_session
@@ -269,6 +313,12 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pci: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
         if is_given(model):
@@ -282,6 +332,18 @@ class STT(stt.STT):
             self._opts.encoding = encoding
         if is_given(eou_timeout_ms):
             self._opts.eou_timeout_ms = eou_timeout_ms
+        if is_given(endpointing):
+            self._opts.endpointing = endpointing
+        if is_given(keywords):
+            self._opts.keywords = list(keywords)
+        if is_given(format):
+            self._opts.format = format
+        if is_given(sentence_timestamps):
+            self._opts.sentence_timestamps = sentence_timestamps
+        if is_given(redact_pii):
+            self._opts.redact_pii = redact_pii
+        if is_given(redact_pci):
+            self._opts.redact_pci = redact_pci
 
         for stream in self._streams:
             stream.update_options(
@@ -290,6 +352,12 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 encoding=encoding,
                 eou_timeout_ms=eou_timeout_ms,
+                endpointing=endpointing,
+                keywords=keywords,
+                format=format,
+                sentence_timestamps=sentence_timestamps,
+                redact_pii=redact_pii,
+                redact_pci=redact_pci,
             )
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> _STTOptions:
@@ -332,6 +400,12 @@ class SpeechStream(stt.SpeechStream):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        endpointing: NotGivenOr[bool] = NOT_GIVEN,
+        keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+        format: NotGivenOr[bool] = NOT_GIVEN,
+        sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+        redact_pci: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -343,6 +417,18 @@ class SpeechStream(stt.SpeechStream):
             self._opts.encoding = encoding
         if is_given(eou_timeout_ms):
             self._opts.eou_timeout_ms = eou_timeout_ms
+        if is_given(endpointing):
+            self._opts.endpointing = endpointing
+        if is_given(keywords):
+            self._opts.keywords = list(keywords)
+        if is_given(format):
+            self._opts.format = format
+        if is_given(sentence_timestamps):
+            self._opts.sentence_timestamps = sentence_timestamps
+        if is_given(redact_pii):
+            self._opts.redact_pii = redact_pii
+        if is_given(redact_pci):
+            self._opts.redact_pci = redact_pci
         self._reconnect_event.set()
 
     async def _run(self) -> None:
@@ -404,7 +490,9 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.warning("failed to parse Smallest AI STT message: %s", msg.data)
+                    logger.warning(
+                        "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
+                    )
                     continue
 
                 self._process_stream_event(data)
@@ -454,6 +542,15 @@ class SpeechStream(stt.SpeechStream):
             "diarize": str(self._opts.diarize).lower(),
         }
         params["eou_timeout_ms"] = self._opts.eou_timeout_ms
+        params["endpointing"] = str(self._opts.endpointing).lower()
+        params["format"] = str(self._opts.format).lower()
+        params["sentence_timestamps"] = str(self._opts.sentence_timestamps).lower()
+        params["redact_pii"] = str(self._opts.redact_pii).lower()
+        params["redact_pci"] = str(self._opts.redact_pci).lower()
+        if self._opts.keywords:
+            params["keywords"] = ",".join(
+                f"{keyword}:{intensifier:g}" for keyword, intensifier in self._opts.keywords
+            )
         ws_url = (
             self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             + "/stt/live"
@@ -476,10 +573,21 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            logger.debug("established Smallest AI STT WebSocket connection")
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to Smallest AI STT") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to Smallest AI STT") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to Smallest AI STT ({type(e).__name__})"
+            ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -504,6 +612,12 @@ class SpeechStream(stt.SpeechStream):
         #     {"word": str, "start": float, "end": float,
         #      "confidence": float, "speaker": int}  # speaker only when diarize=True
         #   ]
+        #   "utterances":   [           # present when sentence_timestamps=True
+        #     {"text": str, "start": float, "end": float,
+        #      "speaker": int}  # speaker only when diarize=True
+        #   ]
+        #   "redacted_entities": [str]  # present when redact_pii/redact_pci=True;
+        #                               # e.g. ["[FIRSTNAME_1]", "[CREDITCARDCVV_1]"]
         # }
         session_id = data.get("session_id", "")
         if session_id:
@@ -585,6 +699,22 @@ def _transcript_to_speech_data(
     # When language="multi", the server echoes the detected language in is_final responses.
     detected_language = data.get("language", language) or language
 
+    metadata: dict[str, Any] = {}
+    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
+    if raw_utterances:
+        metadata["utterances"] = [
+            {
+                **u,
+                "start": u.get("start", 0.0) + start_time_offset,
+                "end": u.get("end", 0.0) + start_time_offset,
+            }
+            for u in raw_utterances
+        ]
+
+    redacted_entities: list[str] = data.get("redacted_entities") or []
+    if redacted_entities:
+        metadata["redacted_entities"] = redacted_entities
+
     return [
         stt.SpeechData(
             language=LanguageCode(detected_language),
@@ -594,6 +724,7 @@ def _transcript_to_speech_data(
             confidence=raw_words[0].get("confidence", 0.0) if raw_words else 0.0,
             words=words,
             speaker_id=speaker_id,
+            metadata=metadata or None,
         )
     ]
 
@@ -609,11 +740,14 @@ def _batch_transcription_to_speech_event(
     #   "audio_length": str,   # duration in seconds as a string
     #   "words":        [{"word": str, "start": float, "end": float,
     #                     "confidence": float, "speaker": str}],
+    #   "utterances":   [{"text": str, "start": float, "end": float,
+    #                     "speaker": str}],  # present when word_timestamps=True
     #   "language":     str,
     #   "metadata":     {"filename": str, "duration": float, "fileSize": int}
     # }
     transcript = data.get("transcription", "")
     raw_words: list[dict[str, Any]] = data.get("words") or []
+    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
     detected_language = data.get("language", language) or language
 
     words: list[TimedString] | None = (
@@ -643,6 +777,7 @@ def _batch_transcription_to_speech_event(
                 end_time=end_time,
                 confidence=raw_words[0].get("confidence", 0.0) if raw_words else 0.0,
                 words=words,
+                metadata={"utterances": raw_utterances} if raw_utterances else None,
             )
         ],
     )

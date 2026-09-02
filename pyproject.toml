@@ -14,6 +14,7 @@ livekit-plugins-azure = { workspace = true }
 livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
+livekit-plugins-bland = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
@@ -44,6 +45,7 @@ livekit-plugins-neuphonic = { workspace = true }
 livekit-plugins-nltk = { workspace = true }
 livekit-plugins-nvidia = { workspace = true }
 livekit-plugins-openai = { workspace = true }
+livekit-plugins-palabra = { workspace = true }
 livekit-plugins-perplexity = { workspace = true }
 livekit-plugins-protoface = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
@@ -76,7 +78,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents"]
+members = ["livekit-plugins/*", "livekit-agents", "examples/avatar", "examples/drive_thru", "examples/expressive_agent", "examples/frontdesk", "examples/healthcare", "examples/homepage", "examples/hotel_receptionist", "examples/inference", "examples/survey", "examples/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",

@@ -214,16 +214,28 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                url,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    API_AUTH_HEADER: self._opts.api_key,
-                },
-            ),
-            timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        API_AUTH_HEADER: self._opts.api_key,
+                    },
+                ),
+                timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(type(e).__name__) from None
+
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(
             "Established new Cartesia TTS WebSocket connection",
@@ -475,6 +487,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
+                # A pooled websocket may still hold audio/done from an interrupted
+                # previous context; ignore messages tagged with another context id.
+                if segment_id is not None and segment_id != cartesia_context_id:
+                    continue
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
@@ -522,7 +538,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "flush_done":
                     pass
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         cartesia_context_id = utils.shortuuid()
         try:
@@ -547,6 +563,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",

@@ -24,6 +24,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -216,6 +217,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         ws_base_url: str,
         session: aiohttp.ClientSession,
         language: LanguageCode,
+        turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_threshold: NotGivenOr[float] = NOT_GIVEN,
+        turn_end_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+        keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._encoding = encoding
@@ -226,6 +232,11 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._ws_base_url = ws_base_url
         self._session = session
         self._language = language
+        self._turn_start_threshold = turn_start_threshold
+        self._turn_eager_end_threshold = turn_eager_end_threshold
+        self._turn_end_threshold = turn_end_threshold
+        self._turn_end_timeout_ms = turn_end_timeout_ms
+        self._keyterm = keyterm
         self._request_id = ""
         self._speaking = False
         self._speech_duration: float = 0.0
@@ -359,11 +370,22 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        params = {
-            "model": self._model,
-            "sample_rate": str(self._sample_rate),
-            "encoding": self._encoding,
-        }
+        # keyterm may repeat, so params is a list of pairs rather than a dict
+        params: list[tuple[str, str]] = [
+            ("model", str(self._model)),
+            ("sample_rate", str(self._sample_rate)),
+            ("encoding", str(self._encoding)),
+        ]
+        if utils.is_given(self._turn_start_threshold):
+            params.append(("turn_start_threshold", str(self._turn_start_threshold)))
+        if utils.is_given(self._turn_eager_end_threshold):
+            params.append(("turn_eager_end_threshold", str(self._turn_eager_end_threshold)))
+        if utils.is_given(self._turn_end_threshold):
+            params.append(("turn_end_threshold", str(self._turn_end_threshold)))
+        if utils.is_given(self._turn_end_timeout_ms):
+            params.append(("turn_end_timeout_ms", str(self._turn_end_timeout_ms)))
+        if utils.is_given(self._keyterm):
+            params.extend(("keyterm", term) for term in self._keyterm)
 
         ws_url = f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}"
 
@@ -384,8 +406,19 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": c_request_id},
             )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to cartesia", retryable=True) from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to cartesia", retryable=True) from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(
+                f"failed to connect to cartesia ({type(e).__name__})",
+                retryable=True,
+            ) from None
         return ws
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:
@@ -486,12 +519,12 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         if data["type"] == "error":
             message = data.get("message") or data.get("title") or "unknown error from cartesia"
             status_code = data.get("status_code") or 500
-            logger.warning("cartesia sent an error", extra={"data": data})
+            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
             return
 
-        logger.warning("received unexpected message from Cartesia STT: %s", data)
+        logger.warning("received unexpected message from Cartesia STT", extra={"lk.pii.data": data})
 
     def update_options(
         self,

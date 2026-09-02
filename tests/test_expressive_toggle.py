@@ -4,9 +4,10 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference
 from livekit.agents.llm.chat_context import ChatContext
-from livekit.agents.voice import presets
+from livekit.agents.utils import is_given
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import (
     EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID,
     _strip_assistant_markup,
@@ -21,7 +22,13 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 SESSION_TIMEOUT = 60
 
 
-MARKED_UP = '<expression value="happy"/> Welcome back! [chuckling] Glad you called again.'
+# what an expressive turn actually leaves in history: the expr markers the LLM emitted,
+# plus (defensively) a hallucinated native tag. Square brackets are *not* markup here —
+# they reach history as prose or markdown links, so the scrub must leave them alone.
+MARKED_UP = (
+    '<expr type="expression" label="happy"/> Welcome back! <sound value="chuckle"/> '
+    "Glad you called again. Docs: [the guide](https://docs.livekit.io)."
+)
 
 
 def test_strip_assistant_markup() -> None:
@@ -38,10 +45,12 @@ def test_strip_assistant_markup() -> None:
         for item in ctx.items
         if item.type == "message" and item.role == "assistant"
     ]
-    assert "<expression" not in (assistant_texts[0] or "")
-    assert "[chuckling]" not in (assistant_texts[0] or "")
+    assert "<expr" not in (assistant_texts[0] or "")
+    assert "<sound" not in (assistant_texts[0] or "")
     assert "Welcome back!" in (assistant_texts[0] or "")
     assert "Glad you called again." in (assistant_texts[0] or "")
+    # markdown links survive: brackets are prose, not markup
+    assert "[the guide](https://docs.livekit.io)" in (assistant_texts[0] or "")
 
     # user content is never touched, tag-shaped or not
     user_text = next(
@@ -51,20 +60,6 @@ def test_strip_assistant_markup() -> None:
 
     # tag-free assistant content is left as-is (fast path)
     assert plain.content is plain_content
-
-
-def test_expressive_internal_toggle() -> None:
-    # expressive mode is not publicly exposed; the pipeline stays disabled unless
-    # the framework-internal attribute is set
-    session = AgentSession()
-    assert session._expressive is False
-
-    session._expressive = presets.CUSTOMER_SERVICE
-    assert session._expressive == presets.CUSTOMER_SERVICE
-
-    # untouched by unrelated option updates
-    session.update_options()
-    assert session._expressive == presets.CUSTOMER_SERVICE
 
 
 def test_update_and_remove_expressive_instructions() -> None:
@@ -80,6 +75,70 @@ def test_update_and_remove_expressive_instructions() -> None:
     assert all(item.id != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in ctx.items)
 
 
+def test_expressive_param_defaults_off() -> None:
+    assert AgentSession()._expressive is False
+    assert AgentSession(expressive=True)._expressive is True
+
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    assert AgentSession(expressive=opts)._expressive == opts
+
+
+def test_update_options_expressive() -> None:
+    session = AgentSession(expressive=True)
+    assert session._expressive is True
+
+    # turn off
+    session.update_options(expressive=False)
+    assert session._expressive is False
+
+    # turn back on with options
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    session.update_options(expressive=opts)
+    assert session._expressive == opts
+
+    # untouched when not given
+    session.update_options()
+    assert session._expressive == opts
+
+
+def test_agent_expressive() -> None:
+    # unset by default: falls back to the session value at runtime
+    assert not is_given(Agent(instructions="test").expressive)
+
+    agent = Agent(instructions="test", expressive=True)
+    assert agent.expressive is True
+
+    agent.update_options(expressive=False)
+    assert agent.expressive is False
+
+    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
+    agent.update_options(expressive=opts)
+    assert agent.expressive == opts
+
+    # untouched when not given
+    agent.update_options()
+    assert agent.expressive == opts
+
+
+def test_agent_expressive_overrides_session() -> None:
+    # constructed hermetically; fishaudio declares a markup dialect, which expressive requires
+    tts = inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake")
+
+    session_on = AgentSession(expressive=True, tts=tts)
+    session_off = AgentSession(tts=tts)
+
+    def resolves(agent: Agent, session: AgentSession) -> bool:
+        return AgentActivity(agent, session)._resolve_expressive_options() is not None
+
+    # agent unset: the session value applies
+    assert resolves(Agent(instructions="test"), session_on)
+    assert not resolves(Agent(instructions="test"), session_off)
+
+    # agent value wins over the session in both directions
+    assert not resolves(Agent(instructions="test", expressive=False), session_on)
+    assert resolves(Agent(instructions="test", expressive=True), session_off)
+
+
 async def test_expressive_off_turn_scrubs_history() -> None:
     """A turn that runs with expressive off removes the injected markup guide and
     scrubs markup from past assistant turns."""
@@ -90,8 +149,10 @@ async def test_expressive_off_turn_scrubs_history() -> None:
 
     # FakeTTS has no markup dialect, so expressive resolves to off even though the
     # session asks for it — same situation as a handoff to a non-expressive TTS.
-    session = create_session(actions)
-    session._expressive = presets.CUSTOMER_SERVICE
+    session = create_session(
+        actions,
+        extra_kwargs={"expressive": {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}},
+    )
 
     # seed history as if previous turns ran expressive: marked-up assistant text +
     # the injected markup guide
@@ -112,9 +173,10 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     ]
     assert assistant_texts, "expected assistant messages in history"
     for text in assistant_texts:
-        assert "<expression" not in (text or "")
-        assert "[chuckling]" not in (text or "")
-    # the seeded message's visible text survives the scrub
+        assert "<expr" not in (text or "")
+        assert "<sound" not in (text or "")
+    # the seeded message's visible text survives the scrub, links included
     assert any("Welcome back!" in (t or "") for t in assistant_texts)
+    assert any("[the guide](https://docs.livekit.io)" in (t or "") for t in assistant_texts)
     # and the new reply went through normally
     assert any("I'm doing well" in (t or "") for t in assistant_texts)

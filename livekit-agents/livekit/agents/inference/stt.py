@@ -30,7 +30,12 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_SESSION_ID,
+    create_access_token,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
@@ -63,13 +68,22 @@ XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
+    "speechmatics/linden-1",
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
+GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    min_volume: float  # default: not specified
-    max_silence_duration_secs: float  # default: not specified
+    min_volume: float  # ink-whisper only; default: not specified
+    max_silence_duration_secs: float  # ink-whisper only; default: not specified
+    # Turn-detection tuning for turn-detecting models (e.g. ink-2). The gateway
+    # validates these against Cartesia's documented ranges.
+    turn_start_threshold: float  # range 0.5-0.9, default 0.8
+    turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
+    turn_end_threshold: float  # range 0.05-0.5, default 0.2
+    turn_end_timeout_ms: int  # range 640-11200, default 5600
+    keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
@@ -140,19 +154,19 @@ class ElevenlabsOptions(TypedDict, total=False):
 class SpeechmaticsOptions(TypedDict, total=False):
     domain: str  # e.g. "finance"
     output_locale: str  # BCP-47 locale for output formatting
-    max_delay: float  # 0.7-4.0 seconds, default 1.0
-    max_delay_mode: str  # "flexible" | "fixed"
+    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: str  # "flexible" | "fixed"; RT only
     diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
     speaker_sensitivity: float  # 0.0-1.0
     max_speakers: int
     prefer_current_speaker: bool
     enable_partials: bool  # default True (overridden by gateway)
-    enable_entities: bool
+    enable_entities: bool  # RT only
     punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]
-    end_of_utterance_silence_trigger: float  # seconds of silence before final
-    audio_filtering_config: dict[str, Any]
-    transcript_filtering_config: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]  # RT only
+    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    audio_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
@@ -172,6 +186,14 @@ class InworldOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
     prompts: list[str]
     vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class GoogleOptions(TypedDict, total=False):
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -218,6 +240,9 @@ def _keyterms_extra_for_model(
     extra_kwargs = extra_kwargs or {}
     session_keyterms = session_keyterms or []
 
+    if model == "speechmatics/linden-1":
+        return None
+
     if model.startswith("speechmatics/"):
         # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
         existing = list(extra_kwargs.get("additional_vocab", []))
@@ -251,6 +276,46 @@ _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
 def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> bool:
     """True if the model natively carries agent_context (AssemblyAI U3 Pro family)."""
     return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
+
+
+# Models verified to carry word timings. Unknown models stay disabled until verified.
+_WORD_ALIGNED_MODELS = frozenset(
+    {
+        "deepgram/nova-3",
+        "deepgram/nova-3-medical",
+        "deepgram/nova-2",
+        "deepgram/nova-2-medical",
+        "deepgram/nova-2-conversationalai",
+        "deepgram/nova-2-phonecall",
+        "deepgram/flux-general",
+        "deepgram/flux-general-en",
+        "deepgram/flux-general-multi",
+        "cartesia/ink-whisper",
+        "assemblyai/universal-streaming",
+        "assemblyai/universal-streaming-multilingual",
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "elevenlabs/scribe_v2_realtime",
+        "xai/stt-1",
+        "speechmatics/enhanced",
+        "speechmatics/standard",
+    }
+)
+
+
+def _aligned_transcript_for_model(
+    model: NotGivenOr[STTModels | str],
+) -> Literal["word", False]:
+    """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
+
+    False when the model sends no word timings, and for "auto", where the provider is
+    picked server-side per language and so can't be known here. Claiming alignment we
+    don't have is the costlier error: it enables adaptive interruption, which then turns
+    off the fast VAD barge-in path it can't actually replace.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    return "word" if model in _WORD_ALIGNED_MODELS else False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
@@ -287,16 +352,19 @@ def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics = (
-        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    is_speechmatics_rt = (
+        is_given(model)
+        and isinstance(model, str)
+        and model.startswith("speechmatics/")
+        and model != "speechmatics/linden-1"
     )
-    if vad_instance is not None and not is_speechmatics:
+    if vad_instance is not None and not is_speechmatics_rt:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics and vad_instance is None:
+    if is_speechmatics_rt and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -327,6 +395,7 @@ STTModels = (
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
+    | GoogleModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -491,6 +560,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: GoogleModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -526,6 +612,7 @@ class STT(stt.STT):
             | XaiOptions
             | SpeechmaticsOptions
             | InworldOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -548,7 +635,8 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to Speechmatics models.
+                gateway on end of speech. Only applicable to the Speechmatics RT models
+                (enhanced/standard); linden-1 detects turns server-side.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -566,13 +654,23 @@ class STT(stt.STT):
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
 
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_models = _normalize_fallback(fallback)
+        models = [model]
+        if is_given(fallback_models):
+            models.extend(item["model"] for item in fallback_models)
+        aligned_transcript: Literal["word", False] = (
+            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+        )
+
         # chat_context follows the model's native support; the session decides whether to forward
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
                 diarization=diarization_enabled,
-                aligned_transcript="word",
+                aligned_transcript=aligned_transcript,
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
@@ -600,9 +698,6 @@ class STT(stt.STT):
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
-        if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)
 
         self._opts = STTOptions(
             model=model,
@@ -694,10 +789,16 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            models = [self._opts.model]
+            if is_given(self._opts.fallback):
+                models.extend(item["model"] for item in self._opts.fallback)
             self._capabilities = replace(
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
+                aligned_transcript=(
+                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+                ),
             )
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -924,6 +1025,8 @@ class SpeechStream(stt.SpeechStream):
                 msg_type = data.get("type")
                 if msg_type == "session.created":
                     pass
+                elif msg_type == "start_of_speech":
+                    self._process_start_of_speech()
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
                 elif msg_type == "preflight_transcript":
@@ -1011,6 +1114,7 @@ class SpeechStream(stt.SpeechStream):
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
+        session_id = headers.get(HEADER_SESSION_ID)
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
@@ -1020,6 +1124,8 @@ class SpeechStream(stt.SpeechStream):
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
+            if session_id is not None:
+                self._request_id = session_id
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
@@ -1070,17 +1176,24 @@ class SpeechStream(stt.SpeechStream):
         )
         self._event_ch.send_nowait(event)
 
+    def _process_start_of_speech(self) -> None:
+        """Onset reported by a provider that detects it server-side (e.g. Cartesia Ink-2).
+
+        Without this the first transcript has to stand in for onset, which lands about
+        800ms late because it waits for a word to be decoded.
+        """
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
 
         if not text and not is_final:
             return
-        # We'll have a more accurate way of detecting when speech started when we have VAD
-        if not self._speaking:
-            self._speaking = True
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+        self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 

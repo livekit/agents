@@ -21,9 +21,22 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..tts._provider_format import drop_bracket_cues
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_SESSION_ID,
+    create_access_token,
+    create_inference_request_id,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 CartesiaModels = Literal[
     "cartesia",
@@ -51,7 +64,6 @@ ElevenlabsModels = Literal[
 ]
 RimeModels = Literal[
     "rime",
-    "rime/arcana",
     "rime/coda",
     "rime/mistv2",
     "rime/mistv3",
@@ -109,7 +121,7 @@ class FallbackModel(TypedDict):
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
+    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda")."""
 
     voice: str
     """Voice to use for the model."""
@@ -180,7 +192,7 @@ class ElevenlabsOptions(TypedDict, total=False):
 
 
 class RimeOptions(TypedDict, total=False):
-    """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
+    """Rime-specific WebSocket JSON query parameters.
     See: https://docs.rime.ai/api-reference/endpoint/websockets-json
     """
 
@@ -242,6 +254,12 @@ class _TTSOptions:
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
+
+
+@dataclass(eq=False)
+class _TTSConnection:
+    ws: aiohttp.ClientWebSocketResponse
+    session_id: str | None
 
 
 class TTS(tts.TTS):
@@ -498,7 +516,7 @@ class TTS(tts.TTS):
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[_TTSConnection](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -520,8 +538,8 @@ class TTS(tts.TTS):
                 return ""  # older inworld models don't support markup
             return provider
 
-        # llm_instructions / to_text / normalize / convert are inherited from the
-        # base Markup, keyed on _provider_key() above.
+        # llm_instructions / normalize / convert are inherited from the base Markup,
+        # keyed on _provider_key() above.
 
     @classmethod
     def from_model_string(cls, model: str) -> TTS:
@@ -544,7 +562,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "livekit"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> _TTSConnection:
         session = self._ensure_session()
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
@@ -554,6 +572,7 @@ class TTS(tts.TTS):
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
+        session_id = headers.get(HEADER_SESSION_ID)
         ws = None
         try:
             ws = await asyncio.wait_for(
@@ -606,10 +625,10 @@ class TTS(tts.TTS):
                 "failed to send session.create message to LiveKit Inference TTS"
             ) from e
 
-        return ws
+        return _TTSConnection(ws=ws, session_id=session_id)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
+    async def _close_ws(self, connection: _TTSConnection) -> None:
+        await connection.ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -681,16 +700,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
+        # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
+        # of an unclosed span here between messages
+        self._held_tokens: list[TimedString] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/pcm",
-        )
+        request_id = ""
 
         # chunking defaults (cap + expressive batch size) live in _provider_format
         from ..tts._provider_format import sentence_tokenizer
@@ -770,36 +785,52 @@ class SynthesizeStream(tts.SynthesizeStream):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif data.get("type") == "output_alignment":
-                    from ..voice.io import TimedString
-
+                    aligned: list[TimedString] = []
                     if words := data.get("words"):
-                        for word_info in words:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    word_info["word"],
-                                    start_time=word_info["start"],
-                                    end_time=word_info["end"],
-                                )
+                        aligned = [
+                            TimedString(
+                                f"{w['word']} " if provider == "cartesia" else w["word"],
+                                start_time=w["start"],
+                                end_time=w["end"],
                             )
+                            for w in words
+                        ]
                     elif chars := data.get("chars"):
-                        for char_info in chars:
-                            output_emitter.push_timed_transcript(
-                                TimedString(
-                                    char_info["char"],
-                                    start_time=char_info["start"],
-                                    end_time=char_info["end"],
-                                )
-                            )
+                        aligned = [
+                            TimedString(c["char"], start_time=c["start"], end_time=c["end"])
+                            for c in chars
+                        ]
+                    if aligned:
+                        # the provider aligned the *converted* text, so under expressive it
+                        # carries native cues that were never spoken
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues(aligned, self._held_tokens)
+                            if self._expressive
+                            else aligned
+                        )
                 elif data.get("type") == "done":
+                    if self._held_tokens:  # release an unclosed span, cue unresolved
+                        output_emitter.push_timed_transcript(
+                            drop_bracket_cues([], self._held_tokens, final=True)
+                        )
                     output_emitter.end_input()
                     break
                 elif data.get("type") == "error":
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as connection:
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
+                request_id = create_inference_request_id(connection.session_id, "tts")
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    stream=True,
+                    mime_type="audio/pcm",
+                )
+                ws = connection.ws
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

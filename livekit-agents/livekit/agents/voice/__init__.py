@@ -2,7 +2,10 @@ from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
+    ExpressiveOptions,
+    NonverbalOptions,
     RecordingOptions,
+    SpeechSteeringOptions,
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
@@ -26,6 +29,7 @@ from .events import (
     ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
 from .keyterm_detection import (
@@ -45,7 +49,10 @@ from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "ExpressiveOptions",
+    "NonverbalOptions",
     "RecordingOptions",
+    "SpeechSteeringOptions",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
@@ -63,6 +70,7 @@ __all__ = [
     "CloseEvent",
     "CloseReason",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
     "AgentFalseInterruptionEvent",

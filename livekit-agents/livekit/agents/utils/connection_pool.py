@@ -173,14 +173,27 @@ class ConnectionPool(Generic[T]):
         This method starts a background task that creates a new connection if none exist.
         The task automatically cleans itself up when the connection pool is closed.
         """
-        if self._prewarm_task is not None or self._connections:
+        if self._prewarm_task is not None:
+            task = self._prewarm_task()
+            if task is not None and not task.done():
+                return
+            self._prewarm_task = None
+
+        if self._connections:
             return
 
         async def _prewarm_impl() -> None:
-            async with self._connect_lock:
-                if not self._connections:
-                    conn = await self._connect(timeout=self._connect_timeout)
-                    self._available.add(conn)
+            try:
+                async with self._connect_lock:
+                    if not self._connections:
+                        conn = await self._connect(timeout=self._connect_timeout)
+                        self._available.add(conn)
+            except Exception as e:
+                # exception details can contain request headers or URL credentials.
+                logger.warning(
+                    "failed to prewarm connection pool",
+                    extra={"exception_type": type(e).__name__},
+                )
 
         task = asyncio.create_task(_prewarm_impl())
         self._prewarm_task = weakref.ref(task)

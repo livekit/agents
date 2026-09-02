@@ -37,6 +37,8 @@ class LLMModelUsage(_BaseModelUsage):
     """Total input tokens."""
     input_cached_tokens: int = 0
     """Input tokens served from cache."""
+    input_cache_creation_tokens: int = 0
+    """Input tokens used to write to the prompt cache (e.g. Anthropic cache writes)."""
     input_audio_tokens: int = 0
     """Input audio tokens (for multimodal models)."""
     input_cached_audio_tokens: int = 0
@@ -56,6 +58,8 @@ class LLMModelUsage(_BaseModelUsage):
     """Output audio tokens (for multimodal models)."""
     output_text_tokens: int = 0
     """Output text tokens."""
+    output_reasoning_tokens: int = 0
+    """Output tokens spent on hidden reasoning. Already counted in ``output_tokens``."""
 
     session_duration: float = 0.0
     """Total session connection duration in seconds (for session-based billing like xAI)."""
@@ -201,7 +205,9 @@ class ModelUsageCollector:
             usage = self._get_llm_usage(provider, model)
             usage.input_tokens += metrics.prompt_tokens
             usage.input_cached_tokens += metrics.prompt_cached_tokens
+            usage.input_cache_creation_tokens += metrics.cache_creation_tokens
             usage.output_tokens += metrics.completion_tokens
+            usage.output_reasoning_tokens += metrics.reasoning_tokens
 
         elif isinstance(metrics, RealtimeModelMetrics):
             provider, model = self._extract_provider_model(metrics)

@@ -32,6 +32,7 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
@@ -156,7 +157,12 @@ class _ResponsesWebsocket:
 
                 event = json.loads(raw_msg.data)
                 yield event
-                if event["type"] in ["response.completed", "response.failed", "error"]:
+                if event["type"] in [
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                ]:
                     completed = True
                     return
         finally:
@@ -484,8 +490,9 @@ class LLMStream(llm.LLMStream):
                 }
                 async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
-                    self._process_event(parsed_ev)
-                    retryable = False
+                    chunk = self._process_event(parsed_ev)
+                    if chunk is not None and chunk.has_response():
+                        retryable = False
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
@@ -512,8 +519,9 @@ class LLMStream(llm.LLMStream):
 
                 async with stream:
                     async for event in stream:
-                        self._process_event(event)
-                        retryable = False
+                        chunk = self._process_event(event)
+                        if chunk is not None and chunk.has_response():
+                            retryable = False
 
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
@@ -565,11 +573,14 @@ class LLMStream(llm.LLMStream):
             return ResponseCompletedEvent.model_validate(event)
         elif event_type == "response.failed":
             return ResponseFailedEvent.model_validate(event)
+        elif event_type == "response.incomplete":
+            return ResponseIncompleteEvent.model_validate(event)
         return None
 
-    def _process_event(self, event: ResponseStreamEvent | None) -> None:
+    def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
+        """Handle one stream event, returning the chunk it sent to the caller, if any."""
         if event is None:
-            return
+            return None
         chunk = None
         if isinstance(event, ResponseErrorEvent):
             self._handle_error(event)
@@ -583,8 +594,11 @@ class LLMStream(llm.LLMStream):
             chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
+        if isinstance(event, ResponseIncompleteEvent):
+            self._handle_response_incomplete(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
+        return chunk
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
         error_code = -1
@@ -598,6 +612,15 @@ class LLMStream(llm.LLMStream):
         err = event.response.error
         raise APIStatusError(
             err.message if err else "response.failed",
+            status_code=-1,
+            retryable=False,
+        )
+
+    def _handle_response_incomplete(self, event: ResponseIncompleteEvent) -> None:
+        details = event.response.incomplete_details
+        reason = details.reason if details else None
+        raise APIStatusError(
+            f"response incomplete: {reason or 'reason unavailable'}",
             status_code=-1,
             retryable=False,
         )
@@ -617,7 +640,7 @@ class LLMStream(llm.LLMStream):
                     "provider tool executed",
                     extra={
                         "tool_type": item.type,
-                        "result": item.model_dump(exclude_none=True),
+                        "lk.pii.result": item.model_dump(exclude_none=True),
                     },
                 )
 

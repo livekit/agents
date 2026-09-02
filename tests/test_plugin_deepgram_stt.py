@@ -32,6 +32,9 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         eager_eot_threshold=opts_kwargs.get("eager_eot_threshold", NOT_GIVEN),
         eot_timeout_ms=opts_kwargs.get("eot_timeout_ms", NOT_GIVEN),
         language_hint=opts_kwargs.get("language_hint", []),
+        numerals=opts_kwargs.get("numerals", False),
+        profanity_filter=opts_kwargs.get("profanity_filter", False),
+        redact=opts_kwargs.get("redact", NOT_GIVEN),
     )
     opts.keyterm = opts_kwargs.get("keyterm", [])
     stream = SimpleNamespace(
@@ -105,6 +108,38 @@ async def test_flux_reconnect_fields_skip_inband_configure():
     assert ws.sent == []
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("numerals", True), ("profanity_filter", True), ("redact", "numbers")],
+)
+async def test_flux_connection_time_fields_trigger_reconnect_not_configure(field, value):
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    ws = _FakeWS()
+    stream = _make_flux_stream(ws=ws)
+    SpeechStreamv2.update_options(stream, **{field: value})
+
+    # Flux can't toggle these via Configure, only at connection time
+    assert getattr(stream._opts, field) == value
+    assert stream._reconnect_event.is_set()
+    assert stream._reconfigure_atask is None
+    assert ws.sent == []
+
+
+async def test_flux_connection_config_includes_formatting_fields():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    config = SpeechStreamv2._live_config(
+        _make_flux_stream(numerals=True, profanity_filter=True, redact="aggressive_numbers")
+    )
+    assert config["numerals"] is True
+    assert config["profanity_filter"] is True
+    assert config["redact"] == "aggressive_numbers"
+
+    default_config = SpeechStreamv2._live_config(_make_flux_stream())
+    assert not {"numerals", "profanity_filter", "redact"} & default_config.keys()
+
+
 async def test_flux_configure_sends_only_changed_fields():
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
 
@@ -154,3 +189,105 @@ async def test_flux_configure_noop_when_disconnected():
     await stream._reconfigure_atask
 
     assert stream._opts.keyterm == ["LiveKit"]
+
+
+class _LiveWS:
+    """Records what the send loop writes. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        # a single ordered log, so "Finalize came after the audio" is assertable
+        self.wire: list[str] = []
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.wire.append(json.loads(data)["type"])
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.wire.append("audio")
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+    def sent(self) -> list[str]:
+        """The wire log without the periodic KeepAlive noise."""
+        return [msg for msg in self.wire if msg != "KeepAlive"]
+
+
+def _live_stream(ws: _LiveWS):
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt import STT, SpeechStream
+
+    instance = STT(api_key="test-key", language="en-US", sample_rate=16000)
+    stream = SpeechStream(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect
+    return stream
+
+
+def _frame(ms: int, sample_rate: int = 16000):
+    from livekit import rtc
+
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * samples,
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _wait_until(predicate, *, timeout: float = 5.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_flush_finalizes_the_turn_when_no_audio_is_left_to_send():
+    # 50ms is exactly one repack chunk, so AudioByteStream.flush() returns no frames.
+    # Finalize must still go out, otherwise the turn waits on Deepgram's own endpointing
+    # and has_ended leaks into the next utterance.
+    ws = _LiveWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: ws.sent() == ["audio"])
+
+        stream.flush()
+        await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_finalizes_after_the_buffered_audio():
+    # a partial chunk is still pending: it has to reach the server before Finalize,
+    # otherwise the tail of the turn is transcribed against the next one
+    ws = _LiveWS()
+    stream = _live_stream(ws)
+    try:
+        stream.push_frame(_frame(30))
+        stream.flush()
+        await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
+    finally:
+        await stream.aclose()
