@@ -253,15 +253,100 @@ def test_session_keyterms_do_not_clobber_caller_keywords():
     assert stt._opts.keywords == ["Agents"]
 
 
-def test_update_options_keeps_a_streams_own_language():
+def test_update_options_keeps_an_explicit_per_stream_language():
     """`stream(language=...)` speaks for one stream; a recognizer-wide update does not."""
-    stt, stream = _make_stream(meta.STT(api_key="test-key", language="en"))
-    stream._opts.languages = ["fr"]
+    stt = meta.STT(api_key="test-key", language="en")
+    stt._session = MagicMock()
 
-    stt.update_options(keywords=["Muse"])
+    def _fake_create_task(coro: Any, **kwargs: Any) -> MagicMock:
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream(language="fr")
+
+    stt.update_options(language="de", keywords=["Muse"])
 
     assert stream._opts.handshake("K")["languageBias"] == ["French"]
     assert stream._opts.handshake("K")["keywords"] == ["Muse"]
+
+
+def test_update_options_reaches_a_stream_without_its_own_language():
+    """A stream that never asked for a language follows the recognizer."""
+    stt, stream = _make_stream(meta.STT(api_key="test-key", language="en"))
+
+    stt.update_options(language="de")
+
+    assert stream._opts.handshake("K")["languageBias"] == ["German"]
+
+
+def test_mode_update_moves_the_diarization_capability():
+    stt = meta.STT(api_key="test-key", mode="ENDPOINTING")
+    assert stt.capabilities.diarization is False
+
+    stt.update_options(mode="DIARIZATION")
+
+    assert stt.capabilities.diarization is True
+
+
+# ---------------------------------------------------------------------------
+# Reconnect scheduling and shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_a_reconnect_requested_mid_turn_waits_for_the_boundary():
+    """Reopening the socket mid-utterance loses the turn's final, so it is deferred."""
+    stt, stream = _make_stream()
+    stream._process_stream_event({"type": "speechStart", "turnId": "t1"})
+
+    stt._update_session_keyterms(["Muse"])
+    assert stream._reconnect_event.is_set() is False
+
+    stream._process_stream_event({"type": "speechComplete", "transcript": "hello"})
+    assert stream._reconnect_event.is_set() is True
+
+
+def test_a_reconnect_requested_between_turns_fires_immediately():
+    stt, stream = _make_stream()
+
+    stt._update_session_keyterms(["Muse"])
+
+    assert stream._reconnect_event.is_set() is True
+
+
+async def test_aclose_closes_the_streams_it_handed_out():
+    """The base implementation is a no-op, which would leave stream tasks running."""
+    stt, stream = _make_stream()
+    closed: list[bool] = []
+
+    async def _fake_aclose() -> None:
+        closed.append(True)
+
+    stream.aclose = _fake_aclose  # type: ignore[method-assign]
+
+    await stt.aclose()
+
+    assert closed == [True]
+    assert len(stt._streams) == 0
+
+
+async def test_aclose_keeps_going_when_one_stream_fails():
+    stt, first = _make_stream()
+    _, second = _make_stream(stt)
+    closed: list[str] = []
+
+    async def _boom() -> None:
+        raise RuntimeError("already gone")
+
+    async def _ok() -> None:
+        closed.append("second")
+
+    first.aclose = _boom  # type: ignore[method-assign]
+    second.aclose = _ok  # type: ignore[method-assign]
+
+    await stt.aclose()
+
+    assert closed == ["second"]
 
 
 def test_diarization_mode_advertises_the_capability():

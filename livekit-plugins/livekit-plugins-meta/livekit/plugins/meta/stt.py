@@ -72,6 +72,9 @@ DEFAULT_MODEL: MuseModels = "muse-voice-transcribe-1.0"
 # Muse holds a realtime session for at most 60 minutes. Rotate well before that so the
 # swap never lands inside a turn; a rotation mid-utterance would drop its final.
 _SESSION_ROTATE_AFTER = 55 * 60
+# How long rotation will wait for a turn to finish before reconnecting anyway. The
+# server drops the session at 60 minutes regardless, so this cannot be open-ended.
+_ROTATE_GRACE = 4 * 60
 
 # The server closes a stream that stops sending audio without an endStream, so gaps in
 # the input are filled with PCM silence rather than left empty.
@@ -235,6 +238,10 @@ class STT(stt.STT):
             self._opts.model = model
         if is_given(mode):
             self._opts.mode = mode
+            # Speaker labels only arrive in DIARIZATION mode, so the advertised
+            # capability has to move with it; adapters read it to decide whether to
+            # trust SpeechData.speaker_id.
+            self._capabilities.diarization = mode == "DIARIZATION"
         if is_given(language):
             self._opts.languages = [language] if isinstance(language, str) else list(language)
         if is_given(keywords):
@@ -273,9 +280,23 @@ class STT(stt.STT):
             api_key=self._api_key,
             base_url=self._base_url,
             http_session=self._ensure_session(),
+            language_override=is_given(language),
         )
         self._streams.add(stream)
         return stream
+
+    async def aclose(self) -> None:
+        """Close the recognizer and every stream it handed out.
+
+        The base implementation is a no-op, which would leave each stream's task and
+        WebSocket running past the recognizer. The HTTP session is not touched: it is
+        either the caller's or the job-scoped one from ``http_context``.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # A stream that fails to close must not strand the ones behind it.
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
+        await super().aclose()
 
     async def _recognize_impl(
         self,
@@ -356,13 +377,17 @@ class SpeechStream(stt.RecognizeStream):
         api_key: str,
         base_url: str,
         http_session: aiohttp.ClientSession,
+        language_override: bool = False,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
         self._base_url = base_url
         self._session = http_session
+        self._language_override = language_override
         self._reconnect_event = asyncio.Event()
+        self._reconnect_requested = False
+        self._turn_active = False
 
         self._request_id = ""
         self._connected_at = time.time()
@@ -381,11 +406,26 @@ class SpeechStream(stt.RecognizeStream):
     def _apply_options(self, opts: _STTOptions) -> None:
         """Take the recognizer's current options and reconnect to apply them.
 
-        The stream's own language stays: it came from the ``stream(language=...)``
-        call for this stream, which a recognizer-wide update does not speak for.
+        A language passed to ``stream(language=...)`` speaks for this stream alone and
+        survives a recognizer-wide update; without that override the stream follows the
+        recognizer, so an ``update_options(language=...)`` does reach it.
         """
-        self._opts = dataclasses.replace(opts, languages=self._opts.languages)
-        self._reconnect_event.set()
+        if self._language_override:
+            self._opts = dataclasses.replace(opts, languages=self._opts.languages)
+        else:
+            self._opts = dataclasses.replace(opts)
+        self._request_reconnect()
+
+    def _request_reconnect(self) -> None:
+        """Reconnect at the next turn boundary.
+
+        Handshake-only settings can only change by reopening the socket, and doing that
+        mid-utterance loses the turn: its final never arrives. Mid-turn requests are
+        held until END_OF_SPEECH releases them.
+        """
+        self._reconnect_requested = True
+        if not self._turn_active:
+            self._reconnect_event.set()
 
     def _on_audio_duration_report(self, duration: float) -> None:
         self._event_ch.send_nowait(
@@ -425,6 +465,9 @@ class SpeechStream(stt.RecognizeStream):
                         await ws.send_bytes(frame.data.tobytes())
                         last_sent = time.monotonic()
 
+                # Input ended inside the collector's period; without this the final
+                # partial interval never reaches STT metrics.
+                self._audio_duration_collector.flush()
                 closing_ws = True
                 await ws.send_str(json.dumps({"type": "endStream"}))
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -448,6 +491,13 @@ class SpeechStream(stt.RecognizeStream):
         async def rotate_task() -> None:
             await asyncio.sleep(_SESSION_ROTATE_AFTER)
             logger.debug("rotating Meta STT session before the 60 minute limit")
+            self._request_reconnect()
+            # _request_reconnect defers to the end of the turn. The server closes the
+            # session at 60 minutes either way, so a turn that never completes cannot
+            # hold the rotation forever.
+            deadline = time.monotonic() + _ROTATE_GRACE
+            while not self._reconnect_event.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(1)
             self._reconnect_event.set()
 
         @utils.log_exceptions(logger=logger)
@@ -570,6 +620,8 @@ class SpeechStream(stt.RecognizeStream):
         # has to move with it - the stream outlives any one socket.
         self._connected_at = time.time()
         self._pending_eos = None
+        self._turn_active = False
+        self._reconnect_requested = False
         return ws
 
     def _emit(self, ev: SpeechEvent) -> None:
@@ -587,6 +639,10 @@ class SpeechStream(stt.RecognizeStream):
             self._emit(self._pending_eos)
             self._pending_eos = None
 
+        self._turn_active = False
+        if self._reconnect_requested:
+            self._reconnect_event.set()
+
     def _process_stream_event(self, data: dict[str, Any]) -> None:
         event_type = data.get("type")
 
@@ -594,6 +650,7 @@ class SpeechStream(stt.RecognizeStream):
             # A turn that never produced its speechComplete would otherwise strand the
             # held boundary; release it before opening the next one.
             self._flush_pending_eos()
+            self._turn_active = True
             self._speaker_id = None
             audio_ms = data.get("audioProcessedMs")
             self._emit(
