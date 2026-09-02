@@ -141,10 +141,10 @@ class _RealtimeOptions:
 
 
 class PhonicSessionConfigUpdate(TypedDict, total=False):
-    """Config fields that can be changed mid-session via :meth:`RealtimeModel.update_config` /
-    :meth:`RealtimeSession.update_config`. Connection-level fields (``api_key``, ``model``,
-    ``conn_options``, ``base_url``) and ``instructions`` (managed through the Agent handoff) are
-    intentionally excluded."""
+    """The config fields that can be changed mid-session via :meth:`RealtimeModel.update_options` /
+    :meth:`RealtimeSession.update_options` (passed as the ``config`` argument). Connection-level
+    fields (``api_key``, ``model``, ``conn_options``, ``base_url``) and ``instructions`` (managed
+    through the Agent handoff) are intentionally excluded."""
 
     phonic_agent: str
     voice: str
@@ -414,22 +414,18 @@ class RealtimeModel(llm.RealtimeModel):
         self._sessions.add(sess)
         return sess
 
-    def update_options(
-        self,
-    ) -> None:
-        logger.warning("update_options is not supported by the Phonic realtime model.")
+    def update_options(self, *, config: NotGivenOr[PhonicSessionConfigUpdate] = NOT_GIVEN) -> None:
+        """Change Phonic config fields on the active session(s) mid-conversation (e.g. switch
+        ``default_language`` when advancing to the next task). ``config`` is any subset of the
+        session config; it is applied immediately via a Phonic ``reset``.
 
-    async def update_config(self, config: PhonicSessionConfigUpdate) -> None:
-        """Change one or more Phonic config fields on the active session(s) mid-conversation (e.g.
-        switch ``default_language`` when advancing to the next task). Forwards to
-        :meth:`RealtimeSession.update_config`, which applies the change immediately via a Phonic
-        ``reset``. No-op (with a warning) when there is no active session."""
-        sessions = list(self._sessions)
-        if not sessions:
-            logger.warning("Phonic update_config called but there is no active session")
+        When ``default_language`` changes and ``additional_languages`` isn't in ``config``, the
+        previous default is rotated into ``additional_languages`` (and the new default removed) so
+        the language set stays intact — the API rejects a default that also appears there."""
+        if not is_given(config):
             return
-        for sess in sessions:
-            await sess.update_config(config)
+        for sess in self._sessions:
+            sess.update_options(config=config)
 
     async def aclose(self) -> None:
         pass
@@ -466,6 +462,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_lock = asyncio.Lock()
 
         self._generate_reply_task: asyncio.Task[None] | None = None
+        self._options_reset_task: asyncio.Task[None] | None = None
         self._pending_generate_reply_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._instructions_ready = asyncio.Event()
         self._tools_ready = asyncio.Event()
@@ -694,7 +691,7 @@ class RealtimeSession(llm.RealtimeSession):
     async def _send_mid_session_reset(self) -> None:
         """Rebuild the Phonic config from the current options, instructions, tools and conversation
         history and send a ``reset`` so a mid-session change (an Agent handoff via
-        :meth:`_update_session` or a config change via :meth:`update_config`) takes effect. No-op if
+        :meth:`_update_session` or a config change via :meth:`update_options`) takes effect. No-op if
         the socket isn't open yet."""
         system_prompt = self._opts.instructions if is_given(self._opts.instructions) else ""
         turn_history = self._build_turn_history(self._chat_ctx)
@@ -708,51 +705,6 @@ class RealtimeSession(llm.RealtimeSession):
                 tools_payload=self._build_tools_payload(),
             )
             await self._socket.send_reset(ResetPayload(config=config_options))
-
-    async def update_config(self, config: PhonicSessionConfigUpdate) -> None:
-        """Change one or more Phonic config fields mid-session (e.g. ``default_language``, ``voice``,
-        ``boosted_keywords``, no-input-poke settings). The merged config is applied immediately by
-        sending a Phonic ``reset``; fields left unset keep their current values. Instructions and
-        tools are driven by the Agent handoff (``update_instructions``/``update_tools``) and are not
-        accepted here.
-
-        Typically called around a task advance — e.g. ``update_config({"default_language": "es"})``
-        — to switch the language (or any other field) for the next reply. When the default language
-        changes and the caller doesn't set ``additional_languages``, the previous default is rotated
-        into ``additional_languages`` (and the new default removed) so the language set stays intact
-        — the API rejects a default that also appears in ``additional_languages``."""
-        changes: dict[str, typing.Any] = dict(config)
-
-        new_default = changes.get("default_language")
-        if (
-            new_default is not None
-            and new_default != self._opts.default_language
-            and "additional_languages" not in changes
-        ):
-            previous_default = self._opts.default_language
-            merged = ([previous_default] if is_given(previous_default) else []) + (
-                list(self._opts.additional_languages)
-                if is_given(self._opts.additional_languages)
-                else []
-            )
-            deduped: list[str] = []
-            for lang in merged:
-                if lang != new_default and lang not in deduped:
-                    deduped.append(lang)
-            changes["additional_languages"] = deduped
-
-        for key, value in changes.items():
-            setattr(self._opts, key, value)
-
-        if not self._config_sent:
-            # Not connected yet — the initial config send will pick up the merged values.
-            return
-        await self._ready_to_start.wait()
-        if self._session_should_close.is_set():
-            return
-        self._close_current_generation(interrupted=True)
-        self._pending_user_text = None
-        await self._send_mid_session_reset()
 
     def _serialize_phonic_tool(self, name: str) -> dict | str:
         """A phonic_tools entry: an inline built-in object when it's a built-in with a config in
@@ -834,8 +786,63 @@ class RealtimeSession(llm.RealtimeSession):
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}
 
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
-        logger.warning("update_options is not supported by the Phonic realtime model.")
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        config: NotGivenOr[PhonicSessionConfigUpdate] = NOT_GIVEN,
+    ) -> None:
+        # tool_choice is the base update_options param (the framework sends it every turn); Phonic
+        # does not support it and ignores it. Config changes come in via `config`.
+        if not is_given(config):
+            return
+        changes: dict[str, typing.Any] = dict(config)
+
+        # Rotate the previous default into additional_languages when switching default_language so
+        # it stays usable (and drop the new default, which the API forbids there), unless the caller
+        # set additional_languages explicitly.
+        new_default = changes.get("default_language")
+        if (
+            new_default is not None
+            and new_default != self._opts.default_language
+            and "additional_languages" not in changes
+        ):
+            previous_default = self._opts.default_language
+            merged = ([previous_default] if is_given(previous_default) else []) + (
+                list(self._opts.additional_languages)
+                if is_given(self._opts.additional_languages)
+                else []
+            )
+            deduped: list[str] = []
+            for lang in merged:
+                if lang != new_default and lang not in deduped:
+                    deduped.append(lang)
+            changes["additional_languages"] = deduped
+
+        changed = False
+        for name, value in changes.items():
+            if getattr(self._opts, name) != value:
+                setattr(self._opts, name, value)
+                changed = True
+
+        if not changed or not self._config_sent:
+            return
+
+        # update_options is synchronous; coalesce into a single background reset (the options are
+        # already applied, so the latest reset carries them).
+        if self._options_reset_task and not self._options_reset_task.done():
+            self._options_reset_task.cancel()
+        self._options_reset_task = asyncio.create_task(
+            self._apply_options_reset(), name="phonic-options-reset"
+        )
+
+    async def _apply_options_reset(self) -> None:
+        await self._ready_to_start.wait()
+        if self._session_should_close.is_set():
+            return
+        self._close_current_generation(interrupted=True)
+        self._pending_user_text = None
+        await self._send_mid_session_reset()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if (
@@ -1020,6 +1027,9 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._generate_reply_task and not self._generate_reply_task.done():
             await utils.aio.cancel_and_wait(self._generate_reply_task)
+
+        if self._options_reset_task and not self._options_reset_task.done():
+            await utils.aio.cancel_and_wait(self._options_reset_task)
 
         if self._main_atask:
             await utils.aio.cancel_and_wait(self._main_atask)
