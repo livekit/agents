@@ -1528,6 +1528,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return handle
 
+    def add_conversation_item(self, item: llm.ChatMessage) -> bool:
+        """Add a conversation item to the session history and the active agent's context.
+
+        Inserts ``item`` into ``session.history`` and, when an agent is running,
+        into its chat context.  Emits ``conversation_item_added`` so that event
+        listeners (transcript capture, analytics, etc.) observe the item the
+        same way they observe items produced by the normal audio pipeline.
+
+        The call is idempotent: if an item with the same ``id`` already exists
+        in the session history the method returns ``False`` and does nothing.
+
+        Args:
+            item: The ChatMessage to add.
+
+        Returns:
+            ``True`` if the item was added, ``False`` if it was already present.
+        """
+        if self._chat_ctx.get_by_id(item.id) is not None:
+            return False
+
+        if self._agent is not None and self._agent._chat_ctx.get_by_id(item.id) is None:
+            self._agent._chat_ctx.insert(item)
+
+        self._conversation_item_added(item)
+        return True
+
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
 
