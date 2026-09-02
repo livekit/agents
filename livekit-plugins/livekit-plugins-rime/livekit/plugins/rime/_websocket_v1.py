@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import ipaddress
 import json
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
@@ -67,6 +68,18 @@ def validate_websocket_url(websocket_url: str) -> None:
     parts = urlsplit(websocket_url)
     if parts.scheme not in ("ws", "wss") or not parts.netloc:
         raise ValueError("Rime v1 websocket_url must be an absolute ws or wss URL")
+    if parts.scheme == "wss":
+        return
+
+    try:
+        is_loopback = (
+            parts.hostname is not None and ipaddress.ip_address(parts.hostname).is_loopback
+        )
+    except ValueError:
+        is_loopback = False
+
+    if not is_loopback:
+        raise ValueError("Rime v1 websocket_url must use wss unless it uses a loopback IP address")
 
 
 async def connect(
