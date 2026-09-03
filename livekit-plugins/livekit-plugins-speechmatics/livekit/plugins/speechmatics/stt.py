@@ -53,6 +53,7 @@ from speechmatics.agent_stt import (
     SpeakerDiarizationConfig,
     SpeakerIdentifier,
     TranscriptionConfig,
+    TurnConfig,
 )
 from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
@@ -312,6 +313,7 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             config=self._prepare_config(language),
+            turn_detection_mode=self._stt_options.turn_detection_mode,
             id=len(self._streams),
             vad_instance=self._vad,
         )
@@ -342,15 +344,18 @@ class STT(stt.STT):
 
         This is the only place the config crosses from the plugin's public options into
         the Agent STT session driver. Only the fields agent-STT accepts on the wire are set.
+
+        Turn detection is configured separately: it is a top-level `turn_config` sibling of
+        `transcription_config` on the wire, passed to the client as a `TurnConfig` (see
+        `SpeechStream._run`), not a member of this config.
         """
 
         # Reference to STT options
         opts = self._stt_options
 
-        config = TranscriptionConfig(
+        return TranscriptionConfig(
             language=language if is_given(language) else opts.language,
             model=opts.model,
-            turn_detection_mode=_handle_turn_detection_mode(opts.turn_detection_mode),
             diarization="speaker" if opts.enable_diarization else None,
             speaker_diarization_config=_build_diarization_config(opts),
             additional_vocab=opts.additional_vocab or None,
@@ -358,10 +363,6 @@ class STT(stt.STT):
             domain=opts.domain,
             enable_partials=opts.include_partials,
         )
-
-        # `turn_detection_mode` is a wire field the SDK lifts out of transcription_config
-        # into the top-level `turn_config` on StartRecognition (per the agent-STT spec).
-        return config
 
     def finalize(self) -> None:
         """Force the current turn to end, flushing buffered words as final segments.
@@ -377,7 +378,7 @@ class STT(stt.STT):
                 continue
 
             # Only finalize() if EXTERNAL turn_detection_mode is selected
-            if stream._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
+            if stream._turn_detection_mode == TurnDetectionMode.EXTERNAL:
                 stream._client.finalize()
 
     async def get_speaker_ids(
@@ -442,6 +443,7 @@ class SpeechStream(stt.RecognizeStream):
         stt: STT,
         conn_options: APIConnectOptions,
         config: TranscriptionConfig,
+        turn_detection_mode: TurnDetectionMode,
         id: int,
         vad_instance: vad.VAD | None = None,
     ) -> None:
@@ -454,6 +456,7 @@ class SpeechStream(stt.RecognizeStream):
         self._stt: STT = stt
         self._id: int = id
         self._config: TranscriptionConfig = config
+        self._turn_detection_mode: TurnDetectionMode = turn_detection_mode
         self._client: AgentSttAsyncClient | None = None
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._speech_duration: float = 0
@@ -475,12 +478,17 @@ class SpeechStream(stt.RecognizeStream):
         if not self._config:
             raise ValueError("Config is required")
 
-        # Create the Agent STT client
+        # Create the Agent STT client. Turn detection is a top-level `turn_config` (a sibling
+        # of the transcription config on the wire), not a field on the transcription config;
+        # audio encoding / sample rate go via AudioFormat.
         self._client = AgentSttAsyncClient(
             api_key=self._stt._api_key,
             url=self._stt._base_url,
             app=f"livekit/{lk_version}",
             config=self._config,
+            turn_config=TurnConfig(
+                turn_detection_mode=_handle_turn_detection_mode(self._turn_detection_mode)
+            ),
             audio_format=AudioFormat(
                 encoding=self._stt._audio_encoding,
                 sample_rate=self._stt._sample_rate,
@@ -528,7 +536,7 @@ class SpeechStream(stt.RecognizeStream):
         # Open external VAD stream (if provided) before tasks start pushing frames.
         # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in DEFAULT
         # mode the server endpoints itself, so finalizing here would double-endpoint.
-        if self._vad is not None and self._config.turn_detection_mode == AgentTurnDetectionMode.EXTERNAL:
+        if self._vad is not None and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
             self._vad_stream = self._vad.stream()
 
         # Audio and messaging tasks
@@ -798,8 +806,8 @@ def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMo
     - `EXTERNAL` -> the caller closes turns by calling `finalize()`.
 
     The plugin's enum values are the SDK's values, so this is a direct lookup — but it
-    is still required: `TranscriptionConfig.to_dict()` compares by identity, so the
-    config must carry the SDK's own enum member, not the plugin's.
+    is still required: `TurnConfig.to_dict()` reads the enum member's value, so the
+    `TurnConfig` must carry the SDK's own enum member, not the plugin's.
     """
     return AgentTurnDetectionMode(mode.value)
 
