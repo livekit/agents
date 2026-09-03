@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import traceback
@@ -473,13 +474,16 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     failure: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from livekit.plugins.rime import TTS
+    from livekit.plugins.rime._legacy_websocket_adapter import LegacyWebSocketAdapter
 
     websocket = _FailingWS3(failure)
 
-    async def connect_ws(self: TTS, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def connect_ws(
+        self: LegacyWebSocketAdapter, *, websocket_url: str, timeout: float
+    ) -> aiohttp.ClientWebSocketResponse:
         return cast(aiohttp.ClientWebSocketResponse, websocket)
 
-    monkeypatch.setattr(TTS, "_connect_ws", connect_ws)
+    monkeypatch.setattr(LegacyWebSocketAdapter, "_connect", connect_ws)
     tts = TTS(api_key="test-key", model="coda", use_websocket=True)
     stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
     stream.push_text("hello")
@@ -494,3 +498,71 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.__cause__ is None
+
+
+async def test_ws3_stream_keeps_options_after_parent_update() -> None:
+    from livekit.plugins.rime import TTS
+
+    request_models: list[str] = []
+
+    async def websocket(request: web.Request) -> web.WebSocketResponse:
+        request_models.append(request.query["modelId"])
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for message in ws:
+            payload = json.loads(message.data)
+            if "text" in payload:
+                await ws.send_json(
+                    {
+                        "type": "chunk",
+                        "data": base64.b64encode(b"\x01\x00" * 2400).decode(),
+                    }
+                )
+            elif payload.get("operation") == "flush":
+                await ws.send_json({"type": "done"})
+            elif payload.get("operation") == "eos":
+                await ws.send_json({"type": "done"})
+                break
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/ws3", websocket)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tts = TTS(
+                api_key="test-key",
+                model="coda",
+                base_url=f"ws://127.0.0.1:{port}",
+                http_session=session,
+                allow_custom_endpoint=True,
+            )
+            metrics = []
+            tts.on("metrics_collected", metrics.append)
+            coda_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            tts.update_options(model="mistv2")
+            mist_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+
+            async def collect(stream: Any) -> list[Any]:
+                stream.push_text("hello")
+                stream.end_input()
+                try:
+                    return [event async for event in stream]
+                finally:
+                    await stream.aclose()
+
+            coda_events = await collect(coda_stream)
+            mist_events = await collect(mist_stream)
+            await tts.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert request_models == ["coda", "mistv2"]
+    assert {event.frame.sample_rate for event in coda_events} == {24000}
+    assert {event.frame.sample_rate for event in mist_events} == {22050}
+    assert [metric.metadata.model_name for metric in metrics] == ["coda", "mistv2"]
