@@ -1596,3 +1596,85 @@ async def test_carryover_explicit_true_wins_over_n_turns_zero():
 
     stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
     assert stt.capabilities.chat_context is True
+
+
+# ---------------------------------------------------------------------------
+# end_of_turn_confidence surfaced on SpeechData.metadata
+#
+# The server reports a per-Turn `end_of_turn_confidence`. On Universal-3.5 Pro
+# (and later) this rises from 0 toward 1 across the partials emitted while a
+# turn is held open between min_turn_silence and max_turn_silence, and is 1.0 on
+# the final. The plugin surfaces it on SpeechData.metadata so callers can
+# threshold it (e.g. to trigger preemptive/eager LLM generation) from a
+# SpeechEvent / stt_node / UserInputTranscribedEvent without subclassing the
+# stream. It's only attached when the message carries the field, so models that
+# never emit it are unaffected.
+# ---------------------------------------------------------------------------
+
+
+def _drain_events(stream):
+    from livekit.agents.utils.aio.channel import ChanEmpty
+
+    events = []
+    while True:
+        try:
+            events.append(stream._event_ch.recv_nowait())
+        except ChanEmpty:
+            break
+    return events
+
+
+def _turn_message(**overrides):
+    """A minimal server Turn message with a single word (so an interim fires)."""
+    msg = {
+        "type": "Turn",
+        "words": [{"text": "hello", "start": 0, "end": 480, "confidence": 0.9}],
+        "end_of_turn": False,
+        "transcript": "",
+    }
+    msg.update(overrides)
+    return msg
+
+
+async def test_end_of_turn_confidence_surfaced_on_interim_metadata():
+    """A held-turn partial carries its end_of_turn_confidence on interim metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn_confidence=0.55))
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata == {"end_of_turn_confidence": 0.55}
+
+
+async def test_end_of_turn_confidence_surfaced_on_final_metadata():
+    """The final transcript carries end_of_turn_confidence (1.0) on its metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hello", end_of_turn_confidence=1.0)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"end_of_turn_confidence": 1.0}
+
+
+async def test_end_of_turn_confidence_zero_is_surfaced():
+    """0.0 on an early partial is a real value (turn just started), not 'absent',
+    so it must still surface — mirrors the value seen before the ramp climbs."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn_confidence=0.0))
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata == {"end_of_turn_confidence": 0.0}
+
+
+async def test_end_of_turn_confidence_absent_leaves_metadata_none():
+    """A model/message that doesn't include end_of_turn_confidence leaves metadata
+    unset, so existing consumers are unaffected."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message())  # no end_of_turn_confidence key
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata is None
