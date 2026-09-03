@@ -124,6 +124,14 @@ class _STTOptions:
 
 
 class STT(stt.STT):
+    """Speech-to-text with Meta's Muse Voice Transcribe.
+
+    Streams audio to the realtime ASR WebSocket and maps its events onto
+    ``SpeechEvent``s; ``recognize()`` uses the batch endpoint. Keywords and
+    language bias are handshake-only on the Meta side, so changing them reconnects
+    any running stream.
+    """
+
     def __init__(
         self,
         *,
@@ -210,10 +218,12 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
+        """The Muse model id in use, e.g. ``muse-voice-transcribe-1.0``."""
         return self._opts.model
 
     @property
     def provider(self) -> str:
+        """Provider name reported in STT metrics."""
         return "Meta"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -269,6 +279,13 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        """Open a realtime transcription stream.
+
+        Args:
+            language: BCP-47 code biasing this stream alone. It survives a later
+                ``update_options(language=...)``; streams without one follow it.
+            conn_options: Connection timeout and retry policy.
+        """
         opts = dataclasses.replace(self._opts)
         if is_given(language):
             opts.languages = [language]
