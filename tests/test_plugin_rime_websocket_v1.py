@@ -1029,6 +1029,36 @@ def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None
     _websocket_v1.validate_websocket_url(websocket_url)
 
 
+def test_v1_rejects_untrusted_secure_host_without_opt_in() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    with pytest.raises(ValueError, match="trusted Rime host"):
+        _websocket_v1.validate_websocket_url("wss://attacker.example/coda/ws")
+
+
+def test_v1_accepts_custom_secure_host_with_opt_in() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    _websocket_v1.validate_websocket_url(
+        "wss://voice.customer.example/coda/ws", allow_custom_endpoint=True
+    )
+
+
+def test_v1_accepts_dedicated_rime_subdomain() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    _websocket_v1.validate_websocket_url(
+        "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
+    )
+
+
+def test_v1_rejects_lookalike_rime_host() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    with pytest.raises(ValueError, match="trusted Rime host"):
+        _websocket_v1.validate_websocket_url("wss://whiteglove.rime.ai.attacker.example/coda/ws")
+
+
 @pytest.mark.parametrize(
     ("websocket_url", "model"),
     [
@@ -1043,18 +1073,28 @@ def test_v1_reads_model_from_websocket_url(websocket_url: str, model: str) -> No
     assert _websocket_v1.model_from_websocket_url(websocket_url) == model
 
 
+def test_v1_dedicated_websocket_url_has_no_embedded_model() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    assert (
+        _websocket_v1.model_from_websocket_url(
+            "wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws"
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "wss://api.rime.ai/ws",
         "wss://api.rime.ai/coda",
         "wss://api.rime.ai/coda/stream",
     ],
 )
-def test_v1_rejects_url_without_model_before_ws(websocket_url: str) -> None:
+def test_v1_rejects_url_not_ending_in_ws(websocket_url: str) -> None:
     from livekit.plugins.rime import _websocket_v1
 
-    with pytest.raises(ValueError, match=r"/\{model\}/ws"):
+    with pytest.raises(ValueError, match="end with /ws"):
         _websocket_v1.model_from_websocket_url(websocket_url)
 
 
@@ -1087,7 +1127,7 @@ async def test_v1_connection_error_does_not_expose_transport_data(
         with pytest.raises(APIConnectionError) as exc_info:
             await _websocket_v1.connect(
                 session,
-                websocket_url="wss://example.com/coda/ws",
+                websocket_url="wss://api.rime.ai/coda/ws",
                 api_key="test-key",
                 protocol="binary",
                 timeout=1,
@@ -1095,6 +1135,32 @@ async def test_v1_connection_error_does_not_expose_transport_data(
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.__cause__ is None
+
+
+async def test_v1_connect_rejects_untrusted_host_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    transport_called = False
+
+    async def _connect(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
+        nonlocal transport_called
+        transport_called = True
+        raise AssertionError("transport must not receive credentials")
+
+    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", _connect)
+    async with aiohttp.ClientSession() as session:
+        with pytest.raises(ValueError, match="trusted Rime host"):
+            await _websocket_v1.connect(
+                session,
+                websocket_url="wss://attacker.example/coda/ws",
+                api_key="test-key",
+                protocol="binary",
+                timeout=1,
+            )
+
+    assert transport_called is False
 
 
 @pytest.mark.parametrize(

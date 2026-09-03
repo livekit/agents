@@ -44,7 +44,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
-from ._websocket_v1 import WebSocketProtocol, model_from_websocket_url
+from ._websocket_v1 import WebSocketProtocol, model_from_websocket_url, validate_endpoint_host
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
 from .log import logger
@@ -154,6 +154,27 @@ def _check_time_scale_factor_supported(
         )
 
 
+def _resolve_websocket_model(
+    websocket_url: str,
+    model: NotGivenOr[TTSModels | str],
+    *,
+    allow_custom_endpoint: bool,
+    current_model: TTSModels | str | None = None,
+) -> TTSModels | str:
+    endpoint_model = model_from_websocket_url(
+        websocket_url, allow_custom_endpoint=allow_custom_endpoint
+    )
+    if endpoint_model is None:
+        if not is_given(model):
+            if current_model is not None:
+                return current_model
+            raise ValueError("model is required when websocket_url ends with /ws")
+        return model
+    if is_given(model):
+        raise ValueError("model is derived from websocket_url; omit model")
+    return endpoint_model
+
+
 class TTS(tts.TTS[Literal["rime_tts_event"]]):
     @overload
     def __init__(
@@ -161,6 +182,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         *,
         websocket_url: str,
         websocket_protocol: WebSocketProtocol = "binary",
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
@@ -170,6 +192,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
     ) -> None: ...
 
     @overload
@@ -195,6 +218,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
     ) -> None: ...
 
     def __init__(
@@ -225,13 +249,12 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
     ) -> None:
         websocket_v1_url = websocket_url if is_given(websocket_url) else None
         if websocket_v1_url is not None:
             if is_given(base_url):
                 raise ValueError("websocket_url cannot be used with base_url")
-            if is_given(model):
-                raise ValueError("model is derived from websocket_url; omit model")
             if use_websocket:
                 raise ValueError("websocket_url enables WebSocket streaming; omit use_websocket")
             if is_given(speed_alpha):
@@ -247,6 +270,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             use_websocket = True
             resolved_base_url = RIME_BASE_URL
         elif is_given(base_url):
+            validate_endpoint_host(base_url, allow_custom_endpoint=allow_custom_endpoint)
             # Infer streaming mode from URL prefix; an explicit use_websocket=True still wins.
             use_websocket = use_websocket or base_url.startswith(("ws://", "wss://"))
             resolved_base_url = base_url
@@ -254,7 +278,11 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             resolved_base_url = RIME_WS_BASE_URL if use_websocket else RIME_BASE_URL
 
         if websocket_v1_url is not None:
-            resolved_model = model_from_websocket_url(websocket_v1_url)
+            resolved_model = _resolve_websocket_model(
+                websocket_v1_url,
+                model,
+                allow_custom_endpoint=allow_custom_endpoint,
+            )
             model_is_explicit = resolved_model != MODEL_CODA
         elif is_given(model):
             resolved_model = model
@@ -289,6 +317,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
         self._api_key = resolved_api_key
+        self._allow_custom_endpoint = allow_custom_endpoint
 
         if not is_given(speaker):
             if not model_is_explicit:
@@ -338,6 +367,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 api_key=self._api_key,
                 ensure_session=self._ensure_session,
                 sentence_tokenizer=tokenizer if is_given(tokenizer) else None,
+                allow_custom_endpoint=allow_custom_endpoint,
             )
             if websocket_v1_url is not None
             else None
@@ -495,9 +525,9 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         websocket_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         if self._websocket_v1_adapter is not None:
-            if is_given(model):
+            if is_given(model) and not is_given(websocket_url):
                 raise ValueError(
-                    "model is derived from websocket_url; update websocket_url instead"
+                    "model can only be updated together with websocket_url for Rime v1"
                 )
             if is_given(base_url):
                 raise ValueError("use websocket_url to update a Rime v1 endpoint")
@@ -507,11 +537,14 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
             ):
                 raise ValueError("Rime v1 does not support generation controls")
-            effective_model = (
-                model_from_websocket_url(websocket_url)
-                if is_given(websocket_url)
-                else self._opts.model
-            )
+            effective_model = self._opts.model
+            if is_given(websocket_url):
+                effective_model = _resolve_websocket_model(
+                    websocket_url,
+                    model,
+                    allow_custom_endpoint=self._allow_custom_endpoint,
+                    current_model=self._opts.model,
+                )
             if not is_mist_model(effective_model) and any(
                 is_given(value) for value in (pause_between_brackets, phonemize_between_brackets)
             ):
@@ -520,6 +553,9 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             raise ValueError("websocket_url can only update a TTS constructed with websocket_url")
         else:
             effective_model = model if is_given(model) else self._opts.model
+
+        if is_given(base_url):
+            validate_endpoint_host(base_url, allow_custom_endpoint=self._allow_custom_endpoint)
 
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
