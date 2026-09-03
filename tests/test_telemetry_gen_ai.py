@@ -208,3 +208,49 @@ def test_error_type_is_low_cardinality() -> None:
     span.end()
     # a status code identifies the failure better than the exception class
     assert _attributes(exporter)["error.type"] == "429"
+
+
+# Every `provider` value a plugin actually reports, gathered from the LLM and realtime
+# plugins. The convention makes the registry spelling mandatory for a provider it
+# enumerates, so a plugin returning a display name or a base-URL host must still land on it.
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        # base-URL hosts, from the OpenAI-compatible clients
+        ("api.openai.com", "openai"),
+        ("api.anthropic.com", "anthropic"),
+        ("api.mistral.ai", "mistral_ai"),
+        ("api.groq.com", "groq"),
+        ("api.x.ai", "x_ai"),
+        ("api.deepseek.com", "deepseek"),
+        ("my-co.openai.azure.com", "azure.ai.openai"),
+        ("bedrock-runtime.us-east-1.amazonaws.com", "aws.bedrock"),
+        # display names
+        ("AWS Bedrock", "aws.bedrock"),
+        ("MistralAI", "mistral_ai"),
+        ("Vertex AI", "gcp.vertex_ai"),
+        ("Vertex AI Model Garden", "gcp.vertex_ai"),
+        ("Gemini", "gcp.gemini"),
+        ("google", "gcp.gen_ai"),
+        ("Google Cloud Platform", "gcp.gen_ai"),
+        ("xAI", "x_ai"),
+        ("Perplexity", "perplexity"),
+        ("Groq", "groq"),
+        # outside the registry: the convention allows a custom value, so it passes through
+        ("Baseten", "Baseten"),
+        ("MiniMax", "MiniMax"),
+        ("api.cerebras.ai", "api.cerebras.ai"),
+    ],
+)
+def test_plugin_providers_resolve_to_the_registry(reported: str, expected: str) -> None:
+    assert trace_types.gen_ai_provider_name(reported) == expected
+
+
+def test_the_provider_tables_only_target_registry_values() -> None:
+    # a typo in a mapping would emit a value no backend recognises
+    targets = {
+        *trace_types._PROVIDER_BY_NAME.values(),
+        *trace_types._PROVIDER_BY_HOST.values(),
+        *(v for _, v in trace_types._PROVIDER_BY_HOST_SUFFIX),
+    }
+    assert targets <= trace_types.GEN_AI_PROVIDER_NAMES

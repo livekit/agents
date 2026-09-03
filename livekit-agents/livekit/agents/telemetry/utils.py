@@ -18,16 +18,20 @@ if TYPE_CHECKING:
 REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
 
 _ALLOW_PII_ENV_VAR = "LIVEKIT_TELEMETRY_ALLOW_PII"
-_TRUTHY = ("1", "true", "yes", "on")
+_FALSY = ("0", "false", "no", "off")
 
 
-def allow_pii_from_env() -> bool:
-    """Grant third-party exporters PII without a ``set_tracer_provider`` call site.
+def allow_pii_from_env() -> bool | None:
+    """The ``LIVEKIT_TELEMETRY_ALLOW_PII`` setting, or ``None`` when unset.
 
-    Only for integrators who let the framework adopt the ambient OpenTelemetry provider
-    (a NodeSDK-style setup) and so have nowhere to pass ``allow_pii``.
+    For integrators who let the framework adopt the ambient OpenTelemetry provider (a
+    NodeSDK-style setup) and so have nowhere to pass ``allow_pii``. Set it to ``0`` to
+    withhold conversational content from third-party exporters.
     """
-    return os.environ.get(_ALLOW_PII_ENV_VAR, "").strip().lower() in _TRUTHY
+    raw = os.environ.get(_ALLOW_PII_ENV_VAR)
+    if raw is None:
+        return None
+    return raw.strip().lower() not in _FALSY
 
 
 def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:

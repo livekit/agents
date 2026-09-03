@@ -256,8 +256,11 @@ class LLMStream(ABC):
             with tracer.start_as_current_span(
                 self._llm_request_span_name, end_on_exit=False
             ) as span:
-                for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
-                    span.add_event(name, attributes)
+                if gen_ai_telemetry.capture_content_enabled():
+                    # superseded by gen_ai.input.messages, kept for the backends that
+                    # still read the per-message events
+                    for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
+                        span.add_event(name, attributes)
                 self._record_genai_request(span)
                 await self._main_task()
 
@@ -444,21 +447,28 @@ class LLMStream(ABC):
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
                 )
 
-            completion_event_body: dict[str, AttributeValue] = {"role": "assistant"}
-            if response_content:
-                completion_event_body["content"] = response_content
-            if tool_calls:
-                completion_event_body["tool_calls"] = [
-                    json.dumps(
-                        {
-                            "function": {"name": tool_call.name, "arguments": tool_call.arguments},
-                            "id": tool_call.call_id,
-                            "type": "function",
-                        }
-                    )
-                    for tool_call in tool_calls
-                ]
-            self._llm_request_span.add_event(trace_types.EVENT_GEN_AI_CHOICE, completion_event_body)
+            # superseded by gen_ai.output.messages, and gated by the same switch
+            if gen_ai_telemetry.capture_content_enabled():
+                completion_event_body: dict[str, AttributeValue] = {"role": "assistant"}
+                if response_content:
+                    completion_event_body["content"] = response_content
+                if tool_calls:
+                    completion_event_body["tool_calls"] = [
+                        json.dumps(
+                            {
+                                "function": {
+                                    "name": tool_call.name,
+                                    "arguments": tool_call.arguments,
+                                },
+                                "id": tool_call.call_id,
+                                "type": "function",
+                            }
+                        )
+                        for tool_call in tool_calls
+                    ]
+                self._llm_request_span.add_event(
+                    trace_types.EVENT_GEN_AI_CHOICE, completion_event_body
+                )
 
         self._llm.emit("metrics_collected", metrics)
 

@@ -217,34 +217,102 @@ class GenAIFinishReason:
     ERROR = "error"
 
 
-# ``gen_ai.provider.name`` is an open enum: the registry enumerates the providers it
-# has modelled, and instrumentations use the plugin's own provider id otherwise. This
-# maps LiveKit plugin provider ids onto the registry spelling where they differ, so a
-# Datadog/Langfuse backend recognises the provider flavour.
-GEN_AI_PROVIDER_ALIASES: dict[str, str] = {
-    "azure": "azure.ai.openai",
-    "azure_openai": "azure.ai.openai",
-    "azure_ai": "azure.ai.inference",
+GEN_AI_PROVIDER_NAMES: frozenset[str] = frozenset(
+    {
+        "openai",
+        "gcp.gen_ai",
+        "gcp.vertex_ai",
+        "gcp.gemini",
+        "anthropic",
+        "cohere",
+        "azure.ai.inference",
+        "azure.ai.openai",
+        "ibm.watsonx.ai",
+        "aws.bedrock",
+        "perplexity",
+        "x_ai",
+        "deepseek",
+        "groq",
+        "mistral_ai",
+        "moonshot_ai",
+    }
+)
+"""The ``gen_ai.provider.name`` values the registry enumerates.
+
+For a provider on this list the convention says the registry spelling MUST be used, since
+backends treat the attribute as the discriminator for provider-specific parsing. A provider
+that is not on it MAY report a custom value, so those pass through untouched.
+"""
+
+# Plugins report `provider` either as a display name ("AWS Bedrock", "MistralAI") or, for the
+# OpenAI-compatible clients, as the base URL's host ("api.openai.com"). Both are mapped here:
+# by host first, then by the display name reduced to lowercase alphanumerics, so
+# "AWS Bedrock" / "aws_bedrock" / "awsbedrock" all resolve alike.
+_PROVIDER_BY_HOST: dict[str, str] = {
+    "api.anthropic.com": "anthropic",
+    "api.cohere.ai": "cohere",
+    "api.cohere.com": "cohere",
+    "api.deepseek.com": "deepseek",
+    "api.groq.com": "groq",
+    "api.mistral.ai": "mistral_ai",
+    "api.moonshot.ai": "moonshot_ai",
+    "api.moonshot.cn": "moonshot_ai",
+    "api.openai.com": "openai",
+    "api.perplexity.ai": "perplexity",
+    "api.x.ai": "x_ai",
+    "generativelanguage.googleapis.com": "gcp.gemini",
+}
+
+_PROVIDER_BY_HOST_SUFFIX: tuple[tuple[str, str], ...] = (
+    (".openai.azure.com", "azure.ai.openai"),
+    (".services.ai.azure.com", "azure.ai.inference"),
+    (".aiplatform.googleapis.com", "gcp.vertex_ai"),
+    (".amazonaws.com", "aws.bedrock"),
+)
+
+_PROVIDER_BY_NAME: dict[str, str] = {
+    "amazonbedrock": "aws.bedrock",
+    "anthropic": "anthropic",
+    "awsbedrock": "aws.bedrock",
+    "azureaiinference": "azure.ai.inference",
+    "azureopenai": "azure.ai.openai",
     "bedrock": "aws.bedrock",
-    "aws": "aws.bedrock",
-    "google": "gcp.gen_ai",
+    "cohere": "cohere",
+    "deepseek": "deepseek",
     "gemini": "gcp.gemini",
-    "vertex": "gcp.vertex_ai",
+    "google": "gcp.gen_ai",
+    "googlecloudplatform": "gcp.gen_ai",
+    "googlegenai": "gcp.gen_ai",
+    "groq": "groq",
+    "ibmwatsonxai": "ibm.watsonx.ai",
+    "mistral": "mistral_ai",
+    "mistralai": "mistral_ai",
+    "moonshot": "moonshot_ai",
+    "moonshotai": "moonshot_ai",
+    "openai": "openai",
+    "perplexity": "perplexity",
     "vertexai": "gcp.vertex_ai",
-    "google_vertex": "gcp.vertex_ai",
+    "vertexaimodelgarden": "gcp.vertex_ai",
     "watsonx": "ibm.watsonx.ai",
     "xai": "x_ai",
-    "grok": "x_ai",
-    "mistral": "mistral_ai",
-    "moonshot": "moonshot_ai",
 }
 
 
 def gen_ai_provider_name(provider: str | None) -> str | None:
-    """Normalize a LiveKit plugin provider id to its GenAI registry spelling."""
-    if not provider:
+    """Normalize a LiveKit plugin's ``provider`` to its GenAI registry spelling."""
+    if not provider or not (value := provider.strip()):
         return None
-    return GEN_AI_PROVIDER_ALIASES.get(provider, provider)
+
+    host = value.lower()
+    if (mapped := _PROVIDER_BY_HOST.get(host)) is not None:
+        return mapped
+    for suffix, mapped in _PROVIDER_BY_HOST_SUFFIX:
+        if host.endswith(suffix):
+            return mapped
+
+    canonical = "".join(c for c in host if c.isalnum())
+    # a provider outside the registry keeps its own id, which the convention allows
+    return _PROVIDER_BY_NAME.get(canonical, value)
 
 
 # Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse

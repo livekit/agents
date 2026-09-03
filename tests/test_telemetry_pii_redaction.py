@@ -34,7 +34,7 @@ _SAFE_ATTRS = {
 
 
 def _emit(
-    *, redaction: bool = False, exporter_first: bool = False, allow_pii: bool = False
+    *, redaction: bool = False, exporter_first: bool = False, allow_pii: bool | None = None
 ) -> InMemorySpanExporter:
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -54,8 +54,8 @@ def _emit(
     return exporter
 
 
-def test_third_party_exporters_never_receive_pii() -> None:
-    span = _emit().get_finished_spans()[0]
+def test_pii_is_withheld_from_third_party_exporters_on_request() -> None:
+    span = _emit(allow_pii=False).get_finished_spans()[0]
 
     leaked = sorted(set(_PII_ATTRS) & set(span.attributes or {}))
     assert not leaked, f"leaked: {leaked}"
@@ -70,8 +70,9 @@ def test_third_party_exporters_never_receive_pii() -> None:
     assert events["llm_started"] == {"n": 1}
 
 
-def test_allow_pii_lets_a_granted_provider_see_everything() -> None:
-    span = _emit(allow_pii=True).get_finished_spans()[0]
+def test_exporters_receive_pii_by_default() -> None:
+    # the GenAI conventions are only useful to a backend that can render the conversation
+    span = _emit().get_finished_spans()[0]
 
     for key, value in _PII_ATTRS.items():
         assert (span.attributes or {})[key] == value
@@ -80,7 +81,7 @@ def test_allow_pii_lets_a_granted_provider_see_everything() -> None:
 
 def test_livekit_cloud_still_receives_pii() -> None:
     # what Cloud may keep is decided at its collector, from the project's setting
-    exporter = _emit()
+    exporter = _emit(allow_pii=False)
     stripped = exporter.get_finished_spans()[0]
     restored = pii.restore_pii(stripped)
 
@@ -100,7 +101,7 @@ def test_the_project_flag_withholds_pii_from_every_destination() -> None:
 
 def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:
     # an integrator attaches their Datadog/Langfuse exporter, then hands us the provider
-    span = _emit(exporter_first=True).get_finished_spans()[0]
+    span = _emit(allow_pii=False, exporter_first=True).get_finished_spans()[0]
 
     assert not set(_PII_ATTRS) & set(span.attributes or {})
 

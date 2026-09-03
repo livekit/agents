@@ -41,6 +41,10 @@ def set_capture_content(enabled: bool) -> None:
     _capture_content = enabled
 
 
+def capture_content_enabled() -> bool:
+    return _capture_content
+
+
 def _text_part(content: str) -> dict[str, Any]:
     return {"type": "text", "content": content}
 

@@ -467,7 +467,7 @@ def _prepend_log_processor(provider: LoggerProvider, processor: LogRecordProcess
 
 
 def _install_pii_redaction(
-    tracer_provider: trace_api.TracerProvider, *, allow_pii: bool = False
+    tracer_provider: trace_api.TracerProvider, *, allow_pii: bool | None = None
 ) -> None:
     """Install in-process PII stripping on an SDK provider, at most once per provider."""
     if not isinstance(tracer_provider, trace_sdk.TracerProvider):
@@ -477,9 +477,13 @@ def _install_pii_redaction(
     if tracer_provider in _pii_redaction_installed:
         return
     _pii_redaction_installed.add(tracer_provider)
+    if allow_pii is None:
+        allow_pii = telemetry_utils.allow_pii_from_env()
     _prepend_span_processor(
         tracer_provider,
-        pii.PIIRedactingSpanProcessor(allow_pii=allow_pii or telemetry_utils.allow_pii_from_env()),
+        # PII flows to every exporter unless withheld: the GenAI conventions are only
+        # useful to a backend that can render the conversation
+        pii.PIIRedactingSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
     )
 
 
@@ -487,19 +491,20 @@ def set_tracer_provider(
     tracer_provider: trace_api.TracerProvider,
     *,
     metadata: dict[str, AttributeValue] | None = None,
-    allow_pii: bool = False,
+    allow_pii: bool | None = None,
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
-        allow_pii (bool, optional): Let this provider's exporters receive conversational
-            content, tool payloads and other user data. Off by default: PII is stripped
-            in-process before any exporter that is not LiveKit Cloud's, so a Datadog or
-            Langfuse pipeline sees only the non-content attributes. Turn it on when the
-            backend is meant to show conversations. Ignored when the project mandates
-            redaction — that setting is not weakened from here.
+        allow_pii (bool | None, optional): Whether this provider's exporters may receive
+            conversational content, tool payloads and other user data. Defaults to
+            ``True`` (or ``LIVEKIT_TELEMETRY_ALLOW_PII``, when set), since a GenAI
+            backend can only render the conversation if it receives it. Pass ``False``
+            to strip PII in-process before every exporter but LiveKit Cloud's, leaving
+            them the non-content attributes. Ignored when the project mandates redaction
+            — that setting is not weakened from here.
     """
     if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
