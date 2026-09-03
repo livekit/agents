@@ -995,20 +995,20 @@ async def test_v1_rejects_started_without_request_id(websocket_protocol: str) ->
 
 
 @pytest.mark.parametrize(
-    ("kind", "status_code"),
+    ("kind", "status_code", "retryable"),
     [
-        ("invalid_input", 400),
-        ("unauthenticated", 401),
-        ("permission_denied", 403),
-        ("not_found", 404),
-        ("resource_exhausted", 429),
-        ("timeout", 504),
-        ("unavailable", 503),
-        ("unimplemented", 501),
-        ("internal", 500),
+        ("invalid_input", 400, False),
+        ("unauthenticated", 401, False),
+        ("permission_denied", 403, False),
+        ("not_found", 404, False),
+        ("resource_exhausted", 429, True),
+        ("timeout", 504, True),
+        ("unavailable", 503, True),
+        ("unimplemented", 501, False),
+        ("internal", 500, True),
     ],
 )
-async def test_v1_maps_context_error(kind: str, status_code: int) -> None:
+async def test_v1_maps_context_error(kind: str, status_code: int, retryable: bool) -> None:
     async with _RimeV1Server(response_mode="error", error_kind=kind) as server:
         tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
@@ -1020,7 +1020,7 @@ async def test_v1_maps_context_error(kind: str, status_code: int) -> None:
         await tts.aclose()
 
     assert exc_info.value.status_code == status_code
-    assert exc_info.value.retryable is (status_code >= 500 or status_code == 429)
+    assert exc_info.value.retryable is retryable
 
 
 async def test_v1_maps_connection_scoped_error() -> None:
@@ -1035,6 +1035,24 @@ async def test_v1_maps_connection_scoped_error() -> None:
         await tts.aclose()
 
     assert exc_info.value.status_code == 503
+
+
+async def test_v1_does_not_retry_unimplemented_error() -> None:
+    async with _RimeV1Server(response_mode="error", error_kind="unimplemented") as server:
+        tts = _v1_tts(server)
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
+        )
+        stream.push_text("hello")
+        stream.end_input()
+        with pytest.raises(APIStatusError) as exc_info:
+            await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert exc_info.value.status_code == 501
+    assert exc_info.value.retryable is False
+    assert server.connections == 1
 
 
 async def test_v1_retries_before_audio() -> None:
