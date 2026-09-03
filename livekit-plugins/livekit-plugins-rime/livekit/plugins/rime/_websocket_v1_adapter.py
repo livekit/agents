@@ -78,6 +78,7 @@ class WebSocketV1Adapter:
         self,
         *,
         websocket_v1_url: str,
+        endpoint_model: str,
         websocket_protocol: _websocket_v1.WebSocketProtocol,
         api_key: str,
         ensure_session: Callable[[], aiohttp.ClientSession],
@@ -89,6 +90,7 @@ class WebSocketV1Adapter:
         )
         _websocket_v1._codec_for_protocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
+        self._endpoint_model = endpoint_model
         self._websocket_protocol = websocket_protocol
         self._api_key = api_key
         self._ensure_session = ensure_session
@@ -149,15 +151,18 @@ class WebSocketV1Adapter:
     def prewarm(self) -> None:
         self._pool.prewarm()
 
-    def update_endpoint(self, websocket_v1_url: str) -> None:
+    def update_endpoint(self, websocket_v1_url: str, *, endpoint_model: str) -> None:
         _websocket_v1.validate_websocket_url(
             websocket_v1_url, allow_custom_endpoint=self._allow_custom_endpoint
         )
         if websocket_v1_url == self._websocket_v1_url:
+            if endpoint_model != self._endpoint_model:
+                raise ValueError("model cannot change without changing websocket_url")
             return
 
         old_pool = self._pool
         self._websocket_v1_url = websocket_v1_url
+        self._endpoint_model = endpoint_model
         self._pool = self._new_pool()
         self._retire_pool(old_pool)
 

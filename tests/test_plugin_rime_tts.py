@@ -507,6 +507,54 @@ def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
     assert tts.model == "coda"
 
 
+def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
+    from livekit.plugins.rime import TTS
+
+    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
+
+    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
+        tts.update_options(websocket_url=websocket_url, model="mistv3")
+
+    assert tts.model == "coda"
+
+
+def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
+    from livekit.plugins.rime import TTS
+
+    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
+
+    tts.update_options(websocket_url=websocket_url, model="coda")
+
+    assert tts.model == "coda"
+
+
+def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(
+        api_key="test-key",
+        websocket_url="wss://coda.aws-us-east-1.whiteglove.rime.ai/ws",
+        model="coda",
+    )
+
+    tts.update_options(
+        websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+        model="mistv3",
+    )
+
+    assert tts.model == "mistv3"
+
+    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
+        tts.update_options(
+            websocket_url="wss://mist.aws-us-east-1.whiteglove.rime.ai/ws",
+            model="coda",
+        )
+
+    assert tts.model == "mistv3"
+
+
 @pytest.mark.parametrize("failure", ["transport", "provider", "send"])
 async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     failure: str, monkeypatch: pytest.MonkeyPatch
