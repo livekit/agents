@@ -15,9 +15,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import copy
-import json
 import os
 import weakref
 from dataclasses import dataclass
@@ -29,7 +27,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -42,8 +39,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
 
+from ._legacy_websocket_adapter import LegacySynthesisOptions, LegacyWebSocketAdapter
 from ._websocket_v1 import (
     DEFAULT_AUDIO_FORMAT,
     RimeAudioFormat,
@@ -394,19 +391,15 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self._total_timeout = _timeout_for_model(resolved_model)
 
         self._streams: weakref.WeakSet[tts.SynthesizeStream] = weakref.WeakSet()
-        self._ws3_pool = (
-            self._new_ws3_pool()
-            if self._use_websocket and self._websocket_v1_adapter is None
-            else None
-        )
-
-    def _new_ws3_pool(self) -> utils.ConnectionPool[aiohttp.ClientWebSocketResponse]:
-        return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._legacy_websocket_adapter: LegacyWebSocketAdapter | None = None
+        if self._use_websocket and self._websocket_v1_adapter is None:
+            assert self._sentence_tokenizer is not None
+            self._legacy_websocket_adapter = LegacyWebSocketAdapter(
+                websocket_url=self._ws_url(),
+                api_key=self._api_key,
+                ensure_session=self._ensure_session,
+                sentence_tokenizer=self._sentence_tokenizer,
+            )
 
     @property
     def model(self) -> str:
@@ -438,36 +431,11 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         }
         return f"{self._base_url}/ws3?{urlencode(encoded)}"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
-        return await asyncio.wait_for(
-            session.ws_connect(
-                self._ws_url(), headers={"Authorization": f"Bearer {self._api_key}"}
-            ),
-            timeout,
-        )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        try:
-            await ws.send_str(json.dumps({"operation": "eos"}))
-            try:
-                await asyncio.wait_for(ws.receive(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
-        except Exception as e:
-            logger.warning(
-                "error during Rime WebSocket close sequence",
-                extra={"exception_type": type(e).__name__},
-            )
-        finally:
-            await ws.close()
-
     def prewarm(self) -> None:
         if self._websocket_v1_adapter is not None:
             self._websocket_v1_adapter.prewarm()
-        elif self._use_websocket:
-            assert self._ws3_pool is not None
-            self._ws3_pool.prewarm()
+        elif self._legacy_websocket_adapter is not None:
+            self._legacy_websocket_adapter.prewarm()
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -484,7 +452,12 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 conn_options=conn_options,
             )
         else:
-            s = _WS3SynthesizeStream(tts=self, conn_options=conn_options)
+            assert self._legacy_websocket_adapter is not None
+            s = self._legacy_websocket_adapter.stream(
+                tts_instance=self,
+                options=self._legacy_synthesis_options(),
+                conn_options=conn_options,
+            )
         self._streams.add(s)
         return s
 
@@ -507,14 +480,21 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             ),
         )
 
+    def _legacy_synthesis_options(self) -> LegacySynthesisOptions:
+        return LegacySynthesisOptions(
+            model=self._opts.model,
+            websocket_url=self._ws_url(),
+            sample_rate=self.sample_rate,
+        )
+
     async def aclose(self) -> None:
         for s in list(self._streams):
             await s.aclose()
         self._streams.clear()
         if self._websocket_v1_adapter is not None:
             await self._websocket_v1_adapter.aclose()
-        elif self._ws3_pool is not None:
-            await self._ws3_pool.aclose()
+        elif self._legacy_websocket_adapter is not None:
+            await self._legacy_websocket_adapter.aclose()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -589,10 +569,8 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
 
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
-        # The WS URL is bound when its pool connects. Refresh the pool when that URL changes.
-        prev_ws_url = (
-            self._ws_url() if self._use_websocket and self._websocket_v1_adapter is None else None
-        )
+        # Each WS3 pool is bound to one URL. Replace it when URL options change.
+        prev_ws_url = self._ws_url() if self._legacy_websocket_adapter is not None else None
         if is_given(websocket_url):
             assert self._websocket_v1_adapter is not None
             self._websocket_v1_adapter.update_endpoint(websocket_url)
@@ -653,8 +631,8 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         )
 
         if prev_ws_url is not None and self._ws_url() != prev_ws_url:
-            assert self._ws3_pool is not None
-            self._ws3_pool.invalidate()
+            assert self._legacy_websocket_adapter is not None
+            self._legacy_websocket_adapter.update_endpoint(self._ws_url())
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -720,126 +698,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
-
-
-class _WS3SynthesizeStream(tts.SynthesizeStream):
-    """One stream = one utterance. Server-side bySentence segmentation by default;
-    pass segment="immediate" on the TTS to disable server buffering when the agent
-    is already feeding sentence-tokenized text."""
-
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = copy.deepcopy(tts._opts)
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        await self._run_ws3(output_emitter)
-
-    async def _run_ws3(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        context_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._tts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
-        )
-        output_emitter.start_segment(segment_id=context_id)
-
-        sentence_tokenizer = self._tts._sentence_tokenizer
-        assert sentence_tokenizer is not None
-        sent_stream = sentence_tokenizer.stream()
-        input_sent_event = asyncio.Event()
-        empty_input = False
-
-        async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    sent_stream.flush()
-                    continue
-                sent_stream.push_text(data)
-            sent_stream.end_input()
-
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal empty_input
-            sent_count = 0
-            async for ev in sent_stream:
-                pkt = {"text": ev.token + " ", "contextId": context_id}
-                self._mark_started()
-                await ws.send_str(json.dumps(pkt))
-                input_sent_event.set()
-                sent_count += 1
-            if sent_count == 0:
-                empty_input = True
-                input_sent_event.set()
-                output_emitter.end_input()
-                return
-            await ws.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
-
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            await input_sent_event.wait()
-            if empty_input:
-                return
-            while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "Rime ws closed unexpectedly",
-                        request_id=request_id,
-                    )
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError("Rime WebSocket transport error")
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Rime ws message type %s", msg.type)
-                    continue
-                data = json.loads(msg.data)
-                t = data.get("type")
-                if t == "chunk":
-                    output_emitter.push(base64.b64decode(data["data"]))
-                elif t == "timestamps":
-                    wt = data.get("word_timestamps") or {}
-                    words = wt.get("words") or []
-                    starts = wt.get("start") or []
-                    ends = wt.get("end") or []
-                    for w, s, e in zip(words, starts, ends, strict=False):
-                        output_emitter.push_timed_transcript(
-                            TimedString(text=w + " ", start_time=s, end_time=e)
-                        )
-                elif t == "done":
-                    output_emitter.end_input()
-                    break
-                elif t == "error":
-                    raise APIError("Rime WebSocket request failed")
-
-        try:
-            assert self._tts._ws3_pool is not None
-            async with self._tts._ws3_pool.connection(timeout=self._conn_options.timeout) as ws:
-                tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_send_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    input_sent_event.set()
-                    await sent_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message="Rime WebSocket request failed",
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from None
-        except APIError:
-            raise
-        except Exception:
-            raise APIConnectionError("Rime WebSocket request failed") from None
