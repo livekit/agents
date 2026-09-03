@@ -26,7 +26,6 @@ class SynthesisRequest(_message.Message):
         "text",
         "audio_parameters",
         "split_strategy",
-        "arcana_parameters",
         "coda_parameters",
         "mist_parameters",
     )
@@ -35,7 +34,6 @@ class SynthesisRequest(_message.Message):
     TEXT_FIELD_NUMBER: _ClassVar[int]
     AUDIO_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     SPLIT_STRATEGY_FIELD_NUMBER: _ClassVar[int]
-    ARCANA_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     CODA_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     MIST_PARAMETERS_FIELD_NUMBER: _ClassVar[int]
     language: str
@@ -43,7 +41,6 @@ class SynthesisRequest(_message.Message):
     text: str
     audio_parameters: AudioParameters
     split_strategy: SplitStrategy
-    arcana_parameters: ArcanaParameters
     coda_parameters: CodaParameters
     mist_parameters: MistParameters
     def __init__(
@@ -53,7 +50,6 @@ class SynthesisRequest(_message.Message):
         text: _Optional[str] = ...,
         audio_parameters: _Optional[_Union[AudioParameters, _Mapping]] = ...,
         split_strategy: _Optional[_Union[SplitStrategy, str]] = ...,
-        arcana_parameters: _Optional[_Union[ArcanaParameters, _Mapping]] = ...,
         coda_parameters: _Optional[_Union[CodaParameters, _Mapping]] = ...,
         mist_parameters: _Optional[_Union[MistParameters, _Mapping]] = ...,
     ) -> None: ...
@@ -71,65 +67,6 @@ class AudioParameters(_message.Message):
         audio_format: _Optional[str] = ...,
         sampling_rate: _Optional[int] = ...,
         time_scale_factor: _Optional[float] = ...,
-    ) -> None: ...
-
-class ArcanaParameters(_message.Message):
-    __slots__ = (
-        "repetition_penalty",
-        "top_p",
-        "temperature",
-        "max_tokens",
-        "presence_penalty",
-        "frequency_penalty",
-        "top_k",
-        "min_p",
-        "seed",
-        "min_tokens",
-        "detokenize",
-        "skip_special_tokens",
-        "spaces_between_special_tokens",
-    )
-    REPETITION_PENALTY_FIELD_NUMBER: _ClassVar[int]
-    TOP_P_FIELD_NUMBER: _ClassVar[int]
-    TEMPERATURE_FIELD_NUMBER: _ClassVar[int]
-    MAX_TOKENS_FIELD_NUMBER: _ClassVar[int]
-    PRESENCE_PENALTY_FIELD_NUMBER: _ClassVar[int]
-    FREQUENCY_PENALTY_FIELD_NUMBER: _ClassVar[int]
-    TOP_K_FIELD_NUMBER: _ClassVar[int]
-    MIN_P_FIELD_NUMBER: _ClassVar[int]
-    SEED_FIELD_NUMBER: _ClassVar[int]
-    MIN_TOKENS_FIELD_NUMBER: _ClassVar[int]
-    DETOKENIZE_FIELD_NUMBER: _ClassVar[int]
-    SKIP_SPECIAL_TOKENS_FIELD_NUMBER: _ClassVar[int]
-    SPACES_BETWEEN_SPECIAL_TOKENS_FIELD_NUMBER: _ClassVar[int]
-    repetition_penalty: float
-    top_p: float
-    temperature: float
-    max_tokens: int
-    presence_penalty: float
-    frequency_penalty: float
-    top_k: int
-    min_p: float
-    seed: int
-    min_tokens: int
-    detokenize: bool
-    skip_special_tokens: bool
-    spaces_between_special_tokens: bool
-    def __init__(
-        self,
-        repetition_penalty: _Optional[float] = ...,
-        top_p: _Optional[float] = ...,
-        temperature: _Optional[float] = ...,
-        max_tokens: _Optional[int] = ...,
-        presence_penalty: _Optional[float] = ...,
-        frequency_penalty: _Optional[float] = ...,
-        top_k: _Optional[int] = ...,
-        min_p: _Optional[float] = ...,
-        seed: _Optional[int] = ...,
-        min_tokens: _Optional[int] = ...,
-        detokenize: _Optional[bool] = ...,
-        skip_special_tokens: _Optional[bool] = ...,
-        spaces_between_special_tokens: _Optional[bool] = ...,
     ) -> None: ...
 
 class CodaParameters(_message.Message):

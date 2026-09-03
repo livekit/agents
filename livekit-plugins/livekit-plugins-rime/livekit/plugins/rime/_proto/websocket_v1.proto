@@ -3,14 +3,13 @@ syntax = "proto3";
 package livekit.plugins.rime.v1;
 
 message SynthesisRequest {
-  reserved 1;
+  reserved 1, 7;
 
   optional string language = 2;
   optional string speaker = 3;
   string text = 4;
   optional AudioParameters audio_parameters = 5;
   optional SplitStrategy split_strategy = 6;
-  optional ArcanaParameters arcana_parameters = 7;
   optional CodaParameters coda_parameters = 8;
   optional MistParameters mist_parameters = 9;
 }
@@ -19,22 +18,6 @@ message AudioParameters {
   optional string audio_format = 1;
   optional int32 sampling_rate = 2;
   optional float time_scale_factor = 3;
-}
-
-message ArcanaParameters {
-  optional float repetition_penalty = 1;
-  optional float top_p = 2;
-  optional float temperature = 3;
-  optional int32 max_tokens = 4;
-  optional float presence_penalty = 5;
-  optional float frequency_penalty = 6;
-  optional int32 top_k = 7;
-  optional float min_p = 8;
-  optional int64 seed = 9;
-  optional int32 min_tokens = 13;
-  optional bool detokenize = 14;
-  optional bool skip_special_tokens = 15;
-  optional bool spaces_between_special_tokens = 16;
 }
 
 message CodaParameters {
