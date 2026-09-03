@@ -122,7 +122,7 @@ def test_dynamic_tracer_omits_automatic_exception_details_when_redacted(
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     dynamic_tracer = _DynamicTracer("test-exception-redaction")
     dynamic_tracer.set_provider(provider)
-    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
 
     with pytest.raises(RuntimeError, match="secret transcript"):
         with dynamic_tracer.start_as_current_span("test-span"):
@@ -152,7 +152,7 @@ def test_dynamic_tracer_use_span_omits_automatic_exception_details_when_redacted
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     dynamic_tracer = _DynamicTracer("test-use-span-exception-redaction")
     dynamic_tracer.set_provider(provider)
-    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
 
     span = dynamic_tracer.start_span("test-span")
     with pytest.raises(RuntimeError, match="secret transcript"):
@@ -193,7 +193,7 @@ def test_logging_handler_omits_automatic_exception_details_when_redacted(
         args=(),
         exc_info=exc_info,
     )
-    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: redaction_enabled)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
 
     translated = _TraceLevelLoggingHandler()._translate(record)
     assert translated.attributes is not None
@@ -229,7 +229,7 @@ def test_redacted_exception_log_can_be_otlp_encoded(monkeypatch: pytest.MonkeyPa
         args=(),
         exc_info=exc_info,
     )
-    monkeypatch.setattr(telemetry_utils, "_redaction_enabled", lambda: True)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: True)
 
     try:
         handler.emit(record)

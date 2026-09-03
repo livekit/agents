@@ -77,10 +77,14 @@ def test_builders_produce_the_conventions_shapes() -> None:
     assert [p["type"] for p in output[0]["parts"]] == ["text", "tool_call"]
     assert gen_ai.to_output_messages(text="", function_calls=[]) == []
 
-    definitions = gen_ai.to_tool_definitions([_get_weather])
-    assert definitions[0]["type"] == "function"
-    assert definitions[0]["name"] == "_get_weather"
-    assert "location" in definitions[0]["parameters"]["properties"]
+    # `parameters` is omitted: the convention marks it NOT RECOMMENDED by default
+    assert gen_ai.to_tool_definitions([_get_weather]) == [
+        {
+            "type": "function",
+            "name": "_get_weather",
+            "description": "Get the current weather in a given location.",
+        }
+    ]
 
 
 @pytest.mark.parametrize(

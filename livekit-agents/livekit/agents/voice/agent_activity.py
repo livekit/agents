@@ -2899,7 +2899,7 @@ class AgentActivity(RecognitionHooks):
                 agent_name=self._agent.label,
             )
             speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.time()
+            turn_started_at = time.perf_counter()
 
             try:
                 await self._tts_task_impl(
@@ -2911,7 +2911,7 @@ class AgentActivity(RecognitionHooks):
                 )
             finally:
                 otel_metrics.record_invoke_agent_duration(
-                    time.time() - turn_started_at, agent_name=self._agent.label
+                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
                 )
 
     async def _tts_task_impl(
@@ -3173,7 +3173,7 @@ class AgentActivity(RecognitionHooks):
                 agent_name=self._agent.label,
             )
             speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.time()
+            turn_started_at = time.perf_counter()
 
             try:
                 await self._pipeline_reply_task_impl(
@@ -3187,7 +3187,7 @@ class AgentActivity(RecognitionHooks):
                 )
             finally:
                 otel_metrics.record_invoke_agent_duration(
-                    time.time() - turn_started_at, agent_name=self._agent.label
+                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
                 )
 
     async def _pipeline_reply_task_impl(
@@ -3937,18 +3937,21 @@ class AgentActivity(RecognitionHooks):
                 agent_name=self._agent.label,
             )
             speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.time()
+            turn_started_at = time.perf_counter()
 
+            inference_span = tracer.start_span("realtime_inference")
             try:
                 await self._realtime_generation_task_impl(
                     speech_handle=speech_handle,
                     generation_ev=generation_ev,
                     model_settings=model_settings,
                     instructions=instructions,
+                    inference_span=inference_span,
                 )
             finally:
+                inference_span.end()
                 otel_metrics.record_invoke_agent_duration(
-                    time.time() - turn_started_at, agent_name=self._agent.label
+                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
                 )
 
     async def _realtime_generation_task_impl(
@@ -3958,6 +3961,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3969,22 +3973,30 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
-        current_span.set_attributes(
-            {
-                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self.llm.provider,
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.llm.model,
-            }
-        )
-        if self._realtime_spans is not None and generation_ev.response_id:
-            self._realtime_spans[generation_ev.response_id] = current_span
-
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription
             if self._session.output.transcription_enabled
             else None
         )
+
+        gen_ai_telemetry.set_request_attributes(
+            inference_span,
+            operation=trace_types.GenAIOperationName.GENERATE_CONTENT,
+            provider=self.llm.provider,
+            model=self.llm.model,
+            stream=True,
+            # a realtime model can be configured text-only
+            output_type=(
+                trace_types.GenAIOutputType.SPEECH
+                if audio_output is not None
+                else trace_types.GenAIOutputType.TEXT
+            ),
+        )
+        # the provider metrics land here rather than on `agent_turn`; they can arrive after
+        # the turn ends, in which case record_realtime_metrics opens its own child span
+        if self._realtime_spans is not None and generation_ev.response_id:
+            self._realtime_spans[generation_ev.response_id] = inference_span
         tool_ctx = llm.ToolContext(self.tools)
 
         tasks: list[asyncio.Task[Any]] = []

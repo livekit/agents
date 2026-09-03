@@ -180,9 +180,12 @@ def to_output_messages(
 
 
 def to_tool_definitions(tools: Iterable[Tool]) -> list[dict[str, Any]]:
-    from ..llm import utils as llm_utils
+    """``parameters`` is deliberately omitted: the convention marks it NOT RECOMMENDED by
+    default because a schema is large, and building one per request would be pure
+    overhead for telemetry."""
     from ..llm.tool_context import (
         ProviderTool,
+        get_function_info,
         get_raw_function_info,
         is_function_tool,
         is_raw_function_tool,
@@ -190,21 +193,22 @@ def to_tool_definitions(tools: Iterable[Tool]) -> list[dict[str, Any]]:
 
     definitions: list[dict[str, Any]] = []
     for tool in tools:
-        if is_raw_function_tool(tool):
-            info = get_raw_function_info(tool)
-            schema = dict(info.raw_schema)
-            schema.setdefault("type", "function")
-            schema.setdefault("name", info.name)
-            definitions.append(schema)
-        elif is_function_tool(tool):
-            try:
-                definitions.append(
-                    llm_utils.build_legacy_openai_schema(tool, internally_tagged=True)
-                )
-            except Exception:  # noqa: BLE001 - a tool whose schema can't be built must not break tracing
-                continue
+        definition: dict[str, Any]
+        if is_function_tool(tool):
+            info = get_function_info(tool)
+            definition = {"type": "function", "name": info.name}
+            if info.description:
+                definition["description"] = info.description
+        elif is_raw_function_tool(tool):
+            raw = get_raw_function_info(tool)
+            definition = {"type": "function", "name": raw.name}
+            if isinstance(description := raw.raw_schema.get("description"), str) and description:
+                definition["description"] = description
         elif isinstance(tool, ProviderTool):
-            definitions.append({"type": tool.id, "name": tool.id})
+            definition = {"type": tool.id, "name": tool.id}
+        else:
+            continue
+        definitions.append(definition)
     return definitions
 
 

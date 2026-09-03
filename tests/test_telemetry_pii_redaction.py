@@ -11,8 +11,9 @@ from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
 
 pytestmark = pytest.mark.unit
 
-# Pins the SDK-side guarantee: for a redaction-enabled session every PII attribute is
-# gone before any exporter sees the span, not only before it reaches LiveKit Cloud.
+# Pins the SDK-side guarantee: PII never reaches an exporter that is not LiveKit Cloud's,
+# whose own handling is the project's setting in the dashboard. `allow_pii` lifts that per
+# provider; the project flag overrides it and strips for every destination.
 
 _PII_ATTRS = {
     trace_types.ATTR_CHAT_CTX: '{"items": []}',
@@ -22,6 +23,8 @@ _PII_ATTRS = {
     trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS: '[{"type": "text"}]',
     trace_types.ATTR_GEN_AI_TOOL_CALL_ARGUMENTS: '{"location": "Paris"}',
     trace_types.ATTR_GEN_AI_TOOL_CALL_RESULT: '{"temp": 14}',
+    # free-form, and recorded whenever the project allows it
+    trace_types.ATTR_EXCEPTION_TRACE: 'Traceback: "my pin is 1234"',
 }
 _SAFE_ATTRS = {
     trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
@@ -30,14 +33,16 @@ _SAFE_ATTRS = {
 }
 
 
-def _emit(*, redaction: bool, exporter_first: bool = False) -> InMemorySpanExporter:
+def _emit(
+    *, redaction: bool = False, exporter_first: bool = False, allow_pii: bool = False
+) -> InMemorySpanExporter:
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
     if exporter_first:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
-        _install_pii_redaction(provider)
+        _install_pii_redaction(provider, allow_pii=allow_pii)
     else:
-        _install_pii_redaction(provider)
+        _install_pii_redaction(provider, allow_pii=allow_pii)
         provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     with provider.get_tracer(__name__).start_as_current_span("llm_request") as span:
@@ -49,8 +54,8 @@ def _emit(*, redaction: bool, exporter_first: bool = False) -> InMemorySpanExpor
     return exporter
 
 
-def test_pii_is_stripped_when_redaction_is_enabled() -> None:
-    span = _emit(redaction=True).get_finished_spans()[0]
+def test_third_party_exporters_never_receive_pii() -> None:
+    span = _emit().get_finished_spans()[0]
 
     leaked = sorted(set(_PII_ATTRS) & set(span.attributes or {}))
     assert not leaked, f"leaked: {leaked}"
@@ -65,26 +70,42 @@ def test_pii_is_stripped_when_redaction_is_enabled() -> None:
     assert events["llm_started"] == {"n": 1}
 
 
-def test_nothing_is_stripped_without_redaction() -> None:
-    span = _emit(redaction=False).get_finished_spans()[0]
+def test_allow_pii_lets_a_granted_provider_see_everything() -> None:
+    span = _emit(allow_pii=True).get_finished_spans()[0]
 
     for key, value in _PII_ATTRS.items():
         assert (span.attributes or {})[key] == value
     assert trace_types.EVENT_GEN_AI_USER_MESSAGE in {e.name for e in span.events}
 
 
-def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:
-    # an integrator attaches their Datadog/Langfuse exporter, then hands us the provider
-    span = _emit(redaction=True, exporter_first=True).get_finished_spans()[0]
+def test_the_project_flag_overrides_allow_pii() -> None:
+    # redaction mandated in the dashboard is not weakened by a local grant
+    span = _emit(allow_pii=True, redaction=True).get_finished_spans()[0]
 
     assert not set(_PII_ATTRS) & set(span.attributes or {})
 
 
-def test_redaction_falls_back_to_the_job_context(monkeypatch: pytest.MonkeyPatch) -> None:
-    # spans created before the job registered its recording options carry no stamp
-    monkeypatch.setattr("livekit.agents.telemetry.utils._redaction_enabled", lambda: True)
+def test_livekit_cloud_still_receives_pii() -> None:
+    # what Cloud may keep is decided at its collector, from the project's setting
+    exporter = _emit()
+    stripped = exporter.get_finished_spans()[0]
+    restored = pii.restore_pii(stripped)
 
-    span = _emit(redaction=False).get_finished_spans()[0]
+    for key, value in _PII_ATTRS.items():
+        assert (restored.attributes or {})[key] == value
+    assert trace_types.EVENT_GEN_AI_USER_MESSAGE in {e.name for e in restored.events}
+
+
+def test_the_project_flag_withholds_pii_from_livekit_cloud_too() -> None:
+    stripped = _emit(redaction=True).get_finished_spans()[0]
+
+    assert pii.restore_pii(stripped) is stripped
+    assert not set(_PII_ATTRS) & set(stripped.attributes or {})
+
+
+def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:
+    # an integrator attaches their Datadog/Langfuse exporter, then hands us the provider
+    span = _emit(exporter_first=True).get_finished_spans()[0]
 
     assert not set(_PII_ATTRS) & set(span.attributes or {})
 

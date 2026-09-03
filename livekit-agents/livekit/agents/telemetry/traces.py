@@ -115,7 +115,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -126,7 +126,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -337,7 +337,9 @@ class _GatedSpanExporter(SpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         exportable = [
-            s
+            # PII stripped for third-party exporters is put back here: what LiveKit Cloud
+            # may receive is the project's setting, applied at its collector
+            pii.restore_pii(s)
             for s in spans
             if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
             and state.traces_enabled
@@ -399,7 +401,7 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
-        if telemetry_utils._redaction_enabled() and log_record.attributes:
+        if telemetry_utils.redaction_enabled() and log_record.attributes:
             attributes = dict(log_record.attributes)
             if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
                 attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
@@ -446,7 +448,27 @@ def _prepend_span_processor(provider: trace_sdk.TracerProvider, processor: SpanP
 _pii_redaction_installed: weakref.WeakSet[trace_sdk.TracerProvider] = weakref.WeakSet()
 
 
-def _install_pii_redaction(tracer_provider: trace_api.TracerProvider) -> None:
+def _prepend_log_processor(provider: LoggerProvider, processor: LogRecordProcessor) -> None:
+    """Log counterpart of :func:`_prepend_span_processor` — same dispatch-order reasoning."""
+    provider.add_log_record_processor(processor)
+
+    multi = getattr(provider, "_multi_log_record_processor", None)
+    processors = getattr(multi, "_log_record_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._log_record_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._log_record_processors = reordered  # type: ignore[union-attr]
+
+
+def _install_pii_redaction(
+    tracer_provider: trace_api.TracerProvider, *, allow_pii: bool = False
+) -> None:
     """Install in-process PII stripping on an SDK provider, at most once per provider."""
     if not isinstance(tracer_provider, trace_sdk.TracerProvider):
         # processors can only be attached to an SDK provider; a no-op/proxy provider
@@ -455,25 +477,34 @@ def _install_pii_redaction(tracer_provider: trace_api.TracerProvider) -> None:
     if tracer_provider in _pii_redaction_installed:
         return
     _pii_redaction_installed.add(tracer_provider)
-    _prepend_span_processor(tracer_provider, pii.PIIRedactingSpanProcessor())
+    _prepend_span_processor(
+        tracer_provider,
+        pii.PIIRedactingSpanProcessor(allow_pii=allow_pii or telemetry_utils.allow_pii_from_env()),
+    )
 
 
 def set_tracer_provider(
-    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider,
+    *,
+    metadata: dict[str, AttributeValue] | None = None,
+    allow_pii: bool = False,
 ) -> None:
     """Set the tracer provider for the livekit-agents.
-
-    Spans exported through this provider have their PII attributes stripped in-process
-    whenever the session enabled redaction — see :mod:`livekit.agents.telemetry.pii`.
 
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
+        allow_pii (bool, optional): Let this provider's exporters receive conversational
+            content, tool payloads and other user data. Off by default: PII is stripped
+            in-process before any exporter that is not LiveKit Cloud's, so a Datadog or
+            Langfuse pipeline sees only the non-content attributes. Turn it on when the
+            backend is meant to show conversations. Ignored when the project mandates
+            redaction — that setting is not weakened from here.
     """
     if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
-    _install_pii_redaction(tracer_provider)
+    _install_pii_redaction(tracer_provider, allow_pii=allow_pii)
     tracer.set_provider(tracer_provider)
 
 
@@ -802,6 +833,9 @@ class _CloudTelemetry:
             self._exit_targets.append(("LoggerProvider", owned.shutdown))
             set_logger_provider(owned)
             self._logger_provider = owned
+
+        # ahead of any exporter already on the provider, as for spans
+        _prepend_log_processor(self._logger_provider, pii.PIIRedactingLogProcessor())
 
     def _ensure_log_pipeline(self, url: str) -> None:
         if self._log_batch_processor is not None or self._logger_provider is None:

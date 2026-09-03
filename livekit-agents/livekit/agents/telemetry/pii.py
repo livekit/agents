@@ -4,10 +4,19 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context as otel_context
+from opentelemetry.sdk._logs import LogRecordProcessor, ReadWriteLogRecord
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
-from ..types import ATTRIBUTE_REDACTION_ENABLED
 from . import trace_types
+from .utils import REDACTED_EXCEPTION_MESSAGE
+
+# exception details are recorded by `record_exception`, which resolves redaction from the
+# ambient job context; that can disagree with the span's own stamp, so they are filtered
+# here as well
+_REDACTED_EXCEPTION_ATTRIBUTES = (
+    trace_types.ATTR_EXCEPTION_MESSAGE,
+    trace_types.ATTR_EXCEPTION_TRACE,
+)
 
 # LiveKit marks attributes carrying conversational content, tool payloads or other user
 # data with a dot-delimited `pii` segment (`lk.pii.<name>`), which PII-enabled projects
@@ -67,50 +76,129 @@ def is_pii_attribute(key: str) -> bool:
 def redact_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
     if not attributes:
         return {}
-    return {k: v for k, v in attributes.items() if not is_pii_attribute(k)}
+
+    redacted: dict[str, Any] = {}
+    for key, value in attributes.items():
+        if is_pii_attribute(key):
+            continue
+        if key == trace_types.ATTR_EXCEPTION_TRACE:
+            continue
+        if key == trace_types.ATTR_EXCEPTION_MESSAGE:
+            # `error.type` still names the class; only the free-form message goes
+            redacted[key] = REDACTED_EXCEPTION_MESSAGE
+            continue
+        redacted[key] = value
+    return redacted
 
 
 def contains_pii(attributes: Mapping[str, Any] | None) -> bool:
-    return any(is_pii_attribute(k) for k in attributes or ())
+    return any(is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES for k in attributes or ())
 
 
-def _span_redaction_enabled(attributes: Mapping[str, Any] | None) -> bool:
-    """Resolved from the span's own attributes rather than the ambient job context: the
-    flag is stamped at span start, so it stays correct when concurrent jobs share the
-    providers (THREAD executor) and when a span ends off the job's thread."""
-    if attributes and attributes.get(ATTRIBUTE_REDACTION_ENABLED):
-        return True
-
-    # spans created before the job registered its recording options, or outside a job
-    # context entirely, fall back to the ambient context
-    from .utils import _redaction_enabled
-
-    return _redaction_enabled()
+_RAW_ATTRIBUTES = "_lk_raw_attributes"
+_RAW_EVENTS = "_lk_raw_events"
 
 
 class PIIRedactingSpanProcessor(SpanProcessor):
-    """Must be registered **before** any exporting processor: ``on_end`` is dispatched in
+    """Strips PII so it never reaches an exporter that is not LiveKit Cloud's.
+
+    Must be registered **before** any exporting processor: ``on_end`` is dispatched in
     registration order over one shared :class:`ReadableSpan` snapshot, so rewriting the
-    snapshot here is what the downstream processors go on to export."""
+    snapshot here is what the downstream processors go on to export.
+
+    LiveKit Cloud is exempt — its PII handling is the project's setting in the dashboard,
+    not ours to second-guess — so the original attributes are stashed on the snapshot for
+    :func:`restore_pii` to put back on that one export path. When the project does mandate
+    redaction, nothing is stashed and Cloud is stripped along with everyone else.
+
+    ``allow_pii`` lifts the stripping for a provider whose exporters the integrator has
+    explicitly granted PII (``set_tracer_provider(..., allow_pii=True)``).
+    """
+
+    def __init__(self, *, allow_pii: bool = False) -> None:
+        self._allow_pii = allow_pii
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
         pass
 
     def on_end(self, span: ReadableSpan) -> None:
+        from .utils import redaction_enabled
+
         attributes = span.attributes
-        if not _span_redaction_enabled(attributes):
+        # the flag stamped at span start keeps this correct for a span ended off the
+        # job's thread, and when concurrent jobs share the providers (THREAD executor)
+        project_redaction = redaction_enabled(attributes)
+        if self._allow_pii and not project_redaction:
             return
 
-        if contains_pii(attributes):
-            # rebind rather than mutate: the snapshot's BoundedAttributes is shared with
-            # the live span, and is immutable once the span has ended
-            span._attributes = redact_attributes(attributes)
-
         events = span.events
-        if events:
-            redacted = _redact_events(events)
-            if redacted is not None:
-                span._events = redacted
+        redacted_events = _redact_events(events)
+        if not contains_pii(attributes) and redacted_events is None:
+            return
+
+        if not project_redaction:
+            # LiveKit Cloud still receives what the project allows
+            setattr(span, _RAW_ATTRIBUTES, dict(attributes or {}))
+            setattr(span, _RAW_EVENTS, tuple(events))
+
+        # rebind rather than mutate: the snapshot's BoundedAttributes is shared with the
+        # live span, and is immutable once the span has ended
+        span._attributes = redact_attributes(attributes)
+        if redacted_events is not None:
+            span._events = redacted_events
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def restore_pii(span: ReadableSpan) -> ReadableSpan:
+    """The span as it was before PII was stripped for third-party exporters.
+
+    Only LiveKit Cloud's own exporter calls this; every other destination sees the
+    redacted snapshot. Returns ``span`` unchanged when nothing was stashed.
+    """
+    attributes = getattr(span, _RAW_ATTRIBUTES, None)
+    if attributes is None:
+        return span
+
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=attributes,
+        events=getattr(span, _RAW_EVENTS, span.events),
+        links=span.links,
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class PIIRedactingLogProcessor(LogRecordProcessor):
+    """Log counterpart of :class:`PIIRedactingSpanProcessor`.
+
+    ``_TraceLevelLoggingHandler`` redacts the records the framework's own handler creates;
+    this covers every other emitter on the logger provider, including the exporters an
+    integrator attached before handing us the provider.
+    """
+
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
+        # on_emit runs synchronously on the emitting thread, so the ambient job context is
+        # the right source here — unlike spans, a log record has no earlier stamp to read
+        from .utils import redaction_enabled
+
+        if not redaction_enabled():
+            return
+
+        record = log_data.log_record
+        if contains_pii(record.attributes):
+            record.attributes = redact_attributes(record.attributes)
 
     def shutdown(self) -> None:
         pass

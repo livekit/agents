@@ -339,7 +339,10 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
-                    metadata=self._otel_metadata(report.options.recording_options),
+                    metadata=self._otel_metadata(
+                        report.options.recording_options,
+                        redaction_enabled=self._redaction_enabled,
+                    ),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")

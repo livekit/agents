@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -15,21 +17,44 @@ if TYPE_CHECKING:
 
 REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
 
+_ALLOW_PII_ENV_VAR = "LIVEKIT_TELEMETRY_ALLOW_PII"
+_TRUTHY = ("1", "true", "yes", "on")
 
-def _redaction_enabled() -> bool:
+
+def allow_pii_from_env() -> bool:
+    """Grant third-party exporters PII without a ``set_tracer_provider`` call site.
+
+    Only for integrators who let the framework adopt the ambient OpenTelemetry provider
+    (a NodeSDK-style setup) and so have nowhere to pass ``allow_pii``.
+    """
+    return os.environ.get(_ALLOW_PII_ENV_VAR, "").strip().lower() in _TRUTHY
+
+
+def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
+    """Whether the project has mandated PII redaction.
+
+    Set in the LiveKit Cloud dashboard (or per session with
+    ``record={"redaction": True}``) and never weakened from here — when it is on, PII is
+    stripped for every destination, LiveKit Cloud included. ``span_attributes`` lets a
+    span ended off the job's thread resolve from the flag stamped on it at span start.
+
+    Stripping PII for *third-party* exporters is not this flag: that is the default, and
+    is lifted per provider with ``set_tracer_provider(..., allow_pii=True)``.
+    """
+    if span_attributes and span_attributes.get(ATTRIBUTE_REDACTION_ENABLED):
+        return True
+
     from ..job import get_job_context
 
     job_ctx = get_job_context(required=False)
-    if job_ctx is None:
-        return False
-    return job_ctx._redaction_enabled
+    return job_ctx is not None and job_ctx._redaction_enabled
 
 
 def record_exception(
     span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
 ) -> None:
     if redacted is NOT_GIVEN:
-        redacted = _redaction_enabled()
+        redacted = redaction_enabled()
 
     # `error.type` is the GenAI/HTTP conventions' low-cardinality error identifier;
     # unlike the message it never carries user data, so it is set either way
@@ -64,10 +89,9 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
     model_provider = ev.metadata.model_provider if ev.metadata else None
 
     attrs: dict[str, str | int | float | bool] = {
-        # a realtime turn is a multimodal generation: `generate_content` is the
-        # convention's operation for it, and the model answers with speech
+        # a realtime turn is a multimodal generation; `gen_ai.output.type` is set on the
+        # inference span, which knows whether this session outputs audio
         trace_types.ATTR_GEN_AI_OPERATION_NAME: (trace_types.GenAIOperationName.GENERATE_CONTENT),
-        trace_types.ATTR_GEN_AI_OUTPUT_TYPE: trace_types.GenAIOutputType.SPEECH,
         trace_types.ATTR_GEN_AI_PROVIDER_NAME: (
             trace_types.gen_ai_provider_name(model_provider) or "unknown"
         ),
