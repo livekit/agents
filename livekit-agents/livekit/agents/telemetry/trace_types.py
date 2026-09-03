@@ -239,6 +239,7 @@ _PROVIDER_BY_HOST_SUFFIX: tuple[tuple[str, str], ...] = (
 )
 
 _PROVIDER_BY_NAME: dict[str, str] = {
+    "amazon": "aws.bedrock",
     "amazonbedrock": "aws.bedrock",
     "anthropic": "anthropic",
     "awsbedrock": "aws.bedrock",

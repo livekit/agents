@@ -96,6 +96,14 @@ def test_builders_produce_the_conventions_shapes() -> None:
             {"function_calls": [llm.FunctionCall(call_id="c", name="n", arguments="{}")]},
             trace_types.GenAIFinishReason.TOOL_CALL,
         ),
+        # a tool call emitted before the generation failed is not a successful handoff
+        (
+            {
+                "function_calls": [llm.FunctionCall(call_id="c", name="n", arguments="{}")],
+                "interrupted": True,
+            },
+            trace_types.GenAIFinishReason.ERROR,
+        ),
     ],
 )
 def test_finish_reasons_use_the_conventions_values(kwargs: dict, expected: str) -> None:
@@ -227,6 +235,7 @@ def test_error_type_is_low_cardinality() -> None:
         ("bedrock-runtime.us-east-1.amazonaws.com", "aws.bedrock"),
         # display names
         ("AWS Bedrock", "aws.bedrock"),
+        ("Amazon", "aws.bedrock"),
         ("MistralAI", "mistral_ai"),
         ("Vertex AI", "gcp.vertex_ai"),
         ("Vertex AI Model Garden", "gcp.vertex_ai"),

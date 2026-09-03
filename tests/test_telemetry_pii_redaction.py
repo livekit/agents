@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -146,3 +147,31 @@ def test_logs_are_filtered_for_every_destination_when_redaction_is_enabled(
         "function": "get_weather",
         trace_types.ATTR_EXCEPTION_MESSAGE: telemetry_utils.REDACTED_EXCEPTION_MESSAGE,
     }
+
+
+def test_exception_details_are_withheld_from_third_party_exporters() -> None:
+    """record_exception resolves the project's setting, so with redaction off it writes the
+    real message onto the span, its `exception` event and the span status. None of that may
+    reach an exporter that is not LiveKit Cloud's."""
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    _install_pii_redaction(provider, allow_pii=False)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    with provider.get_tracer(__name__).start_as_current_span("llm_request") as span:
+        try:
+            raise RuntimeError("my pin is 1234")
+        except RuntimeError as exc:
+            telemetry_utils.record_exception(span, exc, redacted=False)
+
+    exported = exporter.get_finished_spans()[0]
+    serialized = json.dumps(
+        [
+            dict(exported.attributes or {}),
+            [dict(e.attributes or {}) for e in exported.events],
+            exported.status.description,
+        ]
+    )
+    assert "my pin is 1234" not in serialized
+    # the class still identifies the failure
+    assert (exported.attributes or {})[trace_types.ATTR_ERROR_TYPE] == "RuntimeError"

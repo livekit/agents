@@ -219,12 +219,12 @@ def to_tool_definitions(tools: Iterable[Tool]) -> list[dict[str, Any]]:
 def finish_reason_for(
     *, function_calls: Sequence[AnyFunctionCall] = (), interrupted: bool = False
 ) -> str:
+    if interrupted:
+        # checked first: a generation that emitted a tool call and then failed ended
+        # abnormally, and the convention has no `cancelled` value for that
+        return trace_types.GenAIFinishReason.ERROR
     if function_calls:
         return trace_types.GenAIFinishReason.TOOL_CALL
-    if interrupted:
-        # the caller stopped reading the stream; the convention has no `cancelled`
-        # value and treats an abnormally ended generation as `error`
-        return trace_types.GenAIFinishReason.ERROR
     return trace_types.GenAIFinishReason.STOP
 
 

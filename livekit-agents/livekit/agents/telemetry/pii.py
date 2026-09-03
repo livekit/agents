@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import context as otel_context
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadWriteLogRecord
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 from . import trace_types
 from .utils import REDACTED_EXCEPTION_MESSAGE
@@ -151,6 +152,9 @@ class _PIIFilteringSpanProcessor(SpanProcessor):
         span._attributes = filter_attributes(attributes)
         if filtered_events is not None:
             span._events = filtered_events
+        # record_exception also puts the message in the span status
+        if span.status.status_code is StatusCode.ERROR and span.status.description:
+            span._status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
 
     def shutdown(self) -> None:
         pass
