@@ -63,7 +63,6 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
 ]
-ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
@@ -139,16 +138,6 @@ class AssemblyaiOptions(TypedDict, total=False):
     voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
     voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
     mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
-
-
-class ElevenlabsOptions(TypedDict, total=False):
-    commit_strategy: Literal["manual", "vad"]
-    include_timestamps: bool
-    vad_silence_threshold_secs: float
-    vad_threshold: float
-    min_speech_duration_ms: int
-    min_silence_duration_ms: int
-    language_code: str
 
 
 class SpeechmaticsOptions(TypedDict, total=False):
@@ -295,7 +284,6 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-streaming-multilingual",
         "assemblyai/u3-rt-pro",
         "assemblyai/universal-3-5-pro",
-        "elevenlabs/scribe_v2_realtime",
         "xai/stt-1",
         "speechmatics/enhanced",
         "speechmatics/standard",
@@ -391,7 +379,6 @@ STTModels = (
     | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
-    | ElevenlabsModels
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
@@ -484,23 +471,6 @@ class STT(stt.STT):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-    ) -> None: ...
-
-    @overload
-    def __init__(
-        self,
-        model: ElevenlabsModels,
-        *,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -608,7 +578,6 @@ class STT(stt.STT):
             | DeepgramOptions
             | DeepgramFluxOptions
             | AssemblyaiOptions
-            | ElevenlabsOptions
             | XaiOptions
             | SpeechmaticsOptions
             | InworldOptions
