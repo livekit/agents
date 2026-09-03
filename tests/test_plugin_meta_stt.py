@@ -365,6 +365,6 @@ def test_encoding_selects_the_sample_rate():
 
 
 def test_missing_api_key_is_rejected(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("MODEL_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="MODEL_API_KEY"):
+    monkeypatch.delenv("META_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="META_API_KEY"):
         meta.STT()

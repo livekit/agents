@@ -163,7 +163,8 @@ class STT(stt.STT):
             keywords: Product names, people, acronyms and other terms to bias toward.
             emit_audio_progress: Ask the server for periodic ``audioProgress`` events.
             zdr_override: Zero-data-retention override, forwarded as sent.
-            api_key: Meta Model API key. Falls back to ``MODEL_API_KEY``.
+            api_key: Meta Model API key. Falls back to the ``META_API_KEY``
+                environment variable.
             base_url: Override the API root, e.g. for a proxy.
             http_session: Reuse an existing aiohttp session.
         """
@@ -188,10 +189,12 @@ class STT(stt.STT):
             # than replaced, which is not what the interim contract here does.
             raise ValueError("partialMode DELTA is not supported on the realtime stream")
 
-        meta_api_key = api_key if is_given(api_key) else os.environ.get("MODEL_API_KEY")
+        meta_api_key = api_key if is_given(api_key) else os.environ.get("META_API_KEY")
         if not meta_api_key:
             raise ValueError(
-                "Meta API key is required, either as argument or by setting MODEL_API_KEY"
+                "Meta API key is required. "
+                "Pass one in via the `api_key` parameter, "
+                "or set it as the `META_API_KEY` environment variable"
             )
 
         if isinstance(language, str):

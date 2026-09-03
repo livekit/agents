@@ -12,4 +12,4 @@ pip install livekit-plugins-meta
 
 ## Pre-requisites
 
-You'll need an API key from the Meta Model API. It can be set as an environment variable: `MODEL_API_KEY`
+You'll need an API key from the Meta Model API. It can be set as an environment variable: `META_API_KEY`
