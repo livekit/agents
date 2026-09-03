@@ -174,6 +174,44 @@ def test_sample_rate_tracks_service_default_across_model_updates() -> None:
     assert "samplingRate" not in parse_qs(urlparse(tts._ws_url()).query)
 
 
+async def test_chunked_stream_sends_default_mistv2_sample_rate() -> None:
+    from livekit.plugins.rime import TTS
+
+    payload: dict[str, object] = {}
+
+    async def synthesize(request: web.Request) -> web.Response:
+        payload.update(await request.json())
+        return web.Response(body=b"\x01\x00" * 2205, content_type="audio/pcm")
+
+    app = web.Application()
+    app.router.add_post("/tts", synthesize)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tts = TTS(
+                api_key="test-key",
+                model="mistv2",
+                base_url=f"http://127.0.0.1:{port}/tts",
+                http_session=session,
+            )
+            stream = tts.synthesize("hello", conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            try:
+                events = [event async for event in stream]
+            finally:
+                await stream.aclose()
+                await tts.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert payload["samplingRate"] == 22050
+    assert {event.frame.sample_rate for event in events} == {22050}
+
+
 async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
     from livekit.plugins.rime import TTS
 
@@ -217,7 +255,7 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
         await runner.cleanup()
 
     assert payload["modelId"] == "coda"
-    assert "samplingRate" not in payload
+    assert payload["samplingRate"] == 24000
     assert events[0].frame.sample_rate == 24000
 
 

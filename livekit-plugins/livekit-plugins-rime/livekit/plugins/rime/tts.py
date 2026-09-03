@@ -116,10 +116,6 @@ def _default_sample_rate(model: TTSModels | str) -> int:
     return MIST_V2_DEFAULT_SAMPLE_RATE
 
 
-def _requested_sample_rate(options: _TTSOptions) -> NotGivenOr[int]:
-    return options.sample_rate
-
-
 def _model_params(opts: _TTSOptions) -> dict[str, object]:
     """Per-model option fields shared between the HTTP body and the WS query string."""
     params: dict[str, object] = {}
@@ -652,9 +648,7 @@ class ChunkedStream(tts.ChunkedStream):
             **_model_params(self._opts),
         }
         format = "audio/pcm"
-        requested_sample_rate = _requested_sample_rate(self._opts)
-        if is_given(requested_sample_rate):
-            payload["samplingRate"] = requested_sample_rate
+        payload["samplingRate"] = self._sample_rate
         if is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
             if supports_reduce_latency(self._opts.model) and is_given(mist_opts.reduce_latency):
