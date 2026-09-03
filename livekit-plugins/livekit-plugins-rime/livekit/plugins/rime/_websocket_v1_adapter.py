@@ -27,7 +27,7 @@ from livekit.agents.utils import is_given
 from . import _websocket_v1
 from .log import logger
 
-_Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
+_Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
 
 class _DrainTokenizer:
@@ -35,24 +35,36 @@ class _DrainTokenizer:
 
 
 @dataclass(frozen=True)
-class CodaV1SynthesisOptions:
-    """Coda settings before conversion to the WebSocket v1 wire format."""
+class V1SynthesisOptions:
+    """Model settings before conversion to the WebSocket v1 wire format."""
 
+    model: str
     speaker: str
     language: NotGivenOr[str] = NOT_GIVEN
     sampling_rate: NotGivenOr[int] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
+    pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
+    phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
     def _to_protocol(self) -> _websocket_v1.SynthesisOptions:
         if not is_given(self.language):
-            raise APIError("Rime v1 requires a Coda language", retryable=False)
+            raise APIError("Rime v1 requires a language", retryable=False)
 
         return _websocket_v1.SynthesisOptions(
+            model=self.model,
             speaker=self.speaker,
             language=self.language,
             sampling_rate=self.sampling_rate if is_given(self.sampling_rate) else None,
             time_scale_factor=(
                 self.time_scale_factor if is_given(self.time_scale_factor) else None
+            ),
+            pause_between_brackets=(
+                self.pause_between_brackets if is_given(self.pause_between_brackets) else None
+            ),
+            phonemize_between_brackets=(
+                self.phonemize_between_brackets
+                if is_given(self.phonemize_between_brackets)
+                else None
             ),
         )
 
@@ -64,12 +76,15 @@ class WebSocketV1Adapter:
         self,
         *,
         websocket_v1_url: str,
+        websocket_protocol: _websocket_v1.WebSocketProtocol,
         api_key: str,
         ensure_session: Callable[[], aiohttp.ClientSession],
         sentence_tokenizer: tokenize.SentenceTokenizer | None = None,
     ) -> None:
         _websocket_v1.validate_websocket_url(websocket_v1_url)
+        _websocket_v1._codec_for_protocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
+        self._websocket_protocol = websocket_protocol
         self._api_key = api_key
         self._ensure_session = ensure_session
         self._sentence_tokenizer = (
@@ -85,15 +100,16 @@ class WebSocketV1Adapter:
     def _new_pool(self) -> _Pool:
         websocket_v1_url = self._websocket_v1_url
 
-        async def _connect(timeout: float) -> aiohttp.ClientWebSocketResponse:
+        async def _connect(timeout: float) -> _websocket_v1.Connection:
             return await _websocket_v1.connect(
                 self._ensure_session(),
                 websocket_url=websocket_v1_url,
                 api_key=self._api_key,
+                protocol=self._websocket_protocol,
                 timeout=timeout,
             )
 
-        return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        return utils.ConnectionPool[_websocket_v1.Connection](
             connect_cb=_connect,
             close_cb=_websocket_v1.close,
             max_session_duration=300,
@@ -104,7 +120,7 @@ class WebSocketV1Adapter:
         self,
         *,
         tts_instance: tts.TTS,
-        options: CodaV1SynthesisOptions,
+        options: V1SynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> _WebSocketV1SynthesizeStream:
         pool = self._pool
@@ -211,7 +227,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         return sentinel
 
     def flush(self) -> None:
-        """Drain the local tokenizer without ending Coda input.
+        """Drain the local tokenizer without ending Rime input.
 
         This implements the LiveKit stream interface. It does not send a Rime
         protocol message because the Rime v1 protocol has no ``flush`` operation.
@@ -222,7 +238,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             return
 
         # Do not call super().flush(), which records a LiveKit segment boundary. Keep
-        # the Coda context, metric text, and segment state active while the local
+        # the Rime context, metric text, and segment state active while the local
         # sentence tokenizer drains.
         self._enqueue_tokenizer_drain()
 
@@ -258,13 +274,13 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             language=self._options.language,
         )
 
-        ws = await self._pool.get(timeout=self._conn_options.timeout)
+        connection = await self._pool.get(timeout=self._conn_options.timeout)
         self._acquire_time = self._pool.last_acquire_time
         self._connection_reused = self._pool.last_connection_reused
         reusable = False
         try:
             result = await _websocket_v1.run_context(
-                ws,
+                connection,
                 context_id=utils.shortuuid(),
                 options=self._options,
                 sample_rate=self._sample_rate,
@@ -279,10 +295,10 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             raise
         finally:
             if reusable:
-                self._pool.put(ws)
+                self._pool.put(connection)
             else:
-                self._pool.remove(ws)
-                await _websocket_v1.close(ws)
+                self._pool.remove(connection)
+                await _websocket_v1.close(connection)
 
 
 async def _sentence_tokenized_input_events(

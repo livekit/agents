@@ -11,6 +11,7 @@ from typing import Any, cast
 import aiohttp
 import pytest
 from aiohttp import web
+from google.protobuf import json_format
 
 from livekit.agents import (
     APIConnectionError,
@@ -18,6 +19,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
 )
+from livekit.plugins.rime._proto import websocket_v1_pb2 as proto
 
 pytestmark = pytest.mark.unit
 
@@ -53,6 +55,7 @@ class _RimeV1Server:
         self.requests: list[dict[str, Any]] = []
         self.request_connections: list[int] = []
         self.headers: list[dict[str, str]] = []
+        self.protocols: list[str | None] = []
         self.paths: list[str] = []
         self.text_messages_received = 0
         self._text_received_condition = asyncio.Condition()
@@ -88,31 +91,36 @@ class _RimeV1Server:
             )
 
     async def _handle(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(protocols=("rime.v1.json",))
+        ws = web.WebSocketResponse(protocols=("rime.v1.binary", "rime.v1.json"))
         await ws.prepare(request)
         connection = self.connections
         self.connections += 1
         self.headers.append(dict(request.headers))
+        self.protocols.append(ws.ws_protocol)
         self.paths.append(request.path)
-        await ws.send_json({"ready": self.ready})
+        await self._send(ws, {"ready": self.ready})
         self.ready_events += 1
         self.connection_opened.set()
 
         try:
             async for message in ws:
-                if message.type != aiohttp.WSMsgType.TEXT:
-                    continue
-                envelope = json.loads(message.data)
+                envelope = self._decode_request(message)
                 self.requests.append(envelope)
                 self.request_connections.append(connection)
                 self.request_received.set()
                 context_id = envelope.get("contextId", "")
                 if "start" in envelope:
-                    await ws.send_json(
+                    started = (
+                        {}
+                        if self.response_mode == "missing_started_request_id"
+                        else {"requestId": f"request-{connection}"}
+                    )
+                    await self._send(
+                        ws,
                         {
                             "contextId": context_id,
-                            "started": {"requestId": f"request-{connection}"},
-                        }
+                            "started": started,
+                        },
                     )
                 elif "text" in envelope:
                     async with self._text_received_condition:
@@ -120,7 +128,8 @@ class _RimeV1Server:
                         self._text_received_condition.notify_all()
                     if self.fail_before_audio > 0:
                         self.fail_before_audio -= 1
-                        await ws.send_json(
+                        await self._send(
+                            ws,
                             {
                                 "contextId": context_id,
                                 "error": {
@@ -128,73 +137,116 @@ class _RimeV1Server:
                                     "message": "retry later",
                                     "requestId": f"request-{connection}",
                                 },
-                            }
+                            },
                         )
                     else:
                         await self._respond_to_text(ws, context_id)
                 elif "end" in envelope:
                     if self.response_mode == "malformed_done":
-                        await ws.send_json({"contextId": context_id, "done": None})
+                        await self._send_missing_payload(ws, context_id)
+                    elif self.response_mode == "invalid_done_type":
+                        await ws.send_json({"contextId": context_id, "done": "bad"})
                     elif self.response_mode not in ("error", "partial_error", "no_done"):
-                        await ws.send_json({"contextId": context_id, "done": {}})
+                        await self._send(ws, {"contextId": context_id, "done": {}})
                 elif "cancel" in envelope and self.cancel_reply:
                     if self.response_mode == "malformed_cancelled":
-                        await ws.send_json({"contextId": context_id, "cancelled": "bad"})
+                        await self._send_missing_payload(ws, context_id)
                     else:
-                        await ws.send_json({"contextId": context_id, "cancelled": {}})
+                        await self._send(ws, {"contextId": context_id, "cancelled": {}})
                 elif "flush" in envelope:
                     self.unexpected_requests.append(envelope)
-                    await ws.send_json(
+                    await self._send(
+                        ws,
                         {
                             "contextId": context_id,
                             "error": {
                                 "kind": "invalid_input",
                                 "message": "flush is not part of the Rime v1 protocol",
                             },
-                        }
+                        },
                     )
         finally:
             self.closed_connections += 1
             self.connection_closed.set()
         return ws
 
+    def _decode_request(self, message: aiohttp.WSMessage) -> dict[str, Any]:
+        request = proto.WebSocketRequest()
+        if message.type == aiohttp.WSMsgType.BINARY:
+            request.ParseFromString(message.data)
+        elif message.type == aiohttp.WSMsgType.TEXT:
+            json_format.Parse(message.data, request, ignore_unknown_fields=True)
+        else:
+            raise AssertionError(f"unexpected request frame type: {message.type}")
+        return json_format.MessageToDict(
+            request,
+            preserving_proto_field_name=False,
+            always_print_fields_with_no_presence=True,
+        )
+
+    async def _send(self, ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
+        response = proto.WebSocketResponse()
+        json_format.ParseDict(payload, response, ignore_unknown_fields=True)
+        if ws.ws_protocol == "rime.v1.binary":
+            await ws.send_bytes(response.SerializeToString())
+        else:
+            await ws.send_json(payload)
+
+    async def _send_missing_payload(self, ws: web.WebSocketResponse, context_id: str) -> None:
+        await self._send(ws, {"contextId": context_id})
+
     async def _respond_to_text(self, ws: web.WebSocketResponse, context_id: str) -> None:
         if self.response_mode == "normal":
-            await ws.send_json({"contextId": context_id, "audio": base64.b64encode(_PCM).decode()})
+            await self._send(
+                ws, {"contextId": context_id, "audio": base64.b64encode(_PCM).decode()}
+            )
         elif self.response_mode == "wrong_context":
-            await ws.send_json({"contextId": "wrong", "done": {}})
-        elif self.response_mode == "invalid_json":
-            await ws.send_str("{")
-        elif self.response_mode == "binary":
-            await ws.send_bytes(b"not-json")
+            await self._send(ws, {"contextId": "wrong", "done": {}})
+        elif self.response_mode == "invalid_envelope":
+            if ws.ws_protocol == "rime.v1.binary":
+                await ws.send_bytes(b"\xff")
+            else:
+                await ws.send_str("{")
+        elif self.response_mode == "wrong_frame":
+            if ws.ws_protocol == "rime.v1.binary":
+                await ws.send_str("{}")
+            else:
+                await ws.send_bytes(b"")
         elif self.response_mode == "invalid_base64":
-            await ws.send_json({"contextId": context_id, "audio": "%%%"})
+            await ws.send_json({"contextId": context_id, "audio": "AQI=%%%"})
         elif self.response_mode == "error":
-            await ws.send_json(
+            await self._send(
+                ws,
                 {
                     "contextId": context_id,
                     "error": {"kind": self.error_kind, "message": "bad input"},
-                }
+                },
             )
         elif self.response_mode == "connection_error":
-            await ws.send_json({"error": {"kind": self.error_kind, "message": "connection failed"}})
+            await self._send(
+                ws, {"error": {"kind": self.error_kind, "message": "connection failed"}}
+            )
         elif self.response_mode == "partial_error":
-            await ws.send_json({"contextId": context_id, "audio": base64.b64encode(_PCM).decode()})
+            await self._send(
+                ws, {"contextId": context_id, "audio": base64.b64encode(_PCM).decode()}
+            )
             await asyncio.sleep(0.05)
-            await ws.send_json(
+            await self._send(
+                ws,
                 {
                     "contextId": context_id,
                     "error": {"kind": "unavailable", "message": "failed late"},
-                }
+                },
             )
 
 
-def _v1_tts(server: _RimeV1Server, **kwargs: Any):
+def _v1_tts(server: _RimeV1Server, *, endpoint_model: str = "coda", **kwargs: Any):
     from livekit.plugins.rime import TTS
 
+    websocket_url = server.websocket_url.replace("/coda/ws", f"/{endpoint_model}/ws")
     return TTS(
         api_key="test-key",
-        websocket_url=server.websocket_url,
+        websocket_url=websocket_url,
         http_session=server.session,
         **kwargs,
     )
@@ -212,10 +264,22 @@ def _payloads(server: _RimeV1Server) -> list[str]:
     return [next(key for key in request if key != "contextId") for request in server.requests]
 
 
-async def test_v1_streams_audio_before_end_and_maps_supported_start_options() -> None:
+def test_v1_binary_envelope_goldens_match_rime_field_numbers() -> None:
+    request = proto.WebSocketRequest(context_id="turn-42", text="hello")
+    response = proto.WebSocketResponse(context_id="turn-42", audio=b"\x01\x02")
+
+    assert request.SerializeToString() == b"\x0a\x07turn-42\x22\x05hello"
+    assert response.SerializeToString() == b"\x0a\x07turn-42\x22\x02\x01\x02"
+
+
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
+    websocket_protocol: str,
+) -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(
             server,
+            websocket_protocol=websocket_protocol,
             lang="eng",
             sample_rate=22050,
             time_scale_factor=1.2,
@@ -239,7 +303,8 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options() ->
     assert remaining[-1].is_final
     assert server.paths == ["/coda/ws"]
     assert server.headers[0]["Authorization"] == "Bearer test-key"
-    assert server.headers[0]["Sec-WebSocket-Protocol"] == "rime.v1.json"
+    assert server.headers[0]["Sec-WebSocket-Protocol"] == f"rime.v1.{websocket_protocol}"
+    assert server.protocols == [f"rime.v1.{websocket_protocol}"]
     assert _payloads(server) == ["start", "text", "text", "end"]
     assert [request["text"] for request in server.requests if "text" in request] == [
         "Hello from LiveKit today. ",
@@ -258,9 +323,51 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options() ->
     }
 
 
-async def test_v1_uses_service_default_sample_rate() -> None:
+async def test_v1_defaults_to_binary_protocol() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("hello")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.protocols == ["rime.v1.binary"]
+
+
+async def test_v1_maps_mistv3_options_without_a_second_stream_implementation() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(
+            server,
+            endpoint_model="mistv3",
+            pause_between_brackets=True,
+            phonemize_between_brackets=False,
+        )
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("hello")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    start = server.requests[0]["start"]
+    assert start["mistParameters"] == {
+        "pauseBetweenBrackets": True,
+        "phonemizeBetweenBrackets": False,
+        "inlineTimeScaleFactors": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("endpoint_model", "expected_sample_rate"),
+    [("coda", 24000), ("mistv2", 22050), ("future-model", 22050)],
+)
+async def test_v1_sends_resolved_sample_rate(
+    endpoint_model: str, expected_sample_rate: int
+) -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, endpoint_model=endpoint_model)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         try:
             stream.push_text("hello")
@@ -270,9 +377,12 @@ async def test_v1_uses_service_default_sample_rate() -> None:
             await stream.aclose()
             await tts.aclose()
 
-    assert tts.sample_rate == 24000
-    assert events[0].frame.sample_rate == 24000
-    assert server.requests[0]["start"]["audioParameters"] == {"audioFormat": "audio/pcm"}
+    assert tts.sample_rate == expected_sample_rate
+    assert events[0].frame.sample_rate == expected_sample_rate
+    assert server.requests[0]["start"]["audioParameters"] == {
+        "audioFormat": "audio/pcm",
+        "samplingRate": expected_sample_rate,
+    }
 
 
 async def test_v1_stream_keeps_sample_rate_after_parent_update() -> None:
@@ -564,6 +674,46 @@ async def test_v1_stream_snapshots_websocket_url() -> None:
     ]
 
 
+async def test_v1_stream_metrics_keep_model_after_endpoint_update() -> None:
+    async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
+        tts = _v1_tts(first_server)
+        metrics = []
+        tts.on("metrics_collected", metrics.append)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("first")
+        stream.flush()
+        try:
+            await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
+            mist_url = second_server.websocket_url.replace("/coda/ws", "/mistv3/ws")
+            tts.update_options(websocket_url=mist_url)
+            stream.end_input()
+            await _collect(stream)
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+
+    assert tts.model == "mistv3"
+    assert len(metrics) == 1
+    assert metrics[0].metadata.model_name == "coda"
+
+
+async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> None:
+    async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
+        tts = _v1_tts(first_server, time_scale_factor=1.2)
+        mistv2_url = second_server.websocket_url.replace("/coda/ws", "/mistv2/ws")
+        tts.update_options(websocket_url=mistv2_url)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+
+        stream.push_text("hello")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert second_server.paths == ["/mistv2/ws"]
+    assert "timeScaleFactor" not in second_server.requests[0]["start"]["audioParameters"]
+
+
 async def test_v1_clean_interruption_cancels_and_reuses_socket() -> None:
     async with _RimeV1Server(response_mode="no_audio") as server:
         tts = _v1_tts(server)
@@ -607,13 +757,13 @@ async def test_v1_cancels_when_start_write_is_interrupted(
         block_first_start = True
 
         async def _send_envelope(
-            ws: aiohttp.ClientWebSocketResponse,
+            connection: _websocket_v1.Connection,
             context_id: str,
             payload: str,
             value: object,
         ) -> None:
             nonlocal block_first_start
-            await original_send(ws, context_id, payload, value)
+            await original_send(connection, context_id, payload, value)
             if payload == "start" and block_first_start:
                 block_first_start = False
                 start_written.set()
@@ -680,7 +830,7 @@ async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("hello")
         stream.end_input()
-        with pytest.raises(APIConnectionError, match="malformed done"):
+        with pytest.raises(APIConnectionError, match="exactly one payload"):
             await _collect(stream)
         await stream.aclose()
 
@@ -712,7 +862,7 @@ async def test_v1_rejects_malformed_cancelled_before_socket_reuse() -> None:
 
 @pytest.mark.parametrize(
     "response_mode",
-    ["wrong_context", "invalid_json", "binary", "invalid_base64"],
+    ["wrong_context", "invalid_envelope", "wrong_frame"],
 )
 async def test_v1_rejects_contaminated_responses(response_mode: str) -> None:
     async with _RimeV1Server(response_mode=response_mode) as server:
@@ -724,6 +874,45 @@ async def test_v1_rejects_contaminated_responses(response_mode: str) -> None:
             await _collect(stream)
         await stream.aclose()
         await tts.aclose()
+
+
+async def test_v1_json_rejects_invalid_base64_audio() -> None:
+    async with _RimeV1Server(response_mode="invalid_base64") as server:
+        tts = _v1_tts(server, websocket_protocol="json")
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("hello")
+        stream.end_input()
+        with pytest.raises(APIConnectionError, match="invalid Base64 audio"):
+            await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+
+async def test_v1_json_rejects_invalid_done_type() -> None:
+    async with _RimeV1Server(response_mode="invalid_done_type") as server:
+        tts = _v1_tts(server, websocket_protocol="json")
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("hello")
+        stream.end_input()
+        with pytest.raises(APIConnectionError, match="malformed done event"):
+            await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_rejects_started_without_request_id(websocket_protocol: str) -> None:
+    async with _RimeV1Server(response_mode="missing_started_request_id") as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("hello")
+        stream.end_input()
+        with pytest.raises(APIConnectionError, match="malformed started event"):
+            await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.closed_connections == 1
 
 
 @pytest.mark.parametrize(
@@ -803,7 +992,7 @@ async def test_v1_does_not_retry_after_partial_audio() -> None:
 
 async def test_v1_ready_error_does_not_expose_provider_event() -> None:
     async with _RimeV1Server(ready={"protocol": _SECRET, "providerData": _SECRET}) as server:
-        tts = _v1_tts(server)
+        tts = _v1_tts(server, websocket_protocol="json")
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("hello")
         stream.end_input()
@@ -819,8 +1008,9 @@ async def test_v1_ready_error_does_not_expose_provider_event() -> None:
 def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
     from livekit.plugins.rime import _websocket_v1
 
+    response = proto.WebSocketResponse(context_id=_SECRET)
     with pytest.raises(APIConnectionError, match="unexpected contextId") as exc_info:
-        _websocket_v1._check_context({"contextId": _SECRET}, "expected-context")
+        _websocket_v1._check_context(response, "expected-context")
 
     _assert_exception_is_safe(exc_info.value)
 
@@ -837,6 +1027,35 @@ def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None
     from livekit.plugins.rime import _websocket_v1
 
     _websocket_v1.validate_websocket_url(websocket_url)
+
+
+@pytest.mark.parametrize(
+    ("websocket_url", "model"),
+    [
+        ("wss://api.rime.ai/coda/ws", "coda"),
+        ("wss://api.rime.ai/v1/mistv3/ws", "mistv3"),
+        ("wss://api.rime.ai/future-model/ws/?token=value", "future-model"),
+    ],
+)
+def test_v1_reads_model_from_websocket_url(websocket_url: str, model: str) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    assert _websocket_v1.model_from_websocket_url(websocket_url) == model
+
+
+@pytest.mark.parametrize(
+    "websocket_url",
+    [
+        "wss://api.rime.ai/ws",
+        "wss://api.rime.ai/coda",
+        "wss://api.rime.ai/coda/stream",
+    ],
+)
+def test_v1_rejects_url_without_model_before_ws(websocket_url: str) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    with pytest.raises(ValueError, match=r"/\{model\}/ws"):
+        _websocket_v1.model_from_websocket_url(websocket_url)
 
 
 @pytest.mark.parametrize(
@@ -870,6 +1089,7 @@ async def test_v1_connection_error_does_not_expose_transport_data(
                 session,
                 websocket_url="wss://example.com/coda/ws",
                 api_key="test-key",
+                protocol="binary",
                 timeout=1,
             )
 
@@ -880,9 +1100,9 @@ async def test_v1_connection_error_does_not_expose_transport_data(
 @pytest.mark.parametrize(
     ("payload", "value"),
     [
-        ("start", {}),
+        ("start", proto.SynthesisRequest(text="")),
         ("text", "hello"),
-        ("end", {}),
+        ("end", None),
     ],
 )
 async def test_v1_wraps_write_failures_as_safe_api_errors(
@@ -895,9 +1115,12 @@ async def test_v1_wraps_write_failures_as_safe_api_errors(
         async def send_str(self, data: str) -> None:
             raise ConnectionResetError(f"write failed with {_SECRET}")
 
-    ws = cast(aiohttp.ClientWebSocketResponse, _FailingWebSocket())
+    connection = _websocket_v1.Connection(
+        websocket=cast(aiohttp.ClientWebSocketResponse, _FailingWebSocket()),
+        codec=_websocket_v1._JsonEnvelopeCodec(),
+    )
     with pytest.raises(APIConnectionError) as exc_info:
-        await _websocket_v1._send_envelope(ws, "context", payload, value)
+        await _websocket_v1._send_envelope(connection, "context", payload, value)
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.retryable is True
@@ -925,7 +1148,7 @@ async def test_v1_retries_after_write_failure_before_audio(
     monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_str", _send_str)
 
     async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
+        tts = _v1_tts(server, websocket_protocol="json")
         errors: list[Any] = []
         tts.on("error", errors.append)
         stream = tts.stream(
@@ -957,9 +1180,12 @@ async def test_v1_websocket_error_does_not_expose_transport_data() -> None:
         def exception(self) -> BaseException:
             return RuntimeError(f"socket failed with {_SECRET}")
 
-    ws = cast(aiohttp.ClientWebSocketResponse, _ErrorWebSocket())
+    connection = _websocket_v1.Connection(
+        websocket=cast(aiohttp.ClientWebSocketResponse, _ErrorWebSocket()),
+        codec=_websocket_v1._JsonEnvelopeCodec(),
+    )
     with pytest.raises(APIConnectionError) as exc_info:
-        await _websocket_v1._receive_envelope(ws, timeout=1)
+        await _websocket_v1._receive_envelope(connection, timeout=1)
 
     _assert_exception_is_safe(exc_info.value)
 
@@ -975,9 +1201,12 @@ async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
                 None,
             )
 
-    ws = cast(aiohttp.ClientWebSocketResponse, _InvalidJsonWebSocket())
+    connection = _websocket_v1.Connection(
+        websocket=cast(aiohttp.ClientWebSocketResponse, _InvalidJsonWebSocket()),
+        codec=_websocket_v1._JsonEnvelopeCodec(),
+    )
     with pytest.raises(APIConnectionError) as exc_info:
-        await _websocket_v1._receive_envelope(ws, timeout=1)
+        await _websocket_v1._receive_envelope(connection, timeout=1)
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.__cause__ is None
@@ -986,12 +1215,14 @@ async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        {"kind": "invalid_input", "message": _SECRET},
-        {"kind": _SECRET, "message": "provider failure"},
-        {"kind": "invalid_input", "message": 1, "providerData": _SECRET},
+        proto.WebSocketError(kind="invalid_input", message=_SECRET),
+        proto.WebSocketError(kind=_SECRET, message="provider failure"),
+        proto.WebSocketError(kind="invalid_input", message=""),
     ],
 )
-def test_v1_error_mapping_does_not_expose_provider_payload(error: object) -> None:
+def test_v1_error_mapping_does_not_expose_provider_payload(
+    error: proto.WebSocketError,
+) -> None:
     from livekit.plugins.rime import _websocket_v1
 
     exc = _websocket_v1._rime_error(error, fallback_request_id="request-id")

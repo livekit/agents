@@ -539,6 +539,7 @@ class SynthesizeStream(ABC):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__()
         self._tts = tts
+        self._metrics_model = tts.model
         self._conn_options = conn_options
         self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
@@ -717,7 +718,9 @@ class SynthesizeStream(ABC):
                 streamed=True,
                 acquire_time=self._acquire_time,
                 connection_reused=self._connection_reused,
-                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+                metadata=Metadata(
+                    model_name=self._metrics_model, model_provider=self._tts.provider
+                ),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(
