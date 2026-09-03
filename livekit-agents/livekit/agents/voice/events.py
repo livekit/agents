@@ -25,6 +25,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -71,6 +72,8 @@ class RunContext(Generic[Userdata_T]):
 
         # set by a silent update(): the output is recorded but no reply is generated
         self._suppress_reply = False
+        # set by the first update(): the tool choice of the step that answers it
+        self._reply_tool_choice: ToolChoice | None = None
 
     @property
     def session(self) -> AgentSession[Userdata_T]:
@@ -175,6 +178,7 @@ class RunContext(Generic[Userdata_T]):
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
         silent: bool = False,
+        tool_choice: ToolChoice = "none",
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -191,6 +195,8 @@ class RunContext(Generic[Userdata_T]):
             silent: Record the message without voicing it. On the first update this
                 releases control without speaking; on a later one the items still land
                 in the chat context and history, but no reply is generated from them.
+            tool_choice: What the reply to this update may call. ``"none"`` by default:
+                the update carries no result to act on, so the model only speaks to it.
         """
 
         # update() is a deliberate agent action — reset any active filler dwell so a
@@ -244,11 +250,14 @@ class RunContext(Generic[Userdata_T]):
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
             self._suppress_reply = silent
+            self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], silent=silent)
+        await self._executor._enqueue_reply(
+            self, [pair[0], pair[1]], silent=silent, tool_choice=tool_choice
+        )
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

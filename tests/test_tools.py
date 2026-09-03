@@ -2216,12 +2216,52 @@ class TestToolCallEvents:
         assert isinstance(reply, ToolReplyUpdated)
         assert reply.status == "scheduled"
         assert reply.update_ids == ["c5_update_1", "c5_final"]
+        # it carries the final result, so the model may act on it with its default tools
+        from livekit.agents.utils.misc import is_given
+
+        assert not is_given(session.generate_reply.call_args.kwargs["tool_choice"])
 
         speech.fire_done()
         completed = _emitted_items(session)[-1]
         assert isinstance(completed, ToolReplyUpdated)
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
+
+    @pytest.mark.asyncio
+    async def test_reply_to_progress_alone_is_bound_by_the_update(self):
+        """A deferred reply that carries only progress calls nothing unless the update allows it."""
+        import asyncio as _asyncio
+
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        def make_tool(requested: Any, release: _asyncio.Event) -> Any:
+            @function_tool
+            async def progress_tool(ctx: RunContext) -> str:
+                """p"""
+                await ctx.update("step one")
+                await ctx.update("step two", tool_choice=requested)
+                await release.wait()
+                return "all done"
+
+            return progress_tool
+
+        for requested, expected in [("none", "none"), ("auto", "auto")]:
+            release = _asyncio.Event()
+            progress_tool = make_tool(requested, release)
+            speech = _make_fake_speech()
+            session = _make_reply_session(speech)
+            executor = _ToolExecutor()
+            run_ctx = _make_run_context_with_session(session, call_id="c7", name="progress_tool")
+            await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+            while executor._reply_task is None:
+                await _asyncio.sleep(0)
+            await executor._reply_task
+
+            # only the second update is in this batch; the result has not arrived
+            assert session.generate_reply.call_args.kwargs["tool_choice"] == expected
+            release.set()
+            await _drain_executor(executor)
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):

@@ -2783,3 +2783,58 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "follow_up_runs"),
+    [("none", False), ("auto", True)],
+    ids=["default-none", "auto"],
+)
+async def test_update_tool_choice_bounds_the_reply_step(
+    tool_choice: str, follow_up_runs: bool
+) -> None:
+    """The step answering a progress report may call tools only if the report allows it.
+
+    A report carries no result to act on, so by default that step only speaks; a model that
+    builds on the interim text would otherwise call the next tool with a placeholder.
+    """
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Book a table")
+    actions.add_llm(
+        content="Sure.",
+        tool_calls=[FunctionToolCall(name="reserve", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(1.0)
+    # the model answers the report by trying to act on it
+    actions.add_llm(
+        content="Holding it.",
+        tool_calls=[FunctionToolCall(name="send_text", arguments="{}", call_id="2")],
+        input=UPDATE_TEMPLATE.format(function_name="reserve", call_id="1", message="holding"),
+    )
+    actions.add_tts(1.0)
+
+    sent: list[str] = []
+
+    class ReserveAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are a helpful assistant.")
+
+        @function_tool
+        async def reserve(self, context: RunContext) -> str:
+            """Hold a table; reports at once and keeps running."""
+            await context.update("holding", tool_choice=tool_choice)  # type: ignore[arg-type]
+            await asyncio.sleep(5.0)
+            return "R001"
+
+        @function_tool
+        async def send_text(self, context: RunContext) -> str:
+            """Text the caller."""
+            sent.append("sent")
+            return "sent"
+
+    session = create_session(actions)
+    await asyncio.wait_for(
+        run_session(session, ReserveAgent(), drain_delay=15), timeout=SESSION_TIMEOUT
+    )
+
+    assert bool(sent) is follow_up_runs
