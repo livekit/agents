@@ -33,8 +33,23 @@ tts = rime.TTS(
 ```
 
 Pass the active model WebSocket endpoint explicitly. The presence of `websocket_url` selects
-WebSocket v1 streaming. The plugin reads the model from the path segment before `/ws`, such as
-`coda` in `/coda/ws` or `mistv3` in `/mistv3/ws`. Do not pass `model` with `websocket_url`.
+WebSocket v1 streaming. For a route such as `/coda/ws` or `/mistv3/ws`, the plugin reads the
+model from the path segment before `/ws`. Do not also pass `model` for this type of route.
+
+Some dedicated Rime endpoints end with `/ws` and do not contain a model path segment. Pass
+`model` for these endpoints:
+
+```python
+tts = rime.TTS(
+    websocket_url="wss://tigerstripe-dialpad.aws-us-east-1.whiteglove.rime.ai/ws",
+    model="coda",
+    api_key=os.environ["RIME_API_KEY"],
+)
+```
+
+The plugin sends the Rime API key to the endpoint. It trusts `rime.ai` and its subdomains by
+default. To use an endpoint on a different domain, confirm that you trust it and set
+`allow_custom_endpoint=True`. This opt-in also applies to `base_url`.
 
 The `websocket_protocol` option accepts `binary` or `json`. It defaults to `binary`, which uses the
 `rime.v1.binary` subprotocol and protobuf binary frames. Set `websocket_protocol="json"` to use the

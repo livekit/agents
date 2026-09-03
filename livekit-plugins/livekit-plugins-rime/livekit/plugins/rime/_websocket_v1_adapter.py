@@ -80,13 +80,17 @@ class WebSocketV1Adapter:
         api_key: str,
         ensure_session: Callable[[], aiohttp.ClientSession],
         sentence_tokenizer: tokenize.SentenceTokenizer | None = None,
+        allow_custom_endpoint: bool = False,
     ) -> None:
-        _websocket_v1.validate_websocket_url(websocket_v1_url)
+        _websocket_v1.validate_websocket_url(
+            websocket_v1_url, allow_custom_endpoint=allow_custom_endpoint
+        )
         _websocket_v1._codec_for_protocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
         self._websocket_protocol = websocket_protocol
         self._api_key = api_key
         self._ensure_session = ensure_session
+        self._allow_custom_endpoint = allow_custom_endpoint
         self._sentence_tokenizer = (
             sentence_tokenizer
             if sentence_tokenizer is not None
@@ -107,6 +111,7 @@ class WebSocketV1Adapter:
                 api_key=self._api_key,
                 protocol=self._websocket_protocol,
                 timeout=timeout,
+                allow_custom_endpoint=self._allow_custom_endpoint,
             )
 
         return utils.ConnectionPool[_websocket_v1.Connection](
@@ -143,7 +148,9 @@ class WebSocketV1Adapter:
         self._pool.prewarm()
 
     def update_endpoint(self, websocket_v1_url: str) -> None:
-        _websocket_v1.validate_websocket_url(websocket_v1_url)
+        _websocket_v1.validate_websocket_url(
+            websocket_v1_url, allow_custom_endpoint=self._allow_custom_endpoint
+        )
         if websocket_v1_url == self._websocket_v1_url:
             return
 

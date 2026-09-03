@@ -177,31 +177,56 @@ class _ContextCancelled(asyncio.CancelledError):
         self.reusable = reusable
 
 
-def validate_websocket_url(websocket_url: str) -> None:
+def _is_loopback_host(hostname: str | None) -> bool:
+    try:
+        return hostname is not None and ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_trusted_rime_host(hostname: str | None) -> bool:
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    return normalized == "rime.ai" or normalized.endswith(".rime.ai")
+
+
+def validate_endpoint_host(endpoint_url: str, *, allow_custom_endpoint: bool = False) -> None:
+    """Reject endpoints that could receive Rime credentials without caller consent."""
+    parts = urlsplit(endpoint_url)
+    if not parts.netloc or parts.hostname is None:
+        raise ValueError("Rime endpoint must be an absolute URL")
+    if (
+        not allow_custom_endpoint
+        and not _is_loopback_host(parts.hostname)
+        and not _is_trusted_rime_host(parts.hostname)
+    ):
+        raise ValueError(
+            "Rime endpoint must use a trusted Rime host; "
+            "set allow_custom_endpoint=True to send credentials to another host"
+        )
+
+
+def validate_websocket_url(websocket_url: str, *, allow_custom_endpoint: bool = False) -> None:
     """Validate a caller-supplied v1 WebSocket endpoint."""
     parts = urlsplit(websocket_url)
     if parts.scheme not in ("ws", "wss") or not parts.netloc:
         raise ValueError("Rime v1 websocket_url must be an absolute ws or wss URL")
-    if parts.scheme == "wss":
-        return
-
-    try:
-        is_loopback = (
-            parts.hostname is not None and ipaddress.ip_address(parts.hostname).is_loopback
-        )
-    except ValueError:
-        is_loopback = False
-
-    if not is_loopback:
+    if parts.scheme == "ws" and not _is_loopback_host(parts.hostname):
         raise ValueError("Rime v1 websocket_url must use wss unless it uses a loopback IP address")
+    validate_endpoint_host(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
 
 
-def model_from_websocket_url(websocket_url: str) -> str:
-    """Return the model segment from a Rime v1 endpoint ending in /{model}/ws."""
-    validate_websocket_url(websocket_url)
+def model_from_websocket_url(
+    websocket_url: str, *, allow_custom_endpoint: bool = False
+) -> str | None:
+    """Return the model from /{model}/ws, or None for a dedicated /ws endpoint."""
+    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
     path_segments = urlsplit(websocket_url).path.rstrip("/").split("/")
-    if len(path_segments) < 2 or path_segments[-1] != "ws" or not path_segments[-2]:
-        raise ValueError("Rime v1 websocket_url path must end with /{model}/ws")
+    if not path_segments or path_segments[-1] != "ws":
+        raise ValueError("Rime v1 websocket_url path must end with /ws")
+    if len(path_segments) < 2 or not path_segments[-2]:
+        return None
     return unquote(path_segments[-2])
 
 
@@ -212,9 +237,10 @@ async def connect(
     api_key: str,
     protocol: WebSocketProtocol,
     timeout: float,
+    allow_custom_endpoint: bool = False,
 ) -> Connection:
     """Open a v1 socket and consume its one connection-level ready event."""
-    validate_websocket_url(websocket_url)
+    validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
     codec = _codec_for_protocol(protocol)
     try:
         ws = await asyncio.wait_for(
