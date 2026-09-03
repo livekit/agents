@@ -10,6 +10,12 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from . import trace_types
 from .utils import REDACTED_EXCEPTION_MESSAGE
 
+# LiveKit marks attributes carrying conversational content, tool payloads or other user
+# data with a dot-delimited `pii` segment (`lk.pii.<name>`), and the GenAI content
+# attributes carry the same payload under names the semantic convention fixes, where the
+# marker cannot be applied. Both are stripped here, before any exporter that is not
+# LiveKit Cloud's — whose own handling is the project's setting in the dashboard.
+
 # exception details are recorded by `record_exception`, which resolves redaction from the
 # ambient job context; that can disagree with the span's own stamp, so they are filtered
 # here as well
@@ -17,13 +23,6 @@ _REDACTED_EXCEPTION_ATTRIBUTES = (
     trace_types.ATTR_EXCEPTION_MESSAGE,
     trace_types.ATTR_EXCEPTION_TRACE,
 )
-
-# LiveKit marks attributes carrying conversational content, tool payloads or other user
-# data with a dot-delimited `pii` segment (`lk.pii.<name>`), which PII-enabled projects
-# have stripped at the LiveKit Cloud collector. That only protects records reaching
-# LiveKit Cloud, and the GenAI content attributes cannot carry the marker at all — the
-# semantic convention fixes their names. So the stripping happens here as well, before
-# any exporter observes the record.
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import Event

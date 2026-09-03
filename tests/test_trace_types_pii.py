@@ -1,9 +1,8 @@
 """Guard test: every telemetry attribute key must be classified for PII redaction.
 
-The LiveKit Cloud collector strips span/log attributes whose key carries a
-dot-delimited ``pii`` segment (e.g. ``lk.pii.chat_ctx``) for PII-enabled
-projects, and ``telemetry.pii`` strips the same attributes in-process — before
-any exporter, LiveKit's or an integrator's — for redaction-enabled sessions.
+``telemetry.pii`` strips attributes whose key carries a dot-delimited ``pii``
+segment (e.g. ``lk.pii.chat_ctx``) before any exporter that is not LiveKit
+Cloud's, whose own handling is the project's setting in the dashboard.
 
 The OpenTelemetry GenAI attributes cannot carry the ``pii`` marker: their names
 are fixed by the semantic convention. Those are enumerated in
