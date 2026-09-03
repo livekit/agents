@@ -25,6 +25,7 @@ from typing import Any, Literal, Protocol, cast
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
+import numpy as np
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
 
@@ -40,11 +41,30 @@ from ._proto import websocket_v1_pb2 as proto
 from .models import is_mist_model
 
 WebSocketProtocol = Literal["binary", "json"]
+RimeAudioFormat = Literal[
+    "audio/wav",
+    "audio/mpeg",
+    "audio/ogg;codecs=opus",
+    "audio/pcm",
+    "audio/pcmu",
+    "audio/webm;codecs=opus",
+]
 BINARY_SUBPROTOCOL = "rime.v1.binary"
 JSON_SUBPROTOCOL = "rime.v1.json"
 PROTOCOL_VERSION = 1
 CANCEL_TIMEOUT = 1.0
 NUM_CHANNELS = 1
+DEFAULT_AUDIO_FORMAT: RimeAudioFormat = "audio/pcm"
+SUPPORTED_AUDIO_FORMATS: frozenset[str] = frozenset(
+    {
+        "audio/wav",
+        "audio/mpeg",
+        "audio/ogg;codecs=opus",
+        "audio/pcm",
+        "audio/pcmu",
+        "audio/webm;codecs=opus",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +72,7 @@ class SynthesisOptions:
     model: str
     speaker: str
     language: str
+    audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT
     sampling_rate: int | None = None
     time_scale_factor: float | None = None
     pause_between_brackets: bool | None = None
@@ -67,6 +88,45 @@ class RunResult:
 class Connection:
     websocket: aiohttp.ClientWebSocketResponse
     codec: _EnvelopeCodec
+
+
+def validate_audio_format(audio_format: str) -> RimeAudioFormat:
+    """Return a supported canonical Rime audio MIME type."""
+    if audio_format not in SUPPORTED_AUDIO_FORMATS:
+        choices = ", ".join(sorted(SUPPORTED_AUDIO_FORMATS))
+        raise ValueError(
+            f"unsupported Rime audio_format {audio_format!r}; choose one of: {choices}"
+        )
+    return cast(RimeAudioFormat, audio_format)
+
+
+def _build_mulaw_table() -> np.ndarray:
+    """Build an ITU-T G.711 mu-law to linear 16-bit PCM lookup table."""
+    table = np.zeros(256, dtype=np.int16)
+    for value in range(256):
+        encoded = (~value) & 0xFF
+        sign = -1 if encoded & 0x80 else 1
+        exponent = (encoded >> 4) & 0x07
+        mantissa = encoded & 0x0F
+        sample = ((mantissa << 3) + 0x84) << exponent
+        table[value] = sign * (sample - 0x84)
+    return table
+
+
+_MULAW_TABLE = _build_mulaw_table()
+
+
+def _decode_audio(audio_format: RimeAudioFormat, data: bytes) -> bytes:
+    if audio_format != "audio/pcmu":
+        return data
+    pcm = _MULAW_TABLE[np.frombuffer(data, dtype=np.uint8)]
+    return pcm.astype("<i2").tobytes()
+
+
+def _emitter_mime_type(audio_format: RimeAudioFormat) -> str:
+    if audio_format == "audio/pcmu":
+        return "audio/pcm"
+    return audio_format.partition(";")[0]
 
 
 class _EnvelopeCodec(Protocol):
@@ -304,6 +364,7 @@ async def run_context(
     mark_started: Callable[[], None],
 ) -> RunResult:
     """Run one LiveKit output turn as one Rime synthesis context."""
+    emitter_mime_type = _emitter_mime_type(options.audio_format)
     context_started = asyncio.Event()
     input_complete = asyncio.Event()
     input_ended = asyncio.Event()
@@ -333,7 +394,7 @@ async def run_context(
                 request_id=context_id,
                 sample_rate=sample_rate,
                 num_channels=NUM_CHANNELS,
-                mime_type="audio/pcm",
+                mime_type=emitter_mime_type,
                 stream=True,
             )
             state.emitter_initialized = True
@@ -366,7 +427,7 @@ async def run_context(
                     request_id=request_id,
                     sample_rate=sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type=emitter_mime_type,
                     stream=True,
                 )
                 state.emitter_initialized = True
@@ -374,7 +435,7 @@ async def run_context(
             elif payload == "audio":
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent audio before started")
-                output_emitter.push(envelope.audio)
+                output_emitter.push(_decode_audio(options.audio_format, envelope.audio))
             elif payload == "done":
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent done before started")
@@ -432,7 +493,7 @@ async def run_context(
                 request_id=context_id,
                 sample_rate=sample_rate,
                 num_channels=NUM_CHANNELS,
-                mime_type="audio/pcm",
+                mime_type=emitter_mime_type,
                 stream=True,
             )
             state.emitter_initialized = True
@@ -459,7 +520,7 @@ class _ContextState:
 
 
 def _start_payload(options: SynthesisOptions) -> proto.SynthesisRequest:
-    audio_parameters = proto.AudioParameters(audio_format="audio/pcm")
+    audio_parameters = proto.AudioParameters(audio_format=options.audio_format)
     if options.sampling_rate is not None:
         audio_parameters.sampling_rate = options.sampling_rate
     if options.time_scale_factor is not None:

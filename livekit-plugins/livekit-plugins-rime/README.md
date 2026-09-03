@@ -33,8 +33,8 @@ tts = rime.TTS(
 ```
 
 Pass the active model WebSocket endpoint explicitly. The presence of `websocket_url` selects
-WebSocket v1 streaming. For a route such as `/coda/ws` or `/mistv3/ws`, the plugin reads the
-model from the path segment before `/ws`. Do not also pass `model` for this type of route.
+WebSocket v1 streaming. For a route such as `/coda/ws`, the plugin reads the model from the path
+segment before `/ws`. Do not also pass `model` for this type of route.
 
 Some dedicated Rime endpoints end with `/ws` and do not contain a model path segment. Pass
 `model` for these endpoints:
@@ -55,21 +55,29 @@ The `websocket_protocol` option accepts `binary` or `json`. It defaults to `bina
 `rime.v1.binary` subprotocol and protobuf binary frames. Set `websocket_protocol="json"` to use the
 `rime.v1.json` subprotocol and canonical proto3 JSON text frames.
 
-The speaker defaults to `astra` for Coda and `cove` for Mist v3. The plugin uses
+The speaker defaults to `astra` for Coda and `cove` for Mist. The plugin uses
 `livekit.agents.tokenize.blingfire.SentenceTokenizer` by default and configures it to emit one
 complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence tokenizer. A
 custom tokenizer must emit complete sentence units that are safe for Rime text normalization.
 
-Mist v3 uses the same stream implementation:
+The public WebSocket v1 endpoint currently supports Coda. The future Mist route will use
+`/mist/ws`, not `/mistv3/ws`.
 
-```python
-tts = rime.TTS(
-    websocket_url="wss://api.rime.ai/mistv3/ws",
-    speaker="cove",
-    pause_between_brackets=True,
-    api_key=os.environ["RIME_API_KEY"],
-)
-```
+Select the Rime output format with `audio_format`. It defaults to `audio/pcm`. The adapter supports
+all canonical formats from the Rime interface:
+
+- `audio/pcm`
+- `audio/wav`
+- `audio/mpeg`
+- `audio/ogg;codecs=opus`
+- `audio/webm;codecs=opus`
+- `audio/pcmu`
+
+Both WebSocket protocols support every format. The binary protocol sends the encoded audio bytes
+directly. The JSON protocol sends the same bytes as base64 text.
+
+The v1 interface uses `time_scale_factor` for speed control. The deprecated `speed_alpha` option
+applies only to the older Rime interfaces.
 
 One LiveKit stream uses one continuous Rime synthesis context. These stream methods map to the
 Rime lifecycle as follows:
@@ -88,9 +96,7 @@ buffered fragment, so call it only after a complete sentence or a stable clause.
 
 The v1 implementation has these limits:
 
-- It requests raw `audio/pcm` data.
 - It does not provide aligned word timestamps.
-- `speed_alpha` is not supported. Use `time_scale_factor` to control speed.
 - The adapter reuses WebSocket connections between sequential LiveKit streams. It does not run
   concurrent contexts on one WebSocket. Concurrent LiveKit streams use separate pooled
   WebSocket connections.

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import traceback
 from typing import Any, cast
 
 import aiohttp
+import av
+import numpy as np
 import pytest
 from aiohttp import web
 from google.protobuf import json_format
@@ -28,6 +31,34 @@ _PCM = b"\x01\x00" * 2205
 _SECRET = "customer-secret-marker"
 
 
+def _encode_container_audio(container_format: str, codec: str) -> bytes:
+    buffer = io.BytesIO()
+    with av.open(buffer, mode="w", format=container_format) as container:
+        stream = container.add_stream(codec, rate=24000)
+        stream.layout = "mono"
+        frame = av.AudioFrame.from_ndarray(
+            np.zeros((1, 2400), dtype=np.int16), format="s16", layout="mono"
+        )
+        frame.sample_rate = 24000
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+    return buffer.getvalue()
+
+
+@pytest.fixture(scope="module")
+def encoded_audio_by_format() -> dict[str, bytes]:
+    return {
+        "audio/pcm": _PCM,
+        "audio/wav": _encode_container_audio("wav", "pcm_s16le"),
+        "audio/mpeg": _encode_container_audio("mp3", "mp3"),
+        "audio/ogg;codecs=opus": _encode_container_audio("ogg", "libopus"),
+        "audio/webm;codecs=opus": _encode_container_audio("webm", "libopus"),
+        "audio/pcmu": b"\xff" * 2400,
+    }
+
+
 def _assert_exception_is_safe(exc: BaseException) -> None:
     rendered = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     assert _SECRET not in str(exc)
@@ -44,12 +75,14 @@ class _RimeV1Server:
         cancel_reply: bool = True,
         fail_before_audio: int = 0,
         error_kind: str = "invalid_input",
+        audio: bytes = _PCM,
     ) -> None:
         self.response_mode = response_mode
         self.ready = ready or {"protocol": 1, "languages": ["eng"]}
         self.cancel_reply = cancel_reply
         self.fail_before_audio = fail_before_audio
         self.error_kind = error_kind
+        self.audio = audio
         self.connections = 0
         self.ready_events = 0
         self.requests: list[dict[str, Any]] = []
@@ -198,7 +231,7 @@ class _RimeV1Server:
     async def _respond_to_text(self, ws: web.WebSocketResponse, context_id: str) -> None:
         if self.response_mode == "normal":
             await self._send(
-                ws, {"contextId": context_id, "audio": base64.b64encode(_PCM).decode()}
+                ws, {"contextId": context_id, "audio": base64.b64encode(self.audio).decode()}
             )
         elif self.response_mode == "wrong_context":
             await self._send(ws, {"contextId": "wrong", "done": {}})
@@ -272,6 +305,14 @@ def test_v1_binary_envelope_goldens_match_rime_field_numbers() -> None:
     assert response.SerializeToString() == b"\x0a\x07turn-42\x22\x02\x01\x02"
 
 
+def test_v1_decodes_pcmu_to_little_endian_pcm16() -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    decoded = _websocket_v1._decode_audio("audio/pcmu", bytes([0xFF, 0x7F, 0x80, 0x00]))
+
+    assert np.frombuffer(decoded, dtype="<i2").tolist() == [0, 0, 32124, -32124]
+
+
 @pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
 async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
     websocket_protocol: str,
@@ -336,11 +377,49 @@ async def test_v1_defaults_to_binary_protocol() -> None:
     assert server.protocols == ["rime.v1.binary"]
 
 
-async def test_v1_maps_mistv3_options_without_a_second_stream_implementation() -> None:
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+@pytest.mark.parametrize(
+    "audio_format",
+    [
+        "audio/pcm",
+        "audio/wav",
+        "audio/mpeg",
+        "audio/ogg;codecs=opus",
+        "audio/webm;codecs=opus",
+        "audio/pcmu",
+    ],
+)
+async def test_v1_supports_each_rime_audio_format_with_each_protocol(
+    websocket_protocol: str,
+    audio_format: str,
+    encoded_audio_by_format: dict[str, bytes],
+) -> None:
+    async with _RimeV1Server(audio=encoded_audio_by_format[audio_format]) as server:
+        tts = _v1_tts(
+            server,
+            websocket_protocol=websocket_protocol,
+            audio_format=audio_format,
+        )
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        try:
+            stream.push_text("hello")
+            stream.end_input()
+            events = await _collect(stream)
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+
+    assert any(event.frame.data for event in events)
+    assert events[-1].is_final
+    assert server.requests[0]["start"]["audioParameters"]["audioFormat"] == audio_format
+    assert server.protocols == [f"rime.v1.{websocket_protocol}"]
+
+
+async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(
             server,
-            endpoint_model="mistv3",
+            endpoint_model="mist",
             pause_between_brackets=True,
             phonemize_between_brackets=False,
         )
@@ -361,7 +440,7 @@ async def test_v1_maps_mistv3_options_without_a_second_stream_implementation() -
 
 @pytest.mark.parametrize(
     ("endpoint_model", "expected_sample_rate"),
-    [("coda", 24000), ("mistv2", 22050), ("future-model", 22050)],
+    [("coda", 24000), ("mist", 24000), ("mistv2", 22050), ("future-model", 22050)],
 )
 async def test_v1_sends_resolved_sample_rate(
     endpoint_model: str, expected_sample_rate: int
@@ -684,7 +763,7 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update() -> None:
         stream.flush()
         try:
             await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
-            mist_url = second_server.websocket_url.replace("/coda/ws", "/mistv3/ws")
+            mist_url = second_server.websocket_url.replace("/coda/ws", "/mist/ws")
             tts.update_options(websocket_url=mist_url)
             stream.end_input()
             await _collect(stream)
@@ -1063,7 +1142,7 @@ def test_v1_rejects_lookalike_rime_host() -> None:
     ("websocket_url", "model"),
     [
         ("wss://api.rime.ai/coda/ws", "coda"),
-        ("wss://api.rime.ai/v1/mistv3/ws", "mistv3"),
+        ("wss://api.rime.ai/mist/ws", "mist"),
         ("wss://api.rime.ai/future-model/ws/?token=value", "future-model"),
     ],
 )

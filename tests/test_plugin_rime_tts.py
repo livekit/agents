@@ -210,16 +210,18 @@ def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
     assert tts.capabilities.aligned_transcript is False
     assert "websocket_url" in inspect.signature(TTS).parameters
     assert "tokenizer" in inspect.signature(TTS).parameters
+    assert "audio_format" in inspect.signature(TTS).parameters
     assert inspect.signature(TTS).parameters["websocket_protocol"].default == "binary"
+    assert tts._opts.audio_format == "audio/pcm"
     assert "sentence_tokenization" not in inspect.signature(TTS).parameters
 
 
-def test_websocket_url_derives_mistv3_model_and_accepts_options() -> None:
+def test_websocket_url_derives_mist_model_and_accepts_options() -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://api.rime.ai/mistv3/ws",
+        websocket_url="wss://api.rime.ai/mist/ws",
         pause_between_brackets=True,
     )
 
@@ -346,6 +348,13 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
         (
             {
                 "websocket_url": "wss://api.rime.ai/coda/ws",
+                "audio_format": "audio/aac",
+            },
+            "unsupported Rime audio_format",
+        ),
+        (
+            {
+                "websocket_url": "wss://api.rime.ai/coda/ws",
                 "pause_between_brackets": True,
             },
             "Mist options",
@@ -368,12 +377,33 @@ def test_v1_rejects_generation_controls_on_update() -> None:
         tts.update_options(top_p=0.8)
 
 
+def test_audio_format_requires_v1_websocket() -> None:
+    from livekit.plugins.rime import TTS
+
+    with pytest.raises(ValueError, match="only supported with the Rime v1"):
+        TTS(api_key="test-key", audio_format="audio/wav")
+
+
+def test_v1_updates_audio_format() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
+    tts.update_options(audio_format="audio/mpeg")
+
+    assert tts._opts.audio_format == "audio/mpeg"
+
+    with pytest.raises(ValueError, match="unsupported Rime audio_format"):
+        tts.update_options(audio_format="audio/aac")
+
+    assert tts._opts.audio_format == "audio/mpeg"
+
+
 def test_v1_derives_model_when_endpoint_is_updated() -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(api_key="test-key", websocket_url="wss://api.rime.ai/coda/ws")
     tts.update_options(
-        websocket_url="wss://api.rime.ai/mistv3/ws",
+        websocket_url="wss://api.rime.ai/mist/ws",
         pause_between_brackets=True,
     )
 
