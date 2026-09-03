@@ -316,7 +316,6 @@ class AIPlatformLLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             provider_fmt="openai",
-            reposition_instructions=True,
         )
 
 

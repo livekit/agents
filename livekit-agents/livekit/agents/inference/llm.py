@@ -22,7 +22,6 @@ from typing_extensions import TypedDict
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
-from ..llm._provider_format.utils import convert_mid_conversation_instructions
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
@@ -76,9 +75,6 @@ _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 _MODEL_THINK_TAGS = {
     "google/gemma-4-31b-it": ("<|channel>thought", "<channel|>"),
 }
-
-# providers that reject system messages after the start of the conversation
-_REPOSITION_INSTRUCTIONS_MODEL_PREFIXES: tuple[str, ...] = ("google/",)
 
 
 def drop_unsupported_params(
@@ -360,9 +356,6 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-            reposition_instructions=self._opts.model.startswith(
-                _REPOSITION_INSTRUCTIONS_MODEL_PREFIXES
-            ),
         )
 
 
@@ -381,14 +374,12 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
-        reposition_instructions: bool = False,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
         self._provider_fmt = provider_fmt
-        self._reposition_instructions = reposition_instructions
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm_v
@@ -407,12 +398,7 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            ctx = (
-                convert_mid_conversation_instructions(self._chat_ctx)
-                if self._reposition_instructions
-                else self._chat_ctx
-            )
-            chat_ctx, _ = ctx.to_provider_format(format=self._provider_fmt)
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             tool_schemas = cast(
                 list[ChatCompletionToolParam],
                 self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectionError, inference
+from livekit.agents import inference
 from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -133,8 +133,8 @@ def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
 
 
 def test_openai_format_preserves_mid_conversation_system_messages():
-    # intentional pass-through: repositioning for providers that need it
-    # happens in the inference LLMStream, not in the shared openai serializer
+    # intentional pass-through: the openai serializer keeps system messages where they are;
+    # providers that need repositioning handle it in their own serializer
     chat_ctx, instructions = _ctx_with_per_turn_instructions()
 
     messages, _ = chat_ctx.to_provider_format(format="openai")
@@ -142,46 +142,6 @@ def test_openai_format_preserves_mid_conversation_system_messages():
     assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
     assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
     assert messages[-1]["content"] == instructions
-
-
-async def test_inference_llm_repositions_instructions(monkeypatch):
-    captured: dict = {}
-
-    async def _capture_create(**kwargs):
-        captured.update(kwargs)
-        raise RuntimeError("stop request")
-
-    lk_llm = inference.LLM(
-        "google/gemini-2.5-flash", api_key="fake", api_secret="fake-secret-of-at-least-32-bytes!"
-    )
-    monkeypatch.setattr(lk_llm._client.chat.completions, "create", _capture_create)
-    conn_options = APIConnectOptions(max_retry=0)
-
-    try:
-        chat_ctx, instructions = _ctx_with_per_turn_instructions()
-        stream = lk_llm.chat(chat_ctx=chat_ctx, conn_options=conn_options)
-        with pytest.raises(APIConnectionError):
-            await stream.collect()
-        await stream.aclose()
-
-        messages = captured["messages"]
-        assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
-        assert messages[-1]["content"] == f"<instructions>\n{instructions}\n</instructions>"
-        # the original ctx must not be mutated
-        assert [item.role for item in chat_ctx.items] == ["system", "assistant", "user", "system"]
-
-        # openai-served models keep the system role
-        captured.clear()
-        lk_llm.update_options(model="openai/gpt-4.1")
-        stream = lk_llm.chat(chat_ctx=chat_ctx, conn_options=conn_options)
-        with pytest.raises(APIConnectionError):
-            await stream.collect()
-        await stream.aclose()
-
-        messages = captured["messages"]
-        assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
-    finally:
-        await lk_llm.aclose()
 
 
 def test_mistralai_format_converts_mid_conversation_instructions():
