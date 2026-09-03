@@ -374,7 +374,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self._websocket_v1_adapter = (
             WebSocketV1Adapter(
                 websocket_v1_url=websocket_v1_url,
-                endpoint_model=resolved_model,
                 websocket_protocol=websocket_protocol,
                 api_key=self._api_key,
                 ensure_session=self._ensure_session,
@@ -570,9 +569,9 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         prev_ws_url = self._ws_url() if self._legacy_websocket_adapter is not None else None
         if is_given(websocket_url):
             assert self._websocket_v1_adapter is not None
-            self._websocket_v1_adapter.update_endpoint(
-                websocket_url, endpoint_model=effective_model
-            )
+            endpoint_changed = self._websocket_v1_adapter.update_endpoint(websocket_url)
+            if not endpoint_changed and effective_model != self._opts.model:
+                raise ValueError("model cannot change without changing websocket_url")
             self._opts.model = effective_model
             self._total_timeout = _timeout_for_model(effective_model)
             if effective_model == MODEL_CODA and self._opts.coda_options is None:
