@@ -2,10 +2,17 @@
 
 The LiveKit Cloud collector strips span/log attributes whose key carries a
 dot-delimited ``pii`` segment (e.g. ``lk.pii.chat_ctx``) for PII-enabled
-projects. That marker is the only producer-side taxonomy, so every constant in
-``telemetry/trace_types.py`` must be explicitly accounted for: either its value
-carries the ``pii`` segment, or it is listed here as safe (no conversational
-content, tool payloads, or other user data).
+projects, and ``telemetry.pii`` strips the same attributes in-process — before
+any exporter, LiveKit's or an integrator's — for redaction-enabled sessions.
+
+The OpenTelemetry GenAI attributes cannot carry the ``pii`` marker: their names
+are fixed by the semantic convention. Those are enumerated in
+``telemetry.pii.GEN_AI_PII_ATTRIBUTES`` instead.
+
+Every constant in ``telemetry/trace_types.py`` must be explicitly accounted for:
+its value carries the ``pii`` segment, or it is registered in the GenAI PII set,
+or it is listed here as safe (no conversational content, tool payloads, or other
+user data).
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from livekit.agents.telemetry import trace_types
+from livekit.agents.telemetry import pii, trace_types
 
 pytestmark = pytest.mark.unit
 
@@ -123,6 +130,75 @@ SAFE_KEYS = frozenset(
         "lk.interruption.total_duration",
         "lk.interruption.prediction_duration",
         "lk.interruption.detection_delay",
+        # -- OTel GenAI semantic conventions ---------------------------------
+        # identifiers, enums, counts and sampling settings; nothing free-form.
+        # The content-bearing gen_ai attributes live in pii.GEN_AI_PII_ATTRIBUTES.
+        "error.type",
+        "server.address",
+        "server.port",
+        "gen_ai.agent.id",
+        "gen_ai.agent.name",
+        "gen_ai.agent.description",
+        "gen_ai.agent.version",
+        "gen_ai.conversation.id",
+        "gen_ai.conversation.compacted",
+        "gen_ai.data_source.id",
+        "gen_ai.embeddings.dimension.count",
+        "gen_ai.evaluation.name",
+        "gen_ai.evaluation.score.label",
+        "gen_ai.evaluation.score.value",
+        "gen_ai.memory.record.count",
+        "gen_ai.memory.record.id",
+        "gen_ai.memory.store.id",
+        "gen_ai.output.type",
+        "gen_ai.prompt.name",
+        "gen_ai.prompt.version",
+        "gen_ai.request.choice.count",
+        "gen_ai.request.encoding_formats",
+        "gen_ai.request.frequency_penalty",
+        "gen_ai.request.max_tokens",
+        "gen_ai.request.presence_penalty",
+        "gen_ai.request.previous_response.id",
+        "gen_ai.request.reasoning.level",
+        "gen_ai.request.seed",
+        "gen_ai.request.stop_sequences",
+        "gen_ai.request.stream",
+        "gen_ai.request.stream_cursor",
+        "gen_ai.request.temperature",
+        "gen_ai.request.top_k",
+        "gen_ai.request.top_p",
+        "gen_ai.response.finish_reasons",
+        "gen_ai.response.id",
+        "gen_ai.response.model",
+        "gen_ai.response.status",
+        "gen_ai.response.time_to_first_chunk",
+        "gen_ai.retrieval.top_k",
+        "gen_ai.token.type",
+        "gen_ai.tool.call.id",
+        "gen_ai.tool.name",
+        "gen_ai.tool.type",
+        "gen_ai.usage.audio.cache_read.input_tokens",
+        "gen_ai.usage.audio.input_tokens",
+        "gen_ai.usage.audio.output_tokens",
+        "gen_ai.usage.cache_write.input_tokens",
+        "gen_ai.usage.image.cache_read.input_tokens",
+        "gen_ai.usage.image.input_tokens",
+        "gen_ai.usage.image.output_tokens",
+        "gen_ai.usage.reasoning.output_tokens",
+        "gen_ai.usage.text.cache_read.input_tokens",
+        "gen_ai.usage.text.input_tokens",
+        "gen_ai.usage.text.output_tokens",
+        "gen_ai.workflow.name",
+        # GenAI event and metric names (not attribute keys)
+        "gen_ai.client.inference.operation.details",
+        "gen_ai.client.operation.duration",
+        "gen_ai.client.operation.time_per_output_chunk",
+        "gen_ai.client.operation.time_to_first_chunk",
+        "gen_ai.client.token.usage",
+        "gen_ai.execute_tool.duration",
+        "gen_ai.invoke_agent.duration",
+        "gen_ai.invoke_agent.inference_calls",
+        "gen_ai.invoke_agent.tool_calls",
     }
 )
 
@@ -139,14 +215,34 @@ def test_every_key_is_classified() -> None:
     unclassified = {
         name: value
         for name, value in _declared_keys().items()
-        if value not in SAFE_KEYS and not PII_SEGMENT_RE.search(value)
+        if value not in SAFE_KEYS
+        and not PII_SEGMENT_RE.search(value)
+        and not pii.is_pii_attribute(value)
     }
     assert not unclassified, (
         f"unclassified telemetry keys: {unclassified}. If the attribute can carry "
         "conversational content, tool payloads, or other user data, include a "
-        "dot-delimited `pii` segment in its value (e.g. lk.pii.<name>); otherwise "
-        "add it to SAFE_KEYS in this test."
+        "dot-delimited `pii` segment in its value (e.g. lk.pii.<name>) — or, for a "
+        "gen_ai.* name fixed by the semantic convention, register it in "
+        "telemetry.pii.GEN_AI_PII_ATTRIBUTES; otherwise add it to SAFE_KEYS in "
+        "this test."
     )
+
+
+def test_safe_list_and_the_in_process_stripper_agree() -> None:
+    stripped = sorted(k for k in SAFE_KEYS if pii.is_pii_attribute(k))
+    assert not stripped, f"keys listed as safe but stripped by telemetry.pii: {stripped}"
+
+    # an integrator's own exporter never reaches the LiveKit Cloud collector, so every
+    # pii-marked key must be stripped in-process too
+    marked = [v for v in _declared_keys().values() if PII_SEGMENT_RE.search(v)]
+    assert marked, "expected trace_types to declare pii-marked attributes"
+    missed = sorted(k for k in marked if not pii.is_pii_attribute(k))
+    assert not missed, f"pii-marked keys the in-process stripper misses: {missed}"
+
+    # a rename must not silently drop an attribute out of the stripped set
+    stale = sorted(pii.GEN_AI_PII_ATTRIBUTES - set(_declared_keys().values()))
+    assert not stale, f"GEN_AI_PII_ATTRIBUTES entries not declared in trace_types.py: {stale}"
 
 
 def test_safe_keys_do_not_carry_pii_segment() -> None:

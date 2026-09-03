@@ -24,7 +24,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -205,11 +205,23 @@ async def _llm_inference_task(
         trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
         trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
     }
-    if model:
-        attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
-    if provider:
-        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
     current_span.set_attributes(attrs)
+
+    # OTel GenAI semantic conventions: the llm_node is the framework's inference step
+    gen_ai_telemetry.set_request_attributes(
+        current_span,
+        operation=trace_types.GenAIOperationName.CHAT,
+        provider=provider,
+        model=model,
+        stream=True,
+        output_type=trace_types.GenAIOutputType.TEXT,
+    )
+    gen_ai_telemetry.set_content_attributes(
+        current_span,
+        system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
+        input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+        tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
+    )
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -227,6 +239,7 @@ async def _llm_inference_task(
         data.generated_text = llm_node
         text_ch.send_nowait(llm_node)
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
+        _record_llm_node_output(current_span, data)
         return True
 
     if not isinstance(llm_node, AsyncIterable):
@@ -321,7 +334,28 @@ async def _llm_inference_task(
     )
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
+    _record_llm_node_output(current_span, data, usage=usage)
     return True
+
+
+def _record_llm_node_output(
+    span: trace.Span, data: _LLMGenerationData, *, usage: CompletionUsage | None = None
+) -> None:
+    """The GenAI response side of an ``llm_node`` span."""
+    finish_reason = gen_ai_telemetry.finish_reason_for(function_calls=data.generated_functions)
+    gen_ai_telemetry.set_response_attributes(
+        span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
+    )
+    gen_ai_telemetry.set_content_attributes(
+        span,
+        output_messages=gen_ai_telemetry.to_output_messages(
+            text=data.generated_text,
+            function_calls=data.generated_functions,
+            finish_reason=finish_reason,
+        ),
+    )
+    if usage is not None:
+        gen_ai_telemetry.set_usage_attributes(span, usage)
 
 
 @dataclass
@@ -898,7 +932,9 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable,
+                    fnc_call: llm.FunctionCall,
+                    tool_description: str | None,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -908,7 +944,15 @@ async def _execute_tools_task(
                             trace_types.ATTR_FUNCTION_TOOL_ARGS: fnc_call.arguments,
                         }
                     )
+                    gen_ai_telemetry.set_tool_attributes(
+                        current_span,
+                        name=fnc_call.name,
+                        call_id=fnc_call.call_id,
+                        description=tool_description,
+                        arguments=fnc_call.arguments,
+                    )
 
+                    started_at = time.perf_counter()
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
@@ -936,12 +980,24 @@ async def _execute_tools_task(
                     current_span.set_attribute(
                         trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
                     )
+                    gen_ai_telemetry.set_tool_result(
+                        current_span,
+                        result=output.fnc_call_out.output,
+                        is_error=output.fnc_call_out.is_error,
+                    )
+                    otel_metrics.record_execute_tool_duration(
+                        time.perf_counter() - started_at,
+                        tool_name=fnc_call.name,
+                        error=output.fnc_call_out.is_error,
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call),
+                    _traceable_fnc_tool(
+                        function_callable, fnc_call, _tool_description(function_tool)
+                    ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
@@ -984,6 +1040,29 @@ async def _execute_tools_task(
                 "tools execution completed",
                 extra={"speech_id": speech_handle.id},
             )
+
+
+def _tool_description(tool: llm.Tool | None) -> str | None:
+    """The tool's own description, for ``gen_ai.tool.description``.
+
+    The convention flags this attribute as potentially sensitive, so it is recorded
+    only when content capture is on (see ``gen_ai.set_tool_attributes``).
+    """
+    from ..llm.tool_context import (
+        get_function_info,
+        get_raw_function_info,
+        is_function_tool,
+        is_raw_function_tool,
+    )
+
+    if tool is None:
+        return None
+    if is_function_tool(tool):
+        return get_function_info(tool).description
+    if is_raw_function_tool(tool):
+        description = get_raw_function_info(tool).raw_schema.get("description")
+        return description if isinstance(description, str) else None
+    return None
 
 
 @dataclass

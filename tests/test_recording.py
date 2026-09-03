@@ -1226,6 +1226,10 @@ def test_metric_measurements_carry_job_identity() -> None:
     ev.prompt_tokens = 5
     ev.prompt_cached_tokens = 0
     ev.completion_tokens = 0
+    # also read by the GenAI semconv instruments (gen_ai.client.operation.duration,
+    # gen_ai.client.operation.time_to_first_chunk)
+    ev.duration = 0.0
+    ev.ttft = -1.0
 
     with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
         token = _JobContextVar.set(mock_ctx)

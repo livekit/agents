@@ -8,6 +8,7 @@ import os
 import random
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -70,7 +71,7 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from . import trace_types, utils as telemetry_utils
+from . import pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatContext, ChatItem
@@ -405,7 +406,9 @@ class _TraceLevelLoggingHandler(LoggingHandler):
                     telemetry_utils.REDACTED_EXCEPTION_MESSAGE
                 )
             attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
-            log_record.attributes = attributes
+            # callers pass user data through `extra={"lk.pii.<name>": ...}` precisely
+            # because a log body cannot be redacted; drop those before export
+            log_record.attributes = pii.redact_attributes(attributes)
 
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
@@ -414,10 +417,54 @@ class _TraceLevelLoggingHandler(LoggingHandler):
         return log_record
 
 
+def _prepend_span_processor(provider: trace_sdk.TracerProvider, processor: SpanProcessor) -> None:
+    """Attach ``processor`` ahead of every processor already on ``provider``.
+
+    ``on_end`` is dispatched in registration order over a single shared span snapshot,
+    so a processor that rewrites the snapshot only protects the exporters registered
+    after it. Redaction has to come first, including ahead of exporters the integrator
+    attached before handing us their provider.
+    """
+    provider.add_span_processor(processor)
+
+    multi = getattr(provider, "_active_span_processor", None)
+    processors = getattr(multi, "_span_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        # a provider shape we don't recognise: the plain append above still covers
+        # every exporter the framework attaches itself
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._span_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._span_processors = reordered  # type: ignore[union-attr]
+
+
+_pii_redaction_installed: weakref.WeakSet[trace_sdk.TracerProvider] = weakref.WeakSet()
+
+
+def _install_pii_redaction(tracer_provider: trace_api.TracerProvider) -> None:
+    """Install in-process PII stripping on an SDK provider, at most once per provider."""
+    if not isinstance(tracer_provider, trace_sdk.TracerProvider):
+        # processors can only be attached to an SDK provider; a no-op/proxy provider
+        # exports nothing, so there is nothing to strip
+        return
+    if tracer_provider in _pii_redaction_installed:
+        return
+    _pii_redaction_installed.add(tracer_provider)
+    _prepend_span_processor(tracer_provider, pii.PIIRedactingSpanProcessor())
+
+
 def set_tracer_provider(
     tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
 ) -> None:
     """Set the tracer provider for the livekit-agents.
+
+    Spans exported through this provider have their PII attributes stripped in-process
+    whenever the session enabled redaction — see :mod:`livekit.agents.telemetry.pii`.
 
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
@@ -426,6 +473,7 @@ def set_tracer_provider(
     if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
+    _install_pii_redaction(tracer_provider)
     tracer.set_provider(tracer_provider)
 
 
@@ -703,6 +751,8 @@ class _CloudTelemetry:
         if not isinstance(provider, trace_sdk.TracerProvider):
             # processors can only be attached to an SDK provider
             return
+
+        _install_pii_redaction(provider)
 
         if provider is self._trace_provider_attached:
             return

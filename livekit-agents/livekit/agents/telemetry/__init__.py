@@ -1,4 +1,4 @@
-from . import http_server, metrics, otel_metrics, trace_types, utils
+from . import gen_ai, http_server, metrics, otel_metrics, pii, trace_types, utils
 from .traces import (
     _chat_ctx_to_otel_events,
     _setup_cloud_tracer,
@@ -9,6 +9,8 @@ from .traces import (
 
 __all__ = [
     "tracer",
+    "gen_ai",
+    "pii",
     "metrics",
     "otel_metrics",
     "trace_types",

@@ -82,18 +82,185 @@ ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
 # latency span attributes
 ATTR_E2E_LATENCY = "lk.e2e_latency"
 
-# OpenTelemetry GenAI attributes
-# OpenTelemetry specification: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
+# OpenTelemetry GenAI semantic conventions, mirroring the attribute registry of
+# https://github.com/open-telemetry/semantic-conventions-genai. Backends ingest these
+# directly, so the names must stay byte-for-byte identical to the registry. The ones the
+# spec flags as sensitive are listed in `telemetry.pii.GEN_AI_PII_ATTRIBUTES`, since a
+# standard name cannot carry the `lk.pii.` marker segment.
+
+# -- operation & provider ---------------------------------------------------
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+
+# -- request ----------------------------------------------------------------
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+ATTR_GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
+ATTR_GEN_AI_REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count"
+ATTR_GEN_AI_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
+ATTR_GEN_AI_REQUEST_TOP_P = "gen_ai.request.top_p"
+ATTR_GEN_AI_REQUEST_TOP_K = "gen_ai.request.top_k"
+ATTR_GEN_AI_REQUEST_STOP_SEQUENCES = "gen_ai.request.stop_sequences"
+ATTR_GEN_AI_REQUEST_FREQUENCY_PENALTY = "gen_ai.request.frequency_penalty"
+ATTR_GEN_AI_REQUEST_PRESENCE_PENALTY = "gen_ai.request.presence_penalty"
+ATTR_GEN_AI_REQUEST_ENCODING_FORMATS = "gen_ai.request.encoding_formats"
+ATTR_GEN_AI_REQUEST_SEED = "gen_ai.request.seed"
+ATTR_GEN_AI_REQUEST_STREAM = "gen_ai.request.stream"
+ATTR_GEN_AI_REQUEST_REASONING_LEVEL = "gen_ai.request.reasoning.level"
+ATTR_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID = "gen_ai.request.previous_response.id"
+ATTR_GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor"
+
+# -- response ---------------------------------------------------------------
+ATTR_GEN_AI_RESPONSE_ID = "gen_ai.response.id"
+ATTR_GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+ATTR_GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+ATTR_GEN_AI_RESPONSE_STATUS = "gen_ai.response.status"
+ATTR_GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk"
+
+# -- usage ------------------------------------------------------------------
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
-ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
+ATTR_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS = "gen_ai.usage.cache_write.input_tokens"
+ATTR_GEN_AI_USAGE_REASONING_OUTPUT_TOKENS = "gen_ai.usage.reasoning.output_tokens"
+ATTR_GEN_AI_USAGE_TEXT_INPUT_TOKENS = "gen_ai.usage.text.input_tokens"
+ATTR_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS = "gen_ai.usage.text.output_tokens"
+ATTR_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.text.cache_read.input_tokens"
+ATTR_GEN_AI_USAGE_AUDIO_INPUT_TOKENS = "gen_ai.usage.audio.input_tokens"
+ATTR_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = "gen_ai.usage.audio.output_tokens"
+ATTR_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.audio.cache_read.input_tokens"
+ATTR_GEN_AI_USAGE_IMAGE_INPUT_TOKENS = "gen_ai.usage.image.input_tokens"
+ATTR_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS = "gen_ai.usage.image.output_tokens"
+ATTR_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.image.cache_read.input_tokens"
+ATTR_GEN_AI_TOKEN_TYPE = "gen_ai.token.type"
+
+# -- conversation -----------------------------------------------------------
+ATTR_GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
+ATTR_GEN_AI_CONVERSATION_COMPACTED = "gen_ai.conversation.compacted"
+
+# -- agent ------------------------------------------------------------------
+ATTR_GEN_AI_AGENT_ID = "gen_ai.agent.id"
+ATTR_GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+ATTR_GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
+ATTR_GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
+
+# -- tools ------------------------------------------------------------------
+ATTR_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+ATTR_GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
+ATTR_GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
+ATTR_GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
+ATTR_GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
+ATTR_GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+ATTR_GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+
+# -- content (opt-in, sensitive) --------------------------------------------
+ATTR_GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+ATTR_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+ATTR_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+ATTR_GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
+
+# -- retrieval / memory / evaluation / prompt / workflow --------------------
+ATTR_GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
+ATTR_GEN_AI_EMBEDDINGS_DIMENSION_COUNT = "gen_ai.embeddings.dimension.count"
+ATTR_GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents"
+ATTR_GEN_AI_RETRIEVAL_QUERY_TEXT = "gen_ai.retrieval.query.text"
+ATTR_GEN_AI_RETRIEVAL_TOP_K = "gen_ai.retrieval.top_k"
+ATTR_GEN_AI_MEMORY_STORE_ID = "gen_ai.memory.store.id"
+ATTR_GEN_AI_MEMORY_RECORD_ID = "gen_ai.memory.record.id"
+ATTR_GEN_AI_MEMORY_RECORD_COUNT = "gen_ai.memory.record.count"
+ATTR_GEN_AI_MEMORY_QUERY_TEXT = "gen_ai.memory.query.text"
+ATTR_GEN_AI_MEMORY_RECORDS = "gen_ai.memory.records"
+ATTR_GEN_AI_EVALUATION_NAME = "gen_ai.evaluation.name"
+ATTR_GEN_AI_EVALUATION_SCORE_VALUE = "gen_ai.evaluation.score.value"
+ATTR_GEN_AI_EVALUATION_SCORE_LABEL = "gen_ai.evaluation.score.label"
+ATTR_GEN_AI_EVALUATION_EXPLANATION = "gen_ai.evaluation.explanation"
+ATTR_GEN_AI_PROMPT_NAME = "gen_ai.prompt.name"
+ATTR_GEN_AI_PROMPT_VERSION = "gen_ai.prompt.version"
+ATTR_GEN_AI_PROMPT_VARIABLE = "gen_ai.prompt.variable"  # template: gen_ai.prompt.variable.<key>
+ATTR_GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
+
+# -- shared (non gen_ai namespace) attributes used on GenAI spans -----------
+ATTR_ERROR_TYPE = "error.type"
+ATTR_SERVER_ADDRESS = "server.address"
+ATTR_SERVER_PORT = "server.port"
+
+
+class GenAIOperationName:
+    """Well-known ``gen_ai.operation.name`` values."""
+
+    CHAT = "chat"
+    GENERATE_CONTENT = "generate_content"
+    TEXT_COMPLETION = "text_completion"
+    EMBEDDINGS = "embeddings"
+    RETRIEVAL = "retrieval"
+    FETCH_RESPONSE = "fetch_response"
+    CREATE_AGENT = "create_agent"
+    INVOKE_AGENT = "invoke_agent"
+    EXECUTE_TOOL = "execute_tool"
+    INVOKE_WORKFLOW = "invoke_workflow"
+    PLAN = "plan"
+    SEARCH_MEMORY = "search_memory"
+    CREATE_MEMORY = "create_memory"
+    UPDATE_MEMORY = "update_memory"
+    UPSERT_MEMORY = "upsert_memory"
+    DELETE_MEMORY = "delete_memory"
+    CREATE_MEMORY_STORE = "create_memory_store"
+    DELETE_MEMORY_STORE = "delete_memory_store"
+
+
+class GenAIOutputType:
+    """Well-known ``gen_ai.output.type`` values."""
+
+    TEXT = "text"
+    JSON = "json"
+    IMAGE = "image"
+    SPEECH = "speech"
+
+
+class GenAIFinishReason:
+    """Well-known ``gen_ai.response.finish_reasons`` values."""
+
+    STOP = "stop"
+    LENGTH = "length"
+    CONTENT_FILTER = "content_filter"
+    TOOL_CALL = "tool_call"
+    COMPACTION = "compaction"
+    ERROR = "error"
+
+
+# ``gen_ai.provider.name`` is an open enum: the registry enumerates the providers it
+# has modelled, and instrumentations use the plugin's own provider id otherwise. This
+# maps LiveKit plugin provider ids onto the registry spelling where they differ, so a
+# Datadog/Langfuse backend recognises the provider flavour.
+GEN_AI_PROVIDER_ALIASES: dict[str, str] = {
+    "azure": "azure.ai.openai",
+    "azure_openai": "azure.ai.openai",
+    "azure_ai": "azure.ai.inference",
+    "bedrock": "aws.bedrock",
+    "aws": "aws.bedrock",
+    "google": "gcp.gen_ai",
+    "gemini": "gcp.gemini",
+    "vertex": "gcp.vertex_ai",
+    "vertexai": "gcp.vertex_ai",
+    "google_vertex": "gcp.vertex_ai",
+    "watsonx": "ibm.watsonx.ai",
+    "xai": "x_ai",
+    "grok": "x_ai",
+    "mistral": "mistral_ai",
+    "moonshot": "moonshot_ai",
+}
+
+
+def gen_ai_provider_name(provider: str | None) -> str | None:
+    """Normalize a LiveKit plugin provider id to its GenAI registry spelling."""
+    if not provider:
+        return None
+    return GEN_AI_PROVIDER_ALIASES.get(provider, provider)
+
 
 # Unofficial OpenTelemetry GenAI attributes, these are namespaces recognised by LangFuse
 # https://langfuse.com/integrations/native/opentelemetry#usage
-# but not yet in the official OpenTelemetry specification.
+# but not in the official OpenTelemetry specification. Emitted alongside the official
+# ``gen_ai.usage.*.{input,output}_tokens`` names above.
 ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS = "gen_ai.usage.input_text_tokens"
 ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS = "gen_ai.usage.input_audio_tokens"
 ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS = "gen_ai.usage.input_cached_tokens"
@@ -107,6 +274,17 @@ EVENT_GEN_AI_USER_MESSAGE = "gen_ai.user.message"
 EVENT_GEN_AI_ASSISTANT_MESSAGE = "gen_ai.assistant.message"
 EVENT_GEN_AI_TOOL_MESSAGE = "gen_ai.tool.message"
 EVENT_GEN_AI_CHOICE = "gen_ai.choice"
+EVENT_GEN_AI_CLIENT_INFERENCE_OPERATION_DETAILS = "gen_ai.client.inference.operation.details"
+
+# OpenTelemetry GenAI metric names
+METRIC_GEN_AI_CLIENT_TOKEN_USAGE = "gen_ai.client.token.usage"
+METRIC_GEN_AI_CLIENT_OPERATION_DURATION = "gen_ai.client.operation.duration"
+METRIC_GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk"
+METRIC_GEN_AI_CLIENT_TIME_PER_OUTPUT_CHUNK = "gen_ai.client.operation.time_per_output_chunk"
+METRIC_GEN_AI_INVOKE_AGENT_DURATION = "gen_ai.invoke_agent.duration"
+METRIC_GEN_AI_INVOKE_AGENT_INFERENCE_CALLS = "gen_ai.invoke_agent.inference_calls"
+METRIC_GEN_AI_INVOKE_AGENT_TOOL_CALLS = "gen_ai.invoke_agent.tool_calls"
+METRIC_GEN_AI_EXECUTE_TOOL_DURATION = "gen_ai.execute_tool.duration"
 
 # Exception attributes
 ATTR_EXCEPTION_TRACE = "exception.stacktrace"

@@ -35,7 +35,7 @@ from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -958,6 +958,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._root_span_context = otel_context.get_current()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
+            # the session is the convention's workflow: agent turns (`invoke_agent`),
+            # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
+            gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
 
             self._agent = agent
             self._update_agent_state("initializing")

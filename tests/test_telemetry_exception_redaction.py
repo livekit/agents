@@ -28,6 +28,12 @@ class _FakeSpan:
         self.recorded_exceptions: list[Exception] = []
         self.status: trace.Status | None = None
 
+    def is_recording(self) -> bool:
+        return True
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self.attributes[key] = value
+
     def add_event(self, name: str, attributes: dict[str, Any]) -> None:
         self.events.append((name, attributes))
 
@@ -55,6 +61,8 @@ def test_record_exception_preserves_details_when_not_redacted() -> None:
 
     assert len(span.recorded_exceptions) == 1
     assert span.attributes[trace_types.ATTR_EXCEPTION_TYPE] == "RuntimeError"
+    # the GenAI/HTTP conventions' low-cardinality error identifier
+    assert span.attributes[trace_types.ATTR_ERROR_TYPE] == "RuntimeError"
     assert span.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
     assert "secret transcript" in span.attributes[trace_types.ATTR_EXCEPTION_TRACE]
     assert span.status is not None
@@ -68,7 +76,9 @@ def test_record_exception_omits_details_when_redacted() -> None:
     _capture_exception(span, redacted=True)
 
     assert span.recorded_exceptions == []
+    # `error.type` names the exception class, never its message, so it survives redaction
     assert span.attributes == {
+        trace_types.ATTR_ERROR_TYPE: "RuntimeError",
         trace_types.ATTR_EXCEPTION_TYPE: "RuntimeError",
         trace_types.ATTR_EXCEPTION_MESSAGE: telemetry_utils.REDACTED_EXCEPTION_MESSAGE,
     }

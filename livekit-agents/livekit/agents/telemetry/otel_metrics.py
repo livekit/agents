@@ -13,6 +13,7 @@ from ..metrics.base import (
     STTMetrics,
     TTSMetrics,
 )
+from . import trace_types
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext, MetricsMetadata, MetricsReport
@@ -80,6 +81,81 @@ _connection_acquire_time = _meter.create_histogram(
     unit="s",
     description="Time to acquire a connection (WebSocket only)",
 )
+
+
+# -- OpenTelemetry GenAI semantic-convention instruments --
+# https://github.com/open-telemetry/semantic-conventions-genai (docs/gen-ai/gen-ai-metrics.md).
+# Emitted alongside the `lk.agents.*` instruments above so a GenAI-aware backend
+# (Datadog Agent Observability, Langfuse) gets the metrics under the names it expects.
+_genai_token_usage = _meter.create_histogram(
+    trace_types.METRIC_GEN_AI_CLIENT_TOKEN_USAGE,
+    unit="{token}",
+    description="Number of input and output tokens used by the GenAI operation",
+)
+_genai_operation_duration = _meter.create_histogram(
+    trace_types.METRIC_GEN_AI_CLIENT_OPERATION_DURATION,
+    unit="s",
+    description="GenAI operation duration",
+)
+_genai_time_to_first_chunk = _meter.create_histogram(
+    trace_types.METRIC_GEN_AI_CLIENT_TIME_TO_FIRST_CHUNK,
+    unit="s",
+    description="Time to first chunk of a streaming GenAI response",
+)
+_genai_execute_tool_duration = _meter.create_histogram(
+    trace_types.METRIC_GEN_AI_EXECUTE_TOOL_DURATION,
+    unit="s",
+    description="Tool execution duration",
+)
+_genai_invoke_agent_duration = _meter.create_histogram(
+    trace_types.METRIC_GEN_AI_INVOKE_AGENT_DURATION,
+    unit="s",
+    description="Agent invocation duration",
+)
+
+
+def _genai_attrs(metadata: Metadata | None, *, operation: str) -> dict[str, Any]:
+    """The convention's required metric attributes, on top of the job attribution."""
+    attrs = _job_attrs()
+    attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = operation
+    if metadata:
+        provider = trace_types.gen_ai_provider_name(metadata.model_provider)
+        if provider:
+            attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
+        if metadata.model_name:
+            attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = metadata.model_name
+            attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] = metadata.model_name
+    return attrs
+
+
+def _record_genai_tokens(attrs: dict[str, Any], *, input_tokens: int, output_tokens: int) -> None:
+    """``gen_ai.client.token.usage``, split by the convention's `gen_ai.token.type`."""
+    if input_tokens:
+        _genai_token_usage.record(
+            input_tokens, attributes={**attrs, trace_types.ATTR_GEN_AI_TOKEN_TYPE: "input"}
+        )
+    if output_tokens:
+        _genai_token_usage.record(
+            output_tokens, attributes={**attrs, trace_types.ATTR_GEN_AI_TOKEN_TYPE: "output"}
+        )
+
+
+def record_execute_tool_duration(duration: float, *, tool_name: str, error: bool = False) -> None:
+    """``gen_ai.execute_tool.duration`` for one function-tool execution."""
+    attrs = _job_attrs()
+    attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = trace_types.GenAIOperationName.EXECUTE_TOOL
+    attrs[trace_types.ATTR_GEN_AI_TOOL_NAME] = tool_name
+    if error:
+        attrs[trace_types.ATTR_ERROR_TYPE] = "tool_error"
+    _genai_execute_tool_duration.record(duration, attributes=attrs)
+
+
+def record_invoke_agent_duration(duration: float, *, agent_name: str) -> None:
+    """``gen_ai.invoke_agent.duration`` for one agent turn."""
+    attrs = _job_attrs()
+    attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = trace_types.GenAIOperationName.INVOKE_AGENT
+    attrs[trace_types.ATTR_GEN_AI_AGENT_NAME] = agent_name
+    _genai_invoke_agent_duration.record(duration, attributes=attrs)
 
 
 def _job_attrs() -> dict[str, Any]:
@@ -161,6 +237,15 @@ def collect_usage(ev: AgentMetrics) -> None:
         if ev.completion_tokens:
             _llm_output_tokens.add(ev.completion_tokens, attributes=attrs)
 
+        genai_attrs = _genai_attrs(ev.metadata, operation=trace_types.GenAIOperationName.CHAT)
+        _record_genai_tokens(
+            genai_attrs, input_tokens=ev.prompt_tokens, output_tokens=ev.completion_tokens
+        )
+        if ev.duration > 0:
+            _genai_operation_duration.record(ev.duration, attributes=genai_attrs)
+        if ev.ttft >= 0:
+            _genai_time_to_first_chunk.record(ev.ttft, attributes=genai_attrs)
+
     elif isinstance(ev, RealtimeModelMetrics):
         attrs = _model_attrs(ev.metadata)
         if ev.input_tokens:
@@ -179,6 +264,17 @@ def collect_usage(ev: AgentMetrics) -> None:
             _llm_output_text_tokens.add(ev.output_token_details.text_tokens, attributes=attrs)
         if ev.session_duration:
             _llm_session_duration.add(ev.session_duration, attributes=attrs)
+
+        genai_attrs = _genai_attrs(
+            ev.metadata, operation=trace_types.GenAIOperationName.GENERATE_CONTENT
+        )
+        _record_genai_tokens(
+            genai_attrs, input_tokens=ev.input_tokens, output_tokens=ev.output_tokens
+        )
+        if ev.duration > 0:
+            _genai_operation_duration.record(ev.duration, attributes=genai_attrs)
+        if ev.ttft >= 0:
+            _genai_time_to_first_chunk.record(ev.ttft, attributes=genai_attrs)
 
     elif isinstance(ev, TTSMetrics):
         attrs = _model_attrs(ev.metadata)

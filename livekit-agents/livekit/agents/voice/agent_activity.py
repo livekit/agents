@@ -34,7 +34,13 @@ from ..metrics import (
     TTSMetrics,
     VADMetrics,
 )
-from ..telemetry import otel_metrics, trace_types, tracer, utils as trace_utils
+from ..telemetry import (
+    gen_ai as gen_ai_telemetry,
+    otel_metrics,
+    trace_types,
+    tracer,
+    utils as trace_utils,
+)
 from ..tokenize.basic import split_words
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
@@ -860,7 +866,13 @@ class AgentActivity(RecognitionHooks):
 
             start_span = tracer.start_span(
                 "start_agent_activity",
-                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
+                attributes={
+                    trace_types.ATTR_AGENT_LABEL: self.agent.label,
+                    trace_types.ATTR_GEN_AI_OPERATION_NAME: (
+                        trace_types.GenAIOperationName.CREATE_AGENT
+                    ),
+                    trace_types.ATTR_GEN_AI_AGENT_NAME: self.agent.label,
+                },
             )
             try:
                 self._agent._activity = self
@@ -2879,15 +2891,28 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
             if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            speech_handle._agent_turn_context = otel_context.get_current()
-
-            await self._tts_task_impl(
-                speech_handle=speech_handle,
-                text=text,
-                audio=audio,
-                add_to_chat_ctx=add_to_chat_ctx,
-                model_settings=model_settings,
+            # an agent turn is the convention's `invoke_agent`: the framework running the
+            # agent in-process, with the inference and tool spans nested underneath
+            gen_ai_telemetry.set_agent_attributes(
+                current_span,
+                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
+                agent_name=self._agent.label,
             )
+            speech_handle._agent_turn_context = otel_context.get_current()
+            turn_started_at = time.time()
+
+            try:
+                await self._tts_task_impl(
+                    speech_handle=speech_handle,
+                    text=text,
+                    audio=audio,
+                    add_to_chat_ctx=add_to_chat_ctx,
+                    model_settings=model_settings,
+                )
+            finally:
+                otel_metrics.record_invoke_agent_duration(
+                    time.time() - turn_started_at, agent_name=self._agent.label
+                )
 
     async def _tts_task_impl(
         self,
@@ -3140,17 +3165,30 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
             if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            speech_handle._agent_turn_context = otel_context.get_current()
-
-            await self._pipeline_reply_task_impl(
-                speech_handle=speech_handle,
-                chat_ctx=chat_ctx,
-                tools=tools,
-                model_settings=model_settings,
-                new_message=new_message,
-                instructions=instructions,
-                _previous_user_metrics=_previous_user_metrics,
+            # an agent turn is the convention's `invoke_agent`: the framework running the
+            # agent in-process, with the inference and tool spans nested underneath
+            gen_ai_telemetry.set_agent_attributes(
+                current_span,
+                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
+                agent_name=self._agent.label,
             )
+            speech_handle._agent_turn_context = otel_context.get_current()
+            turn_started_at = time.time()
+
+            try:
+                await self._pipeline_reply_task_impl(
+                    speech_handle=speech_handle,
+                    chat_ctx=chat_ctx,
+                    tools=tools,
+                    model_settings=model_settings,
+                    new_message=new_message,
+                    instructions=instructions,
+                    _previous_user_metrics=_previous_user_metrics,
+                )
+            finally:
+                otel_metrics.record_invoke_agent_duration(
+                    time.time() - turn_started_at, agent_name=self._agent.label
+                )
 
     async def _pipeline_reply_task_impl(
         self,
@@ -3891,14 +3929,27 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
             if parent_id := speech_handle._parent_generation_id:
                 current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            speech_handle._agent_turn_context = otel_context.get_current()
-
-            await self._realtime_generation_task_impl(
-                speech_handle=speech_handle,
-                generation_ev=generation_ev,
-                model_settings=model_settings,
-                instructions=instructions,
+            # an agent turn is the convention's `invoke_agent`: the framework running the
+            # agent in-process, with the inference and tool spans nested underneath
+            gen_ai_telemetry.set_agent_attributes(
+                current_span,
+                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
+                agent_name=self._agent.label,
             )
+            speech_handle._agent_turn_context = otel_context.get_current()
+            turn_started_at = time.time()
+
+            try:
+                await self._realtime_generation_task_impl(
+                    speech_handle=speech_handle,
+                    generation_ev=generation_ev,
+                    model_settings=model_settings,
+                    instructions=instructions,
+                )
+            finally:
+                otel_metrics.record_invoke_agent_duration(
+                    time.time() - turn_started_at, agent_name=self._agent.label
+                )
 
     async def _realtime_generation_task_impl(
         self,

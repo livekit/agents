@@ -31,6 +31,12 @@ def record_exception(
     if redacted is NOT_GIVEN:
         redacted = _redaction_enabled()
 
+    # `error.type` is the GenAI/HTTP conventions' low-cardinality error identifier;
+    # unlike the message it never carries user data, so it is set either way
+    from .gen_ai import set_error_type
+
+    set_error_type(span, exception)
+
     if redacted:
         attrs = {
             trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
@@ -57,19 +63,43 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
     model_name = ev.metadata.model_name if ev.metadata else None
     model_provider = ev.metadata.model_provider if ev.metadata else None
 
-    attrs: dict[str, str | int] = {
-        trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-        trace_types.ATTR_GEN_AI_PROVIDER_NAME: model_provider or "unknown",
+    attrs: dict[str, str | int | float | bool] = {
+        # a realtime turn is a multimodal generation: `generate_content` is the
+        # convention's operation for it, and the model answers with speech
+        trace_types.ATTR_GEN_AI_OPERATION_NAME: (trace_types.GenAIOperationName.GENERATE_CONTENT),
+        trace_types.ATTR_GEN_AI_OUTPUT_TYPE: trace_types.GenAIOutputType.SPEECH,
+        trace_types.ATTR_GEN_AI_PROVIDER_NAME: (
+            trace_types.gen_ai_provider_name(model_provider) or "unknown"
+        ),
         trace_types.ATTR_GEN_AI_REQUEST_MODEL: model_name or "unknown",
+        trace_types.ATTR_GEN_AI_RESPONSE_MODEL: model_name or "unknown",
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
+        # official per-modality usage names
+        trace_types.ATTR_GEN_AI_USAGE_TEXT_INPUT_TOKENS: ev.input_token_details.text_tokens,
+        trace_types.ATTR_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: ev.input_token_details.audio_tokens,
+        trace_types.ATTR_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: ev.input_token_details.image_tokens,
+        trace_types.ATTR_GEN_AI_USAGE_TEXT_OUTPUT_TOKENS: ev.output_token_details.text_tokens,
+        trace_types.ATTR_GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS: ev.output_token_details.audio_tokens,
+        trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: (
+            ev.input_token_details.cached_tokens
+        ),
+        # unofficial spellings LangFuse reads, kept alongside the official ones
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: ev.input_token_details.text_tokens,
         trace_types.ATTR_GEN_AI_USAGE_INPUT_AUDIO_TOKENS: ev.input_token_details.audio_tokens,
         trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: ev.input_token_details.cached_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: ev.output_token_details.text_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_AUDIO_TOKENS: ev.output_token_details.audio_tokens,
     }
+    if ev.request_id:
+        attrs[trace_types.ATTR_GEN_AI_RESPONSE_ID] = ev.request_id
+    if cached := ev.input_token_details.cached_tokens_details:
+        attrs[trace_types.ATTR_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS] = cached.text_tokens
+        attrs[trace_types.ATTR_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS] = cached.audio_tokens
+        attrs[trace_types.ATTR_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS] = cached.image_tokens
+    if ev.ttft >= 0:
+        attrs[trace_types.ATTR_GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] = ev.ttft
     if ev.ttft != -1:
         completion_start_time = ev.timestamp + ev.ttft
         # This attribute is used by LangFuse to calculate "time to first token metric"

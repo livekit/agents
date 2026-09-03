@@ -20,7 +20,13 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
+from ..telemetry import (
+    _chat_ctx_to_otel_events,
+    gen_ai as gen_ai_telemetry,
+    trace_types,
+    tracer,
+    utils as telemetry_utils,
+)
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -252,6 +258,7 @@ class LLMStream(ABC):
             ) as span:
                 for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
                     span.add_event(name, attributes)
+                self._record_genai_request(span)
                 await self._main_task()
 
         self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
@@ -262,15 +269,25 @@ class LLMStream(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
+    def _record_genai_request(self, span: trace.Span) -> None:
+        """The GenAI inference span's request side, per the OTel GenAI conventions."""
+        gen_ai_telemetry.set_request_attributes(
+            span,
+            operation=trace_types.GenAIOperationName.CHAT,
+            provider=self._llm.provider,
+            model=self._llm.model,
+            stream=True,
+            output_type=trace_types.GenAIOutputType.TEXT,
+        )
+        gen_ai_telemetry.set_content_attributes(
+            span,
+            system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
+            input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
+            tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
+        )
+
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attributes(
-            {
-                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
-            }
-        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
@@ -402,23 +419,26 @@ class LLMStream(ABC):
                 trace_types.ATTR_LLM_METRICS, metrics.model_dump_json()
             )
 
-            # set gen_ai attributes
-            self._llm_request_span.set_attributes(
-                {
-                    trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-                    trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
-                    trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: metrics.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: (
-                        metrics.prompt_cached_tokens
-                    ),
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
-                },
+            # the GenAI response side; the request side was recorded at span creation
+            gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
+            finish_reason = gen_ai_telemetry.finish_reason_for(
+                function_calls=tool_calls, interrupted=metrics.cancelled
             )
-            if metrics.reasoning_tokens:
-                self._llm_request_span.set_attribute(
-                    trace_types.ATTR_GEN_AI_USAGE_REASONING_TOKENS, metrics.reasoning_tokens
-                )
+            gen_ai_telemetry.set_response_attributes(
+                self._llm_request_span,
+                response_id=request_id or None,
+                model=self._llm.model,
+                finish_reasons=[finish_reason],
+                time_to_first_chunk=ttft if ttft >= 0 else None,
+            )
+            gen_ai_telemetry.set_content_attributes(
+                self._llm_request_span,
+                output_messages=gen_ai_telemetry.to_output_messages(
+                    text=response_content,
+                    function_calls=tool_calls,
+                    finish_reason=finish_reason,
+                ),
+            )
             if completion_start_time:
                 self._llm_request_span.set_attribute(
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'

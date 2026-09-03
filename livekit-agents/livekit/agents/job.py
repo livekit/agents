@@ -843,7 +843,7 @@ class JobContext:
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=self._otel_metadata(options),
+            metadata=self._otel_metadata(options, redaction_enabled=redaction_enabled),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
@@ -890,7 +890,9 @@ class JobContext:
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
-    def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
+    def _otel_metadata(
+        self, options: RecordingOptions | None = None, *, redaction_enabled: bool = False
+    ) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
         if (sim := self.simulation_context()) is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
@@ -901,7 +903,10 @@ class JobContext:
                 metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim.simulation_run_id
             if sim.simulation_job_id:
                 metadata[ATTRIBUTE_SIMULATION_JOB_ID] = sim.simulation_job_id
-        if options and options.get("redaction", False):
+        # stamped on every span and log so redaction can be resolved per-record, off the
+        # record itself, rather than from the ambient job context. Takes the resolved
+        # flag so project-wide redaction counts, not just the per-session option.
+        if redaction_enabled or (options and options.get("redaction", False)):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None
 
