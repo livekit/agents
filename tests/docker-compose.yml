@@ -77,6 +77,7 @@ services:
       - "f.cluster.resemble.ai:172.30.0.10"
       - "websocket.cluster.resemble.ai:172.30.0.10"
       - "users.rime.ai:172.30.0.10"
+      - "api.rime.ai:172.30.0.10"
       - "api.hume.ai:172.30.0.10"
       - "api.lmnt.com:172.30.0.10"
       - "api.inworld.ai:172.30.0.10"

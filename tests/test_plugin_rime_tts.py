@@ -202,7 +202,7 @@ def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://api.rimetts.com/coda/v1/coda/ws",
+        websocket_url="wss://api.rime.ai/coda/ws",
     )
 
     assert tts.model == "coda"
@@ -219,7 +219,7 @@ def test_websocket_url_derives_mistv3_model_and_accepts_options() -> None:
 
     tts = TTS(
         api_key="test-key",
-        websocket_url="wss://api.rimetts.com/mistv3/ws",
+        websocket_url="wss://api.rime.ai/mistv3/ws",
         pause_between_brackets=True,
     )
 
@@ -232,8 +232,8 @@ def test_websocket_url_derives_mistv3_model_and_accepts_options() -> None:
 @pytest.mark.parametrize(
     "websocket_url",
     [
-        "https://api.rimetts.com/coda/v1/coda/ws",
-        "/coda/v1/coda/ws",
+        "https://api.rime.ai/coda/ws",
+        "/coda/ws",
     ],
 )
 def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
