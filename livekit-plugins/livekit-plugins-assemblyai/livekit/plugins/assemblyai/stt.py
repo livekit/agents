@@ -968,6 +968,20 @@ class SpeechStream(stt.SpeechStream):
         speaker_label = data.get("speaker_label")
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
 
+        # Surface the server's end-of-turn confidence on SpeechData.metadata so it's
+        # reachable from SpeechEvent / stt_node / UserInputTranscribedEvent without
+        # subclassing the stream. On Universal-3.5 Pro (and later) this rises from 0
+        # toward 1 across the partials emitted while a turn is held open between
+        # min_turn_silence and max_turn_silence, letting callers threshold it to
+        # trigger preemptive/eager LLM generation before the final arrives; it is 1.0
+        # on the final. Only attached when the message carries it, so models that
+        # don't emit the field are unaffected.
+        eot_confidence_metadata = (
+            {"end_of_turn_confidence": end_of_turn_confidence}
+            if end_of_turn_confidence is not None
+            else None
+        )
+
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
         start_time: float = 0
@@ -1004,6 +1018,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )
@@ -1040,6 +1055,7 @@ class SpeechStream(stt.SpeechStream):
                         words=utterance_words,
                         confidence=utterance_confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )
@@ -1065,6 +1081,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )
