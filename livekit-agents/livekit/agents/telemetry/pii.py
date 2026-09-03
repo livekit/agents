@@ -10,11 +10,17 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from . import trace_types
 from .utils import REDACTED_EXCEPTION_MESSAGE
 
+# Field-level filtering, not entity-level redaction: a matching attribute is dropped
+# whole, never scanned and masked. "Redaction" in this codebase means the project setting
+# (LiveKit Cloud dashboard, or record={"redaction": True}); this module is what the client
+# does about it.
+#
 # LiveKit marks attributes carrying conversational content, tool payloads or other user
 # data with a dot-delimited `pii` segment (`lk.pii.<name>`), and the GenAI content
 # attributes carry the same payload under names the semantic convention fixes, where the
-# marker cannot be applied. Both are stripped here, before any exporter that is not
-# LiveKit Cloud's — whose own handling is the project's setting in the dashboard.
+# marker cannot be applied. Both are filtered here, before any exporter that is not
+# LiveKit Cloud's — and before every exporter, Cloud included, once the project has
+# enabled redaction, so the client never depends on a collector to strip a new key.
 
 # exception details are recorded by `record_exception`, which resolves redaction from the
 # ambient job context; that can disagree with the span's own stamp, so they are filtered
@@ -72,7 +78,7 @@ def is_pii_attribute(key: str) -> bool:
     return key.startswith(trace_types.ATTR_GEN_AI_PROMPT_VARIABLE)
 
 
-def redact_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
+def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
     if not attributes:
         return {}
 
@@ -98,8 +104,8 @@ _RAW_ATTRIBUTES = "_lk_raw_attributes"
 _RAW_EVENTS = "_lk_raw_events"
 
 
-class PIIRedactingSpanProcessor(SpanProcessor):
-    """Strips PII so it never reaches an exporter that is not LiveKit Cloud's.
+class _PIIFilteringSpanProcessor(SpanProcessor):
+    """Drops PII attributes so they never reach an exporter that is not LiveKit Cloud's.
 
     Must be registered **before** any exporting processor: ``on_end`` is dispatched in
     registration order over one shared :class:`ReadableSpan` snapshot, so rewriting the
@@ -131,8 +137,8 @@ class PIIRedactingSpanProcessor(SpanProcessor):
             return
 
         events = span.events
-        redacted_events = _redact_events(events)
-        if not _contains_pii(attributes) and redacted_events is None:
+        filtered_events = _filter_events(events)
+        if not _contains_pii(attributes) and filtered_events is None:
             return
 
         if not project_redaction:
@@ -142,9 +148,9 @@ class PIIRedactingSpanProcessor(SpanProcessor):
 
         # rebind rather than mutate: the snapshot's BoundedAttributes is shared with the
         # live span, and is immutable once the span has ended
-        span._attributes = redact_attributes(attributes)
-        if redacted_events is not None:
-            span._events = redacted_events
+        span._attributes = filter_attributes(attributes)
+        if filtered_events is not None:
+            span._events = filtered_events
 
     def shutdown(self) -> None:
         pass
@@ -179,8 +185,8 @@ def restore_pii(span: ReadableSpan) -> ReadableSpan:
     )
 
 
-class PIIRedactingLogProcessor(LogRecordProcessor):
-    """Log counterpart of :class:`PIIRedactingSpanProcessor`.
+class _PIIFilteringLogProcessor(LogRecordProcessor):
+    """Log counterpart of :class:`_PIIFilteringSpanProcessor`.
 
     ``_TraceLevelLoggingHandler`` redacts the records the framework's own handler creates;
     this covers every other emitter on the logger provider, including the exporters an
@@ -197,7 +203,7 @@ class PIIRedactingLogProcessor(LogRecordProcessor):
 
         record = log_data.log_record
         if _contains_pii(record.attributes):
-            record.attributes = redact_attributes(record.attributes)
+            record.attributes = filter_attributes(record.attributes)
 
     def shutdown(self) -> None:
         pass
@@ -206,7 +212,7 @@ class PIIRedactingLogProcessor(LogRecordProcessor):
         return True
 
 
-def _redact_events(events: Sequence[Event]) -> list[Event] | None:
+def _filter_events(events: Sequence[Event]) -> list[Event] | None:
     """``None`` when nothing changed."""
     from opentelemetry.sdk.trace import Event as SdkEvent
 
@@ -221,7 +227,7 @@ def _redact_events(events: Sequence[Event]) -> list[Event] | None:
             kept.append(
                 SdkEvent(
                     name=event.name,
-                    attributes=redact_attributes(event.attributes),
+                    attributes=filter_attributes(event.attributes),
                     timestamp=event.timestamp,
                 )
             )

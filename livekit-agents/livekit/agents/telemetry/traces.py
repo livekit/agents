@@ -410,7 +410,7 @@ class _TraceLevelLoggingHandler(LoggingHandler):
             attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
             # callers pass user data through `extra={"lk.pii.<name>": ...}` precisely
             # because a log body cannot be redacted; drop those before export
-            log_record.attributes = pii.redact_attributes(attributes)
+            log_record.attributes = pii.filter_attributes(attributes)
 
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
@@ -483,7 +483,7 @@ def _install_pii_redaction(
         tracer_provider,
         # PII flows to every exporter unless withheld: the GenAI conventions are only
         # useful to a backend that can render the conversation
-        pii.PIIRedactingSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
+        pii._PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
     )
 
 
@@ -840,7 +840,7 @@ class _CloudTelemetry:
             self._logger_provider = owned
 
         # ahead of any exporter already on the provider, as for spans
-        _prepend_log_processor(self._logger_provider, pii.PIIRedactingLogProcessor())
+        _prepend_log_processor(self._logger_provider, pii._PIIFilteringLogProcessor())
 
     def _ensure_log_pipeline(self, url: str) -> None:
         if self._log_batch_processor is not None or self._logger_provider is None:

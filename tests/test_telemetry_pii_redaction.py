@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents.telemetry import pii, trace_types
+from livekit.agents.telemetry import pii, trace_types, utils as telemetry_utils
 from livekit.agents.telemetry.traces import _install_pii_redaction
 from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
 
@@ -119,3 +121,28 @@ def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:
 )
 def test_pii_classification(key: str, expected: bool) -> None:
     assert pii.is_pii_attribute(key) is expected
+
+
+def test_logs_are_filtered_for_every_destination_when_redaction_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client filters the new keys itself rather than relying on a collector to know
+    them, so an enabled project setting strips logs on every exporter, LiveKit Cloud's
+    included."""
+    monkeypatch.setattr("livekit.agents.telemetry.utils.redaction_enabled", lambda *_: True)
+
+    record = SimpleNamespace(
+        attributes={
+            trace_types.ATTR_CHAT_CTX: '{"items": []}',
+            trace_types.ATTR_GEN_AI_INPUT_MESSAGES: '[{"role": "user"}]',
+            trace_types.ATTR_EXCEPTION_MESSAGE: "secret transcript",
+            trace_types.ATTR_EXCEPTION_TRACE: 'Traceback: "my pin is 1234"',
+            "function": "get_weather",
+        }
+    )
+    pii._PIIFilteringLogProcessor().on_emit(SimpleNamespace(log_record=record))  # type: ignore[arg-type]
+
+    assert record.attributes == {
+        "function": "get_weather",
+        trace_types.ATTR_EXCEPTION_MESSAGE: telemetry_utils.REDACTED_EXCEPTION_MESSAGE,
+    }
