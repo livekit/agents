@@ -33,7 +33,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.7.1",
+    "livekit-agents[codecs]>=1.7.2",
     "websockets>=14.0,<16.0",
 ]
 
