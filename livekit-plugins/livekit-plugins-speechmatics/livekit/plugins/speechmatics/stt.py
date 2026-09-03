@@ -334,7 +334,7 @@ class STT(stt.STT):
             errors.append("max_speakers must be between 2 and 100")
 
         # diarization sensitivity range enforced by the engine
-        if opts.speaker_sensitivity is not None and not (0.0 < opts.speaker_sensitivity < 1.0):
+        if opts.speaker_sensitivity is not None and not (0.0 <= opts.speaker_sensitivity <= 1.0):
             errors.append("speaker_sensitivity must be between 0.0 and 1.0")
 
         return errors
