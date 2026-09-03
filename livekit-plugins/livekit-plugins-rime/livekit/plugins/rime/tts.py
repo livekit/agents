@@ -455,7 +455,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             except asyncio.TimeoutError:
                 pass
         except Exception as e:
-            logger.warning(f"Error during Rime WS close sequence: {e}")
+            logger.warning(
+                "error during Rime WebSocket close sequence",
+                extra={"exception_type": type(e).__name__},
+            )
         finally:
             await ws.close()
 
@@ -790,7 +793,7 @@ class _WS3SynthesizeStream(tts.SynthesizeStream):
                         request_id=request_id,
                     )
                 if msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"Rime ws error: {ws.exception()}")
+                    raise APIConnectionError("Rime WebSocket transport error")
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Rime ws message type %s", msg.type)
                     continue
@@ -811,8 +814,7 @@ class _WS3SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif t == "error":
-                    msg_text = data.get("message", "(no message)")
-                    raise APIError(f"Rime ws error: {msg_text}")
+                    raise APIError("Rime WebSocket request failed")
 
         try:
             assert self._tts._ws3_pool is not None
@@ -832,9 +834,12 @@ class _WS3SynthesizeStream(tts.SynthesizeStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message="Rime WebSocket request failed",
+                status_code=e.status,
+                request_id=None,
+                body=None,
             ) from None
         except APIError:
             raise
-        except Exception as e:
-            raise APIConnectionError(f"Rime WS error: {e}") from e
+        except Exception:
+            raise APIConnectionError("Rime WebSocket request failed") from None
