@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -56,21 +55,6 @@ def test_model_and_speaker_defaults() -> None:
     assert explicit_coda_tts.model == "coda"
     assert explicit_coda_tts._opts.speaker == "lyra"
     assert explicit_coda_tts.sample_rate == 24000
-
-
-def test_arcana_model_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
-    from livekit.plugins.rime import TTS
-
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.rime"):
-        tts = TTS(api_key="test-key", model="arcana")
-
-    assert 'Rime Arcana is no longer supported. Use model="coda" instead.' in caplog.messages
-
-    caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.rime"):
-        tts.update_options(model="arcana")
-
-    assert 'Rime Arcana is no longer supported. Use model="coda" instead.' in caplog.messages
 
 
 def test_coda_request_controls() -> None:

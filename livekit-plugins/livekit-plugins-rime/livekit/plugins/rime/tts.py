@@ -97,11 +97,6 @@ class _MistOptions:
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
-def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
-    if is_given(model) and model == "arcana":
-        logger.warning('Rime Arcana is no longer supported. Use model="coda" instead.')
-
-
 def _timeout_for_model(model: TTSModels | str) -> int:
     if model == MODEL_CODA:
         return CODA_MODEL_TIMEOUT
@@ -262,7 +257,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             resolved_model = model_from_websocket_url(websocket_v1_url)
             model_is_explicit = resolved_model != MODEL_CODA
         elif is_given(model):
-            _warn_if_arcana(model)
             resolved_model = model
             model_is_explicit = True
         else:
@@ -527,7 +521,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         else:
             effective_model = model if is_given(model) else self._opts.model
 
-        _warn_if_arcana(model)
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
         # The WS URL is bound when its pool connects. Refresh the pool when that URL changes.
