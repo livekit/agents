@@ -173,31 +173,42 @@ def speech_payload(
 
 def raise_http_error(status: int, body: str) -> None:
     """Raise ``APIStatusError`` from a Vakyam HTTP error envelope."""
-    message = body or f"Vakyam TTS request failed with status {status}"
     parsed: object | None = None
     try:
         parsed = json.loads(body) if body else None
     except json.JSONDecodeError:
         parsed = None
 
+    error_code: str | None = None
     if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
         error = parsed["error"]
-        message = str(error.get("message") or message)
+        code = error.get("code")
+        if isinstance(code, (str, int)):
+            error_code = str(code)
 
-    raise APIStatusError(message, status_code=status, body=parsed if parsed is not None else body)
+    message = f"Vakyam TTS request failed with status {status}"
+    safe_body: dict[str, object] = {"status_code": status}
+    if error_code is not None:
+        message += f" (error code: {error_code})"
+        safe_body["error_code"] = error_code
+
+    raise APIStatusError(message, status_code=status, body=safe_body)
 
 
 def raise_ws_error(data: dict[str, Any]) -> None:
     """Raise ``APIStatusError`` from a Vakyam WebSocket ``error`` frame."""
     error = data.get("error") if isinstance(data.get("error"), dict) else {}
     code = error.get("code") if isinstance(error, dict) else None
-    message = (error.get("message") if isinstance(error, dict) else None) or (
-        "WebSocket request failed"
-    )
-    retryable = str(code) in _RETRYABLE_WS_CODES
+    error_code = str(code) if isinstance(code, (str, int)) else None
+    retryable = error_code in _RETRYABLE_WS_CODES
+    message = "Vakyam TTS WebSocket request failed"
+    safe_body: dict[str, str] = {"type": "error"}
+    if error_code is not None:
+        message += f" (error code: {error_code})"
+        safe_body["code"] = error_code
     raise APIStatusError(
-        str(message),
+        message,
         status_code=-1,
-        body=data,
+        body=safe_body,
         retryable=retryable,
     )

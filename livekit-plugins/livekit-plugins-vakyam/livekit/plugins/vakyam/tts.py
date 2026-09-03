@@ -183,6 +183,7 @@ class TTS(tts.TTS):
     ) -> None:
         """Update synthesis options for streams created after this call."""
         next_opts = replace(self._opts)
+        next_sample_rate = self._sample_rate
         if model is not None:
             next_opts.model = model
         if voice is not None:
@@ -191,7 +192,7 @@ class TTS(tts.TTS):
             next_opts.language = language
         if sample_rate is not None:
             next_opts.sample_rate = sample_rate
-            self._sample_rate = int(sample_rate)
+            next_sample_rate = int(sample_rate)
         if speed is not None:
             next_opts.speed = speed
 
@@ -203,6 +204,7 @@ class TTS(tts.TTS):
             voice=next_opts.voice,
         )
         self._opts = next_opts
+        self._sample_rate = next_sample_rate
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -474,12 +476,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                             logger.debug("Vakyam TTS utterance cancelled")
                             break
                         if session.last_result and session.last_result.truncated:
-                            reason = session.last_result.truncation_reason
                             deferred_error = APIStatusError(
-                                "Vakyam TTS utterance was truncated"
-                                + (f": {reason}" if reason else ""),
+                                "Vakyam TTS utterance was truncated",
                                 status_code=500,
-                                body={"reason": reason},
                                 retryable=False,
                             )
                             break

@@ -114,6 +114,34 @@ def test_update_options() -> None:
     assert tts._pool_for(tts._opts) is not old_pool
 
 
+def test_update_options_invalid_sample_rate_is_atomic() -> None:
+    from livekit.plugins.vakyam import TTS
+
+    tts = TTS(api_key="test-key")
+    original_opts = tts._opts
+    original_sample_rate = tts.sample_rate
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        tts.update_options(sample_rate=22050)
+
+    assert tts._opts == original_opts
+    assert tts.sample_rate == original_sample_rate
+
+
+def test_update_options_mixed_invalid_values_is_atomic() -> None:
+    from livekit.plugins.vakyam import TTS
+
+    tts = TTS(api_key="test-key")
+    original_opts = tts._opts
+    original_sample_rate = tts.sample_rate
+
+    with pytest.raises(ValueError, match="voice"):
+        tts.update_options(sample_rate=16000, voice="vc_")
+
+    assert tts._opts == original_opts
+    assert tts.sample_rate == original_sample_rate
+
+
 def test_websocket_url_from_https() -> None:
     from livekit.plugins.vakyam._utils import websocket_url
 
@@ -655,13 +683,37 @@ async def test_synthesize_stream_cancel_drains_until_cancellation() -> None:
 def test_raise_http_error_parses_envelope() -> None:
     from livekit.plugins.vakyam._utils import raise_http_error
 
-    with pytest.raises(APIStatusError, match="Too many requests") as exc_info:
+    with pytest.raises(APIStatusError, match="status 429") as exc_info:
         raise_http_error(
             429,
             json.dumps({"error": {"code": "rate_limit_exceeded", "message": "Too many requests."}}),
         )
     assert exc_info.value.status_code == 429
     assert exc_info.value.retryable is True
+    assert exc_info.value.body == {"status_code": 429, "error_code": "rate_limit_exceeded"}
+    assert "Too many requests" not in str(exc_info.value)
+
+
+def test_raise_http_error_does_not_retain_raw_response() -> None:
+    from livekit.plugins.vakyam._utils import raise_http_error
+
+    secret = "customer text and bearer secret"
+    with pytest.raises(APIStatusError) as exc_info:
+        raise_http_error(500, json.dumps({"error": {"message": secret}}))
+
+    assert exc_info.value.body == {"status_code": 500}
+    assert secret not in str(exc_info.value)
+
+
+def test_raise_ws_error_does_not_retain_raw_event() -> None:
+    from livekit.plugins.vakyam._utils import raise_ws_error
+
+    secret = "customer text and bearer secret"
+    with pytest.raises(APIStatusError) as exc_info:
+        raise_ws_error({"type": "error", "error": {"code": "internal_error", "message": secret}})
+
+    assert exc_info.value.body == {"type": "error", "code": "internal_error"}
+    assert secret not in str(exc_info.value)
 
 
 def test_websocket_auth_close_is_not_retryable() -> None:
@@ -678,6 +730,8 @@ def test_websocket_auth_close_is_not_retryable() -> None:
     assert isinstance(error, APIStatusError)
     assert error.status_code == 401
     assert error.retryable is False
+    assert error.body is None
+    assert "invalid key" not in str(error)
 
 
 def test_websocket_internal_close_is_retryable() -> None:
@@ -694,3 +748,5 @@ def test_websocket_internal_close_is_retryable() -> None:
     assert isinstance(error, APIStatusError)
     assert error.status_code == 1011
     assert error.retryable is True
+    assert error.body is None
+    assert "session lost" not in str(error)

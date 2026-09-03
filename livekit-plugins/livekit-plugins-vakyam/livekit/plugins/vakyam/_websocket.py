@@ -366,7 +366,6 @@ def _websocket_connection_error(
     """Translate WebSocket close codes without exposing request headers."""
     received = getattr(exc, "rcvd", None)
     code = getattr(received, "code", None)
-    reason = getattr(received, "reason", None)
     if code is None:
         code = getattr(exc, "code", None)
 
@@ -374,14 +373,12 @@ def _websocket_connection_error(
         return APIStatusError(
             "Vakyam TTS authentication failed",
             status_code=401,
-            body={"close_code": code, "reason": reason},
             retryable=False,
         )
     if isinstance(code, int):
         return APIStatusError(
             f"{message} (WebSocket closed with code {code})",
             status_code=code,
-            body={"close_code": code, "reason": reason},
             retryable=code in {1011, 4002},
         )
     return APIConnectionError(f"{message}: {type(exc).__name__}")
