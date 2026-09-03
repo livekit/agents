@@ -53,18 +53,32 @@ class CGroupV2CPUMonitor(CPUMonitor):
         return 1.0 * int(quota) / period
 
     def cpu_percent(self, interval: float = 0.5) -> float:
+        t0 = time.monotonic()
         cpu_usage_start = self._read_cpu_usage()
         time.sleep(interval)
         cpu_usage_end = self._read_cpu_usage()
+        elapsed = time.monotonic() - t0
+        if elapsed <= 0:
+            return 0.0
+
         cpu_usage_diff = cpu_usage_end - cpu_usage_start
+        num_cpus = self.cpu_count()
+        # Discard torn/non-monotonic root-cgroup samples (negative or > available CPUs).
+        max_diff_usec = elapsed * num_cpus * 1_000_000
+        if cpu_usage_diff < 0 or cpu_usage_diff > max_diff_usec * 1.05:
+            logger.warning(
+                "discarding impossible cgroup v2 cpu sample: start=%s end=%s elapsed=%.3fs ncpu=%s",
+                cpu_usage_start,
+                cpu_usage_end,
+                elapsed,
+                num_cpus,
+            )
+            return 0.0
 
         # microseconds to seconds
         cpu_usage_seconds = cpu_usage_diff / 1_000_000
-
-        num_cpus = self.cpu_count()
-        cpu_usage_percent = cpu_usage_seconds / (interval * num_cpus)
-
-        return min(cpu_usage_percent, 1)
+        cpu_usage_percent = cpu_usage_seconds / (elapsed * num_cpus)
+        return max(min(cpu_usage_percent, 1.0), 0.0)
 
     def _read_cpu_max(self) -> tuple[str, int]:
         try:
@@ -77,8 +91,23 @@ class CGroupV2CPUMonitor(CPUMonitor):
             period = 100000
         return quota, period
 
+    def _cpu_stat_path(self) -> str:
+        """Prefer this process's cgroup; fall back to the root cgroup."""
+        try:
+            with open("/proc/self/cgroup") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("0::"):
+                        rel = line.split("::", 1)[1]
+                        path = f"/sys/fs/cgroup{rel}/cpu.stat"
+                        if os.path.exists(path):
+                            return path
+        except OSError:
+            pass
+        return "/sys/fs/cgroup/cpu.stat"
+
     def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat") as f:
+        with open(self._cpu_stat_path()) as f:
             for line in f:
                 if line.startswith("usage_usec"):
                     return int(line.split()[1])
