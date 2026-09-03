@@ -228,7 +228,7 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-def conversation_id() -> str | None:
+def _conversation_id() -> str | None:
     """The convention forbids fabricating one (no UUIDs, trace ids or content hashes),
     so this is the room sid LiveKit already stamps on every record."""
     from ..job import get_job_context
@@ -286,7 +286,7 @@ def set_request_attributes(
     if stream:
         # "if and only if the request is streaming; if unset, assumed non-streaming"
         attrs[trace_types.ATTR_GEN_AI_REQUEST_STREAM] = True
-    if (conv := conversation_id()) is not None:
+    if (conv := _conversation_id()) is not None:
         attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if output_type:
         attrs[trace_types.ATTR_GEN_AI_OUTPUT_TYPE] = output_type
@@ -390,7 +390,7 @@ def set_agent_attributes(span: trace.Span, *, operation: str, agent_name: str) -
         trace_types.ATTR_GEN_AI_OPERATION_NAME: operation,
         trace_types.ATTR_GEN_AI_AGENT_NAME: agent_name,
     }
-    if (conv := conversation_id()) is not None:
+    if (conv := _conversation_id()) is not None:
         attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 
@@ -404,7 +404,7 @@ def set_workflow_attributes(span: trace.Span, *, name: str) -> None:
         trace_types.ATTR_GEN_AI_OPERATION_NAME: trace_types.GenAIOperationName.INVOKE_WORKFLOW,
         trace_types.ATTR_GEN_AI_WORKFLOW_NAME: name,
     }
-    if (conv := conversation_id()) is not None:
+    if (conv := _conversation_id()) is not None:
         attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 

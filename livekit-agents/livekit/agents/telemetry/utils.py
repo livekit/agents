@@ -100,7 +100,6 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
         trace_types.ATTR_REALTIME_MODEL_METRICS: ev.model_dump_json(),
         trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: ev.input_tokens,
         trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: ev.output_tokens,
-        # official per-modality usage names
         trace_types.ATTR_GEN_AI_USAGE_TEXT_INPUT_TOKENS: ev.input_token_details.text_tokens,
         trace_types.ATTR_GEN_AI_USAGE_AUDIO_INPUT_TOKENS: ev.input_token_details.audio_tokens,
         trace_types.ATTR_GEN_AI_USAGE_IMAGE_INPUT_TOKENS: ev.input_token_details.image_tokens,

@@ -83,7 +83,6 @@ _connection_acquire_time = _meter.create_histogram(
 )
 
 
-# -- OpenTelemetry GenAI semantic-convention instruments --
 # https://github.com/open-telemetry/semantic-conventions-genai (docs/gen-ai/gen-ai-metrics.md).
 # Emitted alongside the `lk.agents.*` instruments above so a GenAI-aware backend
 # (Datadog Agent Observability, Langfuse) gets the metrics under the names it expects.

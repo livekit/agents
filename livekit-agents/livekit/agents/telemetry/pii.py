@@ -91,7 +91,7 @@ def redact_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
     return redacted
 
 
-def contains_pii(attributes: Mapping[str, Any] | None) -> bool:
+def _contains_pii(attributes: Mapping[str, Any] | None) -> bool:
     return any(is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES for k in attributes or ())
 
 
@@ -133,7 +133,7 @@ class PIIRedactingSpanProcessor(SpanProcessor):
 
         events = span.events
         redacted_events = _redact_events(events)
-        if not contains_pii(attributes) and redacted_events is None:
+        if not _contains_pii(attributes) and redacted_events is None:
             return
 
         if not project_redaction:
@@ -197,7 +197,7 @@ class PIIRedactingLogProcessor(LogRecordProcessor):
             return
 
         record = log_data.log_record
-        if contains_pii(record.attributes):
+        if _contains_pii(record.attributes):
             record.attributes = redact_attributes(record.attributes)
 
     def shutdown(self) -> None:
@@ -217,7 +217,7 @@ def _redact_events(events: Sequence[Event]) -> list[Event] | None:
         if event.name in PII_EVENT_NAMES:
             changed = True
             continue
-        if contains_pii(event.attributes):
+        if _contains_pii(event.attributes):
             changed = True
             kept.append(
                 SdkEvent(

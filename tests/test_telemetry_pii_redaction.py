@@ -78,13 +78,6 @@ def test_allow_pii_lets_a_granted_provider_see_everything() -> None:
     assert trace_types.EVENT_GEN_AI_USER_MESSAGE in {e.name for e in span.events}
 
 
-def test_the_project_flag_overrides_allow_pii() -> None:
-    # redaction mandated in the dashboard is not weakened by a local grant
-    span = _emit(allow_pii=True, redaction=True).get_finished_spans()[0]
-
-    assert not set(_PII_ATTRS) & set(span.attributes or {})
-
-
 def test_livekit_cloud_still_receives_pii() -> None:
     # what Cloud may keep is decided at its collector, from the project's setting
     exporter = _emit()
@@ -96,11 +89,13 @@ def test_livekit_cloud_still_receives_pii() -> None:
     assert trace_types.EVENT_GEN_AI_USER_MESSAGE in {e.name for e in restored.events}
 
 
-def test_the_project_flag_withholds_pii_from_livekit_cloud_too() -> None:
-    stripped = _emit(redaction=True).get_finished_spans()[0]
+def test_the_project_flag_withholds_pii_from_every_destination() -> None:
+    # redaction mandated in the dashboard is not weakened by a local grant, and nothing is
+    # stashed for LiveKit Cloud to restore
+    stripped = _emit(allow_pii=True, redaction=True).get_finished_spans()[0]
 
-    assert pii.restore_pii(stripped) is stripped
     assert not set(_PII_ATTRS) & set(stripped.attributes or {})
+    assert pii.restore_pii(stripped) is stripped
 
 
 def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:

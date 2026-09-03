@@ -88,11 +88,9 @@ ATTR_E2E_LATENCY = "lk.e2e_latency"
 # spec flags as sensitive are listed in `telemetry.pii.GEN_AI_PII_ATTRIBUTES`, since a
 # standard name cannot carry the `lk.pii.` marker segment.
 
-# -- operation & provider ---------------------------------------------------
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
 ATTR_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
 
-# -- request ----------------------------------------------------------------
 ATTR_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 ATTR_GEN_AI_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
 ATTR_GEN_AI_REQUEST_CHOICE_COUNT = "gen_ai.request.choice.count"
@@ -109,14 +107,12 @@ ATTR_GEN_AI_REQUEST_REASONING_LEVEL = "gen_ai.request.reasoning.level"
 ATTR_GEN_AI_REQUEST_PREVIOUS_RESPONSE_ID = "gen_ai.request.previous_response.id"
 ATTR_GEN_AI_REQUEST_STREAM_CURSOR = "gen_ai.request.stream_cursor"
 
-# -- response ---------------------------------------------------------------
 ATTR_GEN_AI_RESPONSE_ID = "gen_ai.response.id"
 ATTR_GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
 ATTR_GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
 ATTR_GEN_AI_RESPONSE_STATUS = "gen_ai.response.status"
 ATTR_GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK = "gen_ai.response.time_to_first_chunk"
 
-# -- usage ------------------------------------------------------------------
 ATTR_GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 ATTR_GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.cache_read.input_tokens"
@@ -133,17 +129,14 @@ ATTR_GEN_AI_USAGE_IMAGE_OUTPUT_TOKENS = "gen_ai.usage.image.output_tokens"
 ATTR_GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS = "gen_ai.usage.image.cache_read.input_tokens"
 ATTR_GEN_AI_TOKEN_TYPE = "gen_ai.token.type"
 
-# -- conversation -----------------------------------------------------------
 ATTR_GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
 ATTR_GEN_AI_CONVERSATION_COMPACTED = "gen_ai.conversation.compacted"
 
-# -- agent ------------------------------------------------------------------
 ATTR_GEN_AI_AGENT_ID = "gen_ai.agent.id"
 ATTR_GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 ATTR_GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
 ATTR_GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
 
-# -- tools ------------------------------------------------------------------
 ATTR_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
 ATTR_GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
 ATTR_GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
@@ -152,13 +145,11 @@ ATTR_GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
 ATTR_GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
 ATTR_GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 
-# -- content (opt-in, sensitive) --------------------------------------------
 ATTR_GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
 ATTR_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
 ATTR_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 ATTR_GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
 
-# -- retrieval / memory / evaluation / prompt / workflow --------------------
 ATTR_GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
 ATTR_GEN_AI_EMBEDDINGS_DIMENSION_COUNT = "gen_ai.embeddings.dimension.count"
 ATTR_GEN_AI_RETRIEVAL_DOCUMENTS = "gen_ai.retrieval.documents"
@@ -178,7 +169,6 @@ ATTR_GEN_AI_PROMPT_VERSION = "gen_ai.prompt.version"
 ATTR_GEN_AI_PROMPT_VARIABLE = "gen_ai.prompt.variable"  # template: gen_ai.prompt.variable.<key>
 ATTR_GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
 
-# -- shared (non gen_ai namespace) attributes used on GenAI spans -----------
 ATTR_ERROR_TYPE = "error.type"
 ATTR_SERVER_ADDRESS = "server.address"
 ATTR_SERVER_PORT = "server.port"
