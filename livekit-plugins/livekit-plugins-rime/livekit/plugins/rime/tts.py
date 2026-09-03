@@ -44,7 +44,14 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
-from ._websocket_v1 import WebSocketProtocol, model_from_websocket_url, validate_endpoint_host
+from ._websocket_v1 import (
+    DEFAULT_AUDIO_FORMAT,
+    RimeAudioFormat,
+    WebSocketProtocol,
+    model_from_websocket_url,
+    validate_audio_format,
+    validate_endpoint_host,
+)
 from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
 from .log import logger
@@ -74,6 +81,7 @@ class _TTSOptions:
     model: TTSModels | str
     speaker: str
     language: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT
     sample_rate: NotGivenOr[int] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     coda_options: _CodaOptions | None = None
@@ -149,9 +157,7 @@ def _check_time_scale_factor_supported(
     model: TTSModels | str, time_scale_factor: NotGivenOr[float]
 ) -> None:
     if is_given(time_scale_factor) and not supports_time_scale_factor(model):
-        raise ValueError(
-            "time_scale_factor is not supported by the mistv2 model; use mistv3 or coda."
-        )
+        raise ValueError("time_scale_factor is not supported by the mistv2 model")
 
 
 def _resolve_websocket_model(
@@ -172,6 +178,8 @@ def _resolve_websocket_model(
         return model
     if is_given(model):
         raise ValueError("model is derived from websocket_url; omit model")
+    if endpoint_model == "mist":
+        return MODEL_MIST_V3
     return endpoint_model
 
 
@@ -185,6 +193,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
+        audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -230,12 +239,13 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
+        audio_format: NotGivenOr[RimeAudioFormat | str] = NOT_GIVEN,
         # Coda options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        # Shared by mistv3 and coda (HTTP and v1 WebSocket)
+        # Shared by Mist and Coda (HTTP and v1 WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Supported by HTTP and the legacy ws3 interface
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -252,13 +262,20 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         allow_custom_endpoint: bool = False,
     ) -> None:
         websocket_v1_url = websocket_url if is_given(websocket_url) else None
+        if websocket_v1_url is None and is_given(audio_format):
+            raise ValueError("audio_format is only supported with the Rime v1 WebSocket interface")
+        resolved_audio_format = (
+            validate_audio_format(audio_format) if is_given(audio_format) else DEFAULT_AUDIO_FORMAT
+        )
         if websocket_v1_url is not None:
             if is_given(base_url):
                 raise ValueError("websocket_url cannot be used with base_url")
             if use_websocket:
                 raise ValueError("websocket_url enables WebSocket streaming; omit use_websocket")
             if is_given(speed_alpha):
-                raise ValueError("speed_alpha is not supported by the Rime v1 WebSocket protocol")
+                raise ValueError(
+                    "speed_alpha belongs to the legacy Rime interfaces; use time_scale_factor"
+                )
             if any(
                 is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
             ):
@@ -333,6 +350,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             model=resolved_model,
             speaker=speaker,
             language=lang,
+            audio_format=resolved_audio_format,
             sample_rate=sample_rate,
             time_scale_factor=time_scale_factor,
         )
@@ -473,6 +491,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             model=self._opts.model,
             speaker=self._opts.speaker,
             language=(str(self._opts.language) if is_given(self._opts.language) else NOT_GIVEN),
+            audio_format=self._opts.audio_format,
             sampling_rate=self.sample_rate,
             time_scale_factor=(
                 self._opts.time_scale_factor
@@ -515,6 +534,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        audio_format: NotGivenOr[RimeAudioFormat | str] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 parameters
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -524,7 +544,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         websocket_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        updated_audio_format: RimeAudioFormat | None = None
         if self._websocket_v1_adapter is not None:
+            if is_given(audio_format):
+                updated_audio_format = validate_audio_format(audio_format)
             if is_given(model) and not is_given(websocket_url):
                 raise ValueError(
                     "model can only be updated together with websocket_url for Rime v1"
@@ -552,6 +575,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         elif is_given(websocket_url):
             raise ValueError("websocket_url can only update a TTS constructed with websocket_url")
         else:
+            if is_given(audio_format):
+                raise ValueError(
+                    "audio_format is only supported with the Rime v1 WebSocket interface"
+                )
             effective_model = model if is_given(model) else self._opts.model
 
         if is_given(base_url):
@@ -589,6 +616,8 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             self._opts.language = lang
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+        if updated_audio_format is not None:
+            self._opts.audio_format = updated_audio_format
         if is_given(time_scale_factor):
             self._opts.time_scale_factor = time_scale_factor
         if self._opts.model == MODEL_CODA and self._opts.coda_options is not None:

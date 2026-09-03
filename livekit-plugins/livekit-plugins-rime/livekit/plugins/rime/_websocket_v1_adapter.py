@@ -41,6 +41,7 @@ class V1SynthesisOptions:
     model: str
     speaker: str
     language: NotGivenOr[str] = NOT_GIVEN
+    audio_format: _websocket_v1.RimeAudioFormat = _websocket_v1.DEFAULT_AUDIO_FORMAT
     sampling_rate: NotGivenOr[int] = NOT_GIVEN
     time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
@@ -54,6 +55,7 @@ class V1SynthesisOptions:
             model=self.model,
             speaker=self.speaker,
             language=self.language,
+            audio_format=self.audio_format,
             sampling_rate=self.sampling_rate if is_given(self.sampling_rate) else None,
             time_scale_factor=(
                 self.time_scale_factor if is_given(self.time_scale_factor) else None
