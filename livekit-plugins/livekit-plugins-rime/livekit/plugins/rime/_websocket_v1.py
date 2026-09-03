@@ -622,6 +622,7 @@ def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None)
         status_code=status_codes.get(kind, 500),
         request_id=request_id,
         body={"kind": safe_kind},
+        retryable=False if kind == "unimplemented" else None,
     )
 
 
