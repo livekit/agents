@@ -62,11 +62,24 @@ class CGroupV2CPUMonitor(CPUMonitor):
                 break
             cgroup_path = parent
 
-        return quota_limit if quota_limit is not None else psutil.cpu_count() or 1.0
+        capacity_limits = [quota_limit] if quota_limit is not None else []
+        host_cpus = psutil.cpu_count()
+        if host_cpus is not None and host_cpus > 0:
+            capacity_limits.append(float(host_cpus))
+        # Linux affinity is already intersected with cpuset restrictions.
+        try:
+            affinity_cpus = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            pass
+        else:
+            if affinity_cpus > 0:
+                capacity_limits.append(float(affinity_cpus))
+
+        return min(capacity_limits) if capacity_limits else 1.0
 
     def cpu_percent(self, interval: float = 0.5) -> float:
-        t0 = time.monotonic()
         cpu_usage_start = self._read_cpu_usage()
+        t0 = time.monotonic()
         time.sleep(interval)
         cpu_usage_end = self._read_cpu_usage()
         elapsed = time.monotonic() - t0
