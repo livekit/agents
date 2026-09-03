@@ -44,10 +44,20 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
-from ._websocket_v1_adapter import CodaV1SynthesisOptions, WebSocketV1Adapter
+from ._websocket_v1 import WebSocketProtocol, model_from_websocket_url
+from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
 from .log import logger
-from .models import DefaultCodaVoice, DefaultMistVoice, TTSModels
+from .models import (
+    MODEL_CODA,
+    MODEL_MIST_V3,
+    DefaultCodaVoice,
+    DefaultMistVoice,
+    TTSModels,
+    is_mist_model,
+    supports_reduce_latency,
+    supports_time_scale_factor,
+)
 
 CODA_MODEL_TIMEOUT = 60 * 4
 MIST_MODEL_TIMEOUT = 30
@@ -63,6 +73,9 @@ MIST_V3_DEFAULT_SAMPLE_RATE = 24000
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
+    language: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
+    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     coda_options: _CodaOptions | None = None
     mist_options: _MistOptions | None = None
 
@@ -73,25 +86,15 @@ class _CodaOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
-    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
-    sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
-    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
 @dataclass
 class _MistOptions:
-    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
-    sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
     reduce_latency: NotGivenOr[bool] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
-    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
-
-
-def _is_mist_model(model: TTSModels | str) -> bool:
-    return "mist" in model
 
 
 def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
@@ -100,34 +103,32 @@ def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
 
 
 def _timeout_for_model(model: TTSModels | str) -> int:
-    if model == "coda":
+    if model == MODEL_CODA:
         return CODA_MODEL_TIMEOUT
     return MIST_MODEL_TIMEOUT
 
 
 def _default_sample_rate(model: TTSModels | str) -> int:
-    if model == "coda":
+    if model == MODEL_CODA:
         return CODA_DEFAULT_SAMPLE_RATE
-    if model == "mistv3":
+    if model == MODEL_MIST_V3:
         return MIST_V3_DEFAULT_SAMPLE_RATE
     return MIST_V2_DEFAULT_SAMPLE_RATE
 
 
 def _requested_sample_rate(options: _TTSOptions) -> NotGivenOr[int]:
-    if options.model == "coda" and options.coda_options is not None:
-        return options.coda_options.sample_rate
-    if _is_mist_model(options.model) and options.mist_options is not None:
-        return options.mist_options.sample_rate
-    return NOT_GIVEN
+    return options.sample_rate
 
 
 def _model_params(opts: _TTSOptions) -> dict[str, object]:
     """Per-model option fields shared between the HTTP body and the WS query string."""
     params: dict[str, object] = {}
-    if opts.model == "coda" and opts.coda_options is not None:
+    if is_given(opts.language):
+        params["lang"] = opts.language
+    if is_given(opts.time_scale_factor) and supports_time_scale_factor(opts.model):
+        params["timeScaleFactor"] = opts.time_scale_factor
+    if opts.model == MODEL_CODA and opts.coda_options is not None:
         co = opts.coda_options
-        if is_given(co.lang):
-            params["lang"] = co.lang
         if is_given(co.repetition_penalty):
             params["repetition_penalty"] = co.repetition_penalty
         if is_given(co.temperature):
@@ -138,28 +139,21 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["max_tokens"] = co.max_tokens
         if is_given(co.speed_alpha):
             params["speedAlpha"] = co.speed_alpha
-        if is_given(co.time_scale_factor):
-            params["timeScaleFactor"] = co.time_scale_factor
-    elif _is_mist_model(opts.model) and opts.mist_options is not None:
+    elif is_mist_model(opts.model) and opts.mist_options is not None:
         mo = opts.mist_options
-        if is_given(mo.lang):
-            params["lang"] = mo.lang
         if is_given(mo.speed_alpha):
             params["speedAlpha"] = mo.speed_alpha
         if is_given(mo.pause_between_brackets):
             params["pauseBetweenBrackets"] = mo.pause_between_brackets
         if is_given(mo.phonemize_between_brackets):
             params["phonemizeBetweenBrackets"] = mo.phonemize_between_brackets
-        # time_scale_factor is supported by mistv3 but not mistv2.
-        if is_given(mo.time_scale_factor) and opts.model != "mistv2":
-            params["timeScaleFactor"] = mo.time_scale_factor
     return params
 
 
 def _check_time_scale_factor_supported(
     model: TTSModels | str, time_scale_factor: NotGivenOr[float]
 ) -> None:
-    if is_given(time_scale_factor) and model == "mistv2":
+    if is_given(time_scale_factor) and not supports_time_scale_factor(model):
         raise ValueError(
             "time_scale_factor is not supported by the mistv2 model; use mistv3 or coda."
         )
@@ -171,10 +165,13 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self,
         *,
         websocket_url: str,
-        speaker: str = "astra",
+        websocket_protocol: WebSocketProtocol = "binary",
+        speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -210,6 +207,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         websocket_url: NotGivenOr[str] = NOT_GIVEN,
+        websocket_protocol: WebSocketProtocol = "binary",
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
@@ -220,7 +218,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         # Shared by mistv3 and coda (HTTP and v1 WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
-        # Supported by all models; the only speed param that works over WebSocket
+        # Supported by HTTP and the legacy ws3 interface
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
         # Supported by all models
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
@@ -238,7 +236,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             if is_given(base_url):
                 raise ValueError("websocket_url cannot be used with base_url")
             if is_given(model):
-                raise ValueError('websocket_url selects model="coda"; do not pass model')
+                raise ValueError("model is derived from websocket_url; omit model")
             if use_websocket:
                 raise ValueError("websocket_url enables WebSocket streaming; omit use_websocket")
             if is_given(speed_alpha):
@@ -247,18 +245,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
             ):
                 raise ValueError(
-                    "Coda generation controls are not supported by the Rime v1 WebSocket protocol"
+                    "generation controls are not supported by the Rime v1 WebSocket protocol"
                 )
-            if any(
-                is_given(value)
-                for value in (
-                    reduce_latency,
-                    pause_between_brackets,
-                    phonemize_between_brackets,
-                    segment,
-                )
-            ):
-                raise ValueError("websocket_url cannot be used with ws3 or Mist options")
+            if is_given(reduce_latency) or is_given(segment):
+                raise ValueError("websocket_url cannot be used with ws3-only options")
             use_websocket = True
             resolved_base_url = RIME_BASE_URL
         elif is_given(base_url):
@@ -269,17 +259,25 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             resolved_base_url = RIME_WS_BASE_URL if use_websocket else RIME_BASE_URL
 
         if websocket_v1_url is not None:
-            resolved_model = "coda"
-            model_is_explicit = False
+            resolved_model = model_from_websocket_url(websocket_v1_url)
+            model_is_explicit = resolved_model != MODEL_CODA
         elif is_given(model):
             _warn_if_arcana(model)
             resolved_model = model
             model_is_explicit = True
         else:
-            resolved_model = "coda"
+            resolved_model = MODEL_CODA
             model_is_explicit = False
 
         _check_time_scale_factor_supported(resolved_model, time_scale_factor)
+        if (
+            websocket_v1_url is not None
+            and not is_mist_model(resolved_model)
+            and any(
+                is_given(value) for value in (pause_between_brackets, phonemize_between_brackets)
+            )
+        ):
+            raise ValueError("Mist options require a Mist model")
         resolved_sample_rate = (
             sample_rate if is_given(sample_rate) else _default_sample_rate(resolved_model)
         )
@@ -291,7 +289,6 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             sample_rate=resolved_sample_rate,
             num_channels=NUM_CHANNELS,
         )
-        self._requested_sample_rate = sample_rate
         resolved_api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
         if not resolved_api_key:
             raise ValueError(
@@ -302,9 +299,9 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         if not is_given(speaker):
             if not model_is_explicit:
                 speaker = "astra"
-            elif _is_mist_model(resolved_model):
+            elif is_mist_model(resolved_model):
                 speaker = DefaultMistVoice
-            elif resolved_model == "coda":
+            elif resolved_model == MODEL_CODA:
                 speaker = DefaultCodaVoice
             else:
                 speaker = "astra"
@@ -312,27 +309,24 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self._opts = _TTSOptions(
             model=resolved_model,
             speaker=speaker,
+            language=lang,
+            sample_rate=sample_rate,
+            time_scale_factor=time_scale_factor,
         )
-        if resolved_model == "coda":
+        if resolved_model == MODEL_CODA:
             self._opts.coda_options = _CodaOptions(
                 repetition_penalty=repetition_penalty,
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                lang=lang,
-                sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
-                time_scale_factor=time_scale_factor,
             )
-        elif _is_mist_model(resolved_model):
+        elif is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
-                lang=lang,
-                sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
                 reduce_latency=reduce_latency,
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
-                time_scale_factor=time_scale_factor,
             )
         self._session = http_session
         self._base_url = resolved_base_url
@@ -346,6 +340,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self._websocket_v1_adapter = (
             WebSocketV1Adapter(
                 websocket_v1_url=websocket_v1_url,
+                websocket_protocol=websocket_protocol,
                 api_key=self._api_key,
                 ensure_session=self._ensure_session,
                 sentence_tokenizer=tokenizer if is_given(tokenizer) else None,
@@ -393,7 +388,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
             "segment": self._segment,
             **_model_params(self._opts),
         }
-        requested_sample_rate = self._requested_sample_rate
+        requested_sample_rate = self._opts.sample_rate
         if is_given(requested_sample_rate):
             params["samplingRate"] = requested_sample_rate
         encoded = {
@@ -440,7 +435,7 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         if self._websocket_v1_adapter is not None:
             s = self._websocket_v1_adapter.stream(
                 tts_instance=self,
-                options=self._coda_v1_synthesis_options(),
+                options=self._v1_synthesis_options(),
                 conn_options=conn_options,
             )
         else:
@@ -448,16 +443,22 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         self._streams.add(s)
         return s
 
-    def _coda_v1_synthesis_options(self) -> CodaV1SynthesisOptions:
-        coda = self._opts.coda_options
-        if coda is None:
-            raise APIError("Rime v1 requires Coda options", retryable=False)
-
-        return CodaV1SynthesisOptions(
+    def _v1_synthesis_options(self) -> V1SynthesisOptions:
+        mist = self._opts.mist_options if is_mist_model(self._opts.model) else None
+        return V1SynthesisOptions(
+            model=self._opts.model,
             speaker=self._opts.speaker,
-            language=str(coda.lang) if is_given(coda.lang) else NOT_GIVEN,
-            sampling_rate=self._requested_sample_rate,
-            time_scale_factor=coda.time_scale_factor,
+            language=(str(self._opts.language) if is_given(self._opts.language) else NOT_GIVEN),
+            sampling_rate=self.sample_rate,
+            time_scale_factor=(
+                self._opts.time_scale_factor
+                if supports_time_scale_factor(self._opts.model)
+                else NOT_GIVEN
+            ),
+            pause_between_brackets=(mist.pause_between_brackets if mist is not None else NOT_GIVEN),
+            phonemize_between_brackets=(
+                mist.phonemize_between_brackets if mist is not None else NOT_GIVEN
+            ),
         )
 
     async def aclose(self) -> None:
@@ -501,27 +502,32 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
     ) -> None:
         if self._websocket_v1_adapter is not None:
             if is_given(model):
-                raise ValueError('websocket_url selects model="coda"; model cannot be updated')
-            if is_given(base_url):
-                raise ValueError("use websocket_url to update a Coda v1 endpoint")
-            if is_given(speed_alpha) or any(
-                is_given(value)
-                for value in (
-                    reduce_latency,
-                    pause_between_brackets,
-                    phonemize_between_brackets,
+                raise ValueError(
+                    "model is derived from websocket_url; update websocket_url instead"
                 )
-            ):
-                raise ValueError("Coda v1 cannot be updated with ws3 or Mist options")
+            if is_given(base_url):
+                raise ValueError("use websocket_url to update a Rime v1 endpoint")
+            if is_given(speed_alpha) or is_given(reduce_latency):
+                raise ValueError("Rime v1 cannot be updated with ws3-only options")
             if any(
                 is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
             ):
-                raise ValueError("Coda v1 does not support generation controls")
+                raise ValueError("Rime v1 does not support generation controls")
+            effective_model = (
+                model_from_websocket_url(websocket_url)
+                if is_given(websocket_url)
+                else self._opts.model
+            )
+            if not is_mist_model(effective_model) and any(
+                is_given(value) for value in (pause_between_brackets, phonemize_between_brackets)
+            ):
+                raise ValueError("Mist options require a Mist model")
         elif is_given(websocket_url):
             raise ValueError("websocket_url can only update a TTS constructed with websocket_url")
+        else:
+            effective_model = model if is_given(model) else self._opts.model
 
         _warn_if_arcana(model)
-        effective_model = model if is_given(model) else self._opts.model
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
         # The WS URL is bound when its pool connects. Refresh the pool when that URL changes.
@@ -531,28 +537,32 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
         if is_given(websocket_url):
             assert self._websocket_v1_adapter is not None
             self._websocket_v1_adapter.update_endpoint(websocket_url)
+            self._opts.model = effective_model
+            self._total_timeout = _timeout_for_model(effective_model)
+            if effective_model == MODEL_CODA and self._opts.coda_options is None:
+                self._opts.coda_options = _CodaOptions()
+            elif is_mist_model(effective_model) and self._opts.mist_options is None:
+                self._opts.mist_options = _MistOptions()
         if is_given(base_url):
             self._base_url = base_url
         if is_given(model):
             self._opts.model = model
             self._total_timeout = _timeout_for_model(model)
 
-            if model == "coda" and self._opts.coda_options is None:
+            if model == MODEL_CODA and self._opts.coda_options is None:
                 self._opts.coda_options = _CodaOptions()
-            elif _is_mist_model(model) and self._opts.mist_options is None:
+            elif is_mist_model(model) and self._opts.mist_options is None:
                 self._opts.mist_options = _MistOptions()
-
-            if is_given(self._requested_sample_rate):
-                if model == "coda" and self._opts.coda_options is not None:
-                    self._opts.coda_options.sample_rate = self._requested_sample_rate
-                elif _is_mist_model(model) and self._opts.mist_options is not None:
-                    self._opts.mist_options.sample_rate = self._requested_sample_rate
 
         if is_given(speaker):
             self._opts.speaker = speaker
+        if is_given(lang):
+            self._opts.language = lang
         if is_given(sample_rate):
-            self._requested_sample_rate = sample_rate
-        if self._opts.model == "coda" and self._opts.coda_options is not None:
+            self._opts.sample_rate = sample_rate
+        if is_given(time_scale_factor):
+            self._opts.time_scale_factor = time_scale_factor
+        if self._opts.model == MODEL_CODA and self._opts.coda_options is not None:
             if is_given(repetition_penalty):
                 self._opts.coda_options.repetition_penalty = repetition_penalty
             if is_given(temperature):
@@ -561,20 +571,10 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 self._opts.coda_options.top_p = top_p
             if is_given(max_tokens):
                 self._opts.coda_options.max_tokens = max_tokens
-            if is_given(lang):
-                self._opts.coda_options.lang = lang
-            if is_given(sample_rate):
-                self._opts.coda_options.sample_rate = sample_rate
             if is_given(speed_alpha):
                 self._opts.coda_options.speed_alpha = speed_alpha
-            if is_given(time_scale_factor):
-                self._opts.coda_options.time_scale_factor = time_scale_factor
 
-        elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
-            if is_given(lang):
-                self._opts.mist_options.lang = lang
-            if is_given(sample_rate):
-                self._opts.mist_options.sample_rate = sample_rate
+        elif is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(speed_alpha):
                 self._opts.mist_options.speed_alpha = speed_alpha
             if is_given(reduce_latency):
@@ -583,10 +583,8 @@ class TTS(tts.TTS[Literal["rime_tts_event"]]):
                 self._opts.mist_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mist_options.phonemize_between_brackets = phonemize_between_brackets
-            if is_given(time_scale_factor):
-                self._opts.mist_options.time_scale_factor = time_scale_factor
 
-        requested_sample_rate = self._requested_sample_rate
+        requested_sample_rate = self._opts.sample_rate
         self._sample_rate = (
             requested_sample_rate
             if is_given(requested_sample_rate)
@@ -618,9 +616,9 @@ class ChunkedStream(tts.ChunkedStream):
         requested_sample_rate = _requested_sample_rate(self._opts)
         if is_given(requested_sample_rate):
             payload["samplingRate"] = requested_sample_rate
-        if _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
+        if is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
-            if self._opts.model == "mistv2" and is_given(mist_opts.reduce_latency):
+            if supports_reduce_latency(self._opts.model) and is_given(mist_opts.reduce_latency):
                 payload["reduceLatency"] = mist_opts.reduce_latency
 
         try:

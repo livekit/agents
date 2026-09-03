@@ -17,6 +17,33 @@ from livekit.agents import APIConnectOptions
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_is_mist", "expected_time_scale", "expected_reduce_latency"),
+    [
+        ("coda", False, True, False),
+        ("mistv2", True, False, True),
+        ("mistv3", True, True, False),
+        ("mistv4", True, True, False),
+        ("custom-mist", False, True, False),
+    ],
+)
+def test_model_capabilities(
+    model: str,
+    expected_is_mist: bool,
+    expected_time_scale: bool,
+    expected_reduce_latency: bool,
+) -> None:
+    from livekit.plugins.rime.models import (
+        is_mist_model,
+        supports_reduce_latency,
+        supports_time_scale_factor,
+    )
+
+    assert is_mist_model(model) is expected_is_mist
+    assert supports_time_scale_factor(model) is expected_time_scale
+    assert supports_reduce_latency(model) is expected_reduce_latency
+
+
 def test_model_and_speaker_defaults() -> None:
     from livekit.plugins.rime import TTS
 
@@ -171,7 +198,7 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
     assert events[0].frame.sample_rate == 24000
 
 
-async def test_chunked_stream_copies_nested_sample_rate_options() -> None:
+async def test_chunked_stream_copies_sample_rate_options() -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(api_key="test-key", model="coda", sample_rate=22050)
@@ -179,15 +206,14 @@ async def test_chunked_stream_copies_nested_sample_rate_options() -> None:
     try:
         tts.update_options(sample_rate=16000)
 
-        assert stream._opts.coda_options is not None
-        assert stream._opts.coda_options.sample_rate == 22050
+        assert stream._opts.sample_rate == 22050
         assert stream._sample_rate == 22050
     finally:
         await stream.aclose()
         await tts.aclose()
 
 
-def test_websocket_url_selects_coda_v1() -> None:
+def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
     from livekit.plugins.rime import TTS
 
     tts = TTS(
@@ -200,8 +226,23 @@ def test_websocket_url_selects_coda_v1() -> None:
     assert tts.capabilities.aligned_transcript is False
     assert "websocket_url" in inspect.signature(TTS).parameters
     assert "tokenizer" in inspect.signature(TTS).parameters
-    assert "websocket_protocol" not in inspect.signature(TTS).parameters
+    assert inspect.signature(TTS).parameters["websocket_protocol"].default == "binary"
     assert "sentence_tokenization" not in inspect.signature(TTS).parameters
+
+
+def test_websocket_url_derives_mistv3_model_and_accepts_options() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(
+        api_key="test-key",
+        websocket_url="wss://api.rimetts.com/mistv3/ws",
+        pause_between_brackets=True,
+    )
+
+    assert tts.model == "mistv3"
+    assert tts._opts.speaker == "cove"
+    assert tts._opts.mist_options is not None
+    assert tts._opts.mist_options.pause_between_brackets is True
 
 
 @pytest.mark.parametrize(
@@ -231,13 +272,6 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
         (
             {
                 "websocket_url": "wss://example.com/coda/ws",
-                "model": "mistv2",
-            },
-            'selects model="coda"',
-        ),
-        (
-            {
-                "websocket_url": "wss://example.com/coda/ws",
                 "use_websocket": True,
             },
             "omit use_websocket",
@@ -256,6 +290,27 @@ def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
             },
             "generation controls",
         ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "model": "coda",
+            },
+            "model is derived",
+        ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "websocket_protocol": "auto",
+            },
+            "binary.*json",
+        ),
+        (
+            {
+                "websocket_url": "wss://example.com/coda/ws",
+                "pause_between_brackets": True,
+            },
+            "Mist options",
+        ),
     ],
 )
 def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) -> None:
@@ -272,3 +327,26 @@ def test_v1_rejects_generation_controls_on_update() -> None:
 
     with pytest.raises(ValueError, match="generation controls"):
         tts.update_options(top_p=0.8)
+
+
+def test_v1_derives_model_when_endpoint_is_updated() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(api_key="test-key", websocket_url="wss://example.com/coda/ws")
+    tts.update_options(
+        websocket_url="wss://example.com/mistv3/ws",
+        pause_between_brackets=True,
+    )
+
+    assert tts.model == "mistv3"
+    assert tts._opts.mist_options is not None
+    assert tts._opts.mist_options.pause_between_brackets is True
+
+
+def test_v1_rejects_model_update() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(api_key="test-key", websocket_url="wss://example.com/coda/ws")
+
+    with pytest.raises(ValueError, match="model is derived"):
+        tts.update_options(model="mistv3")
