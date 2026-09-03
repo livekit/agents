@@ -175,3 +175,9 @@ def test_exception_details_are_withheld_from_third_party_exporters() -> None:
     assert "my pin is 1234" not in serialized
     # the class still identifies the failure
     assert (exported.attributes or {})[trace_types.ATTR_ERROR_TYPE] == "RuntimeError"
+
+    # ... while LiveKit Cloud still receives all three, per the project's setting
+    restored = pii.restore_pii(exported)
+    assert restored.status.description == "my pin is 1234"
+    assert (restored.attributes or {})[trace_types.ATTR_EXCEPTION_MESSAGE] == "my pin is 1234"
+    assert any("my pin is 1234" in str(dict(e.attributes or {})) for e in restored.events)

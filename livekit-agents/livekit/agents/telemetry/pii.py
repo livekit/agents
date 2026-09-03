@@ -103,6 +103,7 @@ def _contains_pii(attributes: Mapping[str, Any] | None) -> bool:
 
 _RAW_ATTRIBUTES = "_lk_raw_attributes"
 _RAW_EVENTS = "_lk_raw_events"
+_RAW_STATUS = "_lk_raw_status"
 
 
 class _PIIFilteringSpanProcessor(SpanProcessor):
@@ -146,6 +147,7 @@ class _PIIFilteringSpanProcessor(SpanProcessor):
             # LiveKit Cloud still receives what the project allows
             setattr(span, _RAW_ATTRIBUTES, dict(attributes or {}))
             setattr(span, _RAW_EVENTS, tuple(events))
+            setattr(span, _RAW_STATUS, span.status)
 
         # rebind rather than mutate: the snapshot's BoundedAttributes is shared with the
         # live span, and is immutable once the span has ended
@@ -182,7 +184,7 @@ def restore_pii(span: ReadableSpan) -> ReadableSpan:
         events=getattr(span, _RAW_EVENTS, span.events),
         links=span.links,
         kind=span.kind,
-        status=span.status,
+        status=getattr(span, _RAW_STATUS, span.status),
         start_time=span.start_time,
         end_time=span.end_time,
         instrumentation_scope=span.instrumentation_scope,
