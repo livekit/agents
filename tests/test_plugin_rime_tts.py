@@ -4,16 +4,54 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any
+import json
+import traceback
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, APIError
 
 pytestmark = pytest.mark.unit
+
+_SECRET = "customer-secret-marker"
+
+
+def _assert_exception_is_safe(exc: BaseException) -> None:
+    rendered = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    assert _SECRET not in str(exc)
+    assert _SECRET not in repr(exc)
+    assert _SECRET not in rendered
+
+
+class _FailingWS3:
+    def __init__(self, failure: str) -> None:
+        self._failure = failure
+
+    async def send_str(self, data: str) -> None:
+        payload = json.loads(data)
+        if self._failure == "send" and "text" in payload:
+            raise RuntimeError(_SECRET)
+
+    async def receive(self, *, timeout: float | None = None) -> aiohttp.WSMessage:
+        if self._failure == "provider":
+            return aiohttp.WSMessage(
+                aiohttp.WSMsgType.TEXT,
+                json.dumps({"type": "error", "message": _SECRET}),
+                None,
+            )
+        if self._failure == "transport":
+            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
+
+    def exception(self) -> BaseException:
+        return RuntimeError(_SECRET)
+
+    async def close(self) -> None:
+        pass
 
 
 @pytest.mark.parametrize(
@@ -428,3 +466,31 @@ def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
     tts.update_options(websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws")
 
     assert tts.model == "coda"
+
+
+@pytest.mark.parametrize("failure", ["transport", "provider", "send"])
+async def test_ws3_errors_do_not_expose_provider_or_transport_data(
+    failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.plugins.rime import TTS
+
+    websocket = _FailingWS3(failure)
+
+    async def connect_ws(self: TTS, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        return cast(aiohttp.ClientWebSocketResponse, websocket)
+
+    monkeypatch.setattr(TTS, "_connect_ws", connect_ws)
+    tts = TTS(api_key="test-key", model="coda", use_websocket=True)
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+    stream.push_text("hello")
+    stream.end_input()
+
+    try:
+        with pytest.raises(APIError) as exc_info:
+            _ = [event async for event in stream]
+    finally:
+        await stream.aclose()
+        await tts.aclose()
+
+    _assert_exception_is_safe(exc_info.value)
+    assert exc_info.value.__cause__ is None
