@@ -45,9 +45,11 @@ NUM_CHANNELS = 1
 SMALLEST_BASE_URL = "https://api.smallest.ai/waves/v1"
 SMALLEST_WS_URL = "wss://api.smallest.ai/waves/v1/tts/live"
 
-# Continuations can emit multiple `complete` frames per context with no terminal
-# marker; drain until idle for this long past the last frame before ending the segment.
-_CONTINUATIONS_IDLE_TIMEOUT = 0.25
+# Continuations gives no terminal marker for the last `complete` frame, so completion
+# is inferred: this many idle seconds after the closing fragment, with no further
+# frames, means done. The connection is never reused after an inferred completion
+# (see _run), so a too-short value costs a truncated tail, not a corrupted response.
+_CONTINUATIONS_IDLE_TIMEOUT = 0.6
 
 
 @dataclass
@@ -356,23 +358,32 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
+                # Whether recv_task ended on a protocol-confirmed signal (legacy's
+                # explicit `complete`) vs. the continuations idle-drain heuristic, which
+                # is never fully certain - see _recv_task and the pool.remove() below.
+                drained_confidently = True
                 try:
                     # send_task reports whether any text was actually sent; if the
                     # segment was empty (no non-whitespace tokens) no context was opened
                     # and the server produces no `complete`, so don't wait on recv_task.
                     sent_any = await send_task
                     if sent_any:
-                        await recv_task
+                        drained_confidently = await recv_task
                     else:
                         await utils.aio.gracefully_cancel(recv_task)
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
-                    if (
-                        self._opts.use_continuations
-                        and ctx_state["opened"]
-                        and not ctx_state["finalized"]
-                    ):
-                        await self._try_cancel_context(ws, context_id)
+                    if self._opts.use_continuations and ctx_state["opened"]:
+                        if not ctx_state["finalized"]:
+                            # Interrupted (e.g. barge-in) before the context was closed.
+                            await self._try_cancel_context(ws, context_id)
+                            self._tts._pool.remove(ws)
+                        elif not drained_confidently:
+                            # Completion was inferred, not confirmed by the server (no
+                            # terminal marker exists in this protocol - see _recv_task).
+                            # Don't let a possibly-still-active context leak trailing
+                            # frames into the next request that reuses this connection.
+                            self._tts._pool.remove(ws)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -451,65 +462,85 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse,
         output_emitter: tts.AudioEmitter,
         ctx_state: dict[str, bool],
-    ) -> None:
-        # Continuations can emit more than one `complete` per context (one per natural
-        # sentence-boundary release) with no marker for which one is terminal, so once
-        # our closing fragment is sent, treat a short gap with no further frames as done
-        # instead of returning on the first `complete` — see docs.smallest.ai.
-        drained_after_close = False
+    ) -> bool:
+        """Returns whether completion was protocol-confirmed (safe to reuse the pooled
+        connection) — always True for legacy, never True for continuations, which has
+        no way to confirm it (see the loop below and _run's handling of the result).
+        """
+        if not self._opts.use_continuations:
+            while True:
+                msg = await self._recv_one(ws, timeout=self._conn_options.timeout)
+                status, event = self._parse_status_event(msg, output_emitter)
+                if status == "complete":
+                    return True
+
+        # Continuations gives no marker for which `complete` is the truly last one (a
+        # context can release audio in more than one frame at natural sentence
+        # boundaries), so instead of reacting to a specific `complete` event, poll with
+        # a short idle timeout and re-check `ctx_state["finalized"]` fresh on every
+        # tick. This also sidesteps any race between the closing fragment's send (which
+        # flips `finalized`) and an early `complete` reply for it: we never depend on
+        # which of the two concurrent tasks the event loop happens to run first, only
+        # on the current value of `finalized` at each poll. Because there's still no
+        # way to be certain we've drained everything, the caller must never reuse the
+        # underlying connection when this heuristic (rather than an explicit signal) is
+        # what ended the loop - see _run.
+        event_loop = asyncio.get_event_loop()
+        hard_deadline = event_loop.time() + self._conn_options.timeout
         while True:
-            timeout = (
-                _CONTINUATIONS_IDLE_TIMEOUT if drained_after_close else self._conn_options.timeout
-            )
             try:
-                msg = await ws.receive(timeout=timeout)
+                msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
             except asyncio.TimeoutError:
-                if drained_after_close:
-                    return
-                raise
-
-            if msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSING,
-            ):
-                raise APIStatusError(
-                    "SmallestAI WebSocket closed unexpectedly",
-                    status_code=ws.close_code or -1,
-                    body=str(msg.data),
-                )
-
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
-
-            event = json.loads(msg.data)
-            status = event.get("status")
-
-            if status == "chunk":
-                audio_b64 = event.get("data", {}).get("audio")
-                if audio_b64:
-                    output_emitter.push(base64.b64decode(audio_b64))
-            elif status == "word_timestamp":
-                data = event.get("data", {})
-                word = data.get("word")
-                start = data.get("start")
-                end = data.get("end")
-                if word is not None and start is not None and end is not None:
-                    output_emitter.push_timed_transcript(
-                        TimedString(text=word, start_time=start, end_time=end)
-                    )
-            elif status == "complete":
-                if not self._opts.use_continuations:
-                    return
                 if ctx_state["finalized"]:
-                    # Could be an intermediate release from a fragment sent just before
-                    # the closing one, or the terminal one — no way to tell which, so
-                    # start the idle-drain countdown instead of returning immediately.
-                    drained_after_close = True
-            elif status == "error":
-                raise APIConnectionError(
-                    f"SmallestAI TTS error: {event.get('message', 'unknown error')}"
+                    return False
+                if event_loop.time() >= hard_deadline:
+                    raise
+                continue
+            self._parse_status_event(msg, output_emitter)
+
+    async def _recv_one(
+        self, ws: aiohttp.ClientWebSocketResponse, *, timeout: float
+    ) -> aiohttp.WSMessage:
+        msg = await ws.receive(timeout=timeout)
+        if msg.type in (
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSING,
+        ):
+            raise APIStatusError(
+                "SmallestAI WebSocket closed unexpectedly",
+                status_code=ws.close_code or -1,
+                body=str(msg.data),
+            )
+        return msg
+
+    def _parse_status_event(
+        self, msg: aiohttp.WSMessage, output_emitter: tts.AudioEmitter
+    ) -> tuple[str | None, dict[str, Any]]:
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            return None, {}
+
+        event = json.loads(msg.data)
+        status = event.get("status")
+
+        if status == "chunk":
+            audio_b64 = event.get("data", {}).get("audio")
+            if audio_b64:
+                output_emitter.push(base64.b64decode(audio_b64))
+        elif status == "word_timestamp":
+            data = event.get("data", {})
+            word = data.get("word")
+            start = data.get("start")
+            end = data.get("end")
+            if word is not None and start is not None and end is not None:
+                output_emitter.push_timed_transcript(
+                    TimedString(text=word, start_time=start, end_time=end)
                 )
+        elif status == "error":
+            raise APIConnectionError(
+                f"SmallestAI TTS error: {event.get('message', 'unknown error')}"
+            )
+        return status, event
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
