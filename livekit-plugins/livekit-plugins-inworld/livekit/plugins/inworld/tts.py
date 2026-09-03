@@ -1088,7 +1088,11 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        self._prewarm_task = asyncio.create_task(self._prewarm_impl())
+        # Don't replace a prewarm still in flight: the old task would lose its only
+        # reference, and aclose() cancels just the latest one, so it could build a
+        # pool after shutdown. Same guard as the soniox plugin.
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
         # Just ensure the pool is created - first acquire will establish a connection

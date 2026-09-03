@@ -254,8 +254,11 @@ async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
         await asyncio.sleep(0)
         fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
-    asyncio.create_task(_trigger())
-    await fut
+    trigger_task = asyncio.create_task(_trigger())
+    try:
+        await fut
+    finally:
+        trigger_task.cancel()
 
 
 async def _poll_until(
