@@ -239,6 +239,8 @@ DEFAULT_EXPRESSIVE_OPTIONS: ExpressiveOptions = ExpressiveOptions(
     speech_steering=DEFAULT_SPEECH_STEERING_OPTIONS,
 )
 
+UserAwaySignal = Literal["audio", "transcript"]
+
 
 def _append_instructions(template: Instructions | str, extra: str) -> Instructions:
     # concatenate the *raw* template text so any {placeholders} survive until render()
@@ -289,6 +291,7 @@ class AgentSessionOptions:
     """sparse endpointing keys the user provided explicitly"""
     max_tool_steps: int
     user_away_timeout: float | None
+    user_away_signal: UserAwaySignal
     transcription_timeout: float | None
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
@@ -393,6 +396,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         aec_warmup_duration: NotGivenOr[float | None] = NOT_GIVEN,
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
+        user_away_signal: UserAwaySignal = "audio",
         transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
@@ -483,6 +487,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
+            user_away_signal (Literal["audio", "transcript"], optional): Which user
+                activity holds off the "away" state. ``"audio"`` (default) trusts any
+                detected speech. ``"transcript"`` trusts only transcribed speech, so
+                noise that never becomes text is ignored; it needs a streaming STT.
             transcription_timeout (float, optional): If set, emit a
                 ``user_transcription_timeout`` event when VAD detects user speech
                 during the user's turn but no non-empty final transcript arrives
@@ -573,6 +581,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             endpointing_overrides=endpointing_overrides,
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
+            user_away_signal=user_away_signal,
             transcription_timeout=transcription_timeout,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
@@ -1976,7 +1985,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._aec_warmup_remaining,
             )
 
-        if state == "listening" and self._user_state == "listening":
+        # the transcript signal ignores speech activity, so noise must not block the re-arm
+        user_idle = self._user_state == "listening" or (
+            self._opts.user_away_signal == "transcript" and self._user_state == "speaking"
+        )
+        if state == "listening" and user_idle:
             self._set_user_away_timer()
         else:
             self._cancel_user_away_timer()
@@ -1989,7 +2002,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _update_user_state(
-        self, state: UserState, *, last_speaking_time: float | None = None
+        self,
+        state: UserState,
+        *,
+        last_speaking_time: float | None = None,
+        by_transcript: bool = False,
     ) -> None:
         # pinned to "speaking" while a `claim_user_turn` is active; voice
         # transitions are recoverable from `_user_silence_event` on release
@@ -1997,6 +2014,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         if self._user_state == state:
+            return
+
+        if (
+            self._opts.user_away_signal == "transcript"
+            and self._user_state == "away"
+            and not by_transcript
+        ):
+            # only a transcript ends "away"; noise would otherwise clear it at once
             return
 
         last_speaking_time_ns = (
@@ -2020,10 +2045,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._user_speaking_span.end(end_time=last_speaking_time_ns)
             self._user_speaking_span = None
 
-        if state == "listening" and self._agent_state == "listening":
-            self._set_user_away_timer()
-        else:
-            self._cancel_user_away_timer()
+        if self._opts.user_away_signal == "audio":
+            if state == "listening" and self._agent_state == "listening":
+                self._set_user_away_timer()
+            else:
+                self._cancel_user_away_timer()
 
         old_state = self._user_state
         self._user_state = state
@@ -2049,7 +2075,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a transcript means stt recovered; reset its error tolerance
             self._stt_error_counts = 0
 
-        if ev.is_final and self.user_state != "speaking":
+        if self._opts.user_away_signal == "transcript":
+            if ev.transcript:
+                # interims count: a long answer must not trip "away" before its final
+                if self.user_state == "away":
+                    # "away" swallowed this turn's speech start, so restore what the
+                    # detector sees: an interim still has a speech end coming, a final may not
+                    self._update_user_state(
+                        "listening" if ev.is_final else "speaking", by_transcript=True
+                    )
+                if self._agent_state == "listening":
+                    self._set_user_away_timer()
+        elif ev.is_final and self.user_state != "speaking":
             if self.user_state == "away":
                 # reset user state from away to listening in case VAD has a miss detection
                 self._update_user_state("listening")
