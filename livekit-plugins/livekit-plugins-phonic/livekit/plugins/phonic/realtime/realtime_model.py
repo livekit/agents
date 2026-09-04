@@ -26,6 +26,7 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.core import RequestOptions
+from phonic.requests import ResponsesToolDefinitionParams
 from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
@@ -99,15 +100,9 @@ class ConfigurationEndpoint(TypedDict, total=False):
     timeout_ms: int
 
 
-class PhonicToolDefinition(TypedDict):
-    """Tool schema accepted by Phonic's Responses API."""
-
-    name: str
-    description: str
-    parameters: dict[str, typing.Any]
-
-
-def _to_phonic_tool_definition(tool_schema: dict[str, typing.Any]) -> PhonicToolDefinition:
+def _to_phonic_tool_definition(
+    tool_schema: dict[str, typing.Any],
+) -> ResponsesToolDefinitionParams:
     function = tool_schema["function"]
     return {
         "name": function["name"],
@@ -116,7 +111,9 @@ def _to_phonic_tool_definition(tool_schema: dict[str, typing.Any]) -> PhonicTool
     }
 
 
-def to_phonic_tool_definitions(tool_context: llm.ToolContext) -> list[PhonicToolDefinition]:
+def to_phonic_tool_definitions(
+    tool_context: llm.ToolContext,
+) -> list[ResponsesToolDefinitionParams]:
     """Convert LiveKit function tools to Phonic Responses API definitions.
 
     The returned values contain schemas only; the executable callables remain in
