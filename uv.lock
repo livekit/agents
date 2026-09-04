@@ -3149,7 +3149,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "funasr", specifier = ">=1.1.0" },
+    { name = "funasr", specifier = ">=1.1.3" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "numpy" },
     { name = "torch", specifier = ">=2.0" },

@@ -7,6 +7,7 @@ import sys
 import threading
 import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +29,12 @@ def test_package_imports_with_declared_dependencies() -> None:
     assert torch.__version__
     assert torchaudio.__version__
     assert livekit_funasr.STT is livekit_funasr.FunASRSTT
+
+
+def test_declared_funasr_minimum_supports_the_plugin_import() -> None:
+    project = Path(__file__).parents[1] / "livekit-plugins/livekit-plugins-funasr/pyproject.toml"
+
+    assert '"funasr>=1.1.3"' in project.read_text()
 
 
 class _FakeAutoModel:
@@ -201,6 +208,16 @@ async def test_model_loading_redacts_model_identifier_from_logs(
         await stt._recognize_impl([_make_audio_frame()], conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     assert private_model not in caplog.text
+
+
+def test_metrics_metadata_redacts_model_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    funasr_stt = _load_funasr_stt_module(monkeypatch, lambda **kwargs: [{"text": "<|en|>hello"}])
+    private_model = "https://user:secret@example.invalid/model"
+    stt = funasr_stt.FunASRSTT(model=private_model)
+
+    assert stt.metrics_metadata == {"model_name": "FunASR", "model_provider": "FunASR"}
 
 
 def test_plugin_version_matches_livekit_agents_release() -> None:

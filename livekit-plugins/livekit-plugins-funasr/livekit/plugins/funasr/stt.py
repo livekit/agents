@@ -18,7 +18,7 @@ import asyncio
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -29,6 +29,9 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
+
+if TYPE_CHECKING:
+    from livekit.agents.llm.chat_context import MetricsMetadata
 
 try:
     from funasr import AutoModel  # type: ignore
@@ -107,6 +110,11 @@ class FunASRSTT(stt.STT):
     def model(self) -> str:
         """Return the configured FunASR model identifier."""
         return self._model_name
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Avoid exposing caller-provided model identifiers through telemetry."""
+        return {"model_name": "FunASR", "model_provider": self.provider}
 
     @property
     def provider(self) -> str:
