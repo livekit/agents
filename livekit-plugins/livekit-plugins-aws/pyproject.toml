@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.7.1",
+    "livekit-agents>=1.8.0",
     "aiobotocore>=3.0.0",
     # StartStreamTranscription is bidirectional, which only the CRT transport provides;
     # transcribe-streaming 0.11 dropped it from its own base dependencies.

@@ -31,7 +31,7 @@ classifiers = [
 # stays wide so platforms 2.x dropped (Windows, x86_64 macOS, macOS < 14) can
 # still resolve the 1.x line, which satisfies everything avatar.py calls.
 dependencies = [
-    "livekit-agents>=1.7.1",
+    "livekit-agents>=1.8.0",
     "bithuman>=0.5.25,<3; python_version >= '3.11' and python_version < '3.14'",
 ]
 
