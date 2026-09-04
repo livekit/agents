@@ -236,6 +236,77 @@ def _end_of_speech() -> vad.VADEvent:
     )
 
 
+class TestManualCommitSurvivesVadActivity:
+    """In ``turn_detection="manual"`` the application owns turn boundaries: an
+    eou task only exists for a turn the app already committed, so VAD activity
+    (a breath or click in the audio tail after commit) must neither cancel it
+    nor, when some other site cancels it, leave ``_user_turn_committed`` set —
+    stranded, that flag makes ``_on_stt_event`` discard every later transcript
+    until the next commit."""
+
+    def _make_manual_recognition(self) -> AudioRecognition:
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detection_mode = "manual"
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._user_turn_committed = True
+        ar._turn_backchannel_over_agent = False
+        ar._overlap_in_current_turn = False
+        # park the bounce long enough for mid-sleep events to land
+        ar._endpointing.min_delay = 0.5
+        return ar
+
+    async def test_sos_does_not_cancel_committed_turn(self) -> None:
+        ar = self._make_manual_recognition()
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None
+
+        await asyncio.sleep(0.05)
+        await ar._on_vad_event(_start_of_speech())
+
+        await task
+        assert not task.cancelled()
+        ar._hooks.on_end_of_turn.assert_called_once()
+        assert ar._user_turn_committed is False
+
+    async def test_cancelled_bounce_resets_committed_flag(self) -> None:
+        ar = self._make_manual_recognition()
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None
+
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)  # let the done callback run
+
+        assert ar._user_turn_committed is False
+
+    async def test_superseded_bounce_leaves_the_new_commit_intact(self) -> None:
+        ar = self._make_manual_recognition()
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="manual")
+        old_task = ar._end_of_turn_task
+        assert old_task is not None
+
+        # a second commit reschedules: the old task's callback must not reset
+        # the flag out from under the new bounce
+        await asyncio.sleep(0.05)
+        ar._user_turn_committed = True
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="manual")
+        with contextlib.suppress(asyncio.CancelledError):
+            await old_task
+        await asyncio.sleep(0)
+
+        assert ar._user_turn_committed is True
+        new_task = ar._end_of_turn_task
+        assert new_task is not None and not new_task.cancelled()
+        new_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await new_task
+
+
 class TestSubThresholdSpeakingSpike:
     """A noise spike can push ``raw_accumulated_speech`` above zero on ``INFERENCE_DONE``
     without ever reaching ``START_OF_SPEECH`` — so no SOS/EOS fires. Resumed speech is
