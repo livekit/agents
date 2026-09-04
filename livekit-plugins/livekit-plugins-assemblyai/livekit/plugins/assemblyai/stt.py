@@ -59,6 +59,7 @@ class STTOptions:
         "u3-rt-pro-beta-1",
         "u3-pro",
         "universal-3-5-pro",
+        "universal-3-6-pro",
     ] = "universal-3-5-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
@@ -85,7 +86,7 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
+_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -147,6 +148,7 @@ class STT(stt.STT):
             "u3-rt-pro-beta-1",
             "u3-pro",
             "universal-3-5-pro",
+            "universal-3-6-pro",
         ] = "universal-3-5-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
@@ -966,6 +968,20 @@ class SpeechStream(stt.SpeechStream):
         speaker_label = data.get("speaker_label")
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
 
+        # Surface the server's end-of-turn confidence on SpeechData.metadata so it's
+        # reachable from SpeechEvent / stt_node / UserInputTranscribedEvent without
+        # subclassing the stream. On Universal-3.5 Pro (and later) this rises from 0
+        # toward 1 across the partials emitted while a turn is held open between
+        # min_turn_silence and max_turn_silence, letting callers threshold it to
+        # trigger preemptive/eager LLM generation before the final arrives; it is 1.0
+        # on the final. Only attached when the message carries it, so models that
+        # don't emit the field are unaffected.
+        eot_confidence_metadata = (
+            {"end_of_turn_confidence": end_of_turn_confidence}
+            if end_of_turn_confidence is not None
+            else None
+        )
+
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
         start_time: float = 0
@@ -1002,6 +1018,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )
@@ -1038,6 +1055,7 @@ class SpeechStream(stt.SpeechStream):
                         words=utterance_words,
                         confidence=utterance_confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )
@@ -1063,6 +1081,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=eot_confidence_metadata,
                     )
                 ],
             )

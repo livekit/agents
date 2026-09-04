@@ -3,25 +3,39 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "livekit-plugins-hedra"
+name = "livekit-plugins-vakyam"
 dynamic = ["version"]
-description = "Agent Framework plugin for Hedra Avatar"
+description = "LiveKit Agents plugin for Vakyam AI TTS (Raaga 1) — Indian-language text-to-speech"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
-keywords = ["voice", "ai", "realtime", "audio", "video", "avatar", "livekit", "hedra"]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = [
+    "webrtc",
+    "realtime",
+    "audio",
+    "livekit",
+    "vakyam",
+    "raaga",
+    "indian-languages",
+    "tts",
+    "text-to-speech",
+]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
-    "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.7.1"]
+dependencies = [
+    "livekit-agents[codecs]>=1.7.1",
+    "websockets>=14.0,<16.0",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -29,7 +43,7 @@ Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
-path = "livekit/plugins/hedra/version.py"
+path = "livekit/plugins/vakyam/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

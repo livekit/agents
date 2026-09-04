@@ -506,3 +506,120 @@ class TestMixedToolsRequestConstruction:
         assert config.cached_content == "cachedContents/abc"
         assert config.tools is None
         assert config.tool_config is None
+
+
+class TestThinkingConfigRequestConstruction:
+    """Gemini 3 and Gemma 4 configure thinking with ``thinking_level``, every other model with
+    ``thinking_budget``. These tests drive ``chat()`` against a stubbed
+    ``generate_content_stream`` and assert on the ``ThinkingConfig`` it received."""
+
+    @staticmethod
+    async def _single_response_async_iter():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+        )
+
+    @classmethod
+    async def _capture_thinking_config(
+        cls, model: str, thinking_config: types.ThinkingConfigOrDict
+    ) -> types.ThinkingConfig | None:
+        captured: dict = {}
+
+        async def fake_stream(**kwargs):
+            captured["config"] = kwargs.get("config")
+            return cls._single_response_async_iter()
+
+        llm_ = LLM(model=model, api_key="test", thinking_config=thinking_config)
+        fake = AsyncMock(side_effect=fake_stream)
+        with patch.object(llm_._client.aio.models, "generate_content_stream", fake):
+            stream = llm_.chat(chat_ctx=ChatContext.empty())
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+        return captured["config"].thinking_config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemma-4-31b-it", "models/gemma-4-31b-it"])
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH])
+    async def test_gemma_4_level_reaches_the_request(
+        self, model: str, level: types.ThinkingLevel
+    ) -> None:
+        """Gemma 4 takes the level it documents, under a bare or a qualified model name."""
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(thinking_level=level)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == level
+
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.LOW, types.ThinkingLevel.MEDIUM])
+    def test_gemma_4_rejects_undocumented_levels(self, level: types.ThinkingLevel) -> None:
+        """Gemma 4 answers 'low' and 'medium' with 400 INVALID_ARGUMENT, so the session fails at
+        construction instead of on the first turn."""
+        with pytest.raises(ValueError, match="only supports thinking_level"):
+            LLM(
+                model="gemma-4-31b-it",
+                api_key="test",
+                thinking_config=types.ThinkingConfig(thinking_level=level),
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemma-4-31b-it"])
+    async def test_include_thoughts_survives_the_level_branch(self, model: str) -> None:
+        thinking_config = await self._capture_thinking_config(
+            model, {"thinking_level": "high", "include_thoughts": True}
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == types.ThinkingLevel.HIGH
+        assert thinking_config.include_thoughts is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model,expected_level",
+        [
+            ("gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
+            ("models/gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
+            ("gemini-3-pro-preview", types.ThinkingLevel.LOW),
+            # no default is invented for a model whose accepted levels are unknown
+            ("gemma-4-31b-it", None),
+        ],
+    )
+    async def test_default_level_only_for_gemini_3(
+        self, model: str, expected_level: types.ThinkingLevel | None
+    ) -> None:
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(include_thoughts=False)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == expected_level
+        assert thinking_config.include_thoughts is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemma-4-31b-it"])
+    async def test_budget_alone_is_dropped_on_level_models(self, model: str) -> None:
+        """A budget on a level model is ignored with a warning, on Gemini 3 and Gemma 4 alike."""
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(thinking_budget=0)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_budget is None
+
+    @pytest.mark.asyncio
+    async def test_budget_still_reaches_gemini_2_5(self) -> None:
+        thinking_config = await self._capture_thinking_config(
+            "gemini-2.5-flash", types.ThinkingConfig(thinking_budget=1024)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_budget == 1024
+        assert thinking_config.thinking_level is None

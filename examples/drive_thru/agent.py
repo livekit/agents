@@ -512,7 +512,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
     # function tool that mutated the order shouldn't block on the
     # RPC round-trip.
     push_pending = False
-    push_running = False
+    push_task: asyncio.Task[None] | None = None
 
     async def _push_to(identity: str, payload: str) -> None:
         try:
@@ -525,29 +525,29 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             logger.exception("cart push to %s failed", identity)
 
     async def _push_runner() -> None:
-        nonlocal push_pending, push_running
-        push_running = True
-        try:
-            while push_pending:
-                push_pending = False
-                payload = format_cart(userdata)
-                logger.info("push_cart: %d chars", len(payload))
-                peers = list(ctx.room.remote_participants.values())
-                if not peers:
-                    continue
-                await asyncio.gather(
-                    *(_push_to(p.identity, payload) for p in peers),
-                    return_exceptions=True,
-                )
-        finally:
-            push_running = False
+        nonlocal push_pending
+        while push_pending:
+            push_pending = False
+            payload = format_cart(userdata)
+            logger.info("push_cart: %d chars", len(payload))
+            peers = list(ctx.room.remote_participants.values())
+            if not peers:
+                continue
+            await asyncio.gather(
+                *(_push_to(p.identity, payload) for p in peers),
+                return_exceptions=True,
+            )
 
     async def push_cart() -> None:
-        nonlocal push_pending
+        nonlocal push_pending, push_task
         push_pending = True
-        if push_running:
+        # The retained task is the single-flight guard. A flag set inside the runner
+        # is not set until the loop schedules it, so back-to-back calls would each
+        # see it clear and start a runner of their own. push_pending keeps the
+        # trailing edge: a change during an in-flight RPC is sent when it returns.
+        if push_task is not None and not push_task.done():
             return
-        asyncio.create_task(_push_runner())
+        push_task = asyncio.create_task(_push_runner())
 
     userdata.order.on_change = push_cart
 

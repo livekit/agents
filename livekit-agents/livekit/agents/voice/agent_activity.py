@@ -3090,6 +3090,7 @@ class AgentActivity(RecognitionHooks):
                 role="assistant",
                 content=forwarded_text,
                 interrupted=speech_handle.interrupted,
+                created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
             )
             speech_handle._item_added([msg])

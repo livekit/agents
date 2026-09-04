@@ -553,6 +553,10 @@ class RealtimeSession(  # noqa: F811
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
+        # Held only so the loop's weak reference cannot collect them mid-flight.
+        # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
+        self._user_text_tasks: set[asyncio.Task[None]] = set()
+        self._deferred_tool_recycle_tasks: set[asyncio.Task[None]] = set()
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -1865,7 +1869,11 @@ class RealtimeSession(  # noqa: F811
                                 if self._pending_generation_fut is fut:
                                     self._pending_generation_fut = None
 
-                        asyncio.create_task(_send_user_text())
+                        task = asyncio.create_task(
+                            _send_user_text(), name="RealtimeSession._send_user_text"
+                        )
+                        self._user_text_tasks.add(task)
+                        task.add_done_callback(self._user_text_tasks.discard)
 
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
@@ -1931,7 +1939,11 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            asyncio.create_task(self._deferred_tool_recycle())
+            task = asyncio.create_task(
+                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+            )
+            self._deferred_tool_recycle_tasks.add(task)
+            task.add_done_callback(self._deferred_tool_recycle_tasks.discard)
         else:
             logger.debug("Tool list updated locally")
 

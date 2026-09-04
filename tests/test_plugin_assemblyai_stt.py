@@ -562,6 +562,75 @@ async def test_universal_3_5_pro_leaves_continuous_partials_unset():
 
 
 # ---------------------------------------------------------------------------
+# universal-3-6-pro: u3-rt-pro parameter family
+#
+# universal-3-6-pro is the next U3 Pro release: server-side it has the same
+# parameter support as universal-3-5-pro and differs only in which ASR
+# deployment serves the session. So it accepts the u3-pro-gated params and
+# inherits the family's connect-time defaults.
+# ---------------------------------------------------------------------------
+
+
+async def test_universal_3_6_pro_is_accepted():
+    """universal-3-6-pro is a valid model selection."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-3-6-pro")
+    assert stt.model == "universal-3-6-pro"
+    assert stt._opts.speech_model == "universal-3-6-pro"
+
+
+async def test_universal_3_6_pro_accepts_u3_pro_params():
+    """universal-3-6-pro shares the u3-rt-pro parameter family."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="universal-3-6-pro",
+        prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
+        interruption_delay=300,
+        voice_focus="near-field",
+        mode="max_accuracy",
+        language_codes=["en", "es"],
+    )
+    assert stt._opts.speech_model == "universal-3-6-pro"
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
+    assert stt._opts.interruption_delay == 300
+    assert stt._opts.voice_focus == "near-field"
+    assert stt._opts.mode == "max_accuracy"
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_universal_3_6_pro_connect_config_uses_u3_pro_defaults():
+    """The connect query names universal-3-6-pro and applies the U3 Pro family's
+    connect-time defaults (100ms min/max turn silence, language detection on)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="universal-3-6-pro")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["speech_model"] == ["universal-3-6-pro"]
+    assert query["min_turn_silence"] == ["100"]
+    assert query["max_turn_silence"] == ["100"]
+    assert query["language_detection"] == ["true"]
+
+
+# ---------------------------------------------------------------------------
 # voice_focus / voice_focus_threshold
 #
 # Voice Focus isolates the primary voice and suppresses background noise.
@@ -708,7 +777,7 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
     """voice_focus is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, voice_focus="far-field")
         assert stt._opts.voice_focus == "far-field"
 
@@ -764,7 +833,7 @@ async def test_mode_allowed_for_all_u3_pro_family_models():
     """mode is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, mode="min_latency")
         assert stt._opts.mode == "min_latency"
 
@@ -1049,7 +1118,7 @@ async def test_language_codes_allowed_for_all_u3_pro_family_models():
     """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro"):
+    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
         stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
         assert stt._opts.language_codes == ["en", "es"]
 
@@ -1441,7 +1510,13 @@ async def test_carryover_on_by_default_for_u3_pro_family():
     """chat_context carryover is on by default on models that support it."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "u3-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "u3-pro",
+    ):
         stt = STT(api_key="test-key", model=model)
         assert stt.capabilities.chat_context is True
 
@@ -1521,3 +1596,85 @@ async def test_carryover_explicit_true_wins_over_n_turns_zero():
 
     stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
     assert stt.capabilities.chat_context is True
+
+
+# ---------------------------------------------------------------------------
+# end_of_turn_confidence surfaced on SpeechData.metadata
+#
+# The server reports a per-Turn `end_of_turn_confidence`. On Universal-3.5 Pro
+# (and later) this rises from 0 toward 1 across the partials emitted while a
+# turn is held open between min_turn_silence and max_turn_silence, and is 1.0 on
+# the final. The plugin surfaces it on SpeechData.metadata so callers can
+# threshold it (e.g. to trigger preemptive/eager LLM generation) from a
+# SpeechEvent / stt_node / UserInputTranscribedEvent without subclassing the
+# stream. It's only attached when the message carries the field, so models that
+# never emit it are unaffected.
+# ---------------------------------------------------------------------------
+
+
+def _drain_events(stream):
+    from livekit.agents.utils.aio.channel import ChanEmpty
+
+    events = []
+    while True:
+        try:
+            events.append(stream._event_ch.recv_nowait())
+        except ChanEmpty:
+            break
+    return events
+
+
+def _turn_message(**overrides):
+    """A minimal server Turn message with a single word (so an interim fires)."""
+    msg = {
+        "type": "Turn",
+        "words": [{"text": "hello", "start": 0, "end": 480, "confidence": 0.9}],
+        "end_of_turn": False,
+        "transcript": "",
+    }
+    msg.update(overrides)
+    return msg
+
+
+async def test_end_of_turn_confidence_surfaced_on_interim_metadata():
+    """A held-turn partial carries its end_of_turn_confidence on interim metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn_confidence=0.55))
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata == {"end_of_turn_confidence": 0.55}
+
+
+async def test_end_of_turn_confidence_surfaced_on_final_metadata():
+    """The final transcript carries end_of_turn_confidence (1.0) on its metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hello", end_of_turn_confidence=1.0)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"end_of_turn_confidence": 1.0}
+
+
+async def test_end_of_turn_confidence_zero_is_surfaced():
+    """0.0 on an early partial is a real value (turn just started), not 'absent',
+    so it must still surface — mirrors the value seen before the ramp climbs."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn_confidence=0.0))
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata == {"end_of_turn_confidence": 0.0}
+
+
+async def test_end_of_turn_confidence_absent_leaves_metadata_none():
+    """A model/message that doesn't include end_of_turn_confidence leaves metadata
+    unset, so existing consumers are unaffected."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message())  # no end_of_turn_confidence key
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata is None

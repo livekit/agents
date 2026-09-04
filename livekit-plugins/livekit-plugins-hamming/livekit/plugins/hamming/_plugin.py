@@ -1057,6 +1057,7 @@ class HammingRuntime:
 
 
 _RUNTIME: HammingRuntime | None = None
+_PENDING_RUNTIME_CLOSES: set[asyncio.Task[None]] = set()
 
 
 def configure_runtime(config: HammingConfig) -> HammingRuntime:
@@ -1916,4 +1917,8 @@ def _reset_runtime_for_tests() -> None:
         asyncio.run(runtime.aclose())
         return
 
-    loop.create_task(runtime.aclose())
+    # Hold the task: the loop only keeps a weak reference, so a discarded one can be
+    # collected before the runtime is actually closed.
+    task = loop.create_task(runtime.aclose())
+    _PENDING_RUNTIME_CLOSES.add(task)
+    task.add_done_callback(_PENDING_RUNTIME_CLOSES.discard)

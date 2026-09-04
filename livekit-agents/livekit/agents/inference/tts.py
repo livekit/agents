@@ -53,15 +53,6 @@ DeepgramModels = Literal[
     "deepgram/aura",
     "deepgram/aura-2",
 ]
-ElevenlabsModels = Literal[
-    "elevenlabs",
-    "elevenlabs/eleven_flash_v2",
-    "elevenlabs/eleven_flash_v2_5",
-    "elevenlabs/eleven_turbo_v2",
-    "elevenlabs/eleven_turbo_v2_5",
-    "elevenlabs/eleven_multilingual_v2",
-    "elevenlabs/eleven_v3",
-]
 RimeModels = Literal[
     "rime",
     "rime/coda",
@@ -87,13 +78,7 @@ FishAudioModels = Literal[
 ]
 
 TTSModels = (
-    CartesiaModels
-    | DeepgramModels
-    | ElevenlabsModels
-    | RimeModels
-    | InworldModels
-    | XaiModels
-    | FishAudioModels
+    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
 )
 
 
@@ -121,7 +106,7 @@ class FallbackModel(TypedDict):
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda")."""
+    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
 
     voice: str
     """Voice to use for the model."""
@@ -137,8 +122,6 @@ def _has_aligned_transcript(model: str, extra_kwargs: dict[str, Any]) -> bool:
     provider = model.split("/")[0]
     if provider == "cartesia":
         return bool(extra_kwargs.get("add_timestamps"))
-    if provider == "elevenlabs":
-        return bool(extra_kwargs.get("sync_alignment"))
     if provider == "inworld":
         return extra_kwargs.get("timestamp_type") in ("WORD", "CHARACTER")
     return False
@@ -172,23 +155,6 @@ class CartesiaOptions(TypedDict, total=False):
 
 class DeepgramOptions(TypedDict, total=False):
     mip_opt_out: bool  # default: False
-
-
-class ElevenlabsOptions(TypedDict, total=False):
-    inactivity_timeout: int  # default: 60, range 5-180
-    apply_text_normalization: Literal["auto", "off", "on"]  # default: "auto"
-    auto_mode: bool
-    enable_logging: bool
-    enable_ssml_parsing: bool
-    sync_alignment: bool
-    language_code: str
-    stability: float  # range 0-1
-    similarity_boost: float  # range 0-1
-    style: float  # range 0-1
-    speed: float  # range 0.25-4
-    use_speaker_boost: bool
-    chunk_length_schedule: list[float]
-    preferred_alignment: str
 
 
 class RimeOptions(TypedDict, total=False):
@@ -296,25 +262,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: ElevenlabsModels,
-        *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -431,7 +378,6 @@ class TTS(tts.TTS):
             dict[str, Any]
             | CartesiaOptions
             | DeepgramOptions
-            | ElevenlabsOptions
             | RimeOptions
             | InworldOptions
             | XaiOptions

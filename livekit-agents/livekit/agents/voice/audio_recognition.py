@@ -604,11 +604,10 @@ class AudioRecognition:
         user_speaking_span: trace.Span | None = None,
         interruption: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        should_ignore = is_given(interruption) and not interruption and self._agent_speaking
         if self._speaking:
             self._endpointing.on_end_of_speech(
                 ended_at=ended_at,
-                should_ignore=should_ignore,
+                interruption=interruption,
             )
 
         self._on_end_of_overlap_speech(ended_at=ended_at, user_speaking_span=user_speaking_span)
