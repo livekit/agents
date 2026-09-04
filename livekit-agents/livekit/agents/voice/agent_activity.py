@@ -868,19 +868,12 @@ class AgentActivity(RecognitionHooks):
                 "start_agent_activity",
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
-            # a fallback adapter stands for several models and reports a placeholder for
-            # both, which would name the adapter rather than anything that serves inference
-            single_model = not isinstance(
-                self.llm, (llm.FallbackAdapter, llm.RealtimeModelFallbackAdapter)
-            )
-            configured_model = getattr(self.llm, "model", None) if single_model else None
-            configured_provider = getattr(self.llm, "provider", None) if single_model else None
             gen_ai_telemetry.set_agent_attributes(
                 start_span,
                 operation=trace_types.GenAIOperationName.CREATE_AGENT,
                 agent_name=self.agent.label,
-                model=configured_model,
-                provider=configured_provider,
+                model=getattr(self.llm, "model", None),
+                provider=getattr(self.llm, "provider", None),
             )
             try:
                 self._agent._activity = self
