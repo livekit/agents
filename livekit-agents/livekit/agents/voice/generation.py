@@ -875,7 +875,10 @@ async def _execute_tools_task(
                 mocked = mock is not None
 
                 run_ctx = RunContext(
-                    session=session, speech_handle=speech_handle, function_call=fnc_call
+                    activity=activity,
+                    session=session,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
                 )
 
                 logger.debug(
