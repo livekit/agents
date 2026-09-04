@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
+import copy
 import os
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from typing import Literal, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -27,7 +27,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -40,23 +39,48 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
 
+from ._legacy_websocket_adapter import LegacySynthesisOptions, LegacyWebSocketAdapter
+from ._websocket_v1 import (
+    DEFAULT_AUDIO_FORMAT,
+    RimeAudioFormat,
+    WebSocketProtocol,
+    model_from_websocket_url,
+    validate_audio_format,
+    validate_endpoint_host,
+)
+from ._websocket_v1_adapter import V1SynthesisOptions, WebSocketV1Adapter
 from .langs import TTSLangs
 from .log import logger
-from .models import DefaultCodaVoice, DefaultMistVoice, TTSModels
+from .models import (
+    MODEL_CODA,
+    MODEL_MIST_V3,
+    DefaultCodaVoice,
+    DefaultMistVoice,
+    TTSModels,
+    is_mist_model,
+    supports_reduce_latency,
+    supports_time_scale_factor,
+)
 
 CODA_MODEL_TIMEOUT = 60 * 4
 MIST_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
 RIME_WS_BASE_URL = "wss://users-ws.rime.ai"
 NUM_CHANNELS = 1
+CODA_DEFAULT_SAMPLE_RATE = 24000
+MIST_V2_DEFAULT_SAMPLE_RATE = 22050
+MIST_V3_DEFAULT_SAMPLE_RATE = 24000
 
 
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
+    language: NotGivenOr[TTSLangs | str] = NOT_GIVEN
+    audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT
+    sample_rate: NotGivenOr[int] = NOT_GIVEN
+    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
     coda_options: _CodaOptions | None = None
     mist_options: _MistOptions | None = None
 
@@ -67,45 +91,40 @@ class _CodaOptions:
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
     max_tokens: NotGivenOr[int] = NOT_GIVEN
-    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
-    sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
-    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
 
 
 @dataclass
 class _MistOptions:
-    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
-    sample_rate: NotGivenOr[int] = NOT_GIVEN
     speed_alpha: NotGivenOr[float] = NOT_GIVEN
     reduce_latency: NotGivenOr[bool] = NOT_GIVEN
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
-    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
-
-
-def _is_mist_model(model: TTSModels | str) -> bool:
-    return "mist" in model
-
-
-def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
-    if is_given(model) and model == "arcana":
-        logger.warning('Rime Arcana is no longer supported. Use model="coda" instead.')
 
 
 def _timeout_for_model(model: TTSModels | str) -> int:
-    if model == "coda":
+    if model == MODEL_CODA:
         return CODA_MODEL_TIMEOUT
     return MIST_MODEL_TIMEOUT
+
+
+def _default_sample_rate(model: TTSModels | str) -> int:
+    if model == MODEL_CODA:
+        return CODA_DEFAULT_SAMPLE_RATE
+    if model == MODEL_MIST_V3:
+        return MIST_V3_DEFAULT_SAMPLE_RATE
+    return MIST_V2_DEFAULT_SAMPLE_RATE
 
 
 def _model_params(opts: _TTSOptions) -> dict[str, object]:
     """Per-model option fields shared between the HTTP body and the WS query string."""
     params: dict[str, object] = {}
-    if opts.model == "coda" and opts.coda_options is not None:
+    if is_given(opts.language):
+        params["lang"] = opts.language
+    if is_given(opts.time_scale_factor) and supports_time_scale_factor(opts.model):
+        params["timeScaleFactor"] = opts.time_scale_factor
+    if opts.model == MODEL_CODA and opts.coda_options is not None:
         co = opts.coda_options
-        if is_given(co.lang):
-            params["lang"] = co.lang
         if is_given(co.repetition_penalty):
             params["repetition_penalty"] = co.repetition_penalty
         if is_given(co.temperature):
@@ -116,34 +135,69 @@ def _model_params(opts: _TTSOptions) -> dict[str, object]:
             params["max_tokens"] = co.max_tokens
         if is_given(co.speed_alpha):
             params["speedAlpha"] = co.speed_alpha
-        if is_given(co.time_scale_factor):
-            params["timeScaleFactor"] = co.time_scale_factor
-    elif _is_mist_model(opts.model) and opts.mist_options is not None:
+    elif is_mist_model(opts.model) and opts.mist_options is not None:
         mo = opts.mist_options
-        if is_given(mo.lang):
-            params["lang"] = mo.lang
         if is_given(mo.speed_alpha):
             params["speedAlpha"] = mo.speed_alpha
         if is_given(mo.pause_between_brackets):
             params["pauseBetweenBrackets"] = mo.pause_between_brackets
         if is_given(mo.phonemize_between_brackets):
             params["phonemizeBetweenBrackets"] = mo.phonemize_between_brackets
-        # time_scale_factor is supported by mistv3 but not mistv2.
-        if is_given(mo.time_scale_factor) and opts.model != "mistv2":
-            params["timeScaleFactor"] = mo.time_scale_factor
     return params
 
 
 def _check_time_scale_factor_supported(
     model: TTSModels | str, time_scale_factor: NotGivenOr[float]
 ) -> None:
-    if is_given(time_scale_factor) and model == "mistv2":
-        raise ValueError(
-            "time_scale_factor is not supported by the mistv2 model; use mistv3 or coda."
-        )
+    if is_given(time_scale_factor) and not supports_time_scale_factor(model):
+        raise ValueError("time_scale_factor is not supported by the mistv2 model")
 
 
-class TTS(tts.TTS):
+def _resolve_websocket_model(
+    websocket_url: str,
+    model: NotGivenOr[TTSModels | str],
+    *,
+    allow_custom_endpoint: bool,
+    current_model: TTSModels | str | None = None,
+) -> TTSModels | str:
+    endpoint_model = model_from_websocket_url(
+        websocket_url, allow_custom_endpoint=allow_custom_endpoint
+    )
+    if endpoint_model is None:
+        if not is_given(model):
+            if current_model is not None:
+                return current_model
+            raise ValueError("model is required when websocket_url ends with /ws")
+        return model
+    if is_given(model):
+        raise ValueError("model is derived from websocket_url; omit model")
+    if endpoint_model == "mist":
+        return MODEL_MIST_V3
+    return endpoint_model
+
+
+class TTS(tts.TTS[Literal["rime_tts_event"]]):
+    @overload
+    def __init__(
+        self,
+        *,
+        websocket_url: str,
+        websocket_protocol: WebSocketProtocol = "binary",
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        speaker: NotGivenOr[str] = NOT_GIVEN,
+        lang: TTSLangs | str = "eng",
+        audio_format: RimeAudioFormat = DEFAULT_AUDIO_FORMAT,
+        time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
+    ) -> None: ...
+
+    @overload
     def __init__(
         self,
         *,
@@ -151,17 +205,13 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
-        # Coda options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        # Shared by mistv3 and coda (HTTP only; use speed_alpha on WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
-        # Supported by all models; the only speed param that works over WebSocket
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
-        # Mistv2 options
-        sample_rate: int = 22050,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
         reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
@@ -170,44 +220,121 @@ class TTS(tts.TTS):
         use_websocket: bool = False,
         segment: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        websocket_url: NotGivenOr[str] = NOT_GIVEN,
+        websocket_protocol: WebSocketProtocol = "binary",
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        speaker: NotGivenOr[str] = NOT_GIVEN,
+        lang: TTSLangs | str = "eng",
+        audio_format: NotGivenOr[RimeAudioFormat | str] = NOT_GIVEN,
+        # Coda options
+        repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        # Shared by Mist and Coda (HTTP and v1 WebSocket)
+        time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
+        # Supported by HTTP and the legacy ws3 interface
+        speed_alpha: NotGivenOr[float] = NOT_GIVEN,
+        # Supported by all models
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        reduce_latency: NotGivenOr[bool] = NOT_GIVEN,
+        pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        use_websocket: bool = False,
+        segment: NotGivenOr[str] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        allow_custom_endpoint: bool = False,
     ) -> None:
-        if is_given(base_url):
+        websocket_v1_url = websocket_url if is_given(websocket_url) else None
+        if websocket_v1_url is None and is_given(audio_format):
+            raise ValueError("audio_format is only supported with the Rime v1 WebSocket interface")
+        resolved_audio_format = (
+            validate_audio_format(audio_format) if is_given(audio_format) else DEFAULT_AUDIO_FORMAT
+        )
+        if websocket_v1_url is not None:
+            if is_given(base_url):
+                raise ValueError("websocket_url cannot be used with base_url")
+            if use_websocket:
+                raise ValueError("websocket_url enables WebSocket streaming; omit use_websocket")
+            if is_given(speed_alpha):
+                raise ValueError(
+                    "speed_alpha belongs to the legacy Rime interfaces; use time_scale_factor"
+                )
+            if any(
+                is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
+            ):
+                raise ValueError(
+                    "generation controls are not supported by the Rime v1 WebSocket protocol"
+                )
+            if is_given(reduce_latency) or is_given(segment):
+                raise ValueError("websocket_url cannot be used with ws3-only options")
+            use_websocket = True
+            resolved_base_url = RIME_BASE_URL
+        elif is_given(base_url):
+            validate_endpoint_host(base_url, allow_custom_endpoint=allow_custom_endpoint)
             # Infer streaming mode from URL prefix; an explicit use_websocket=True still wins.
             use_websocket = use_websocket or base_url.startswith(("ws://", "wss://"))
             resolved_base_url = base_url
         else:
             resolved_base_url = RIME_WS_BASE_URL if use_websocket else RIME_BASE_URL
 
-        super().__init__(
-            capabilities=tts.TTSCapabilities(
-                streaming=use_websocket,
-                aligned_transcript=use_websocket,
-            ),
-            sample_rate=sample_rate,
-            num_channels=NUM_CHANNELS,
-        )
-        self._api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
-        if not self._api_key:
-            raise ValueError(
-                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
+        if websocket_v1_url is not None:
+            resolved_model = _resolve_websocket_model(
+                websocket_v1_url,
+                model,
+                allow_custom_endpoint=allow_custom_endpoint,
             )
-
-        _warn_if_arcana(model)
-        if is_given(model):
+            model_is_explicit = resolved_model != MODEL_CODA
+        elif is_given(model):
             resolved_model = model
             model_is_explicit = True
         else:
-            resolved_model = "coda"
+            resolved_model = MODEL_CODA
             model_is_explicit = False
 
         _check_time_scale_factor_supported(resolved_model, time_scale_factor)
+        if (
+            websocket_v1_url is not None
+            and not is_mist_model(resolved_model)
+            and any(
+                is_given(value) for value in (pause_between_brackets, phonemize_between_brackets)
+            )
+        ):
+            raise ValueError("Mist options require a Mist model")
+        resolved_sample_rate = (
+            sample_rate if is_given(sample_rate) else _default_sample_rate(resolved_model)
+        )
+        super().__init__(
+            capabilities=tts.TTSCapabilities(
+                streaming=use_websocket,
+                aligned_transcript=use_websocket and websocket_v1_url is None,
+            ),
+            sample_rate=resolved_sample_rate,
+            num_channels=NUM_CHANNELS,
+        )
+        resolved_api_key = api_key if is_given(api_key) else os.environ.get("RIME_API_KEY")
+        if not resolved_api_key:
+            raise ValueError(
+                "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
+            )
+        self._api_key = resolved_api_key
+        self._allow_custom_endpoint = allow_custom_endpoint
 
         if not is_given(speaker):
             if not model_is_explicit:
                 speaker = "astra"
-            elif _is_mist_model(resolved_model):
+            elif is_mist_model(resolved_model):
                 speaker = DefaultMistVoice
-            elif resolved_model == "coda":
+            elif resolved_model == MODEL_CODA:
                 speaker = DefaultCodaVoice
             else:
                 speaker = "astra"
@@ -215,45 +342,60 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=resolved_model,
             speaker=speaker,
+            language=lang,
+            audio_format=resolved_audio_format,
+            sample_rate=sample_rate,
+            time_scale_factor=time_scale_factor,
         )
-        if resolved_model == "coda":
+        if resolved_model == MODEL_CODA:
             self._opts.coda_options = _CodaOptions(
                 repetition_penalty=repetition_penalty,
                 temperature=temperature,
                 top_p=top_p,
                 max_tokens=max_tokens,
-                lang=lang,
-                sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
-                time_scale_factor=time_scale_factor,
             )
-        elif _is_mist_model(resolved_model):
+        elif is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
-                lang=lang,
-                sample_rate=sample_rate,
                 speed_alpha=speed_alpha,
                 reduce_latency=reduce_latency,
                 pause_between_brackets=pause_between_brackets,
                 phonemize_between_brackets=phonemize_between_brackets,
-                time_scale_factor=time_scale_factor,
             )
         self._session = http_session
         self._base_url = resolved_base_url
         self._use_websocket = use_websocket
         self._segment = segment if is_given(segment) else "bySentence"
+        self._sentence_tokenizer: tokenize.SentenceTokenizer | None = None
+        if websocket_v1_url is None:
+            self._sentence_tokenizer = (
+                tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+            )
+        self._websocket_v1_adapter = (
+            WebSocketV1Adapter(
+                websocket_v1_url=websocket_v1_url,
+                websocket_protocol=websocket_protocol,
+                api_key=self._api_key,
+                ensure_session=self._ensure_session,
+                sentence_tokenizer=tokenizer if is_given(tokenizer) else None,
+                allow_custom_endpoint=allow_custom_endpoint,
+            )
+            if websocket_v1_url is not None
+            else None
+        )
 
         self._total_timeout = _timeout_for_model(resolved_model)
 
-        self._streams: weakref.WeakSet[SynthesizeStream] = weakref.WeakSet()
-        self._sentence_tokenizer = (
-            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
-        )
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._streams: weakref.WeakSet[tts.SynthesizeStream] = weakref.WeakSet()
+        self._legacy_websocket_adapter: LegacyWebSocketAdapter | None = None
+        if self._use_websocket and self._websocket_v1_adapter is None:
+            assert self._sentence_tokenizer is not None
+            self._legacy_websocket_adapter = LegacyWebSocketAdapter(
+                websocket_url=self._ws_url(),
+                api_key=self._api_key,
+                ensure_session=self._ensure_session,
+                sentence_tokenizer=self._sentence_tokenizer,
+            )
 
     @property
     def model(self) -> str:
@@ -274,56 +416,81 @@ class TTS(tts.TTS):
             "speaker": self._opts.speaker,
             "modelId": self._opts.model,
             "audioFormat": "pcm",
-            "samplingRate": self._sample_rate,
             "segment": self._segment,
             **_model_params(self._opts),
         }
+        requested_sample_rate = self._opts.sample_rate
+        if is_given(requested_sample_rate):
+            params["samplingRate"] = requested_sample_rate
         encoded = {
             k: ("true" if v else "false") if isinstance(v, bool) else v for k, v in params.items()
         }
         return f"{self._base_url}/ws3?{urlencode(encoded)}"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        session = self._ensure_session()
-        return await asyncio.wait_for(
-            session.ws_connect(
-                self._ws_url(), headers={"Authorization": f"Bearer {self._api_key}"}
-            ),
-            timeout,
-        )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        try:
-            await ws.send_str(json.dumps({"operation": "eos"}))
-            try:
-                await asyncio.wait_for(ws.receive(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
-        except Exception as e:
-            logger.warning(f"Error during Rime WS close sequence: {e}")
-        finally:
-            await ws.close()
-
     def prewarm(self) -> None:
-        if self._use_websocket:
-            self._pool.prewarm()
+        if self._websocket_v1_adapter is not None:
+            self._websocket_v1_adapter.prewarm()
+        elif self._legacy_websocket_adapter is not None:
+            self._legacy_websocket_adapter.prewarm()
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    ) -> tts.SynthesizeStream:
         if not self._use_websocket:
             raise RuntimeError(
                 "Rime TTS streaming requires use_websocket=True at construction time"
             )
-        s = SynthesizeStream(tts=self, conn_options=conn_options)
+        s: tts.SynthesizeStream
+        if self._websocket_v1_adapter is not None:
+            s = self._websocket_v1_adapter.stream(
+                tts_instance=self,
+                options=self._v1_synthesis_options(),
+                conn_options=conn_options,
+            )
+        else:
+            assert self._legacy_websocket_adapter is not None
+            s = self._legacy_websocket_adapter.stream(
+                tts_instance=self,
+                options=self._legacy_synthesis_options(),
+                conn_options=conn_options,
+            )
         self._streams.add(s)
         return s
+
+    def _v1_synthesis_options(self) -> V1SynthesisOptions:
+        mist = self._opts.mist_options if is_mist_model(self._opts.model) else None
+        return V1SynthesisOptions(
+            model=self._opts.model,
+            speaker=self._opts.speaker,
+            language=(str(self._opts.language) if is_given(self._opts.language) else NOT_GIVEN),
+            audio_format=self._opts.audio_format,
+            sampling_rate=self.sample_rate,
+            time_scale_factor=(
+                self._opts.time_scale_factor
+                if supports_time_scale_factor(self._opts.model)
+                else NOT_GIVEN
+            ),
+            pause_between_brackets=(mist.pause_between_brackets if mist is not None else NOT_GIVEN),
+            phonemize_between_brackets=(
+                mist.phonemize_between_brackets if mist is not None else NOT_GIVEN
+            ),
+        )
+
+    def _legacy_synthesis_options(self) -> LegacySynthesisOptions:
+        return LegacySynthesisOptions(
+            model=self._opts.model,
+            websocket_url=self._ws_url(),
+            sample_rate=self.sample_rate,
+        )
 
     async def aclose(self) -> None:
         for s in list(self._streams):
             await s.aclose()
         self._streams.clear()
-        await self._pool.aclose()
+        if self._websocket_v1_adapter is not None:
+            await self._websocket_v1_adapter.aclose()
+        elif self._legacy_websocket_adapter is not None:
+            await self._legacy_websocket_adapter.aclose()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -346,6 +513,7 @@ class TTS(tts.TTS):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        audio_format: NotGivenOr[RimeAudioFormat | str] = NOT_GIVEN,
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 parameters
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -353,28 +521,85 @@ class TTS(tts.TTS):
         pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
+        websocket_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        _warn_if_arcana(model)
-        effective_model = model if is_given(model) else self._opts.model
+        updated_audio_format: RimeAudioFormat | None = None
+        if self._websocket_v1_adapter is not None:
+            if is_given(audio_format):
+                updated_audio_format = validate_audio_format(audio_format)
+            if is_given(model) and not is_given(websocket_url):
+                raise ValueError(
+                    "model can only be updated together with websocket_url for Rime v1"
+                )
+            if is_given(base_url):
+                raise ValueError("use websocket_url to update a Rime v1 endpoint")
+            if is_given(speed_alpha) or is_given(reduce_latency):
+                raise ValueError("Rime v1 cannot be updated with ws3-only options")
+            if any(
+                is_given(value) for value in (repetition_penalty, temperature, top_p, max_tokens)
+            ):
+                raise ValueError("Rime v1 does not support generation controls")
+            effective_model = self._opts.model
+            if is_given(websocket_url):
+                effective_model = _resolve_websocket_model(
+                    websocket_url,
+                    model,
+                    allow_custom_endpoint=self._allow_custom_endpoint,
+                    current_model=self._opts.model,
+                )
+            if not is_mist_model(effective_model) and any(
+                is_given(value) for value in (pause_between_brackets, phonemize_between_brackets)
+            ):
+                raise ValueError("Mist options require a Mist model")
+        elif is_given(websocket_url):
+            raise ValueError("websocket_url can only update a TTS constructed with websocket_url")
+        else:
+            if is_given(audio_format):
+                raise ValueError(
+                    "audio_format is only supported with the Rime v1 WebSocket interface"
+                )
+            effective_model = model if is_given(model) else self._opts.model
+
+        if is_given(base_url):
+            validate_endpoint_host(base_url, allow_custom_endpoint=self._allow_custom_endpoint)
+
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
-        # WS URL is bound at pool connect; invalidate if any URL-affecting param changed.
-        prev_ws_url = self._ws_url() if self._use_websocket else None
+        # Each WS3 pool is bound to one URL. Replace it when URL options change.
+        prev_ws_url = self._ws_url() if self._legacy_websocket_adapter is not None else None
+        if is_given(websocket_url):
+            assert self._websocket_v1_adapter is not None
+            self._websocket_v1_adapter.update_endpoint(
+                websocket_url, model_changed=effective_model != self._opts.model
+            )
+            self._opts.model = effective_model
+            self._total_timeout = _timeout_for_model(effective_model)
+            if effective_model == MODEL_CODA and self._opts.coda_options is None:
+                self._opts.coda_options = _CodaOptions()
+            elif is_mist_model(effective_model) and self._opts.mist_options is None:
+                self._opts.mist_options = _MistOptions()
         if is_given(base_url):
             self._base_url = base_url
         if is_given(model):
             self._opts.model = model
             self._total_timeout = _timeout_for_model(model)
 
-            if model == "coda" and self._opts.coda_options is None:
+            if model == MODEL_CODA and self._opts.coda_options is None:
                 self._opts.coda_options = _CodaOptions()
-            elif _is_mist_model(model) and self._opts.mist_options is None:
+            elif is_mist_model(model) and self._opts.mist_options is None:
                 self._opts.mist_options = _MistOptions()
 
         if is_given(speaker):
             self._opts.speaker = speaker
-
-        if self._opts.model == "coda" and self._opts.coda_options is not None:
+        if is_given(lang):
+            self._opts.language = lang
+        if is_given(sample_rate):
+            self._opts.sample_rate = sample_rate
+        if updated_audio_format is not None:
+            self._opts.audio_format = updated_audio_format
+        if is_given(time_scale_factor):
+            self._opts.time_scale_factor = time_scale_factor
+        if self._opts.model == MODEL_CODA and self._opts.coda_options is not None:
             if is_given(repetition_penalty):
                 self._opts.coda_options.repetition_penalty = repetition_penalty
             if is_given(temperature):
@@ -383,20 +608,10 @@ class TTS(tts.TTS):
                 self._opts.coda_options.top_p = top_p
             if is_given(max_tokens):
                 self._opts.coda_options.max_tokens = max_tokens
-            if is_given(lang):
-                self._opts.coda_options.lang = lang
-            if is_given(sample_rate):
-                self._opts.coda_options.sample_rate = sample_rate
             if is_given(speed_alpha):
                 self._opts.coda_options.speed_alpha = speed_alpha
-            if is_given(time_scale_factor):
-                self._opts.coda_options.time_scale_factor = time_scale_factor
 
-        elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
-            if is_given(lang):
-                self._opts.mist_options.lang = lang
-            if is_given(sample_rate):
-                self._opts.mist_options.sample_rate = sample_rate
+        elif is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             if is_given(speed_alpha):
                 self._opts.mist_options.speed_alpha = speed_alpha
             if is_given(reduce_latency):
@@ -405,37 +620,40 @@ class TTS(tts.TTS):
                 self._opts.mist_options.pause_between_brackets = pause_between_brackets
             if is_given(phonemize_between_brackets):
                 self._opts.mist_options.phonemize_between_brackets = phonemize_between_brackets
-            if is_given(time_scale_factor):
-                self._opts.mist_options.time_scale_factor = time_scale_factor
+
+        requested_sample_rate = self._opts.sample_rate
+        self._sample_rate = (
+            requested_sample_rate
+            if is_given(requested_sample_rate)
+            else _default_sample_rate(self._opts.model)
+        )
 
         if prev_ws_url is not None and self._ws_url() != prev_ws_url:
-            self._pool.invalidate()
+            assert self._legacy_websocket_adapter is not None
+            self._legacy_websocket_adapter.update_endpoint(self._ws_url())
 
 
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
     def __init__(self, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        self._sample_rate = tts.sample_rate
+        self._opts = copy.deepcopy(tts._opts)
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        payload: dict = {
+        payload: dict[str, object] = {
             "speaker": self._opts.speaker,
             "text": self._input_text,
             "modelId": self._opts.model,
             **_model_params(self._opts),
         }
         format = "audio/pcm"
-        if self._opts.model == "coda" and self._opts.coda_options is not None:
-            if is_given(self._opts.coda_options.sample_rate):
-                payload["samplingRate"] = self._opts.coda_options.sample_rate
-        elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
+        payload["samplingRate"] = self._sample_rate
+        if is_mist_model(self._opts.model) and self._opts.mist_options is not None:
             mist_opts = self._opts.mist_options
-            if is_given(mist_opts.sample_rate):
-                payload["samplingRate"] = mist_opts.sample_rate
-            if self._opts.model == "mistv2" and is_given(mist_opts.reduce_latency):
+            if supports_reduce_latency(self._opts.model) and is_given(mist_opts.reduce_latency):
                 payload["reduceLatency"] = mist_opts.reduce_latency
 
         try:
@@ -460,7 +678,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=self._tts.sample_rate,
+                    sample_rate=self._sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type=format,
                 )
@@ -476,117 +694,3 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
-
-
-class SynthesizeStream(tts.SynthesizeStream):
-    """One stream = one utterance. Server-side bySentence segmentation by default;
-    pass segment="immediate" on the TTS to disable server buffering when the agent
-    is already feeding sentence-tokenized text."""
-
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        context_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._tts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
-        )
-        output_emitter.start_segment(segment_id=context_id)
-
-        sent_stream = self._tts._sentence_tokenizer.stream()
-        input_sent_event = asyncio.Event()
-        empty_input = False
-
-        async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    sent_stream.flush()
-                    continue
-                sent_stream.push_text(data)
-            sent_stream.end_input()
-
-        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal empty_input
-            sent_count = 0
-            async for ev in sent_stream:
-                pkt = {"text": ev.token + " ", "contextId": context_id}
-                self._mark_started()
-                await ws.send_str(json.dumps(pkt))
-                input_sent_event.set()
-                sent_count += 1
-            if sent_count == 0:
-                empty_input = True
-                input_sent_event.set()
-                output_emitter.end_input()
-                return
-            await ws.send_str(json.dumps({"operation": "flush", "contextId": context_id}))
-
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            await input_sent_event.wait()
-            if empty_input:
-                return
-            while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "Rime ws closed unexpectedly",
-                        request_id=request_id,
-                    )
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"Rime ws error: {ws.exception()}")
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Rime ws message type %s", msg.type)
-                    continue
-                data = json.loads(msg.data)
-                t = data.get("type")
-                if t == "chunk":
-                    output_emitter.push(base64.b64decode(data["data"]))
-                elif t == "timestamps":
-                    wt = data.get("word_timestamps") or {}
-                    words = wt.get("words") or []
-                    starts = wt.get("start") or []
-                    ends = wt.get("end") or []
-                    for w, s, e in zip(words, starts, ends, strict=False):
-                        output_emitter.push_timed_transcript(
-                            TimedString(text=w + " ", start_time=s, end_time=e)
-                        )
-                elif t == "done":
-                    output_emitter.end_input()
-                    break
-                elif t == "error":
-                    msg_text = data.get("message", "(no message)")
-                    raise APIError(f"Rime ws error: {msg_text}")
-
-        try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                tasks = [
-                    asyncio.create_task(_input_task()),
-                    asyncio.create_task(_send_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    input_sent_event.set()
-                    await sent_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Rime WS error: {e}") from e
