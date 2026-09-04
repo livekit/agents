@@ -100,6 +100,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._last_final_transcript_time = None
     ar._speech_start_time = None
     ar._vad_speech_started = False
+    ar._vad_speech_flushed = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
     ar._vad = None
@@ -385,3 +386,140 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_discards_the_uncommitted_recognition_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 7063: the false turn's open user_turn span and _user_turn_start anchor must
+    # not survive the resume. _ensure_user_turn_span returns a recording span
+    # as-is, so the next real utterance would inherit the abandoned turn's start
+    # and commit with a started_speaking_at seconds before it was spoken.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    activity._audio_recognition = recognition
+
+    # the false turn left an open span and a stale start anchor behind
+    stale_start = time.time() - 12.0
+    recognition._user_turn_start = stale_start
+    stale_span = MagicMock()
+    stale_span.is_recording.return_value = True
+    recognition._user_turn_span = stale_span
+    stt_pipeline = MagicMock()
+    stt_pipeline.aclose = AsyncMock()
+    recognition._stt_pipeline = stt_pipeline
+
+    order: list[str] = []
+    original_clear = recognition._clear_user_turn
+
+    def _record_clear(**kwargs: bool) -> None:
+        order.append("clear")
+        original_clear(**kwargs)
+
+    recognition._clear_user_turn = _record_clear  # type: ignore[method-assign]
+    audio_output = session.output.audio
+    assert audio_output is not None
+    original_resume = audio_output.resume
+
+    def _record_resume() -> None:
+        order.append("resume")
+        original_resume()
+
+    monkeypatch.setattr(audio_output, "resume", _record_resume)
+
+    events: list[bool] = []
+    session.on("agent_false_interruption", lambda ev: events.append(ev.resumed))
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+
+    assert events == [True]
+    # the dead turn is discarded before agent audio resumes
+    assert order == ["clear", "resume"]
+    # the span is closed and the anchor dropped, so the next utterance starts fresh
+    stale_span.end.assert_called_once()
+    assert recognition._user_turn_start is None
+    # the live STT stream is kept: a late final for a real barge-in must still arrive
+    assert recognition._stt_pipeline is stt_pipeline
+    stt_pipeline.aclose.assert_not_called()
+
+    recognition._stt_pipeline = None  # teardown owns the real pipeline lifecycle
+    await session.aclose()
+
+
+async def test_resume_keeps_the_anchors_of_live_user_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # if the user is speaking when the timer fires (e.g. VAD activity that the
+    # min_duration gate kept from resetting the timer), the recognition anchors
+    # belong to a live utterance and must survive the resume
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = True
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_not_called()
+
+
+async def test_resume_keeps_the_anchors_of_a_live_vad_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # stt turn detection: a premature STT END_OF_SPEECH sets _speaking False while
+    # VAD is still mid-segment (the flushed VAD corrects it with a new SOS). The
+    # discard must treat that live segment as speech, or it wipes the transcript
+    # and timing of an utterance that is still going.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = False
+    recognition._vad_speech_started = True
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_not_called()
+
+
+async def test_resume_discards_a_flush_abandoned_vad_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the premature-STT-EOS flush emits no VAD END_OF_SPEECH, so
+    # _vad_speech_started stays True with nothing left to clear it. When STT was
+    # right and no speech follows, that stuck flag must not suppress the
+    # discard, or the stale-anchor bug returns on this path.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+    recognition = _recognition(activity, last_speaking_time=time.time())
+    recognition._speaking = False
+    recognition._vad_speech_started = True
+    recognition._vad_speech_flushed = True  # STT END_OF_SPEECH flushed the segment
+    activity._audio_recognition = recognition
+    recognition._clear_user_turn = MagicMock()  # type: ignore[method-assign]
+
+    activity._start_false_interruption_timer(0.01)
+    await asyncio.sleep(0.1)
+    await session.aclose()
+
+    recognition._clear_user_turn.assert_called_once_with(reset_stt=False)
