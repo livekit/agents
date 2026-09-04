@@ -38,10 +38,12 @@ from speechmatics.voice import (
     AdditionalVocabEntry,
     AgentServerMessageType,
     AudioEncoding,
+    EndOfTurnConfig,
     OperatingPoint,
     SpeakerFocusConfig,
     SpeakerFocusMode,
     SpeakerIdentifier,
+    VoiceActivityConfig,
     VoiceAgentClient,
     VoiceAgentConfig,
     VoiceAgentConfigPreset,
@@ -112,6 +114,10 @@ class STTOptions:
     punctuation_overrides: dict | None = None
     include_partials: bool | None = None
 
+    # Turn detection / VAD
+    end_of_turn_config: EndOfTurnConfig | None = None
+    vad_config: VoiceActivityConfig | None = None
+
     # Diarization
     enable_diarization: bool | None = None
     speaker_sensitivity: float | None = None
@@ -135,6 +141,8 @@ class STT(stt.STT):
         max_delay: NotGivenOr[float] = NOT_GIVEN,
         end_of_utterance_silence_trigger: NotGivenOr[float] = NOT_GIVEN,
         end_of_utterance_max_delay: NotGivenOr[float] = NOT_GIVEN,
+        end_of_turn_config: NotGivenOr[EndOfTurnConfig] = NOT_GIVEN,
+        vad_config: NotGivenOr[VoiceActivityConfig] = NOT_GIVEN,
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         punctuation_overrides: NotGivenOr[dict] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
@@ -199,6 +207,17 @@ class STT(stt.STT):
             end_of_utterance_max_delay: Maximum delay in seconds for end of utterance.
                 Must be greater than `end_of_utterance_silence_trigger`.
                 Overrides preset if provided. Optional.
+
+            end_of_turn_config: Advanced end-of-turn tuning for `ADAPTIVE` and
+                `SMART_TURN` modes: annotation penalty multipliers, base multiplier,
+                minimum end-of-turn delay and forced end-of-utterance behaviour.
+                Replaces the preset's end-of-turn configuration entirely if
+                provided. Optional.
+
+            vad_config: Client-side voice activity detection settings (enabled,
+                silence_duration, threshold) used to schedule end-of-turn
+                predictions in `ADAPTIVE` and `SMART_TURN` modes. Replaces the
+                preset's VAD configuration entirely if provided. Optional.
 
             additional_vocab: List of additional vocabulary entries to increase the
                 weight of specific words in the transcription model. Defaults to [].
@@ -320,6 +339,8 @@ class STT(stt.STT):
             max_delay=_set(max_delay),
             end_of_utterance_silence_trigger=_set(end_of_utterance_silence_trigger),
             end_of_utterance_max_delay=_set(end_of_utterance_max_delay),
+            end_of_turn_config=_set(end_of_turn_config),
+            vad_config=_set(vad_config),
             punctuation_overrides=_set(punctuation_overrides),
             include_partials=_set(include_partials),
             enable_diarization=_set(enable_diarization),
@@ -471,6 +492,7 @@ class STT(stt.STT):
         # Override preset parameters if provided
         advanced_params = [
             "enable_diarization",
+            "end_of_turn_config",
             "end_of_utterance_max_delay",
             "end_of_utterance_silence_trigger",
             "include_partials",
@@ -480,6 +502,7 @@ class STT(stt.STT):
             "prefer_current_speaker",
             "punctuation_overrides",
             "speaker_sensitivity",
+            "vad_config",
         ]
 
         # Override preset parameters if provided
