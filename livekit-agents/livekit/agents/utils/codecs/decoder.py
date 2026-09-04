@@ -266,7 +266,10 @@ class _WavInlineDecoder:
             self._init_streaming()
             self._state = _WavState.STREAMING
         else:
-            self._skip_remaining = chunk_size
+            # RIFF chunks are word-aligned: an odd-sized chunk is followed by a
+            # single pad byte that is not counted in chunk_size. Skip it too so
+            # the next chunk header stays aligned (common with LIST/bext/cue).
+            self._skip_remaining = chunk_size + (chunk_size & 1)
             self._state = _WavState.SKIP_CHUNK_DATA
         return pos
 
@@ -292,8 +295,13 @@ class _WavInlineDecoder:
         self._wave_channels = channels
         self._wave_rate = rate
         self._hdr_buf.clear()
-        self._need = 8
-        self._state = _WavState.CHUNK_HEADER
+        if self._chunk_size & 1:
+            # odd-sized fmt chunk carries a trailing pad byte (see _consume_chunk_header)
+            self._skip_remaining = 1
+            self._state = _WavState.SKIP_CHUNK_DATA
+        else:
+            self._need = 8
+            self._state = _WavState.CHUNK_HEADER
         return pos
 
     def _consume_skip(self, buf: memoryview, pos: int) -> int:
