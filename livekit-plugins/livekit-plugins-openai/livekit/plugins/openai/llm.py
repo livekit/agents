@@ -860,9 +860,9 @@ class LLM(llm.LLM):
     @staticmethod
     def with_nebius(
         *,
-        model: str | NebiusChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        model: str | NebiusChatModels,
         api_key: str | None = None,
-        base_url: str = "https://api.studio.nebius.com/v1/",
+        base_url: str = "https://api.tokenfactory.nebius.com/v1/",
         client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -874,10 +874,11 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
     ) -> LLM:
         """
-        Create a new instance of Nebius LLM.
+        Create a new Nebius Token Factory LLM.
 
-        ``api_key`` must be set to your Nebius API key, either using the argument or by setting
-        the ``NEBIUS_API_KEY`` environmental variable.
+        ``model`` must be a current chat-completions model from the Token Factory model catalog.
+        ``api_key`` must be set to your Token Factory API key, either using the argument or by
+        setting the ``NEBIUS_API_KEY`` environmental variable.
         """
 
         api_key = api_key or os.environ.get("NEBIUS_API_KEY")
