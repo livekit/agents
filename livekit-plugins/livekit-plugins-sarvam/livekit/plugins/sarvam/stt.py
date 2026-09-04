@@ -378,7 +378,7 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     params = {
         "language-code": opts.language,
         "model": opts.model,
-        "vad_signals": " true",
+        "vad_signals": "true",
     }
 
     if opts.sample_rate:
