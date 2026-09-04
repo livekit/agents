@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -30,6 +31,7 @@ def _make_stream_under_test(
     instance._should_flush = False  # type: ignore[attr-defined]
     instance._start_time_offset = 0.0  # type: ignore[attr-defined]
     instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
+    instance._utterance_speech_end_wall = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
@@ -86,6 +88,43 @@ async def test_end_speech_emits_bare_end_of_speech() -> None:
     assert len(end_events) == 1
     assert end_events[0].alternatives == []
     assert end_events[0].request_id == "req-session"
+
+
+async def test_end_of_speech_carries_speech_end_wall_clock() -> None:
+    # The voice pipeline anchors `_last_speaking_time` from END_OF_SPEECH's
+    # speech_end_time (stt turn-detection mode), which makes transcription_delay
+    # measure Sarvam VAD speech end -> final transcript received. The anchor is
+    # the wall-clock moment the plugin received END_SPEECH, not the later moment
+    # the EOS event is actually emitted.
+    instance, captured = _make_stream_under_test()
+
+    await instance._handle_events(_event("START_SPEECH"))
+    await instance._handle_events(_event("END_SPEECH"))
+    await asyncio.sleep(0.05)
+
+    end_events = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
+    assert len(end_events) == 1
+    speech_end = end_events[0].speech_end_time
+    assert speech_end is not None
+    assert speech_end <= time.time()
+    # The anchor is captured at END_SPEECH receipt, so it must not be later than
+    # the moment the EOS event was created by the fallback task.
+    assert speech_end <= end_events[0].created_at
+
+
+async def test_speech_end_wall_clock_resets_on_new_utterance() -> None:
+    # A stale anchor from the previous utterance must not leak into the next
+    # turn: _reset_utterance_state clears it on START_SPEECH.
+    instance, captured = _make_stream_under_test()
+
+    await instance._handle_events(_event("START_SPEECH"))
+    await instance._handle_events(_event("END_SPEECH"))
+    await asyncio.sleep(0.05)  # let the EOS fallback task fire
+    first_end = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)[0]
+    assert first_end.speech_end_time is not None
+
+    await instance._handle_events(_event("START_SPEECH"))
+    assert instance._utterance_speech_end_wall is None  # type: ignore[attr-defined]
 
 
 async def test_final_end_time_is_zero_when_provider_omits_timing() -> None:
@@ -258,3 +297,5 @@ async def test_occured_at_is_ignored() -> None:
     end = _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)[0]
     assert final.alternatives[0].end_time == 0.0
     assert end.alternatives == []
+    # The wall-clock anchor still rides on the EOS event itself.
+    assert end.speech_end_time is not None
