@@ -752,7 +752,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
                     "av",
                     "livekit.agents.inference._warmup",
-                    # Keep last so it freezes objects imported by every other preload.
+                    # Must remain last; it freezes objects imported by earlier preloads.
                     "livekit.agents.ipc._preload_freeze",
                 ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
