@@ -3,9 +3,11 @@ from .realtime_model import (
     IntelligenceLevel,
     ObservabilityIntegration,
     PhonicToolConfig,
+    PhonicToolDefinition,
     PronunciationEntry,
     RealtimeModel,
     RealtimeSession,
+    to_phonic_tool_definitions,
 )
 
 __all__ = [
@@ -13,7 +15,9 @@ __all__ = [
     "IntelligenceLevel",
     "ObservabilityIntegration",
     "PhonicToolConfig",
+    "PhonicToolDefinition",
     "PronunciationEntry",
     "RealtimeModel",
     "RealtimeSession",
+    "to_phonic_tool_definitions",
 ]
