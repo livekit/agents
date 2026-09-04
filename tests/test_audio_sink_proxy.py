@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
@@ -223,6 +224,212 @@ async def test_swap_stops_playback_progress_from_the_old_leaf() -> None:
     assert received == []
 
 
+class _ReportingSink(FakeAudioOutput):
+    """A sink with a local playhead, which reports it as it is cleared."""
+
+    def __init__(self, played: float = 0.4, started_at: float = 100.0) -> None:
+        super().__init__()
+        self._played = played
+        self._started_at = started_at
+
+    def clear_buffer(self) -> None:
+        self.on_playback_progressed(started_at=self._started_at, offset=0.0, duration=self._played)
+        super().clear_buffer()
+
+
+async def test_a_swap_still_hears_where_the_old_sink_got_to() -> None:
+    """The clear happens while the proxy is still listening for progress."""
+    leaf_a, leaf_b = _ReportingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    wrapper.flush()
+    proxy.set_next_in_chain(leaf_b)
+
+    assert [(ev.offset, ev.duration) for ev in received] == [(0.0, 0.4)]
+
+
+async def test_a_mid_segment_swap_keeps_progress_offsets_on_the_segment() -> None:
+    """A sink attached mid-segment counts from its own zero, the segment is already further in."""
+    leaf_a, leaf_b = _ReportingSink(played=2.0, started_at=100.0), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    # the avatar sink arrives mid-segment; what leaf_a still held never plays
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    proxy.set_next_in_chain(leaf_b)
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    leaf_b.on_playback_progressed(started_at=105.0, offset=0.0, duration=5.0)
+
+    assert [(ev.offset, ev.duration) for ev in received] == [(0.0, 2.0), (5.0, 5.0)]
+
+
+class _StartedSink(_TrackingSink):
+    """Says playback started at a fixed time, and reports nothing else."""
+
+    def __init__(self, started_at: float) -> None:
+        super().__init__()
+        self._started_at = started_at
+        self._started = False
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        if not self._started:
+            self._started = True
+            self.on_playback_started(created_at=self._started_at)
+
+
+async def test_a_detached_sink_that_reported_nothing_keeps_its_stretch() -> None:
+    """It cannot be asked now, so all it was given counts as played."""
+    leaf_a, leaf_b = _StartedSink(1000.0), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    with patch("livekit.agents.voice.io.time.time", return_value=1005.0):
+        proxy.set_next_in_chain(leaf_b)
+
+    assert [(ev.offset, ev.duration) for ev in received] == [(0.0, 5.0)]
+
+
+async def test_an_assumed_run_cannot_outrun_the_clock() -> None:
+    """Audio plays no faster than realtime, however much the sink was given."""
+    leaf_a, leaf_b = _StartedSink(1000.0), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    with patch("livekit.agents.voice.io.time.time", return_value=1000.1):
+        proxy.set_next_in_chain(leaf_b)  # given 5s, but only 0.1s has passed
+
+    assert [(ev.offset, round(ev.duration, 3)) for ev in received] == [(0.0, 0.1)]
+
+
+async def test_a_sink_that_never_started_playing_has_nothing_assumed() -> None:
+    """Its silence means nothing reached its device, not that it cannot report."""
+    leaf_a, leaf_b = _TrackingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    proxy.set_next_in_chain(leaf_b)
+
+    assert received == []
+
+
+async def test_a_segment_ending_on_a_detached_sink_keeps_its_stretch() -> None:
+    """The swap ends the segment there, and the sink reported no run of its own."""
+    leaf_a, leaf_b = FakeAudioOutput(), _StartedSink(105.0)
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=2.0))
+    leaf_a.on_playback_progressed(started_at=100.0, offset=0.0, duration=2.0)
+    proxy.set_next_in_chain(leaf_b)  # mid-segment
+    await wrapper.capture_frame(_silence(duration_s=5.0))
+    wrapper.flush()
+    with patch("livekit.agents.voice.io.time.time", return_value=110.0):
+        proxy.set_next_in_chain(FakeAudioOutput())  # the segment ends on leaf_b
+
+    assert [(ev.offset, ev.duration) for ev in received] == [(0.0, 2.0), (2.0, 5.0)]
+
+
+async def test_a_swap_during_a_handover_counts_the_frame_on_the_old_sink() -> None:
+    """The old sink already has the frame, so the new sink's zero sits past it."""
+    box: list[tuple[_AudioSinkProxy, AudioOutput]] = []
+
+    class _SwappingSink(_TrackingSink):
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            await super().capture_frame(frame)
+            if box:
+                swap_proxy, new = box.pop()
+                swap_proxy.set_next_in_chain(new)
+
+    leaf_a, leaf_b = _SwappingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+    box.append((proxy, leaf_b))
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=0.5))
+    leaf_b.on_playback_progressed(started_at=200.0, offset=0.0, duration=0.5)
+
+    assert [(ev.offset, ev.duration) for ev in received] == [(0.5, 0.5)]
+
+
+async def test_a_sink_that_only_reports_a_position_is_placed_at_its_offset() -> None:
+    """All a remote sink can say is how much played, so the segment supplies the where."""
+    leaf_a, leaf_b = _ReportingSink(played=0.03), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    proxy.set_next_in_chain(leaf_b)
+    await wrapper.capture_frame(_silence(duration_s=0.02))
+    wrapper.flush()
+    await asyncio.wait_for(wrapper.wait_for_playout(), timeout=2.0)
+
+    # leaf_b reports no runs, only that 0.02s played, and the segment puts that at 0.05
+    assert [(round(ev.offset, 3), round(ev.duration, 3)) for ev in received] == [
+        (0.0, 0.03),
+        (0.05, 0.02),
+    ]
+
+
+async def test_the_next_segment_counts_from_its_own_start_again() -> None:
+    leaf_a, leaf_b = _ReportingSink(played=0.05), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    received: list[PlaybackProgressedEvent] = []
+    wrapper.on("playback_progressed", received.append)
+
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    proxy.set_next_in_chain(leaf_b)
+    await wrapper.capture_frame(_silence(duration_s=0.02))
+    wrapper.flush()
+    await asyncio.wait_for(wrapper.wait_for_playout(), timeout=2.0)
+
+    await wrapper.capture_frame(_silence(duration_s=0.02))
+    leaf_b.on_playback_progressed(started_at=200.0, offset=0.0, duration=0.02)
+
+    # leaf_a's stretch, leaf_b's stretch in the same segment, then a segment from zero again
+    assert [round(ev.offset, 3) for ev in received] == [0.0, 0.05, 0.0]
+
+
 @pytest.mark.asyncio
 async def test_swap_disconnects_old_leaf() -> None:
     leaf_a = FakeAudioOutput()
@@ -251,10 +458,42 @@ class _ClearCountingSink(FakeAudioOutput):
     def __init__(self) -> None:
         super().__init__()
         self.clear_calls = 0
+        self.flush_calls = 0
+
+    def flush(self) -> None:
+        self.flush_calls += 1
+        super().flush()
 
     def clear_buffer(self) -> None:
         self.clear_calls += 1
         super().clear_buffer()
+
+
+async def test_a_mid_capture_swap_interrupts_the_old_sink() -> None:
+    """It sees a flush and a clear, the shape every other interruption gives it."""
+    leaf_a, leaf_b = _ClearCountingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=0.05))
+    proxy.set_next_in_chain(leaf_b)
+
+    assert (leaf_a.flush_calls, leaf_a.clear_calls) == (1, 1)
+
+
+async def test_a_swap_after_a_flush_does_not_flush_again() -> None:
+    """A second flush cancels the playout wait that is already draining the sink."""
+    leaf_a, leaf_b = _ClearCountingSink(), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    wrapper.flush()
+    proxy.set_next_in_chain(leaf_b)
+
+    assert (leaf_a.flush_calls, leaf_a.clear_calls) == (1, 1)
 
 
 @pytest.mark.asyncio
