@@ -4451,8 +4451,18 @@ class AgentActivity(RecognitionHooks):
 
     def _disallow_interruptions(self, speech_handle: SpeechHandle) -> None:
         speech_handle.allow_interruptions = False
-        if self._paused_speech is not None and self._paused_speech.handle is speech_handle:
-            self._reconcile_playout_pause(speech_handle)
+        paused_speech = self._paused_speech
+        if paused_speech is None or paused_speech.handle is not speech_handle:
+            return
+
+        if (
+            not speech_handle.done()
+            and self._session.output.audio_enabled
+            and self._session.output.audio is not None
+        ):
+            self._restore_paused_speech_state(paused_speech)
+
+        self._reconcile_playout_pause(speech_handle)
 
     def _update_paused_speech(self, speech_handle: SpeechHandle, timeout: float) -> None:
         """Record that ``speech_handle`` is paused.
@@ -4523,6 +4533,16 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer = None
         self._false_interruption_pending = False
 
+    def _restore_paused_speech_state(self, paused_speech: _PausedSpeechInfo) -> None:
+        self._session._update_agent_state(
+            paused_speech.agent_state,
+            otel_context=paused_speech.handle._agent_turn_context,
+        )
+        if self._audio_recognition and paused_speech.agent_state == "speaking":
+            self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
+        if self.interruption_enabled:
+            self._disable_vad_interruption_soon()
+
     def _start_false_interruption_timer(self, timeout: float) -> None:
         self._cancel_false_interruption_timer()
 
@@ -4541,14 +4561,7 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
             ):
-                self._session._update_agent_state(
-                    self._paused_speech.agent_state,
-                    otel_context=self._paused_speech.handle._agent_turn_context,
-                )
-                if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
-                if self.interruption_enabled:
-                    self._disable_vad_interruption_soon()
+                self._restore_paused_speech_state(self._paused_speech)
                 audio_output.resume()
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
