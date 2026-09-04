@@ -628,6 +628,30 @@ async def test_interruption(
         check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
 
 
+async def test_interrupted_say_uses_speech_start_timestamp() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("I saw your application for a Honda")
+
+    actions = FakeActions()
+    actions.add_tts(10.0, input="I saw your application for a Honda")
+    actions.add_user_speech(1.0, 1.2, "Who is this?")
+    actions.add_llm("This is John.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [message.role for message in messages] == ["system", "assistant", "user", "assistant"]
+    assert messages[1].interrupted is True
+    assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
+    assert messages[2].text_content == "Who is this?"
+    assert messages[3].text_content == "This is John."
+
+
 async def test_interruption_options() -> None:
     speed = 1
     actions = FakeActions()
