@@ -499,8 +499,10 @@ def set_tracer_provider(
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
-        allow_pii (bool | None, optional): Whether this provider's exporters may receive
-            conversational content, tool payloads and other user data. Defaults to
+        allow_pii (bool | None, optional): Whether the exporters on this provider *other
+            than LiveKit Cloud's* may receive conversational content, tool payloads and
+            other user data. What LiveKit Cloud receives is the project's PII setting in
+            the dashboard, which this cannot widen or narrow. Defaults to
             ``True`` (or ``LIVEKIT_TELEMETRY_ALLOW_PII``, when set), since a GenAI
             backend can only render the conversation if it receives it. Pass ``False``
             to strip PII in-process before every exporter but LiveKit Cloud's, leaving
