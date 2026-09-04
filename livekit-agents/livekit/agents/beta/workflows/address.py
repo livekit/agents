@@ -59,6 +59,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_address = ""
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -135,9 +136,16 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Repeat the address field by field, spelling the street name letter by "
+            f"letter: {address_fields}"
+            if self._spell_read_back
+            else "Repeat the address back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The address has been updated to {address}\n"
-            f"Repeat the address field by field: {address_fields} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_address` directly"
         )
 

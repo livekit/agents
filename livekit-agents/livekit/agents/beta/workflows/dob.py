@@ -91,6 +91,7 @@ class GetDOBTask(AgentTask[GetDOBResult]):
         self._require_explicit_ask = require_explicit_ask
         self._current_dob: date | None = None
         self._current_time: time | None = None
+        self._spell_read_back = False
 
         super().__init__(
             instructions=Instructions(
@@ -195,9 +196,15 @@ class GetDOBTask(AgentTask[GetDOBResult]):
             formatted_time = self._current_time.strftime("%I:%M %p")
             response += f" at {formatted_time}"
 
+        read_back = (
+            f"Repeat the date back one part at a time, the month, the day, then the year: "
+            f"{dob.strftime('%B')}, {dob.day}, {dob.year}"
+            if self._spell_read_back
+            else "Repeat the date back to the user in a natural spoken format."
+        )
+        self._spell_read_back = True
         response += (
-            "\nRepeat the date back to the user in a natural spoken format.\n"
-            "Prompt the user for confirmation, do not call `confirm_dob` directly"
+            f"\n{read_back}\nPrompt the user for confirmation, do not call `confirm_dob` directly"
         )
 
         return response
