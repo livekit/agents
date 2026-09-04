@@ -59,6 +59,7 @@ livekit-plugins-slng = { workspace = true }
 livekit-plugins-avatartalk = { workspace = true }
 livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-simplismart = { workspace = true }
+livekit-plugins-sonex = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
 livekit-plugins-browser = { workspace = true }
