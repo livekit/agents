@@ -9,8 +9,6 @@ in span names, event names, or log message bodies — those are not redactable.
 
 ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"
-ATTR_START_TIME = "lk.start_time"
-ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
 ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
 """Provider-known correlation ids associated with this span (list[str]).
@@ -30,7 +28,6 @@ ATTR_AGENT_NAME = "lk.agent_name"
 ATTR_CLOUD_AGENT_ID = "lk.cloud_agent_id"
 ATTR_DEPLOYMENT_ID = "lk.deployment_id"
 ATTR_ROOM_NAME = "lk.pii.room_name"
-ATTR_SESSION_OPTIONS = "lk.session_options"
 
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
