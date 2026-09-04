@@ -36,7 +36,7 @@ result = await WarmTransferTask(
 - A [LiveKit Cloud](https://livekit.io) account
 - SIP trunks configured (inbound & outbound) [guide](https://docs.livekit.io/sip/quickstarts/configuring-sip-trunk/)
 - Two phone numbers, one to call the agent, the other for escalation
-- A SIP dispatch rule to trigger `sip-inbound` agent when dialed
+- A SIP dispatch rule to trigger the `telephony-support-agent` agent when dialed (set `SUPPORT_AGENT_DISPATCH_NAME` to change the name)
 
 **Environment variables**
 - LIVEKIT_SIP_OUTBOUND_TRUNK: the outbound SIP trunk ID
