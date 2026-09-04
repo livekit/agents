@@ -7,7 +7,7 @@ from typing import Annotated
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import StreamWriter
@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 
 from livekit.agents.llm import ChatContext
 from livekit.plugins.langchain import LLMAdapter
+from livekit.plugins.langchain.langgraph import _to_chat_chunk
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -259,3 +260,102 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+
+# --- Tests: token usage on ChatChunk ---
+
+
+def test_to_chat_chunk_maps_usage_metadata():
+    """AIMessageChunk.usage_metadata is copied onto ChatChunk.usage."""
+    chunk = _to_chat_chunk(
+        AIMessageChunk(
+            content="Hello",
+            id="msg-1",
+            usage_metadata={
+                "input_tokens": 12,
+                "output_tokens": 4,
+                "total_tokens": 16,
+            },
+        )
+    )
+
+    assert chunk is not None
+    assert chunk.id == "msg-1"
+    assert chunk.delta is not None
+    assert chunk.delta.content == "Hello"
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 12
+    assert chunk.usage.completion_tokens == 4
+    assert chunk.usage.total_tokens == 16
+
+
+def test_to_chat_chunk_keeps_empty_content_usage_chunk():
+    """Providers may emit usage on a later chunk with no text; do not drop it."""
+    chunk = _to_chat_chunk(
+        AIMessageChunk(
+            content="",
+            usage_metadata={
+                "input_tokens": 9,
+                "output_tokens": 3,
+                "total_tokens": 12,
+            },
+        )
+    )
+
+    assert chunk is not None
+    assert chunk.delta is None
+    assert chunk.usage is not None
+    assert chunk.usage.prompt_tokens == 9
+    assert chunk.usage.completion_tokens == 3
+    assert chunk.usage.total_tokens == 12
+
+
+def test_to_chat_chunk_drops_empty_chunk_without_usage():
+    assert _to_chat_chunk(AIMessageChunk(content="")) is None
+    assert _to_chat_chunk("") is None
+
+
+def test_to_chat_chunk_string_has_no_usage():
+    chunk = _to_chat_chunk("hello")
+    assert chunk is not None
+    assert chunk.delta is not None
+    assert chunk.delta.content == "hello"
+    assert chunk.usage is None
+
+
+class _UsageStreamingGraph:
+    """Minimal graph that yields a token then a usage-only chunk."""
+
+    async def astream(self, *args, **kwargs):
+        yield AIMessageChunk(content="Hello")
+        yield AIMessageChunk(
+            content="",
+            usage_metadata={
+                "input_tokens": 8,
+                "output_tokens": 1,
+                "total_tokens": 9,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_messages_mode_forwards_usage_only_chunk():
+    """Usage-only chunks must reach the caller so llm_node_tps can be computed."""
+    adapter = LLMAdapter(_UsageStreamingGraph(), stream_mode="messages")  # type: ignore[arg-type]
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="Hi")
+    stream = adapter.chat(chat_ctx=chat_ctx)
+
+    contents: list[str] = []
+    usages = []
+    async for chunk in stream:
+        if chunk.delta and chunk.delta.content:
+            contents.append(chunk.delta.content)
+        if chunk.usage is not None:
+            usages.append(chunk.usage)
+
+    assert contents == ["Hello"]
+    assert len(usages) == 1
+    assert usages[0].prompt_tokens == 8
+    assert usages[0].completion_tokens == 1
+    assert usages[0].total_tokens == 9
