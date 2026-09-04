@@ -3431,7 +3431,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "spatius", extras = ["opus"], specifier = ">=1.0.5" },
+    { name = "spatius", extras = ["opus"], specifier = ">=1.1.0" },
 ]
 
 [[package]]
@@ -5772,7 +5772,7 @@ wheels = [
 
 [[package]]
 name = "spatius"
-version = "1.0.5"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -5783,9 +5783,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/10/d1b4b523c0b20e6bea62c3f8497ea12339bc0532804ffe9d9fba7c1b00e9/spatius-1.0.5.tar.gz", hash = "sha256:bc9a2d66156e5eec65f45847d4d19be1b0cbc0bbe91011150a58f931ad681500", size = 152920, upload-time = "2026-08-16T22:13:26.215Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/e5/bcc84a81d1aa7254d91869f2ebac0bfdf6e9d3c43510ee98abee6b478d04/spatius-1.1.0.tar.gz", hash = "sha256:5b2d6ce92ce58172dc2ed98f5184de0e961f781ed390f7466b471836c2d04658", size = 160375, upload-time = "2026-08-28T11:45:57.494Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/c9/4b2ba01d29595f9da903519588bfee8f06982bc5836a61bb81646c1998a0/spatius-1.0.5-py3-none-any.whl", hash = "sha256:114a19897ed96a6f6a7fac7edece0f204f9fe166776d8ca253119c9bf05c8371", size = 31489, upload-time = "2026-08-16T22:13:24.954Z" },
+    { url = "https://files.pythonhosted.org/packages/22/73/b13dda4c6376aaeb4cd61eb0c0f340afa35582b81b9c97262f85f2d32064/spatius-1.1.0-py3-none-any.whl", hash = "sha256:887ee65021a7dd52470a29bd341b40b4a2ee9c21e423e59d011097329a460b34", size = 38519, upload-time = "2026-08-28T11:45:56.303Z" },
 ]
 
 [package.optional-dependencies]
