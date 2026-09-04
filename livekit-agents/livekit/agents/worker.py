@@ -51,7 +51,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
-from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
+from .types import ATTRIBUTE_AGENT_NAME, ATTRIBUTE_AGENT_VERSION, NOT_GIVEN, NotGivenOr
 from .utils import http_context, http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
@@ -336,6 +336,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
         self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
+        self._deployed_version = os.environ.get("LIVEKIT_DEPLOYED_AGENT_VERSION") or ""
 
         self._host = host
         self._port = port
@@ -1388,6 +1389,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_NAME] = (
                 self._agent_name
             )
+            if self._deployed_version:
+                availability_resp.availability.participant_attributes[ATTRIBUTE_AGENT_VERSION] = (
+                    self._deployed_version
+                )
             if args.attributes:
                 availability_resp.availability.participant_attributes.update(args.attributes)
 

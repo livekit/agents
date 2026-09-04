@@ -39,6 +39,12 @@ The name of the agent, stored in the agent's attributes.
 This is set when the agent joins a room and can be used to identify the agent type.
 """
 
+ATTRIBUTE_AGENT_VERSION = "lk.agent.version"
+"""
+The deployed version of the agent, stored in the agent's attributes.
+Only set for agents hosted on LiveKit Cloud; matches the version shown by `lk agent versions`.
+"""
+
 ATTRIBUTE_SIMULATOR = "lk.simulator"
 """
 Indicates that the participant is a simulator for testing purposes.
