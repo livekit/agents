@@ -1374,6 +1374,7 @@ class AudioRecognition:
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
+                self._user_turn_committed = False
 
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_started()
