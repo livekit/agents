@@ -277,6 +277,20 @@ def validate_websocket_url(websocket_url: str, *, allow_custom_endpoint: bool = 
     validate_endpoint_host(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
 
 
+def _model_endpoint_identity(websocket_url: str) -> tuple[str, str, int, str]:
+    """Return the URL parts that identify the model behind an endpoint."""
+    parts = urlsplit(websocket_url)
+    assert parts.hostname is not None
+    scheme = parts.scheme.lower()
+    default_port = 443 if scheme == "wss" else 80
+    return (
+        scheme,
+        parts.hostname.rstrip(".").lower(),
+        parts.port or default_port,
+        parts.path.rstrip("/"),
+    )
+
+
 def model_from_websocket_url(
     websocket_url: str, *, allow_custom_endpoint: bool = False
 ) -> str | None:

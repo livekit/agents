@@ -149,18 +149,23 @@ class WebSocketV1Adapter:
     def prewarm(self) -> None:
         self._pool.prewarm()
 
-    def update_endpoint(self, websocket_v1_url: str) -> bool:
+    def update_endpoint(self, websocket_v1_url: str, *, model_changed: bool) -> None:
+        """Update the connection URL after validating its model binding."""
         _websocket_v1.validate_websocket_url(
             websocket_v1_url, allow_custom_endpoint=self._allow_custom_endpoint
         )
+        model_endpoint_changed = _websocket_v1._model_endpoint_identity(
+            websocket_v1_url
+        ) != _websocket_v1._model_endpoint_identity(self._websocket_v1_url)
+        if model_changed and not model_endpoint_changed:
+            raise ValueError("model cannot change without changing websocket_url")
         if websocket_v1_url == self._websocket_v1_url:
-            return False
+            return
 
         old_pool = self._pool
         self._websocket_v1_url = websocket_v1_url
         self._pool = self._new_pool()
         self._retire_pool(old_pool)
-        return True
 
     async def aclose(self) -> None:
         await self._pool.aclose()

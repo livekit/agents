@@ -519,6 +519,35 @@ def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
     assert tts.model == "coda"
 
 
+@pytest.mark.parametrize(
+    "updated_websocket_url",
+    [
+        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws/",
+        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated",
+        "wss://TIGERSTRIPE.aws-us-east-1.whiteglove.rime.ai/ws",
+        "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai:443/ws",
+    ],
+)
+def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
+    updated_websocket_url: str,
+) -> None:
+    from livekit.plugins.rime import TTS
+
+    websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws"
+    tts = TTS(
+        api_key="test-key",
+        websocket_url=websocket_url,
+        model="coda",
+    )
+
+    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
+        tts.update_options(websocket_url=updated_websocket_url, model="mistv3")
+
+    assert tts.model == "coda"
+    assert tts._websocket_v1_adapter is not None
+    assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
+
+
 def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
     from livekit.plugins.rime import TTS
 
@@ -528,6 +557,26 @@ def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
     tts.update_options(websocket_url=websocket_url, model="coda")
 
     assert tts.model == "coda"
+
+
+def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(
+        api_key="test-key",
+        websocket_url="wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws",
+        model="coda",
+    )
+    adapter = tts._websocket_v1_adapter
+    assert adapter is not None
+    previous_pool = adapter._pool
+    updated_websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated"
+
+    tts.update_options(websocket_url=updated_websocket_url, model="coda")
+
+    assert tts.model == "coda"
+    assert adapter._websocket_v1_url == updated_websocket_url
+    assert adapter._pool is not previous_pool
 
 
 def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
