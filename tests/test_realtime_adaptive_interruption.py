@@ -10,6 +10,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -547,6 +548,21 @@ def test_positive_verdict_does_not_reopen_overlap_during_transcript_replay() -> 
     assert ar._overlap_open is False
     assert ar._transcript_gate_active is False
     assert _sentinel_names(ch) == []
+
+
+@pytest.mark.parametrize("interruption", [NOT_GIVEN, True, False])
+def test_end_of_speech_passes_interruption_verdict_to_endpointing(
+    interruption: NotGivenOr[bool],
+) -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._speaking = True
+
+    ar._on_end_of_speech(ended_at=10.0, interruption=interruption)
+
+    ar._endpointing.on_end_of_speech.assert_called_once_with(
+        ended_at=10.0,
+        interruption=interruption,
+    )
 
 
 async def test_agent_speech_end_closes_overlap_before_reset() -> None:
