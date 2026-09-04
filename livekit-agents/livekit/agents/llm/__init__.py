@@ -23,6 +23,7 @@ from .llm import (
     FunctionToolCall,
     LLMError,
     LLMStream,
+    ProviderToolCall,
 )
 from .realtime import (
     GenerationCreatedEvent,
@@ -104,6 +105,7 @@ __all__ = [
     "utils",
     "remote_chat_context",
     "FunctionToolCall",
+    "ProviderToolCall",
     "RealtimeModel",
     "RealtimeError",
     "RealtimeModelError",

@@ -297,6 +297,7 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
+    "provider_tool_execution_updated",
     "error",
     "close",
     "debug_message",
@@ -525,6 +526,42 @@ class ToolExecutionUpdatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class ProviderToolCallStarted(BaseModel):
+    """A provider-executed (server-side) tool call began running."""
+
+    type: Literal["provider_tool_call_started"] = "provider_tool_call_started"
+    call_id: str
+    name: str
+    arguments: str = ""
+
+
+class ProviderToolCallEnded(BaseModel):
+    """A provider-executed tool call finished, with its result when the provider returns one."""
+
+    type: Literal["provider_tool_call_ended"] = "provider_tool_call_ended"
+    call_id: str
+    name: str
+    arguments: str = ""
+    result: str | None = None
+
+
+class ProviderToolExecutionUpdatedEvent(BaseModel):
+    """One provider-tool lifecycle update, parallel to ``ToolExecutionUpdatedEvent`` for
+    locally-executed tools. Discriminate on ``update.type``: ``provider_tool_call_started``
+    → ``provider_tool_call_ended``.
+
+    Provider tools run inside the model provider's own stream, so they never appear in
+    ``tool_execution_updated`` or ``function_tools_executed``.
+    """
+
+    type: Literal["provider_tool_execution_updated"] = "provider_tool_execution_updated"
+    update: Annotated[
+        ProviderToolCallStarted | ProviderToolCallEnded,
+        Field(discriminator="type"),
+    ]
+    created_at: float = Field(default_factory=time.time)
+
+
 class UserTurnExceededEvent(BaseModel):
     type: Literal["user_turn_exceeded"] = "user_turn_exceeded"
     transcript: str
@@ -591,6 +628,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
+    | ProviderToolExecutionUpdatedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,
