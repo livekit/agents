@@ -87,6 +87,7 @@ members = [
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
+    "livekit-plugins-standin",
     "livekit-plugins-tavus",
     "livekit-plugins-telnyx",
     "livekit-plugins-trugen",
@@ -3474,6 +3475,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "spitch", specifier = ">=1.47.0" },
+]
+
+[[package]]
+name = "livekit-plugins-standin"
+source = { editable = "livekit-plugins/livekit-plugins-standin" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
