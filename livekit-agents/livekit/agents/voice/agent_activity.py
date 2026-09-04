@@ -4536,12 +4536,25 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
             ):
+                if (recognition := self._audio_recognition) is not None:
+                    # the interruption was false, so the turn that raised it is abandoned: let it
+                    # go before the agent's next speech interval opens, or the next real utterance
+                    # inherits its speech-start anchor. How much can go depends on whether the
+                    # turn was decided, which only the decision itself knows: this can be reached
+                    # with no decision ever made (turn_detection="stt" starts no bounce on VAD
+                    # END_OF_SPEECH), and then a slow stt final for real speech may still be on
+                    # its way.
+                    if recognition._user_turn_dropped:
+                        recognition._clear_user_turn()
+                    else:
+                        recognition._release_user_turn_anchors()
+
                 self._session._update_agent_state(
                     self._paused_speech.agent_state,
                     otel_context=self._paused_speech.handle._agent_turn_context,
                 )
-                if self._audio_recognition and self._paused_speech.agent_state == "speaking":
-                    self._audio_recognition._on_start_of_agent_speech(started_at=time.time())
+                if recognition is not None and self._paused_speech.agent_state == "speaking":
+                    recognition._on_start_of_agent_speech(started_at=time.time())
                 if self.interruption_enabled:
                     self._disable_vad_interruption_soon()
                 audio_output.resume()

@@ -14,7 +14,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, AgentSession, TurnHandlingOptions, stt, vad
 from livekit.agents.inference import OverlappingSpeechEvent
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
@@ -46,6 +46,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._session = MagicMock()
     ar._hooks = hooks
     ar._stt = None  # realtime model, no STT
+    ar._stt_aligned_transcript = False
     ar._audio_transcript = ""
     ar._turn_detection_mode = None
     ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
@@ -102,6 +103,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._vad_speech_started = False
     ar._end_of_turn_task = None
     ar._user_turn_committed = False
+    ar._user_turn_dropped = False
     ar._vad = None
     ar._last_language = None
     ar._last_emitted_prediction = None
@@ -385,3 +387,159 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_drops_the_turn_it_resumed_over(monkeypatch: pytest.MonkeyPatch) -> None:
+    # a confirmed false interruption abandons the recognition turn that caused it; leaving that
+    # turn open lets the next real utterance inherit its anchor, because _on_vad_event only
+    # takes a new _speech_start_time while _vad_speech_started is still False
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    stale_start = time.time() - 12.0
+
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    # the VAD turn behind the interruption: opened, never transcribed
+    recognition._speech_start_time = stale_start
+    recognition._vad_speech_started = True
+    # a confirmed backchannel is what makes the turn drop rather than commit
+    recognition._turn_backchannel_over_agent = True
+    recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    await asyncio.sleep(MAX_DELAY + 0.3)
+    assert activity._paused_speech is None  # the speech resumed
+
+    # the later, real utterance
+    onset = time.time()
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.START_OF_SPEECH,
+            samples_index=0,
+            timestamp=onset,
+            speech_duration=0.1,
+            silence_duration=0.0,
+        )
+    )
+    await session.aclose()
+
+    assert recognition._speech_start_time == pytest.approx(onset - 0.1, abs=0.1)
+
+
+async def test_resume_without_a_turn_decision_keeps_a_late_transcript_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # turn_detection="stt" starts no eou bounce on VAD END_OF_SPEECH, so the resume timer fires
+    # with no decision open. The speech may have been real with a slow stt final still on its
+    # way: letting the turn go must release its anchor without taking the pipeline — and the
+    # transcript it can still commit — with it
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    recognition._speech_start_time = time.time() - 12.0
+    recognition._vad_speech_started = True
+    recognition._audio_transcript = "what the caller actually said"
+    pipeline = MagicMock()
+    pipeline.aclose = AsyncMock()
+    recognition._stt_pipeline = pipeline
+
+    # no _run_eou_detection: on an stt pipeline the bounce waits for the stt final
+    activity.on_end_of_speech(None)
+    assert recognition._end_of_turn_task is None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert activity._paused_speech is None  # the speech resumed
+    assert recognition._speech_start_time is None  # the anchor is released
+    # everything a late final needs to commit the turn survived
+    assert recognition._audio_transcript == "what the caller actually said"
+    assert recognition._stt_pipeline is pipeline
+    pipeline.aclose.assert_not_called()
+
+
+async def test_a_backchannel_dropped_before_the_timeout_does_not_leak_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the shipped false_interruption_timeout is 2s and a confirmed backchannel drops in a few
+    # hundred ms, so the decision normally lands well before the resume timer. The verdict has
+    # to survive that gap: a dropped turn keeps its transcript, which would otherwise be
+    # prepended to the next real utterance (_audio_transcript accumulates)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, handle = _paused_activity(session)
+    # a resume timer that outlives the turn decision, unlike the module default
+    late_timeout = MAX_DELAY + 0.3
+    activity._paused_speech = _PausedSpeechInfo(
+        handle=handle, agent_state="speaking", timeout=late_timeout
+    )
+
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    recognition._speech_start_time = time.time() - 12.0
+    recognition._vad_speech_started = True
+    recognition._audio_transcript = "mm-hmm"
+    recognition._turn_backchannel_over_agent = True
+    recognition._run_eou_detection(MagicMock(), trigger="vad")
+
+    # the turn is dropped here, while the resume timer is still running
+    await asyncio.sleep(MAX_DELAY + 0.1)
+    assert recognition._user_turn_dropped is True
+
+    await asyncio.sleep(late_timeout - MAX_DELAY + 0.2)
+    await session.aclose()
+
+    assert activity._paused_speech is None  # the speech resumed
+    assert recognition._speech_start_time is None
+    assert recognition._audio_transcript == ""  # nothing left to prepend
+
+
+async def test_an_stt_anchored_turn_supersedes_the_previous_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the resume timer is also armed from the stt hooks, so a session can anchor its next turn
+    # through _on_stt_event rather than a VAD start. The dropped verdict belongs to the turn
+    # that ended: read against the new one it would erase a real transcript
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    recognition = _recognition(activity, last_speaking_time=time.time() - VAD_MIN_SILENCE)
+    activity._audio_recognition = recognition
+    recognition._turn_detection_mode = "stt"
+    # the previous turn was decided and dropped
+    recognition._user_turn_dropped = True
+
+    # the next turn takes its anchor from the stt stream, never from a VAD start
+    onset = time.time()
+    await recognition._on_stt_event(
+        stt.SpeechEvent(
+            type=stt.SpeechEventType.START_OF_SPEECH,
+            alternatives=[stt.SpeechData(language="en", text="", start_time=onset)],
+        )
+    )
+    assert recognition._speech_start_time == pytest.approx(onset, abs=1.0)
+    assert recognition._user_turn_dropped is False
+
+    # a slow final for this new turn is still on its way when the resume fires
+    recognition._audio_transcript = "what the caller actually said"
+    activity.on_end_of_speech(None)
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert activity._paused_speech is None
+    assert recognition._audio_transcript == "what the caller actually said"

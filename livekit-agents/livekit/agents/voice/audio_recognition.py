@@ -283,6 +283,9 @@ class AudioRecognition:
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
         self._final_transcript_confidence: list[float] = []
+        # set by the end-of-turn decision; read by the false-interruption resume, which has to
+        # know whether this turn was decided and dropped or is simply still open
+        self._user_turn_dropped = False
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
@@ -976,6 +979,34 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
+    def _open_user_turn(self, speech_start_time: float) -> None:
+        """Anchor a new logical user turn, superseding the previous turn's verdict.
+
+        Every path that takes a fresh ``_speech_start_time`` goes through here.
+        ``_user_turn_dropped`` describes the turn that just ended, and reading it against
+        this one is how a real transcript ends up discarded.
+        """
+        self._speech_start_time = speech_start_time
+        self._user_turn_dropped = False
+
+    def _release_user_turn_anchors(self) -> None:
+        """Release an open turn's anchors without discarding what could still arrive.
+
+        For a turn abandoned before any end-of-turn decision ran: its speech-start anchor
+        must not be inherited by the next utterance, but an stt final for this speech may
+        still be in flight. Unlike `_clear_user_turn`, the transcript, the accumulated
+        confidence, the turn detector's buffer and the stt pipeline are left alone, so a
+        late final can still commit the turn.
+        """
+        self._speech_start_time = None
+        self._vad_speech_started = False
+        self._last_emitted_prediction = None
+        self._user_turn_dropped = False
+        self._turn_tracker = _UserTurnTracker()
+
+        # end any in-progress user_turn span so the next speech starts a fresh one
+        self._end_user_turn_span()
+
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
@@ -986,6 +1017,7 @@ class AudioRecognition:
         self._last_speaking_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
+        self._user_turn_dropped = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1339,11 +1371,12 @@ class AudioRecognition:
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
-            if self._speech_start_time is None:
-                self._speech_start_time = ev.speech_start_time or time.time()
+            if (speech_start_time := self._speech_start_time) is None:
+                speech_start_time = ev.speech_start_time or time.time()
+                self._open_user_turn(speech_start_time)
 
-            with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
-                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
+            with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+                self._hooks.on_start_of_speech(None, speech_start_time=speech_start_time)
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
@@ -1357,7 +1390,7 @@ class AudioRecognition:
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
             if not self._vad_speech_started:
-                self._speech_start_time = speech_start_time
+                self._open_user_turn(speech_start_time)
                 self._vad_speech_started = True
 
             self._cancel_transcription_timeout()
@@ -1386,7 +1419,7 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
                 if self._speech_start_time is None:
-                    self._speech_start_time = time.time() - ev.raw_accumulated_speech
+                    self._open_user_turn(time.time() - ev.raw_accumulated_speech)
                 if self._speaking and self._turn_detector_prediction_fut is not None:
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
@@ -1749,6 +1782,9 @@ class AudioRecognition:
                     self._turn_detector_stream.flush(reason="turn committed")
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
+
+            # a dropped turn keeps accumulating, so nothing else records the verdict
+            self._user_turn_dropped = not committed
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
