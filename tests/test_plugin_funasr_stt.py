@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import sys
 import threading
 import types
@@ -154,6 +155,59 @@ async def test_cancelled_recognition_keeps_model_calls_serialized(
         await asyncio.wait_for(second, timeout=5)
 
     assert second_started.is_set()
+
+
+async def test_queued_recognition_uses_options_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls: list[dict[str, Any]] = []
+
+    def generate(**kwargs: Any) -> list[dict[str, str]]:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            first_started.set()
+            assert release_first.wait(timeout=5)
+        return [{"text": "<|zh|>hello"}]
+
+    funasr_stt = _load_funasr_stt_module(monkeypatch, generate)
+    stt = funasr_stt.FunASRSTT(language="zh", use_itn=True)
+    first = asyncio.create_task(
+        stt._recognize_impl([_make_audio_frame()], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    )
+    assert await asyncio.to_thread(first_started.wait, 5)
+
+    second = asyncio.create_task(
+        stt._recognize_impl([_make_audio_frame()], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    )
+    await asyncio.sleep(0)
+    stt.update_options(language="en", use_itn=False)
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    assert [call["language"] for call in calls] == ["zh", "zh"]
+    assert [call["use_itn"] for call in calls] == [True, True]
+
+
+async def test_model_loading_redacts_model_identifier_from_logs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    funasr_stt = _load_funasr_stt_module(monkeypatch, lambda **kwargs: [{"text": "<|en|>hello"}])
+    private_model = "private-model?access_token=should-not-appear"
+    stt = funasr_stt.FunASRSTT(model=private_model)
+
+    with caplog.at_level(logging.INFO, logger="livekit.plugins.funasr"):
+        await stt._recognize_impl([_make_audio_frame()], conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    assert private_model not in caplog.text
+
+
+def test_plugin_version_matches_livekit_agents_release() -> None:
+    from livekit.agents import __version__ as agents_version
+    from livekit.plugins.funasr.version import __version__ as plugin_version
+
+    assert plugin_version == agents_version
 
 
 def test_plugin_download_files_prefetches_default_model(

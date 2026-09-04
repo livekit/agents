@@ -49,7 +49,7 @@ _DEFAULT_MODEL = "iic/SenseVoiceSmall"
 
 
 def _load_model(model: str, device: str) -> Any:
-    logger.info(f"loading FunASR model {model} on {device}...")
+    logger.info("loading FunASR model...")
     loaded_model = AutoModel(model=model, device=device, disable_update=True)
     logger.info("FunASR model loaded")
     return loaded_model
@@ -137,7 +137,10 @@ class FunASRSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        lang = _normalize_language(language) if is_given(language) else self._opts.language
+        request_options = _STTOptions(
+            language=(_normalize_language(language) if is_given(language) else self._opts.language),
+            use_itn=self._opts.use_itn,
+        )
 
         combined = rtc.combine_audio_frames(buffer)
         channels = combined.num_channels
@@ -163,8 +166,8 @@ class FunASRSTT(stt.STT):
                 result = self._model.generate(
                     input=samples,
                     cache={},
-                    language=lang,
-                    use_itn=self._opts.use_itn,
+                    language=request_options.language,
+                    use_itn=request_options.use_itn,
                 )
                 return result[0]["text"] if result else ""
 
