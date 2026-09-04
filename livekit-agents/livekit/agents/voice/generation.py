@@ -205,10 +205,6 @@ async def _llm_inference_task(
         trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
         trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
     }
-    if model:
-        attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
-    if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
-        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     current_span.set_attributes(attrs)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
@@ -234,7 +230,14 @@ async def _llm_inference_task(
         text_ch.send_nowait(llm_node)
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
         _record_uninstrumented_inference(
-            current_span, inference_recorded, chat_ctx, tools, data, model, provider
+            current_span,
+            inference_recorded,
+            chat_ctx,
+            tools,
+            data,
+            model,
+            provider,
+            streaming=False,
         )
         return True
 
@@ -310,6 +313,12 @@ async def _llm_inference_task(
                 last_content_at = now
                 data.generated_text += content
                 text_ch.send_nowait(content)
+    except BaseException as exc:
+        # a node that raises still made a request; without this it leaves no inference span
+        _record_uninstrumented_inference(
+            current_span, inference_recorded, chat_ctx, tools, data, model, provider, error=exc
+        )
+        raise
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
@@ -346,6 +355,8 @@ def _record_uninstrumented_inference(
     provider: str | None,
     *,
     usage: CompletionUsage | None = None,
+    streaming: bool = True,
+    error: BaseException | None = None,
 ) -> None:
     """Describe the node itself as the inference, for a custom ``llm_node``.
 
@@ -353,19 +364,30 @@ def _record_uninstrumented_inference(
     str, streaming its own chunks, or calling a third-party engine — and then there is no
     nested ``llm_request`` span to carry the convention's attributes. When one was created,
     this stands down so the counts are not reported twice.
+
+    The configured model and provider are only reported when that LLM served the request.
+    Reaching here means it did not, so a third-party engine is left unattributed rather
+    than credited to the model the agent happens to be configured with.
     """
     if inference_recorded:
+        # the configured LLM served this, so its identity describes the call
+        if model:
+            span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+        if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
+            span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
         return
 
     gen_ai_telemetry.set_request_attributes(
         span,
         operation=trace_types.GenAIOperationName.CHAT,
-        provider=provider,
-        model=model,
-        stream=True,
+        stream=streaming,
         output_type=trace_types.GenAIOutputType.TEXT,
     )
-    finish_reason = gen_ai_telemetry.finish_reason_for(function_calls=data.generated_functions)
+    if error is not None:
+        gen_ai_telemetry.set_error_type(span, error)
+    finish_reason = gen_ai_telemetry.finish_reason_for(
+        function_calls=data.generated_functions, interrupted=error is not None
+    )
     gen_ai_telemetry.set_response_attributes(
         span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
     )
@@ -1027,7 +1049,7 @@ async def _execute_tools_task(
                         function_callable,
                         fnc_call,
                         _tool_description(function_tool),
-                        session.current_agent.label,
+                        activity.agent.label,
                     ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )

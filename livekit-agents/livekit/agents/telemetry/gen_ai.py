@@ -428,7 +428,14 @@ def set_tool_result(span: trace.Span, *, result: str | None, is_error: bool) -> 
         span.set_attribute(trace_types.ATTR_GEN_AI_TOOL_CALL_RESULT, _json(_maybe_json(result)))
 
 
-def set_agent_attributes(span: trace.Span, *, operation: str, agent_name: str) -> None:
+def set_agent_attributes(
+    span: trace.Span,
+    *,
+    operation: str,
+    agent_name: str,
+    model: str | None = None,
+    provider: str | None = None,
+) -> None:
     if not span.is_recording():
         return
 
@@ -436,6 +443,12 @@ def set_agent_attributes(span: trace.Span, *, operation: str, agent_name: str) -
         trace_types.ATTR_GEN_AI_OPERATION_NAME: operation,
         trace_types.ATTR_GEN_AI_AGENT_NAME: agent_name,
     }
+    # required on create_agent; the model is conditionally required and an agent is
+    # configured with exactly one, which is when the convention asks for it
+    if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
+        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
+    if model:
+        attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
     if (conv := _conversation_id()) is not None:
         attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)

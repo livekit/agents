@@ -866,13 +866,14 @@ class AgentActivity(RecognitionHooks):
 
             start_span = tracer.start_span(
                 "start_agent_activity",
-                attributes={
-                    trace_types.ATTR_AGENT_LABEL: self.agent.label,
-                    trace_types.ATTR_GEN_AI_OPERATION_NAME: (
-                        trace_types.GenAIOperationName.CREATE_AGENT
-                    ),
-                    trace_types.ATTR_GEN_AI_AGENT_NAME: self.agent.label,
-                },
+                attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
+            )
+            gen_ai_telemetry.set_agent_attributes(
+                start_span,
+                operation=trace_types.GenAIOperationName.CREATE_AGENT,
+                agent_name=self.agent.label,
+                model=getattr(self.llm, "model", None),
+                provider=getattr(self.llm, "provider", None),
             )
             try:
                 self._agent._activity = self

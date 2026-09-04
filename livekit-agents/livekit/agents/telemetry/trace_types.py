@@ -235,7 +235,6 @@ _PROVIDER_BY_HOST_SUFFIX: tuple[tuple[str, str], ...] = (
     (".openai.azure.com", "azure.ai.openai"),
     (".services.ai.azure.com", "azure.ai.inference"),
     (".aiplatform.googleapis.com", "gcp.vertex_ai"),
-    (".amazonaws.com", "aws.bedrock"),
 )
 
 _PROVIDER_BY_NAME: dict[str, str] = {
@@ -278,6 +277,9 @@ def gen_ai_provider_name(provider: str | None) -> str | None:
     for suffix, mapped in _PROVIDER_BY_HOST_SUFFIX:
         if host.endswith(suffix):
             return mapped
+    # only the Bedrock endpoints, not every AWS service that shares the domain
+    if host.startswith("bedrock") and host.endswith(".amazonaws.com"):
+        return "aws.bedrock"
 
     canonical = "".join(c for c in host if c.isalnum())
     # a provider outside the registry keeps its own id, which the convention allows
