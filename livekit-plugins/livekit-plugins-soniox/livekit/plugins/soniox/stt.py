@@ -449,49 +449,55 @@ class SpeechStream(stt.SpeechStream):
 
         def send_endpoint_transcript() -> None:
             nonlocal is_speaking
-            if final.text:
-                # Translation mode determines the role of each accumulator:
-                # when on, `final_original` carries the source side and
-                # `final` carries the target side -- even across flush windows
-                # where the originals were finalized in a prior message and
-                # only translation tokens land in this one. When translation
-                # is off, `final` IS the source side and `final_original`
-                # stays empty.
-                src_segs, tgt_segs = (
-                    (final_original._lang_segments, final._lang_segments)
-                    if is_translation_mode
-                    else (final._lang_segments, [])
-                )
-                source_languages, source_texts = _lang_segments_to_fields(src_segs)
-                target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[
-                            final.to_speech_data(
-                                self.start_time_offset,
-                                source_languages=source_languages,
-                                source_texts=source_texts,
-                                target_languages=target_languages,
-                                target_texts=target_texts,
-                            )
-                        ],
-                    )
-                )
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.END_OF_SPEECH,
-                    )
-                )
+            if not final.text:
+                # Keep `final_original`. In translation mode an <end>/<fin>
+                # can land between the source tokens and their translation;
+                # resetting here would drop `source_texts` from the pairing
+                # that the next frame is about to complete. Outside
+                # translation mode `final_original` stays empty, so this is
+                # a no-op.
+                return
 
-                # Reset buffers.
-                final.reset()
-                final_original.reset()
+            # Translation mode determines the role of each accumulator:
+            # when on, `final_original` carries the source side and
+            # `final` carries the target side -- even across flush windows
+            # where the originals were finalized in a prior message and
+            # only translation tokens land in this one. When translation
+            # is off, `final` IS the source side and `final_original`
+            # stays empty.
+            src_segs, tgt_segs = (
+                (final_original._lang_segments, final._lang_segments)
+                if is_translation_mode
+                else (final._lang_segments, [])
+            )
+            source_languages, source_texts = _lang_segments_to_fields(src_segs)
+            target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        final.to_speech_data(
+                            self.start_time_offset,
+                            source_languages=source_languages,
+                            source_texts=source_texts,
+                            target_languages=target_languages,
+                            target_texts=target_texts,
+                        )
+                    ],
+                )
+            )
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.END_OF_SPEECH,
+                )
+            )
 
-                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
-                is_speaking = False
-            else:
-                final_original.reset()
+            # Reset buffers.
+            final.reset()
+            final_original.reset()
+
+            # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
+            is_speaking = False
 
         if not self._ws:
             return
