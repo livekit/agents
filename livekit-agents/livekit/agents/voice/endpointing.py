@@ -128,8 +128,9 @@ class DynamicEndpointing(BaseEndpointing):
         )
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
-        # VAD interrupt by audio activity is triggered before end of speech is detected
-        # adjust the utterance ended time to be just before the agent speech started
+        # Agent speech started before the current user utterance ended, so the stored
+        # end still belongs to the previous utterance. Move it just before agent speech
+        # to exclude this overlap from dynamic endpointing statistics.
         if (
             self._agent_speech_started_at is None
             and self._speaking
