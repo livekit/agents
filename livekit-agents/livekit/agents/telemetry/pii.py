@@ -175,6 +175,13 @@ def restore_pii(span: ReadableSpan) -> ReadableSpan:
     if attributes is None:
         return span
 
+    from .utils import redaction_enabled
+
+    # nothing is stashed once the project mandates redaction, so this is belt-and-braces:
+    # it keeps a change to that upstream check from turning into a leak here
+    if redaction_enabled(span.attributes):
+        return span
+
     return ReadableSpan(
         name=span.name,
         context=span.context,

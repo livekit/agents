@@ -337,8 +337,9 @@ class _GatedSpanExporter(SpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         exportable = [
-            # PII stripped for third-party exporters is put back here: what LiveKit Cloud
-            # may receive is the project's setting, applied at its collector
+            # PII filtered for third-party exporters is put back here: what LiveKit Cloud
+            # may receive is the project's setting, applied at its collector. restore_pii
+            # is a no-op once that setting mandates redaction.
             pii.restore_pii(s)
             for s in spans
             if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
