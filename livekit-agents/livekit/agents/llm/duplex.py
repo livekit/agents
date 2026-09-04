@@ -19,17 +19,11 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 @dataclass
 class DuplexAudioFrame:
-    """One frame of a duplex model's output, tagged with the turn it belongs to."""
+    """One frame of the model's output audio."""
 
     frame: rtc.AudioFrame
-    turn_id: str | None = None
-    """The model's turn id, or None when the plugin does not know it yet.
-
-    Never a per-fragment id: a change of id means a change of turn, so report None rather than
-    invent one.
-    """
     start_ms: int | None = None
-    """Position on the model's own timeline."""
+    """Position on the model's timeline, for a provider that stamps its audio."""
 
 
 @dataclass
@@ -37,38 +31,17 @@ class DuplexTranscriptDelta:
     """A fragment of the model's transcript of its own speech."""
 
     text: str
-    turn_id: str | None = None
-    """The model's turn id, or None while the model has not announced one yet."""
     start_ms: int | None = None
     end_ms: int | None = None
-    """End of the span covered, on the model's timeline.
-
-    A turn closes once this reaches the audio it forwarded.
-    """
-
-
-@dataclass
-class DuplexTurnStartedEvent:
-    turn_id: str
-
-
-@dataclass
-class DuplexTurnEndedEvent:
-    """Emitted after the turn's last transcript, so it also means fully transcribed."""
-
-    turn_id: str
+    """Span on the model's timeline; only its continuity from one fragment to the next is used."""
 
 
 @dataclass
 class DuplexCapabilities:
-    """What varies between duplex providers.
-
-    Barge-in and the absence of message truncation are properties of the model type rather than
-    flags: no duplex model can do them.
-    """
+    """What varies between duplex providers; barge-in and the lack of truncation do not."""
 
     user_transcription: bool
-    """Whether the model emits user audio transcription events"""
+    """Whether the model transcribes the user's speech"""
     auto_tool_reply_generation: bool
     """Whether the model automatically continues speaking after receiving tool results"""
     manual_response_creation: bool = False
@@ -83,10 +56,8 @@ class DuplexCapabilities:
 
 DuplexEventTypes = Literal[
     "transcript_delta",  # the model's transcript of its own speech
-    "turn_started",  # assistant turn boundary, as the model reports it
-    "turn_ended",
     "function_call",
-    "input_speech_started",  # serverside turn detection over the user's audio
+    "input_speech_started",  # the user's turns, as the plugin detects them
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "session_reconnected",
@@ -126,8 +97,7 @@ class DuplexModel(ABC):
 
     @abstractmethod
     def session(self, *, wait_for_config: bool = False) -> DuplexSession:
-        """Open a session, ``wait_for_config`` promising it a :meth:`DuplexSession._update_session`
-        call before it is used."""
+        """Open a session; ``wait_for_config`` promises it a ``_update_session`` call before use."""
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -150,14 +120,10 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         self._duplex_model = duplex_model
         self._config_delivered = asyncio.Event()
         if not wait_for_config:
-            self._config_delivered.set()  # nothing was promised, so there is nothing to wait for
+            self._config_delivered.set()
 
     async def _await_config(self) -> None:
-        """Block until the promised configuration arrives, for a model that must send it on connect.
-
-        Returns at once where none was promised. Set ``_config_delivered`` from ``aclose`` too, or
-        a session closed before it was configured never finishes closing.
-        """
+        """Wait for the promised configuration; set ``_config_delivered`` from ``aclose`` too."""
         await self._config_delivered.wait()
 
     @property
@@ -171,10 +137,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @property
     @abstractmethod
     def audio_stream(self) -> AsyncIterable[DuplexAudioFrame]:
-        """The model's output audio, streamed for the life of the session.
-
-        Carries silence and untranscribed sound as well as speech; the consumer decides what plays.
-        """
+        """The model's output audio for the life of the session, silence included."""
 
     @property
     @abstractmethod
@@ -194,8 +157,8 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @abstractmethod
     async def aclose(self) -> None: ...
 
-    # underscored until the shape settles, so they stay free to change: this is the framework's
-    # contract with the plugin, and apps use a plugin's own methods via Agent.duplex_session
+    # underscored until the shape settles: this is the framework's contract with the plugin, and
+    # apps reach a plugin's own methods through Agent.duplex_session
 
     @abstractmethod
     async def _update_instructions(self, instructions: str) -> None: ...
@@ -217,14 +180,8 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[str | None]:
-        """Ask the model to speak now, where the protocol allows it.
-
-        Resolves once the ask lands, with the id of the turn that will answer it, or None where
-        the protocol names none and the model's next turn should be taken as the reply. Fail it
-        where the ask could not be delivered; raise :class:`RealtimeError` where the model cannot
-        be asked at all.
-        """
+    ) -> None:
+        """Ask the model to speak now; its next speech is taken as the reply."""
         raise RealtimeError(f"{type(self).__name__} decides for itself when to speak")
 
     async def _update_session(
@@ -234,10 +191,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
-        """Apply the agent's whole configuration at once, right after the session is created.
-
-        A model whose configuration is immutable once started should compose it here.
-        """
+        """Apply the whole configuration at once, right after the session is created."""
         try:
             if is_given(instructions):
                 await self._update_instructions(instructions)

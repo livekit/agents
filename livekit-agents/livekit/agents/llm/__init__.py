@@ -19,8 +19,6 @@ from .duplex import (
     DuplexModel,
     DuplexSession,
     DuplexTranscriptDelta,
-    DuplexTurnEndedEvent,
-    DuplexTurnStartedEvent,
 )
 from .duplex_adapter import (
     AdaptiveNoiseGate,
@@ -123,8 +121,6 @@ __all__ = [
     "DuplexCapabilities",
     "DuplexAudioFrame",
     "DuplexTranscriptDelta",
-    "DuplexTurnStartedEvent",
-    "DuplexTurnEndedEvent",
     "DuplexRealtimeAdapter",
     "AudioGate",
     "AdaptiveNoiseGate",

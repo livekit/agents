@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import numpy as np
@@ -21,8 +21,6 @@ from .duplex import (
     DuplexModel,
     DuplexSession,
     DuplexTranscriptDelta,
-    DuplexTurnEndedEvent,
-    DuplexTurnStartedEvent,
 )
 from .realtime import (
     GenerationCreatedEvent,
@@ -37,34 +35,22 @@ from .tool_context import Tool, ToolChoice, ToolContext
 # a floor this low is digital silence; it keeps the gate's ratios finite when a model emits zeros
 _SILENCE_FLOOR = 1e-4
 
-# liveness bound only: a turn closes on its transcript catching up, or on the model ending it
-_STALLED_TRANSCRIPT_TIMEOUT = 3.0
+# audio heard with no burst open before waiting transcript is emitted on its own rather than lost
+_UNCLAIMED_TRANSCRIPT_MS = 3000
 
 # how long a requested reply waits for the model to start speaking before it counts as declined
 _REPLY_TIMEOUT = 10.0
 
-
-def _frame_rms(frame: rtc.AudioFrame) -> float:
-    """Root-mean-square level of a frame, normalized to 0..1."""
-    samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-    if samples.size == 0:
-        return 0.0
-    return float(np.sqrt(np.mean(np.square(samples)))) / 32768.0
+# how far ahead of its sound a fragment is handed over: span labels sit about a frame early
+# against the audible onset, and text a little early reads better than late
+_ATTACH_LEAD_MS = 300
 
 
 class AudioGate(Protocol):
     """Decides which frames of a continuously-emitting model carry output worth playing."""
 
-    @property
-    def voiced(self) -> bool:
-        """Whether the last frame carried sound, regardless of any forcing."""
-        ...
-
-    def update(self, frame: rtc.AudioFrame, *, forced: bool = False) -> bool:
-        """True while the frame belongs to an open burst of output.
-
-        ``forced`` marks audio the model attributes to a turn: always output, and it holds the gate.
-        """
+    def update(self, frame: rtc.AudioFrame) -> bool:
+        """True while the frame belongs to an open burst of output."""
         ...
 
 
@@ -72,8 +58,8 @@ class AdaptiveNoiseGate:
     """Opens on output that stands out from the model's own noise floor.
 
     Thresholds are ratios against the quietest frame of the recent past, which speech cannot drag
-    upward, and every duration is measured in audio rather than wall clock. One set of defaults
-    therefore ports across providers, frame sizes and network conditions.
+    upward, and every duration is measured in audio rather than wall clock, so one set of defaults
+    ports across providers, frame sizes and network conditions.
     """
 
     def __init__(
@@ -93,26 +79,16 @@ class AdaptiveNoiseGate:
         self._history_duration = 0.0
         self._open = False
         self._quiet = 0.0
-        self._voiced = False
 
-    @property
-    def voiced(self) -> bool:
-        return self._voiced
-
-    def update(self, frame: rtc.AudioFrame, *, forced: bool = False) -> bool:
-        rms = _frame_rms(frame)
+    def update(self, frame: rtc.AudioFrame) -> bool:
+        samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+        rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
 
         self._history.append((rms, frame.duration))
         self._history_duration += frame.duration
         while self._history_duration > self._window and len(self._history) > 1:
             self._history_duration -= self._history.popleft()[1]
         floor = max(min(level for level, _ in self._history), _SILENCE_FLOOR)
-        self._voiced = rms > floor * self._close_ratio
-
-        if forced:
-            self._open = True
-            self._quiet = 0.0
-            return True
 
         if not self._open:
             if rms > floor * self._open_ratio:
@@ -137,89 +113,36 @@ class _Burst:
     function_ch: aio.Chan[FunctionCall]
     text_ch: aio.Chan[str]
     audio_ch: aio.Chan[rtc.AudioFrame]
-    modalities: asyncio.Future[list[Literal["text", "audio"]]]
-    model_turn_id: str | None = None
-    transcript: str = ""
-    message_opened: bool = False
-    """Speech has arrived; a burst carrying only function calls never announces a message."""
-    has_audio: bool = False
-    transcript_end_ms: int | None = None
-    orphaned: bool = False
-    """Opened by a fragment that outlived its audio, so no turn can claim it."""
-    turn_ended: bool = False
-    """The model has declared this burst's turn over."""
+    audio_start_ms: int
+    """Where on the adapter's audio clock the burst opened."""
+    anchor_ms: int | None = None
+    """Span clock minus audio clock, fixed by the first fragment this burst carries."""
+    _last_annotation: float = 0.0
 
-    # anchors mapping the model's timeline onto playback; audio the model omits never plays
-    _start_ms: int | None = field(default=None)
-    _skipped_ms: int = field(default=0)
-    _end_ms: int | None = field(default=None)
-    _voiced_end_ms: int | None = field(default=None)
-    _last_annotation: float = field(default=0.0)
-
-    @property
-    def transcript_pending(self) -> bool:
-        """Whether the model still owes transcript for the audio this burst forwarded."""
-        if self.transcript:
-            if self.transcript_end_ms is None or self._voiced_end_ms is None:
-                return True  # nothing to compare: only the turn ending can settle this burst
-            # against the audio that carried sound, since silence is never transcribed, and on the
-            # model's own timeline, so neither side moves with network latency
-            return self.transcript_end_ms < self._voiced_end_ms
-        # a turn the model claimed still owes its text; audio it never claimed is a backchannel
-        return self.model_turn_id is not None
-
-    def track_audio(self, start_ms: int | None, duration: float, *, voiced: bool) -> None:
-        """Advance the playback timeline with a frame that is about to be forwarded."""
-        if start_ms is not None:
-            if not self.has_audio:
-                self._start_ms = start_ms
-            elif self._end_ms is not None and start_ms > self._end_ms:
-                self._skipped_ms += start_ms - self._end_ms
-            self._end_ms = start_ms + round(duration * 1000)
-            if voiced:
-                self._voiced_end_ms = self._end_ms
-        self.has_audio = True
-
-    def playback_time(self, model_ms: int) -> float:
-        """Position of a model timestamp in the forwarded audio, in seconds."""
-        if self._start_ms is None:
-            return 0.0
-        return max(0.0, (model_ms - self._start_ms - self._skipped_ms) / 1000)
-
-    def timed_text(self, text: str, start_ms: int | None, end_ms: int | None) -> str:
-        """Annotate a transcript fragment with the playback range it is spoken over."""
-        if start_ms is None:
-            return text
-        if self._start_ms is None:
-            self._start_ms = start_ms
-        # the synchronizer indexes annotations by time, so they must never go backwards
-        start_time = max(self._last_annotation, self.playback_time(start_ms))
-        end_time = max(start_time, self.playback_time(end_ms)) if end_ms is not None else None
-        self._last_annotation = end_time if end_time is not None else start_time
-        return TimedString(
-            text, start_time=start_time, end_time=end_time if end_time is not None else NOT_GIVEN
-        )
-
-    def open_message(self) -> None:
-        if self.message_opened:
-            return
-        self.message_opened = True
-        self.message_ch.send_nowait(
-            MessageGeneration(
-                message_id=self.id,
-                text_stream=self.text_ch,
-                audio_stream=self.audio_ch,
-                modalities=self.modalities,
+    def attach(self, fragment: DuplexTranscriptDelta) -> None:
+        text: str = fragment.text
+        if fragment.start_ms is not None and self.anchor_ms is not None:
+            # placed on the forwarded audio so the synchronizer paces against real speech; the
+            # annotations never go backwards, since it indexes them by time
+            offset = self.anchor_ms + self.audio_start_ms
+            start = max(self._last_annotation, (fragment.start_ms - offset) / 1000)
+            end = (
+                max(start, (fragment.end_ms - offset) / 1000)
+                if fragment.end_ms is not None
+                else None
             )
-        )
+            self._last_annotation = start if end is None else end
+            text = TimedString(
+                fragment.text, start_time=start, end_time=NOT_GIVEN if end is None else end
+            )
+        if not self.text_ch.closed:
+            self.text_ch.send_nowait(text)
 
     def close(self) -> None:
         if not self.text_ch.closed:
             self.text_ch.close()
         if not self.audio_ch.closed:
             self.audio_ch.close()
-        if not self.modalities.done():
-            self.modalities.set_result(["audio", "text"])
         self.function_ch.close()
         self.message_ch.close()
 
@@ -227,9 +150,9 @@ class _Burst:
 class DuplexRealtimeAdapter(RealtimeModel):
     """Runs a :class:`DuplexModel` inside an ``AgentSession``.
 
-    Segments the model's continuous output into turns and presents them as an ordinary
-    ``RealtimeSession``, so the voice pipeline needs no duplex-specific path. Output the model never
-    transcribes still plays, it simply produces no chat item.
+    Segments the model's continuous output into generations and presents them as an ordinary
+    ``RealtimeSession``, so the voice pipeline needs no duplex-specific path. Output the model
+    never transcribes still plays, it simply produces no chat item.
     """
 
     def __init__(
@@ -237,7 +160,6 @@ class DuplexRealtimeAdapter(RealtimeModel):
         duplex_model: DuplexModel,
         *,
         gate: Callable[[], AudioGate] = AdaptiveNoiseGate,
-        stalled_transcript_timeout: float = _STALLED_TRANSCRIPT_TIMEOUT,
     ) -> None:
         caps: DuplexCapabilities = duplex_model.capabilities
         super().__init__(
@@ -259,7 +181,6 @@ class DuplexRealtimeAdapter(RealtimeModel):
         )
         self._duplex_model = duplex_model
         self._gate = gate
-        self._stalled_timeout = stalled_transcript_timeout
 
     @property
     def duplex_model(self) -> DuplexModel:
@@ -277,7 +198,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
         # turn detection is inherent to a duplex model, so it is never asked to be off
         # AgentActivity configures the session before it is used
         duplex = self._duplex_model.session(wait_for_config=True)
-        return _DuplexRealtimeSession(self, duplex, self._gate(), self._stalled_timeout)
+        return _DuplexRealtimeSession(self, duplex, self._gate())
 
     async def aclose(self) -> None:
         await self._duplex_model.aclose()
@@ -285,51 +206,36 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
 class _DuplexRealtimeSession(RealtimeSession):
     def __init__(
-        self,
-        adapter: DuplexRealtimeAdapter,
-        duplex: DuplexSession,
-        gate: AudioGate,
-        stalled_timeout: float,
+        self, adapter: DuplexRealtimeAdapter, duplex: DuplexSession, gate: AudioGate
     ) -> None:
         super().__init__(adapter)
         self._duplex = duplex
         self._gate = gate
-        self._stalled_timeout = stalled_timeout
         self._burst: _Burst | None = None
-        self._close_handle: asyncio.TimerHandle | None = None
-        self._sound_stopped = False
-        self._closed_audio_end_ms: int | None = None
-        self._open_turns: set[str] = set()
+        # the adapter's clock: output audio heard so far, which is gapless and real-time
+        self._audio_ms = 0
+        # the model's words waiting for the sound that carries them, and since when
+        self._fragments: deque[DuplexTranscriptDelta] = deque()
+        self._waiting_since_ms = 0
         # user_initiated has to be settled before a burst's event goes out, or the framework
         # schedules it as a turn of the model's own as well
         self._pending_reply: asyncio.Future[GenerationCreatedEvent] | None = None
-        self._reply_turn_id: str | None = None
 
         duplex.on("transcript_delta", self._on_transcript_delta)
-        duplex.on("turn_started", self._on_turn_started)
-        duplex.on("turn_ended", self._on_turn_ended)
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
-        for event in (
-            "input_speech_started",
-            "input_speech_stopped",
+        duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
+        duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
+        duplex.on(
             "input_audio_transcription_completed",
-            "metrics_collected",
-            "error",
-        ):
-            duplex.on(event, self._forward(event))
+            lambda ev: self.emit("input_audio_transcription_completed", ev),
+        )
+        duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+        duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
             self._segment_task(), name="DuplexRealtimeSession.segment"
         )
-
-    def _forward(self, event: str) -> Callable[[object], None]:
-        def _emit(ev: object) -> None:
-            self.emit(event, ev)
-
-        return _emit
-
-    # -- segmenter -------------------------------------------------------------------------
 
     async def _segment_task(self) -> None:
         try:
@@ -343,175 +249,105 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._close_burst()
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
-        # every frame keeps the floor tracking; a tagged one also holds the gate through its tail
-        voiced = self._gate.update(f.frame, forced=f.turn_id is not None)
+        if f.start_ms is not None:
+            self._audio_ms = f.start_ms
+        # the gate is the one boundary: a burst is open exactly while the model is audibly
+        # producing output, its own pauses inside an utterance included
+        if self._gate.update(f.frame):
+            burst = self._burst or self._open_burst()
+            if not burst.audio_ch.closed:
+                burst.audio_ch.send_nowait(f.frame)
+            self._audio_ms += round(f.frame.duration * 1000)
 
-        if f.turn_id is not None:
-            burst = self._burst
-            # an orphaned burst holds a dead turn's text, which would prefix this one
-            if burst is not None and (
-                burst.orphaned or burst.model_turn_id not in (None, f.turn_id)
-            ):
-                self._close_burst()
-                burst = None
-            if burst is None:
-                burst = self._open_burst(turn_id=f.turn_id)
-            burst.model_turn_id = f.turn_id
-            self._feed(burst, f)
+            # the first fragment anchors the span clock to the audio clock at the onset, the only
+            # moment the two are known to agree; every later one is due when the audio reaches
+            # its span, and one the burst ends before reaching describes the next burst
+            while self._fragments:
+                fragment = self._fragments[0]
+                if fragment.start_ms is not None:
+                    if burst.anchor_ms is None:
+                        burst.anchor_ms = fragment.start_ms - burst.audio_start_ms
+                    if fragment.start_ms - burst.anchor_ms > self._audio_ms + _ATTACH_LEAD_MS:
+                        break
+                burst.attach(self._fragments.popleft())
             return
 
+        self._audio_ms += round(f.frame.duration * 1000)
         if self._burst is not None:
-            # an open burst owns the stream until it closes, quiet stretches included: dropping
-            # them would starve playback and leave the pause nowhere on the recording's clock
-            sound = voiced or bool(self._open_turns)
-            self._feed(self._burst, f, sound=sound)
-            if not sound:
-                self._sound_stopped = True
-                self._maybe_close()
-            return
+            self._close_burst()
+        elif (
+            self._fragments and self._audio_ms - self._waiting_since_ms >= _UNCLAIMED_TRANSCRIPT_MS
+        ):
+            # transcript no sound ever claims is emitted alone: losing it is worse than an odd item
+            logger.error(
+                "duplex transcript outlived the audio it describes",
+                extra={"text": "".join(f.text for f in self._fragments)},
+            )
+            burst = self._open_burst()
+            while self._fragments:
+                burst.attach(self._fragments.popleft())
+            self._close_burst()
 
-        if voiced:
-            self._feed(self._open_burst(), f)
-
-    def _feed(self, burst: _Burst, f: DuplexAudioFrame, *, sound: bool = True) -> None:
-        if sound:
-            self._sound_stopped = False
-            self._cancel_close()
-        burst.open_message()
-        burst.track_audio(f.start_ms, f.frame.duration, voiced=self._gate.voiced)
-        if not burst.modalities.done():
-            burst.modalities.set_result(["audio", "text"])
-        if not burst.audio_ch.closed:
-            burst.audio_ch.send_nowait(f.frame)
-
-    def _claims_reply(self, turn_id: str | None) -> bool:
-        """Whether a burst just opening is the reply a caller asked for."""
-        if self._pending_reply is None or self._pending_reply.done():
-            return False
-        # a burst already attributed to another turn cannot be the answer to this ask
-        return self._reply_turn_id is None or turn_id in (None, self._reply_turn_id)
-
-    def _open_burst(self, *, turn_id: str | None = None, orphaned: bool = False) -> _Burst:
-        burst = _Burst(
+    def _open_burst(self, *, message: bool = True) -> _Burst:
+        burst = self._burst = _Burst(
             id=shortuuid("item_"),
-            orphaned=orphaned,
             message_ch=aio.Chan(),
             function_ch=aio.Chan(),
             text_ch=aio.Chan(),
             audio_ch=aio.Chan(),
-            modalities=asyncio.Future(),
+            audio_start_ms=self._audio_ms,
         )
-        self._burst = burst
         ev = GenerationCreatedEvent(
             message_stream=burst.message_ch,
             function_stream=burst.function_ch,
             user_initiated=False,
             response_id=burst.id,
         )
-        if self._claims_reply(turn_id):
-            assert self._pending_reply is not None
+        # the model answers on the one stream it has, so a burst opening is the reply asked for
+        if self._pending_reply is not None and not self._pending_reply.done():
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
+        if message:
+            modalities: asyncio.Future[list[Literal["text", "audio"]]] = asyncio.Future()
+            modalities.set_result(["audio", "text"])
+            burst.message_ch.send_nowait(
+                MessageGeneration(
+                    message_id=burst.id,
+                    text_stream=burst.text_ch,
+                    audio_stream=burst.audio_ch,
+                    modalities=modalities,
+                )
+            )
         return burst
 
-    def _maybe_close(self) -> None:
-        """Close a burst whose sound has stopped, once the model has finished transcribing it."""
-        burst = self._burst
-        if burst is None or not self._sound_stopped:
-            return
-
-        if burst.turn_ended or not burst.transcript_pending:
-            self._close_burst()
-        elif self._close_handle is None:
-            self._close_handle = asyncio.get_running_loop().call_later(
-                self._stalled_timeout, self._close_burst
-            )
-
-    def _cancel_close(self) -> None:
-        if self._close_handle is not None:
-            self._close_handle.cancel()
-            self._close_handle = None
-
     def _close_burst(self) -> None:
-        self._cancel_close()
         burst, self._burst = self._burst, None
         if burst is not None:
-            if burst._end_ms is not None:
-                self._closed_audio_end_ms = burst._end_ms
             burst.close()
-
-    # -- duplex events ---------------------------------------------------------------------
+        self._waiting_since_ms = self._audio_ms
 
     def _on_transcript_delta(self, ev: DuplexTranscriptDelta) -> None:
-        # only audio defines boundaries and claims the burst's id; fragment ids can differ across
-        # one stretch of speech, and claiming one would make the turn's own frames look foreign
-        burst = self._burst
-        if burst is None:
-            # a fragment reaching past the audio already forwarded leads a turn about to start;
-            # one that does not has outlived its own audio
-            orphaned = (
-                ev.end_ms is not None
-                and self._closed_audio_end_ms is not None
-                and ev.end_ms <= self._closed_audio_end_ms
-            )
-            if orphaned:
-                # emitted rather than dropped, since losing transcript is worse than an odd item
-                logger.error(
-                    "duplex transcript outlived the audio it describes",
-                    extra={
-                        "text": ev.text,
-                        "turn_id": ev.turn_id,
-                        "span_ms": (ev.start_ms, ev.end_ms),
-                        "closed_audio_end_ms": self._closed_audio_end_ms,
-                    },
-                )
-            burst = self._open_burst(orphaned=orphaned)
-        burst.open_message()
-        burst.transcript += ev.text
-        if ev.end_ms is not None:
-            burst.transcript_end_ms = max(burst.transcript_end_ms or ev.end_ms, ev.end_ms)
-        if not burst.text_ch.closed:
-            burst.text_ch.send_nowait(burst.timed_text(ev.text, ev.start_ms, ev.end_ms))
-        self._maybe_close()
-
-    def _on_turn_started(self, ev: DuplexTurnStartedEvent) -> None:
-        self._open_turns.add(ev.turn_id)
-        if (burst := self._burst) is None:
-            return
-
-        if burst.model_turn_id is None:
-            # a turn is announced after its first audio, so an unlabelled burst is this one
-            burst.model_turn_id = ev.turn_id
-            self._cancel_close()
-        elif burst.model_turn_id != ev.turn_id:
-            # whatever is open belongs to the previous turn, the only boundary an
-            # untagging model gives
-            self._close_burst()
-
-    def _on_turn_ended(self, ev: DuplexTurnEndedEvent) -> None:
-        self._open_turns.discard(ev.turn_id)
-        burst = self._burst
-        if burst is not None and burst.model_turn_id == ev.turn_id:
-            # the model is the authority on its turn being over; the gate still ends the sound
-            burst.turn_ended = True
-            self._maybe_close()
+        # attached on the next frame: the sound places the words, and the frames never stop
+        if not self._fragments:
+            self._waiting_since_ms = self._audio_ms
+        self._fragments.append(ev)
 
     def _on_function_call(self, call: FunctionCall) -> None:
-        # a call is an event, not speech: it joins the burst in flight so the tool runs while the
-        # model talks, and alone it is a generation of its own, over as soon as it is delivered
-        if (burst := self._burst) is not None:
-            burst.function_ch.send_nowait(call)
+        # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
+        # generation of its own, over as soon as it is delivered
+        if self._burst is not None:
+            self._burst.function_ch.send_nowait(call)
             return
-        self._open_burst().function_ch.send_nowait(call)
+        self._open_burst(message=False).function_ch.send_nowait(call)
         self._close_burst()
 
     def _on_session_reconnected(self, ev: object) -> None:
-        # a dropped connection never delivers the turn's end, which would hold the burst forever
-        self._open_turns.clear()
+        # a dropped connection never delivers the rest of a burst, the sound its waiting words
+        # describe, or the reply it was asked for
+        self._fragments.clear()
         self._close_burst()
         if self._pending_reply is not None and not self._pending_reply.done():
-            # the request went to a session that no longer exists
             self._pending_reply.cancel()
         self.emit("session_reconnected", ev)
 
@@ -572,43 +408,24 @@ class _DuplexRealtimeSession(RealtimeSession):
     ) -> asyncio.Future[GenerationCreatedEvent]:
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.Future()
         try:
-            asked = self._duplex._generate_reply(
+            self._duplex._generate_reply(
                 instructions=instructions, tool_choice=tool_choice, tools=tools
             )
         except RealtimeError as e:
             fut.set_exception(e)
             return fut
 
-        # the reply arrives as a burst on the one output stream, and only this side sees bursts
+        # the reply is the next burst to open; asking is a request the model may never answer
         if self._pending_reply is not None and not self._pending_reply.done():
             self._pending_reply.cancel()
-        self._pending_reply, self._reply_turn_id = fut, None
-
-        def _on_asked(f: asyncio.Future[str | None]) -> None:
-            # the plugin reports the ask landing, and names the answering turn where it can
-            if fut.done():
-                return
-            if f.cancelled():
-                fut.cancel()
-            elif (exc := f.exception()) is not None:
-                fut.set_exception(exc)
-            elif self._pending_reply is fut:
-                self._reply_turn_id = f.result()
+        self._pending_reply = fut
 
         def _on_timeout() -> None:
-            # asking is a request, not a command: the model may simply never answer
             if not fut.done():
                 fut.set_exception(RealtimeError("the model did not start speaking when asked"))
 
         timeout = asyncio.get_running_loop().call_later(_REPLY_TIMEOUT, _on_timeout)
-
-        def _on_settled(_: asyncio.Future[GenerationCreatedEvent]) -> None:
-            timeout.cancel()
-            if self._pending_reply is fut:
-                self._pending_reply, self._reply_turn_id = None, None
-
-        asked.add_done_callback(_on_asked)
-        fut.add_done_callback(_on_settled)
+        fut.add_done_callback(lambda _: timeout.cancel())
         return fut
 
     def commit_audio(self) -> None:

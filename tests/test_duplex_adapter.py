@@ -1,7 +1,8 @@
 """
-Tests for the duplex adapter: a full-duplex model emits audio continuously, so the framework gates
-it against the model's own noise floor and cuts it into turns. Output the model never transcribes
-still plays — it simply produces no chat item.
+Tests for the duplex adapter: a full-duplex model emits audio continuously and reports only
+fragments of its transcript, so the framework gates the audio against the model's own noise floor,
+cuts it into generations and attaches the words to the sound that carries them. Output the model
+never transcribes still plays, it simply produces no chat item.
 """
 
 from __future__ import annotations
@@ -14,11 +15,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents.llm.duplex_adapter import (
-    _STALLED_TRANSCRIPT_TIMEOUT,
-    AdaptiveNoiseGate,
-    _DuplexRealtimeSession,
-)
+from livekit.agents.llm.duplex_adapter import AdaptiveNoiseGate, _DuplexRealtimeSession
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import aio
 
@@ -26,9 +23,6 @@ pytestmark = pytest.mark.unit
 
 SAMPLE_RATE = 24000
 FRAME_MS = 100
-# the adapter's liveness bound only releases a turn nothing else can close; tests that are not
-# about it shrink it so the file does not spend its runtime asleep
-STALLED = 0.1
 
 
 def _frame(level: float, *, duration_ms: int = FRAME_MS) -> rtc.AudioFrame:
@@ -77,11 +71,8 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.audio_ch = aio.Chan[llm.DuplexAudioFrame]()
         self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext([])
-        self.model_ms = 0
         self.config_batches: list[tuple[object, object, object]] = []
         self.replies_requested: list[object] = []
-        # the turn a protocol names as answering an ask, where it names one at all
-        self.answering_turn: str | None = None
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
@@ -122,15 +113,10 @@ class _FakeDuplexSession(llm.DuplexSession):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[str | None]:
+    ) -> None:
         if not self.capabilities.manual_response_creation:
-            return super()._generate_reply(
-                instructions=instructions, tool_choice=tool_choice, tools=tools
-            )
+            super()._generate_reply(instructions=instructions, tool_choice=tool_choice, tools=tools)
         self.replies_requested.append(instructions)
-        fut: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
-        fut.set_result(self.answering_turn)
-        return fut
 
     async def _update_session(
         self,
@@ -144,12 +130,19 @@ class _FakeDuplexSession(llm.DuplexSession):
 
     # -- test helpers ----------------------------------------------------------------------
 
-    def push(self, level: float, *, count: int = 1, turn_id: str | None = None) -> None:
-        for _ in range(count):
+    def push(self, level: float, *, count: int = 1, start_ms: int | None = None) -> None:
+        for i in range(count):
             self.audio_ch.send_nowait(
-                llm.DuplexAudioFrame(frame=_frame(level), turn_id=turn_id, start_ms=self.model_ms)
+                llm.DuplexAudioFrame(
+                    _frame(level), start_ms=None if start_ms is None else start_ms + i * FRAME_MS
+                )
             )
-            self.model_ms += FRAME_MS
+
+    def say(self, text: str, *, start_ms: int | None = None, end_ms: int | None = None) -> None:
+        self.emit(
+            "transcript_delta",
+            llm.DuplexTranscriptDelta(text=text, start_ms=start_ms, end_ms=end_ms),
+        )
 
 
 async def _settle() -> None:
@@ -168,13 +161,20 @@ async def _read(ev: llm.GenerationCreatedEvent) -> tuple[int, str]:
     return frames, text
 
 
+async def _chunks(ev: llm.GenerationCreatedEvent) -> list[str]:
+    chunks: list[str] = []
+    async for msg in ev.message_stream:
+        async for _ in msg.audio_stream:
+            pass
+        async for chunk in msg.text_stream:
+            chunks.append(chunk)
+    return chunks
+
+
 @pytest.fixture
-async def duplex(request) -> tuple[_FakeDuplexSession, _DuplexRealtimeSession, list]:
+async def duplex() -> tuple[_FakeDuplexSession, _DuplexRealtimeSession, list]:
     model = _FakeDuplexModel()
-    adapter = llm.DuplexRealtimeAdapter(
-        model, stalled_transcript_timeout=getattr(request, "param", STALLED)
-    )
-    session = adapter.session()
+    session = llm.DuplexRealtimeAdapter(model).session()
     assert isinstance(session, _DuplexRealtimeSession)
     fake = model.session_obj
     assert fake is not None
@@ -269,7 +269,7 @@ async def test_silence_alone_produces_no_generation(duplex) -> None:
 
 
 async def test_untranscribed_burst_plays_and_carries_no_transcript(duplex) -> None:
-    """A backchannel: the model vocalises, nothing labels it, it still reaches the room."""
+    """A backchannel: the model vocalises, nothing describes it, it still reaches the room."""
     fake, _session, generations = duplex
     fake.push(0.001, count=20)
     fake.push(0.3, count=3)
@@ -282,199 +282,201 @@ async def test_untranscribed_burst_plays_and_carries_no_transcript(duplex) -> No
     assert text == ""
 
 
-async def test_tagged_frames_split_on_turn_id(duplex) -> None:
+async def test_two_stretches_of_speech_are_two_generations(duplex) -> None:
+    """Only the sound stopping ends a burst: there is no turn event to do it."""
     fake, _session, generations = duplex
-    fake.push(0.3, count=3, turn_id="turn_a")
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
     await _settle()
-    fake.push(0.3, count=3, turn_id="turn_b")
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
     await _settle()
 
     assert len(generations) == 2
-    assert (await _read(generations[0]))[0] == 3
 
 
-async def test_tagged_audio_is_forwarded_even_when_quiet(duplex) -> None:
-    """A pause inside a turn is the model's pacing, not a boundary."""
-    fake, _session, generations = duplex
-    fake.push(0.3, count=2, turn_id="turn_a")
-    fake.push(0.0, count=5, turn_id="turn_a")
-    fake.push(0.3, count=2, turn_id="turn_a")
-    await _settle()
-
-    assert len(generations) == 1
-    fake.audio_ch.close()
-    await _settle()
-    assert (await _read(generations[0]))[0] == 9
-
-
-async def test_tail_after_turn_ended_stays_in_the_same_generation(duplex) -> None:
-    """turn.done can lag the last audio, so the gate decides where the sound stopped."""
+async def test_a_pause_inside_an_utterance_stays_in_one_generation(duplex) -> None:
+    """A burst carries its own quiet stretches, so what it forwards plays back in real time."""
     fake, _session, generations = duplex
     fake.push(0.001, count=20)  # let the gate learn the model's floor
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
-    fake.push(0.3, count=2)  # untagged tail, still audible
-    await _settle()
-    fake.push(0.001, count=5)  # now genuinely quiet
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=3)  # shorter than the gate's hangover
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
     await _settle()
 
     assert len(generations) == 1
-    # 3 tagged + 2 tail + the five quiet frames the burst keeps until the gate closes it
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[0] == 10
+    frames, _ = await asyncio.wait_for(_read(generations[0]), timeout=1)
+    assert frames >= 9  # both stretches and the pause between them
 
 
-@pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
-async def test_a_pause_inside_an_open_burst_is_forwarded(duplex) -> None:
-    """A burst carries its own quiet stretches, so what it forwards plays back in real time.
-
-    Dropping them starves the sink instead: the pause is still heard, but nothing records where
-    it was, and the recorder collects it in front of the speech rather than inside it.
-    """
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)  # let the gate learn the model's floor
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text="Half a", turn_id="turn_a", start_ms=2000, end_ms=2100),
-    )
-    fake.push(0.001, count=10)  # a pause the gate closes on, and the burst outlives
-    await _settle()
-    assert session._burst is not None  # the transcript is short of the audio
-
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
-    fake.push(0.001, count=5)
-    await _settle()
-
-    assert len(generations) == 1
-    assert session._burst is None
-    # every frame since the burst opened, the pause included: 3 + 10 + 3 + 5
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[0] == 21
-
-
-async def test_turn_ended_while_audio_is_still_flowing_does_not_cut_it_short(duplex) -> None:
-    """The boundary lags the sound, so the model calling a turn over never truncates playout."""
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
-    await _settle()
-    assert session._burst is not None
-
-    fake.push(0.3, count=4, turn_id="turn_a")  # the model is audibly still speaking
-    await _settle()
-    assert len(generations) == 1
-    fake.audio_ch.close()
-    await _settle()
-    assert (await _read(generations[0]))[0] == 7
-
-
-@pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
-async def test_turn_ended_releases_a_burst_whose_transcript_never_caught_up(duplex) -> None:
-    """Once the sound has stopped, the model calling the turn over settles it on its own."""
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text="Half a", turn_id="turn_a", start_ms=2000, end_ms=2200),
-    )
-    fake.push(0.001, count=5)
-    await _settle()
-    assert session._close_handle is not None  # the transcript is short of the audio
-
-    fake.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id="turn_a"))
-    await _settle()
-    assert session._burst is None
-    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (8, "Half a")
-
-
-@pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
-async def test_a_transcript_that_catches_up_closes_the_burst_at_once(duplex) -> None:
-    """A model that reports spans needs no timeout: audio it has transcribed is a finished turn."""
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)  # the gate closes on the fifth, which the burst still carries
-    await _settle()
-    assert session._close_handle is not None
-
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text="All done.", turn_id="turn_a", start_ms=2000, end_ms=fake.model_ms - FRAME_MS
-        ),
-    )
-    await _settle()
-
-    assert session._burst is None
-    assert await asyncio.wait_for(_read(generations[0]), timeout=0.5) == (8, "All done.")
-
-
-async def test_turn_started_adopts_a_burst_already_open(duplex) -> None:
-    """Speech onset arrives before the turn that labels it; it must not become a second turn."""
+async def test_fragments_join_the_burst_that_is_open(duplex) -> None:
     fake, _session, generations = duplex
     fake.push(0.001, count=20)
     fake.push(0.3, count=2)
     await _settle()
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_a"))
-    fake.push(0.3, count=2, turn_id="turn_a")
+    fake.say("Sure,", start_ms=2000, end_ms=2200)
+    fake.push(0.3, count=2)
+    fake.say(" I can.", start_ms=2200, end_ms=2400)
+    fake.push(0.001, count=8)
     await _settle()
 
     assert len(generations) == 1
+    frames, text = await asyncio.wait_for(_read(generations[0]), timeout=1)
+    assert frames >= 4
+    assert text == "Sure, I can."
 
 
-async def test_turn_started_for_another_turn_closes_the_burst(duplex) -> None:
-    """When a model announces turns but never tags frames, the next turn is the only boundary."""
+async def test_transcript_is_timed_against_the_burst_it_joins(duplex) -> None:
+    """The first fragment anchors the model's span clock to the sound that opened the burst, so
+    every fragment is placed where it is spoken in the forwarded audio."""
+    fake, _session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=2)
+    await _settle()
+    fake.say("hello", start_ms=7000, end_ms=7200)
+    fake.say(" there", start_ms=7200, end_ms=7400)
+    fake.push(0.3, count=3)
+    fake.audio_ch.close()
+    await _settle()
+
+    first, second = await _chunks(generations[0])
+    assert isinstance(first, TimedString) and isinstance(second, TimedString)
+    assert (first.start_time, first.end_time) == (pytest.approx(0.0), pytest.approx(0.2))
+    assert (second.start_time, second.end_time) == (pytest.approx(0.2), pytest.approx(0.4))
+
+
+async def test_stamped_audio_supplies_the_clock(duplex) -> None:
+    """A provider that times its audio needs no inference: the stamps are the adapter's clock."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20, start_ms=5000)
+    fake.push(0.3, count=2, start_ms=7000)
+    await _settle()
+    assert session._audio_ms == 7200
+    fake.say("hello", start_ms=7000, end_ms=7200)
+    fake.push(0.3, count=3, start_ms=7200)
+    fake.audio_ch.close()
+    await _settle()
+
+    (first,) = await _chunks(generations[0])
+    assert isinstance(first, TimedString)
+    assert (first.start_time, first.end_time) == (pytest.approx(0.0), pytest.approx(0.2))
+
+
+async def test_a_fragment_that_leads_its_audio_waits_for_the_burst_that_carries_it(
+    duplex, caplog
+) -> None:
+    """A transcript can beat its own audio to the wire by half a second or more; it must neither
+    open a generation of silence nor be lost."""
     fake, session, generations = duplex
     fake.push(0.001, count=20)
-    fake.push(0.3, count=2)  # the first turn's onset, untagged
     await _settle()
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_a"))
-    fake.push(0.3, count=2)
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        fake.say(" Sure.", start_ms=2000, end_ms=2200)
+        fake.push(0.001, count=5)
+        await _settle()
+        assert generations == []
+        assert session._fragments  # held for the sound to come
+
+        fake.push(0.3, count=3)
+        fake.push(0.001, count=8)
+        await _settle()
+
+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []
+    assert len(generations) == 1
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1)) == (7, " Sure.")
+
+
+async def test_a_fragment_the_burst_ends_before_reaching_rolls_over_to_the_next(duplex) -> None:
+    """Text for the next utterance arrives while the current one is still sounding; the current
+    burst never reaches its position, so it anchors the burst that follows."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say(" Checking the current conditions.", start_ms=2000, end_ms=2800)
+    fake.say(" It's", start_ms=4200, end_ms=4400)  # 1.4 s after the onset
+    fake.push(0.001, count=8)  # the burst closes at 1.1 s, short of it
     await _settle()
     assert len(generations) == 1
+    assert len(session._fragments) == 1
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == (
+        " Checking the current conditions."
+    )
 
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_b"))
+    fake.push(0.3, count=3)
     await _settle()
-    assert session._burst is None
-
-    fake.push(0.3, count=2)
+    fake.say(" 62 degrees.", start_ms=4400, end_ms=5000)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
     await _settle()
     assert len(generations) == 2
-    assert (await _read(generations[0]))[0] == 4
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1))[1] == " It's 62 degrees."
 
 
-async def test_transcript_is_timed_against_forwarded_audio(duplex) -> None:
+async def test_a_fragment_that_lags_its_audio_anchors_at_the_bursts_onset(duplex) -> None:
+    """Sound first, words later: the words still describe the onset, not the moment they arrived."""
     fake, _session, generations = duplex
-    fake.push(0.3, count=3, turn_id="turn_a")
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=5)
     await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text="hello", turn_id="turn_a", start_ms=0, end_ms=200),
-    )
-    await _settle()
+    fake.say("Hello there.", start_ms=9000, end_ms=9400)
+    fake.push(0.3, count=1)
     fake.audio_ch.close()
     await _settle()
 
-    assert len(generations) == 1
-    chunks: list[str] = []
-    async for msg in generations[0].message_stream:
-        async for _ in msg.audio_stream:
-            pass
-        async for chunk in msg.text_stream:
-            chunks.append(chunk)
+    (first,) = await _chunks(generations[0])
+    assert isinstance(first, TimedString)
+    assert first.start_time == pytest.approx(0.0)
 
-    assert "".join(chunks) == "hello"
-    timed = chunks[0]
-    assert isinstance(timed, TimedString)
-    assert timed.start_time == pytest.approx(0.0)
-    assert timed.end_time == pytest.approx(0.2)
+
+async def test_a_fragment_is_attached_when_the_audio_reaches_it(duplex) -> None:
+    """The model's words run ahead of its voice; a span the sound has not reached yet waits, even
+    across a pause in the transcript, and joins this burst if the gate rides the pause out."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)  # the audio clock reads 2000 when the burst opens
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say(" Yep, I've got order A1042", start_ms=5000, end_ms=5600)
+    fake.say(" on file.", start_ms=6500, end_ms=6900)  # a 900 ms pause in the model's own words
+    fake.push(0.3, count=1)
+    await _settle()
+    assert len(session._fragments) == 1  # due 1.5 s after the onset, and the audio is at 0.4 s
+
+    fake.push(0.3, count=2)  # the pause the gate rides out, then the sound resumes
+    fake.push(0.001, count=4)
+    fake.push(0.3, count=3)
+    await _settle()
+    assert not session._fragments
+    fake.push(0.001, count=8)
+    await _settle()
+
+    assert len(generations) == 1
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == (
+        " Yep, I've got order A1042 on file."
+    )
+
+
+async def test_transcript_no_audio_ever_claims_is_emitted_rather_than_lost(duplex, caplog) -> None:
+    """Losing transcript is worse than an odd chat item; the model's silence is the clock."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        fake.say("Lost words.", start_ms=2000, end_ms=2400)
+        fake.push(0.001, count=29)
+        await _settle()
+        assert generations == []  # 2.9 s of silence is not yet the timeout
+        fake.push(0.001, count=1)
+        await _settle()
+
+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == [
+        "duplex transcript outlived the audio it describes"
+    ]
+    assert len(generations) == 1
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1)) == (0, "Lost words.")
+    assert not session._fragments
 
 
 async def test_a_function_call_joins_the_speech_in_flight(duplex) -> None:
@@ -497,7 +499,7 @@ async def test_a_function_call_joins_the_speech_in_flight(duplex) -> None:
 
 
 async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> None:
-    """Nothing speech-shaped exists to end it, so it never waits on the gate or on a turn."""
+    """Nothing speech-shaped exists to end it, so it never waits on the gate."""
     fake, session, generations = duplex
     fake.push(0.001, count=20)
     await _settle()
@@ -507,7 +509,7 @@ async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> Non
     assert session._burst is None
     assert len(generations) == 1
     ev = generations[0]
-    assert await asyncio.wait_for(_read(ev), timeout=1) == (0, "")
+    assert [m async for m in ev.message_stream] == []
     assert [c async for c in ev.function_stream] == [call]
 
     # the idle stream keeps flowing and opens nothing of its own
@@ -516,326 +518,58 @@ async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> Non
     assert len(generations) == 1
 
 
-async def test_transcript_fragments_never_split_a_burst(duplex) -> None:
-    """Only audio defines boundaries.
-
-    A model can label transcript fragments before it announces the turn they belong to, so
-    consecutive fragments may carry different ids for one stretch of speech.
-    """
-    fake, _session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=2)
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text="Sure,", turn_id="item_1", start_ms=2000, end_ms=2200),
-    )
-    await _settle()
-    fake.push(0.3, count=2)
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text=" I", turn_id="item_2", start_ms=2200, end_ms=2400),
-    )
-    await _settle()
-
-    assert len(generations) == 1
-    fake.audio_ch.close()
-    await _settle()
-    assert (await _read(generations[0]))[1] == "Sure, I"
-
-
-async def test_a_trailing_transcript_lands_in_the_burst_the_gate_just_closed(duplex) -> None:
-    """The model transcribes what it has just said, so the last fragment outlives the sound."""
-    fake, _session, generations = duplex
-    fake.push(0.001, count=20)
-    speech_start = fake.model_ms
-    fake.push(0.3, count=3, turn_id="turn_a")
-    speech_end = fake.model_ms
-    fake.push(0.001, count=5)  # the gate closes here, on the fifth quiet frame
-    await _settle()
-    assert len(generations) == 1
-
-    # the watermark tracks the audio that carried sound, so the spans have to describe the speech
-    mid = (speech_start + speech_end) // 2
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text=" Alright", turn_id="turn_a", start_ms=speech_start, end_ms=mid
-        ),
-    )
-    await asyncio.sleep(STALLED / 2)
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text=".", turn_id="turn_a", start_ms=mid, end_ms=speech_end),
-    )
-    await _settle()
-
-    assert len(generations) == 1
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == " Alright."
-
-
-async def test_the_next_turn_does_not_inherit_the_previous_trailing_transcript(duplex) -> None:
-    """The punctuation a turn ends on must not prefix the chat item of the turn after it."""
-    fake, _session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text=" Alright.", turn_id="turn_a", start_ms=2000, end_ms=fake.model_ms - FRAME_MS
-        ),
-    )
-    await _settle()
-    assert len(generations) == 1
-
-    start_ms = fake.model_ms
-    fake.push(0.3, count=3, turn_id="turn_b")
-    await _settle()  # the transcript lags the speech it describes
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text=" Once there", turn_id="turn_b", start_ms=start_ms, end_ms=fake.model_ms
-        ),
-    )
-    await _settle()
-    fake.audio_ch.close()
-    await _settle()
-
-    assert len(generations) == 2
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=2))[1] == " Alright."
-    assert (await asyncio.wait_for(_read(generations[1]), timeout=2))[1] == " Once there"
-
-
-async def test_a_turn_that_stops_being_transcribed_is_released_by_the_liveness_bound(
-    duplex,
-) -> None:
-    """Nothing else can ever close a turn the model abandoned mid-transcript, so a bound must."""
+async def test_reconnect_releases_the_burst_and_the_words_waiting_on_it(duplex) -> None:
+    """A dropped connection never delivers the rest of what it was carrying."""
     fake, session, generations = duplex
     fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
+    fake.push(0.3, count=3)
     await _settle()
-    assert len(generations) == 1
-    assert session._close_handle is not None
-
-    # 3 tagged frames plus the five quiet ones the burst carries until the gate closes it
-    assert await asyncio.wait_for(_read(generations[0]), timeout=2) == (8, "")
-    assert session._burst is None
-
-
-async def test_the_liveness_bound_is_armed_once_and_cleared_by_audio(duplex) -> None:
-    """It bounds a stalled turn rather than pacing it, so a fragment must not push it out."""
-    fake, session, _generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
+    fake.say("Half a", start_ms=2000, end_ms=2200)
+    fake.say(" sentence", start_ms=4000, end_ms=4400)  # held for the next burst
+    fake.push(0.3, count=1)
     await _settle()
-    assert session._close_handle is not None
-    armed_at = session._close_handle.when()
+    assert session._fragments
 
-    await asyncio.sleep(0.01)
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text="Half a", turn_id="turn_a", start_ms=2000, end_ms=2200),
-    )
+    fake.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
     await _settle()
-    assert session._close_handle is not None
-    assert session._close_handle.when() == armed_at
 
-    fake.push(0.3, count=1, turn_id="turn_a")  # the turn resumes, nothing stays pending
-    await _settle()
-    assert session._close_handle is None
+    assert session._burst is None and not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1)) == (4, "Half a")
 
 
-async def test_a_turn_announced_while_the_liveness_bound_runs_keeps_its_burst(duplex) -> None:
-    """The announcement is the strongest sign yet that the burst is the model still speaking."""
+async def test_the_callers_events_pass_through_and_leave_the_burst_alone(duplex) -> None:
+    """The plugin detects the caller's turns; the adapter forwards them and never lets them cut
+    the model's speech, since a full-duplex model speaks over the caller by design."""
     fake, session, generations = duplex
+    events: list[str] = []
+    for name in (
+        "input_speech_started",
+        "input_audio_transcription_completed",
+        "input_speech_stopped",
+    ):
+        session.on(name, lambda ev, name=name: events.append(name))
     fake.push(0.001, count=20)
-    fake.push(0.3, count=2)  # onset, nothing labels it yet
+    fake.push(0.3, count=3)
     await _settle()
+    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
     fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text=" Once", turn_id="item_1", start_ms=2000, end_ms=2100),
+        "input_audio_transcription_completed",
+        llm.InputTranscriptionCompleted(item_id="u1", transcript="Wait", is_final=True),
     )
-    fake.push(0.001, count=5)
+    fake.emit("input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False))
+    fake.push(0.3, count=3)
     await _settle()
-    assert session._close_handle is not None
 
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_a"))
-    await _settle()
-    assert session._close_handle is None
-    assert len(generations) == 1
-
-
-async def test_the_first_fragment_of_a_session_starts_the_turn_its_audio_completes(
-    duplex, caplog
-) -> None:
-    """Nothing has played yet, so a fragment before any audio can only be a turn beginning."""
-    fake, _session, generations = duplex
-    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
-        fake.emit(
-            "transcript_delta",
-            llm.DuplexTranscriptDelta(text=" Sure.", start_ms=0, end_ms=200),
-        )
-        await _settle()
-        fake.push(0.3, count=3, turn_id="turn_a")
-        await _settle()
-
-    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []
-    assert len(generations) == 1
-    fake.audio_ch.close()
-    await _settle()
-    assert (await _read(generations[0])) == (3, " Sure.")
-
-
-async def test_a_fragment_that_leads_its_audio_is_adopted_by_the_turn_it_describes(
-    duplex, caplog
-) -> None:
-    """A transcript can beat its own audio to the wire, and that is an ordinary turn opening."""
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text="All done.", turn_id="turn_a", start_ms=2000, end_ms=fake.model_ms - FRAME_MS
-        ),
-    )
-    await _settle()
-    assert session._burst is None
-
-    start_ms = fake.model_ms  # the next turn reaches past everything already played
-    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
-        fake.emit(
-            "transcript_delta",
-            llm.DuplexTranscriptDelta(text=" Sure.", start_ms=start_ms, end_ms=start_ms + 200),
-        )
-        await _settle()
-        fake.push(0.3, count=3, turn_id="turn_b")
-        await _settle()
-
-    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []
-    assert len(generations) == 2
-    fake.audio_ch.close()
-    await _settle()
-    assert (await _read(generations[1])) == (3, " Sure.")
-
-
-async def test_a_fragment_that_outlived_its_audio_is_reported_and_never_adopted(
-    duplex, caplog
-) -> None:
-    """Losing transcript is worse than an odd chat item, but it must not prefix the next turn."""
-    fake, session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
-    await _settle()
-    audio_end = fake.model_ms - FRAME_MS
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text="All done", turn_id="turn_a", start_ms=2000, end_ms=audio_end
-        ),
-    )
-    await _settle()
-    assert session._burst is None
-
-    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
-        # a fragment reaching no further than the audio already played describes speech gone by
-        fake.emit(
-            "transcript_delta",
-            llm.DuplexTranscriptDelta(text=".", turn_id="turn_a", start_ms=2600, end_ms=audio_end),
-        )
-        await _settle()
-
-    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == [
-        "duplex transcript outlived the audio it describes"
+    assert events == [
+        "input_speech_started",
+        "input_audio_transcription_completed",
+        "input_speech_stopped",
     ]
-    assert len(generations) == 2
-
-    fake.push(0.3, count=3, turn_id="turn_b")
-    await _settle()
-    fake.audio_ch.close()
-    await _settle()
-
-    assert len(generations) == 3
-    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, ".")
-    assert (await asyncio.wait_for(_read(generations[2]), timeout=1)) == (3, "")
-
-
-@pytest.mark.parametrize("duplex", [_STALLED_TRANSCRIPT_TIMEOUT], indirect=True)
-async def test_a_turn_announced_late_keeps_the_words_spoken_before_it(duplex) -> None:
-    """A turn is announced ~450 ms after its first transcript; its onset is still the same turn."""
-    fake, _session, generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=2)  # speech onset, before anything labels it
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(text=" Once upon", turn_id="item_1", start_ms=2000, end_ms=2100),
-    )
-    fake.push(0.001, count=5)  # the gate closes while the transcript is still short of the audio
-    await _settle()
     assert len(generations) == 1
-
-    await asyncio.sleep(0.45)
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_a"))
-    start_ms = fake.model_ms
-    fake.push(0.3, count=2, turn_id="turn_a")
-    await _settle()
-    fake.emit(
-        "transcript_delta",
-        llm.DuplexTranscriptDelta(
-            text=" a time", turn_id="turn_a", start_ms=start_ms, end_ms=fake.model_ms
-        ),
-    )
-    await _settle()
-
-    assert len(generations) == 1
-    fake.audio_ch.close()
-    await _settle()
-    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == " Once upon a time"
+    assert session._burst is not None
 
 
-async def test_reconnect_releases_a_burst_held_by_an_open_turn(duplex) -> None:
-    """A dropped connection never delivers turn.done, which would hold the burst open forever."""
-    fake, _session, generations = duplex
-    fake.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id="turn_a"))
-    fake.push(0.3, count=3, turn_id="turn_a")
-    await _settle()
-    assert len(generations) == 1
-
-    fake.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
-    await _settle()
-
-    frames, _text = await asyncio.wait_for(_read(generations[0]), timeout=1)
-    assert frames == 3
-
-
-async def test_reconnect_and_shutdown_leave_no_close_pending(duplex) -> None:
-    """A timer surviving either path would fire against a session that has moved on."""
-    fake, session, _generations = duplex
-    fake.push(0.001, count=20)
-    fake.push(0.3, count=3, turn_id="turn_a")
-    fake.push(0.001, count=5)
-    await _settle()
-    assert session._close_handle is not None
-
-    fake.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
-    await _settle()
-    assert session._close_handle is None
-
-    fake.push(0.3, count=3, turn_id="turn_b")
-    fake.push(0.001, count=5)
-    await _settle()
-    assert session._close_handle is not None
-
-    await session.aclose()
-    assert session._close_handle is None
+# -- configuration and replies -------------------------------------------------------------
 
 
 async def test_configuration_is_handed_over_as_one_unit(duplex) -> None:
@@ -868,31 +602,23 @@ async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex
         await session.generate_reply()
 
 
-async def test_generate_reply_reaches_a_model_that_supports_it() -> None:
+def _askable() -> tuple[_FakeDuplexSession, _DuplexRealtimeSession]:
+    """A session whose model can be asked to speak."""
     model = _FakeDuplexModel()
     model._capabilities.manual_response_creation = True
     session = llm.DuplexRealtimeAdapter(model).session()
+    assert isinstance(session, _DuplexRealtimeSession)
     fake = model.session_obj
     assert fake is not None
+    return fake, session
 
+
+async def test_generate_reply_reaches_a_model_that_supports_it() -> None:
+    fake, session = _askable()
     assert session.realtime_model.capabilities.manual_response_creation
     session.generate_reply(instructions="say hi")
     assert fake.replies_requested == ["say hi"]
     await session.aclose()
-
-
-def _askable(
-    answering_turn: str | None = None,
-) -> tuple[_FakeDuplexSession, _DuplexRealtimeSession]:
-    """A session whose model can be asked to speak, naming its answering turn or not."""
-    model = _FakeDuplexModel()
-    model._capabilities.manual_response_creation = True
-    session = llm.DuplexRealtimeAdapter(model, stalled_transcript_timeout=STALLED).session()
-    assert isinstance(session, _DuplexRealtimeSession)
-    fake = model.session_obj
-    assert fake is not None
-    fake.answering_turn = answering_turn
-    return fake, session
 
 
 async def test_a_requested_reply_is_the_speech_that_follows_it() -> None:
@@ -917,23 +643,6 @@ async def test_a_reply_the_model_never_gives_does_not_strand_the_caller(monkeypa
 
     with pytest.raises(llm.RealtimeError):
         await asyncio.wait_for(fut, 1)
-    await session.aclose()
-
-
-async def test_a_named_turn_is_not_claimed_by_a_burst_of_another() -> None:
-    """A model asked mid-answer must not hand back the answer it was already giving."""
-    fake, session = _askable(answering_turn="turn_reply")
-    fut = session.generate_reply()
-    fake.push(0.001, count=20)
-    await _settle()
-
-    fake.push(0.5, count=3, turn_id="turn_other")
-    await _settle()
-    assert not fut.done()
-
-    fake.push(0.5, count=3, turn_id="turn_reply")
-    await _settle()
-    assert (await asyncio.wait_for(fut, 1)).user_initiated
     await session.aclose()
 
 
