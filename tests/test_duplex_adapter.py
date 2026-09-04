@@ -477,16 +477,43 @@ async def test_transcript_is_timed_against_forwarded_audio(duplex) -> None:
     assert timed.end_time == pytest.approx(0.2)
 
 
-async def test_function_call_opens_a_generation_when_none_is_open(duplex) -> None:
-    fake, _session, generations = duplex
+async def test_a_function_call_joins_the_speech_in_flight(duplex) -> None:
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
     call = llm.FunctionCall(call_id="c1", name="lookup", arguments="{}")
     fake.emit("function_call", call)
     await _settle()
 
     assert len(generations) == 1
-    fake.audio_ch.close()
+    assert session._burst is not None  # the speech carries on, the call rides in it
+
+    fake.push(0.001, count=8)
     await _settle()
+    frames, _ = await asyncio.wait_for(_read(generations[0]), timeout=1)
+    assert frames >= 3
     assert [c async for c in generations[0].function_stream] == [call]
+
+
+async def test_a_function_call_alone_is_a_generation_over_at_once(duplex) -> None:
+    """Nothing speech-shaped exists to end it, so it never waits on the gate or on a turn."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    call = llm.FunctionCall(call_id="c1", name="lookup", arguments="{}")
+    fake.emit("function_call", call)
+
+    assert session._burst is None
+    assert len(generations) == 1
+    ev = generations[0]
+    assert await asyncio.wait_for(_read(ev), timeout=1) == (0, "")
+    assert [c async for c in ev.function_stream] == [call]
+
+    # the idle stream keeps flowing and opens nothing of its own
+    fake.push(0.001, count=5)
+    await _settle()
+    assert len(generations) == 1
 
 
 async def test_transcript_fragments_never_split_a_burst(duplex) -> None:

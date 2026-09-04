@@ -140,6 +140,8 @@ class _Burst:
     modalities: asyncio.Future[list[Literal["text", "audio"]]]
     model_turn_id: str | None = None
     transcript: str = ""
+    message_opened: bool = False
+    """Speech has arrived; a burst carrying only function calls never announces a message."""
     has_audio: bool = False
     transcript_end_ms: int | None = None
     orphaned: bool = False
@@ -196,6 +198,19 @@ class _Burst:
         self._last_annotation = end_time if end_time is not None else start_time
         return TimedString(
             text, start_time=start_time, end_time=end_time if end_time is not None else NOT_GIVEN
+        )
+
+    def open_message(self) -> None:
+        if self.message_opened:
+            return
+        self.message_opened = True
+        self.message_ch.send_nowait(
+            MessageGeneration(
+                message_id=self.id,
+                text_stream=self.text_ch,
+                audio_stream=self.audio_ch,
+                modalities=self.modalities,
+            )
         )
 
     def close(self) -> None:
@@ -362,6 +377,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         if sound:
             self._sound_stopped = False
             self._cancel_close()
+        burst.open_message()
         burst.track_audio(f.start_ms, f.frame.duration, voiced=self._gate.voiced)
         if not burst.modalities.done():
             burst.modalities.set_result(["audio", "text"])
@@ -386,14 +402,6 @@ class _DuplexRealtimeSession(RealtimeSession):
             modalities=asyncio.Future(),
         )
         self._burst = burst
-        burst.message_ch.send_nowait(
-            MessageGeneration(
-                message_id=burst.id,
-                text_stream=burst.text_ch,
-                audio_stream=burst.audio_ch,
-                modalities=burst.modalities,
-            )
-        )
         ev = GenerationCreatedEvent(
             message_stream=burst.message_ch,
             function_stream=burst.function_ch,
@@ -429,7 +437,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._cancel_close()
         burst, self._burst = self._burst, None
         if burst is not None:
-            self._closed_audio_end_ms = burst._end_ms
+            if burst._end_ms is not None:
+                self._closed_audio_end_ms = burst._end_ms
             burst.close()
 
     # -- duplex events ---------------------------------------------------------------------
@@ -458,6 +467,7 @@ class _DuplexRealtimeSession(RealtimeSession):
                     },
                 )
             burst = self._open_burst(orphaned=orphaned)
+        burst.open_message()
         burst.transcript += ev.text
         if ev.end_ms is not None:
             burst.transcript_end_ms = max(burst.transcript_end_ms or ev.end_ms, ev.end_ms)
@@ -488,8 +498,13 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._maybe_close()
 
     def _on_function_call(self, call: FunctionCall) -> None:
-        burst = self._burst or self._open_burst()
-        burst.function_ch.send_nowait(call)
+        # a call is an event, not speech: it joins the burst in flight so the tool runs while the
+        # model talks, and alone it is a generation of its own, over as soon as it is delivered
+        if (burst := self._burst) is not None:
+            burst.function_ch.send_nowait(call)
+            return
+        self._open_burst().function_ch.send_nowait(call)
+        self._close_burst()
 
     def _on_session_reconnected(self, ev: object) -> None:
         # a dropped connection never delivers the turn's end, which would hold the burst forever
