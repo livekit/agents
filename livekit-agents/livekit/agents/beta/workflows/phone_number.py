@@ -59,6 +59,16 @@ class GetPhoneNumberResult:
     phone_number: str
 
 
+class PhoneNumberCaptureDeclinedError(ToolError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"couldn't get the phone number: {reason}")
+        self._reason = reason
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
 class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
     def __init__(
         self,
@@ -184,7 +194,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
             reason: A short explanation of why the user declined to provide the phone number
         """
         if not self.done():
-            self.complete(ToolError(f"couldn't get the phone number: {reason}"))
+            self.complete(PhoneNumberCaptureDeclinedError(reason))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
         if is_given(self._require_confirmation):
