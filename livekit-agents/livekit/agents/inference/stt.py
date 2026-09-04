@@ -7,6 +7,7 @@ import os
 import weakref
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
+from urllib.parse import urlencode
 
 import aiohttp
 from typing_extensions import Required
@@ -16,6 +17,7 @@ from livekit import rtc
 from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
@@ -39,6 +41,8 @@ from ._utils import (
 
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
+
+INACTIVITY_TIMEOUT_ERROR_CODE = 2007
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -913,13 +917,22 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
-        closing_ws = False
+        input_ended = False
+        session_closed = False
+        session_close_sent = False
         http_session = self._stt._ensure_session()
         vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
+        async def send_session_close(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal session_close_sent
+            if session_close_sent or ws.closed:
+                return
+            await ws.send_str(json.dumps({"type": "session.close"}))
+            session_close_sent = True
+
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal input_ended
 
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -950,13 +963,14 @@ class SpeechStream(stt.SpeechStream):
                 if vad_stream is not None:
                     vad_stream.end_input()
 
-                closing_ws = True
+                input_ended = True
                 finalize_msg = {
                     "type": "session.finalize",
                 }
                 await ws.send_str(json.dumps(finalize_msg))
+                await send_session_close(ws)
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or http_session.closed:
+                if input_ended or http_session.closed:
                     return
                 raise APIConnectionError(
                     "LiveKit Inference STT connection closed unexpectedly"
@@ -977,7 +991,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal session_closed
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -985,10 +999,12 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or http_session.closed:
+                    if session_closed or http_session.closed:
                         return
                     raise APIStatusError(
-                        message="LiveKit Inference STT connection closed unexpectedly"
+                        message="LiveKit Inference STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        retryable=not input_ended,
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -1010,12 +1026,18 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "session.finalized":
                     pass
                 elif msg_type == "session.closed":
-                    pass
+                    session_closed = True
+                    return
                 elif msg_type == "error":
-                    raise APIStatusError(
-                        f"LiveKit Inference STT returned error: {data.get('message')}",
-                        status_code=data.get("code", -1),
-                        body=data,
+                    logger.error(
+                        "received error from LiveKit Inference STT",
+                        extra={"lk.pii.event": data},
+                    )
+                    code = data.get("code", -1)
+                    raise APIError(
+                        "LiveKit Inference STT returned an error",
+                        body={"code": code},
+                        retryable=code != INACTIVITY_TIMEOUT_ERROR_CODE,
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
@@ -1038,6 +1060,10 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(*self._session_update_tasks)
                 self._session_update_tasks.clear()
             if ws is not None:
+                try:
+                    await send_session_close(ws)
+                except Exception:
+                    logger.debug("failed to send session.close, ws may be closing")
                 await ws.close()
             if vad_stream is not None:
                 await vad_stream.aclose()
@@ -1095,7 +1121,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await asyncio.wait_for(
                 http_session.ws_connect(
-                    f"{base_url}/stt?model={self._opts.model}", headers=headers
+                    f"{base_url}/stt?{urlencode({'model': self._opts.model})}", headers=headers
                 ),
                 self._conn_options.timeout,
             )
