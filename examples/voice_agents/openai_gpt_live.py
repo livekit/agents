@@ -12,16 +12,13 @@ Notes for this alpha:
   afterwards the API is append-only, so nothing can be edited or removed. A reconnect
   reseeds the whole conversation, so the model picks up where the dropped one stopped.
 - ``delegation="client"`` hands work to the application instead of a backend model: it
-  arrives as a ``GPTLiveDelegation`` on the session's ``delegation_created`` event and is
-  answered with ``send_delegation_context``. There is no tool channel in that mode, so
-  ``@function_tool`` is ignored. ``update_delegation`` switches between the two mid-session.
-- The Agent's ``instructions`` are the voice persona and are immutable once the
-  session starts; the backend reasoning model is configured via ``backend_instructions``.
-- Audio the model never transcribes — a backchannel, a laugh — still plays; it simply
-  produces no chat item.
-- ``opening`` is the way to speak first: the server mutes the microphone for its duration, so
-  nothing here pauses input. It is startup-only, and the model may reword it, so use prerecorded
-  audio where the exact wording is a compliance requirement.
+  arrives as a ``GPTLiveDelegation`` on the session's ``delegation_created`` event, carrying
+  only an id. The ask is whatever the conversation says, which ``duplex_session.chat_ctx``
+  holds; answer with ``append_commentary(text, delegation_id=...)``. There is no tool channel
+  in that mode, so ``@function_tool`` is ignored, and the mode is fixed for the session.
+- The Agent's ``instructions`` are the voice persona and are immutable once the session
+  starts. ``generate_reply(instructions=...)`` asks the model to speak, which it does in its own
+  words. The backend reasoning model is configured via ``backend_instructions``.
 
 Run it in the terminal (needs OPENAI_API_KEY and alpha access):
 
@@ -58,7 +55,7 @@ ORDERS = {
 def prior_conversation() -> ChatContext:
     """A conversation this caller had earlier, seeded as GPT-Live startup history.
 
-    Only what is here before the session starts becomes ``initial_items``; afterwards the API is
+    Only what is here before the session starts becomes startup ``input``; afterwards the API is
     append-only, so nothing can be edited or removed. The service accepts at most 128 messages and
     8192 rendered tokens, oldest dropped first.
     """
@@ -87,8 +84,14 @@ class Assistant(Agent):
         )
 
     async def on_enter(self) -> None:
-        # nothing to do: the session's `opening` already greets the caller
-        pass
+        # an ask is a request the model may decline, and it declines one that contradicts the
+        # seeded history, so the greeting picks up where that conversation left off
+        self.session.generate_reply(
+            instructions=(
+                "Welcome the caller back to Acme and ask whether they are calling about the "
+                "delivery of order A1042."
+            )
+        )
 
     @function_tool
     async def lookup_weather(self, context: RunContext, location: str) -> str:
@@ -98,8 +101,8 @@ class Assistant(Agent):
             location: The city or region to look up.
         """
         logger.info("looking up weather for %s", location)
-        # the backend Responses model calls this tool; the framework runs it here and
-        # returns the result via delegation.function_call_output.create
+        # the backend Responses model calls this tool; the framework runs it here and the
+        # plugin returns the result to the backend
         return f"The weather in {location} is 62 degrees and partly cloudy."
 
     @function_tool
@@ -137,8 +140,6 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         llm=GPTLiveModel(
             voice="marin",
-            # spoken before the caller can interrupt it, in place of an on_enter greeting
-            opening="Thanks for calling Acme. How can I help you today?",
             # backend Responses model that handles reasoning and tools
             backend_model="gpt-5.6-sol",
             backend_instructions="Use tools when current information is required.",

@@ -6,8 +6,8 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import AsyncIterable, Iterator
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterable
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
 
@@ -25,45 +25,53 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
+from openai.types.responses.response_input_item import FunctionCallOutput
 
 from ..log import logger
 from ..tools import OpenAITool
 from . import gpt_live_types as types
 
-# GPT-Live is a full-duplex voice model. Unlike the Realtime API it is server-driven: the model
-# decides when to speak and self-manages barge-in, so there is no client response.create / cancel /
-# truncate / commit. Reasoning and tools are delegated, over WebSocket, either to a backend
-# Responses model or to the application.
-#
-# output audio streams continuously, inter-turn filler and silence included. every frame reaches
-# the DuplexSession audio stream tagged with the assistant turn it belongs to, and the framework's
-# DuplexRealtimeAdapter is what gates that stream and segments it into turns.
+# GPT-Live is a full-duplex voice model: it decides when to speak and manages barge-in itself,
+# so there is no response.create / cancel / truncate for its own speech. Output audio streams
+# continuously, silence included, and the protocol reports timed transcript fragments of both
+# speakers with no turn events. Reasoning and tools are delegated to a backend Responses model
+# or to the application.
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "gpt-live-1-marble-alpha"
+DEFAULT_MODEL = "gpt-live-1-diamond-alpha"
 DEFAULT_VOICE = "marin"
 DEFAULT_BACKEND_MODEL = "gpt-5.6-sol"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-ALPHA_VALUE = "quicksilver=v2"
+ALPHA_VALUE = "quicksilver=v3"
 
 # TODO: tune the prompts and caps
-# service caps, budgeted at the usual ~4 characters a token since there is no tokenizer here
-_MAX_INITIAL_ITEMS = 128
-_MAX_INITIAL_CHARS = 8192 * 4
-_MAX_CONTEXT_CHARS = 500 * 4
-_MAX_OPENING_CHARS = 250 * 4
-_MAX_FEEDBACK_CHARS = 4096
+# service caps, budgeted at ~4 characters a token since there is no tokenizer here
+_MAX_INPUT_ITEMS = 128
+_MAX_INPUT_CHARS = 8192 * 4
+_MAX_APPEND_CHARS = 500 * 4
 
-# no client event asks for a turn, so a reply is requested by putting the ask in the context
-_SPEAK_NOW = (
-    # "Speak now. Do not wait for the user to say anything first. Afterwards, pause and listen."
-    "User said something, reply to it."
-)
+# a speaker's fragments extend one message until a pause this long: on the model's clock between
+# the spans they cover, and for the user on the input audio pushed since the last one. fragments
+# inside an utterance come a few hundred ms apart, a pause between phrases reaches ~800 ms
+_SPEECH_GAP_MS = 1000
 
-# session.closed carries the final usage; the service drains first, capped at 10s server-side
+# no client event asks for a turn: appended commentary does, which the model speaks from once
+# within about a second (an appended instruction took 3-9 s and stands for the whole session).
+# each ask ends with the same two sentences; what precedes them says what to speak about
+_SPEAK_NOW = "Do not wait for the caller to speak first. After that, pause and listen."
+_ASK_INSTRUCTED = f"Immediately follow the instruction below. {_SPEAK_NOW}"
+_ASK_TYPED = f"Reply to the caller now, don't repeat what they said. {_SPEAK_NOW}"
+_ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
+
+# session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
 _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
+
+# responses the application starts itself carry a null delegation_id; tracked under this key
+_APP_DELEGATION = ""
+
+Role = Literal["user", "assistant"]
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -77,31 +85,7 @@ _FATAL_ERROR_CODES = frozenset(
 )
 
 
-# reported before session.opening.completed, and between them they mean the caller heard nothing
-_OPENING_FAILURE_CODES = frozenset({"opening_timeout", "opening_no_output_audio"})
-
-
-def _is_fatal_error(error: types.ErrorBody) -> bool:
-    return (error.code or error.type or "") in _FATAL_ERROR_CODES
-
-
-def _build_live_url(base_url: str, model: str) -> str:
-    """Turn an http(s) base url into the wss GPT-Live endpoint with the model query."""
-    if base_url.startswith("http"):
-        base_url = base_url.replace("http", "ws", 1)
-
-    parsed = urlparse(base_url)
-    path = parsed.path.rstrip("/")
-    if not path.endswith("/live"):
-        path = f"{path}/live"
-
-    query = f"model={model}"
-    return urlunparse((parsed.scheme, parsed.netloc, path, "", query, ""))
-
-
-def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any] | None:
-    if tool_choice is None:
-        return None
+def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:
     if isinstance(tool_choice, str):
         return tool_choice
     if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -110,7 +94,6 @@ def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any] 
 
 
 def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
-    """Convert framework tools into Responses-delegation tool entries."""
     oai_tools: list[dict[str, Any]] = []
     for tool in tools:
         if isinstance(tool, llm.FunctionTool):
@@ -127,13 +110,12 @@ def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
     return oai_tools
 
 
-def _render_item(item: llm.ChatItem) -> tuple[llm.ChatRole, str] | None:
-    """One context item as the role and text the Live API carries.
-
-    A tool call has no role of its own here, so it is narrated to the developer.
-    """
+def _render_item(item: llm.ChatItem) -> tuple[types.InputRole, str] | None:
+    """A context item as the role and text the Live API carries; tool traffic is narrated."""
     if isinstance(item, llm.ChatMessage):
-        return (item.role, text) if (text := item.text_content) else None
+        if not (text := item.text_content):
+            return None
+        return ("developer" if item.role == "system" else item.role), text
     if isinstance(item, llm.FunctionCall):
         return "developer", f"Called tool {item.name} with {item.arguments}"
     if isinstance(item, llm.FunctionCallOutput):
@@ -142,27 +124,61 @@ def _render_item(item: llm.ChatItem) -> tuple[llm.ChatRole, str] | None:
     return None
 
 
+def _is_speech(item: llm.ChatItem) -> bool:
+    """Whether an item is the model's own transcript: assistant text, or user text with a confidence."""
+    return isinstance(item, llm.ChatMessage) and (
+        item.role == "assistant" or (item.role == "user" and item.transcript_confidence is not None)
+    )
+
+
 @dataclass
 class GPTLiveDelegation:
-    """Work the model handed to the application, under client delegation."""
+    """Work the model handed to the application, under client delegation.
+
+    It carries no task text: the ask is whatever :attr:`GPTLiveSession.chat_ctx` says. Answer it
+    with :meth:`GPTLiveSession.append_commentary`, passing this id.
+    """
 
     id: str
-    """Answer it with :meth:`GPTLiveSession.send_delegation_context`."""
-    text: str
-    """What the model is asking for, in its own words."""
+
+
+@dataclass
+class _Speech:
+    """A speaker's message still growing in the mirror; for the user, also their open turn."""
+
+    message_id: str
+    text: str = ""
+    end_ms: int | None = None
+    started_at: float = field(default_factory=time.time)
+    quiet_ms: int = 0
+    """Input audio pushed since the user's last fragment."""
+
+
+@dataclass
+class _BackendResponse:
+    """The backend's current response for one delegation, and the tool calls it waits on.
+
+    A response continues only on an explicit ``response.create`` sent after every output, and its
+    ``response.completed`` has an empty ``output``, so the calls are collected as they arrive.
+    """
+
+    call_ids: set[str] = field(default_factory=set)
+    returned: set[str] = field(default_factory=set)
+    completed: bool = False
 
 
 @dataclass
 class _LiveOptions:
     model: str
-    voice: str
+    voice: str | dict[str, Any]
     instructions: str | None
-    opening: str | None
     delegation: types.DelegationTarget
     backend_model: str
     backend_instructions: str | None
     tool_choice: llm.ToolChoice | None
+    parallel_tool_calls: bool | None
     reasoning: dict[str, Any] | None
+    text: dict[str, Any] | None
     service_tier: str | None
     max_output_tokens: int | None
     api_key: str
@@ -178,14 +194,15 @@ class GPTLiveModel(llm.DuplexModel):
         self,
         *,
         model: str = DEFAULT_MODEL,
-        voice: str = DEFAULT_VOICE,
+        voice: str | dict[str, Any] = DEFAULT_VOICE,
         instructions: NotGivenOr[str] = NOT_GIVEN,
-        opening: NotGivenOr[str] = NOT_GIVEN,
         delegation: types.DelegationTarget = "responses",
         backend_model: str = DEFAULT_BACKEND_MODEL,
         backend_instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         reasoning: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
+        text: NotGivenOr[dict[str, Any] | None] = NOT_GIVEN,
         service_tier: NotGivenOr[str | None] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
         api_key: str | None = None,
@@ -197,20 +214,21 @@ class GPTLiveModel(llm.DuplexModel):
         """
         Args:
             model: GPT-Live voice model slug.
-            voice: Output voice. Immutable after the session starts.
-            instructions: Voice-model system instructions. Immutable after the session starts.
-            opening: A passage the model speaks first, at most 250 tokens. The server mutes the
-                microphone for its duration, so the caller cannot interrupt it. The model may
-                reword it, and it cannot be set after the session starts.
-            delegation: Where delegated work goes. ``responses`` runs it on a backend model, so
-                ``@function_tool`` works as usual; ``client`` hands it to the application as a
-                ``delegation_created`` event, which no framework tool can answer.
+            voice: Output voice: a name such as ``marin``, or ``{"id": "voice_..."}`` for an
+                authorized custom voice. Immutable after the session starts.
+            instructions: Voice-model system instructions, immutable after the session starts.
+            delegation: Where delegated work goes, fixed for the life of the session.
+                ``responses`` runs it on a backend model, so ``@function_tool`` works as usual;
+                ``client`` hands it to the application as a ``delegation_created`` event, which
+                no framework tool can answer.
             backend_model: Responses model the voice model delegates reasoning and tools to.
             backend_instructions: Instructions for the backend Responses model.
             tool_choice: Tool selection policy for the backend Responses model.
+            parallel_tool_calls: Whether the backend may request several tool calls at once.
             reasoning: Reasoning config for the backend Responses model, e.g. ``{"effort": "medium"}``.
+            text: Text config for the backend Responses model, e.g. ``{"verbosity": "low"}``.
             service_tier: Backend service tier (``auto``, ``default``, ``flex`` or ``priority``).
-            max_output_tokens: Backend max output tokens.
+            max_output_tokens: Backend max output tokens, at least 16.
             api_key: OpenAI API key. Falls back to ``OPENAI_API_KEY``.
             base_url: HTTP base url of the OpenAI API.
             http_session: Optional shared HTTP session.
@@ -220,13 +238,14 @@ class GPTLiveModel(llm.DuplexModel):
         super().__init__(
             capabilities=llm.DuplexCapabilities(
                 user_transcription=True,
-                # the model continues on its own once a tool result reaches the backend
+                # the model continues on its own once every tool result reaches the backend
                 auto_tool_reply_generation=True,
-                # no client event creates a turn, but a speakable context append asks for one
+                # no client event creates a turn, but appended commentary asks for one
                 manual_response_creation=True,
                 mutable_chat_context=False,
                 mutable_instructions=False,
-                mutable_tools=True,
+                # tools live on the backend model, and a client delegation has none
+                mutable_tools=delegation == "responses",
             )
         )
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -240,12 +259,13 @@ class GPTLiveModel(llm.DuplexModel):
             model=model,
             voice=voice,
             instructions=instructions if is_given(instructions) else None,
-            opening=opening if is_given(opening) else None,
             delegation=delegation,
             backend_model=backend_model,
             backend_instructions=backend_instructions if is_given(backend_instructions) else None,
             tool_choice=tool_choice if is_given(tool_choice) else None,
+            parallel_tool_calls=parallel_tool_calls if is_given(parallel_tool_calls) else None,
             reasoning=reasoning if is_given(reasoning) else None,
+            text=text if is_given(text) else None,
             service_tier=service_tier if is_given(service_tier) else None,
             max_output_tokens=max_output_tokens if is_given(max_output_tokens) else None,
             api_key=api_key,
@@ -308,31 +328,24 @@ class GPTLiveSession(
         self._input_resampler: rtc.AudioResampler | None = None
 
         self._closing = False
-        # the first session.update of a connection carries the config that is immutable after it
-        self._initial_config_sent = False
-        # an opening only belongs in a conversation nobody has spoken in yet: a connection that
-        # drops before anyone did still carries it, a later one would talk over what is under way
-        self._conversation_started = False
-        self._opening_failed = False
+        # session.start opens a connection and carries the config that is immutable after it
+        self._session_start_sent = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
         self._session_id: str | None = None
         # session usage is reported cumulatively; kept to emit per-event deltas
         self._usage_total = types.Usage()
 
-        # turn.delta carries only a turn_id (no role); the role comes from turn.created, so route
-        # user vs assistant transcript by turn_id instead of by whichever side is currently open
-        self._turn_roles: dict[str, types.TurnRole] = {}
-        self._user_transcripts: dict[str, str] = {}
-        self._user_turn_started_at: dict[str, float] = {}
-        self._assistant_transcripts: dict[str, str] = {}
-        # the turn output audio is attributed to, so the framework can tell one apart from the next
-        self._assistant_turn_id: str | None = None
-        # calls this connection delegated; only their results mean anything to the backend
-        self._delegated_calls: set[str] = set()
-        self._tools_ignored = False
-        # everything the model has been told, and the baseline a context sync diffs against
+        # everything the model has been told, and the baseline a context sync diffs against; both
+        # speakers' fragments grow into its messages as they arrive
         self._remote_chat_ctx = llm.ChatContext.empty()
+        self._speech: dict[Role, _Speech] = {}
+        # the backend's response per delegation and the delegation each tool call belongs to,
+        # since the framework hands a result back by call id alone
+        self._backend: dict[str, _BackendResponse] = {}
+        self._delegation_of_call: dict[str, str] = {}
+        # the newest context item the last ask was about, so an ask never repeats one
+        self._asked_item_id: str | None = None
 
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
@@ -348,43 +361,36 @@ class GPTLiveSession(
 
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
-            # there is no backend model to give tools to; the model asks the app in plain text
-            if (
-                tool_ids := [tool.id for tool in self._tools.flatten()]
-            ) and not self._tools_ignored:
-                self._tools_ignored = True
-                logger.warning(
-                    "gpt-live client delegation has no tool channel; answer delegation_created "
-                    "with send_delegation_context instead",
-                    extra={"tools": tool_ids},
-                )
             return types.Delegation(type="client")
-
-        tools = _build_delegation_tools(self._tools.flatten())
         return types.Delegation(
             type="responses",
             responses=types.ResponsesConfig(
                 model=self._opts.backend_model,
                 instructions=self._opts.backend_instructions,
-                tools=tools or None,
-                tool_choice=_to_tool_choice(self._opts.tool_choice),
+                tools=_build_delegation_tools(self._tools.flatten()) or None,
+                tool_choice=_to_tool_choice(self._opts.tool_choice)
+                if self._opts.tool_choice is not None
+                else None,
+                parallel_tool_calls=self._opts.parallel_tool_calls,
                 reasoning=self._opts.reasoning,
+                text=self._opts.text,
                 service_tier=self._opts.service_tier,
                 max_output_tokens=self._opts.max_output_tokens,
             ),
         )
 
-    def _build_initial_items(self) -> list[types.InitialItem]:
-        """The conversation so far as startup history, newest first until the caps are reached."""
-        items: list[types.InitialItem] = []
-        budget = _MAX_INITIAL_CHARS
+    def _session_start_event(self) -> types.SessionStartEvent:
+        """The whole configuration, composed fresh for each connection."""
+        # the conversation so far is startup history, newest first until the caps are reached
+        items: list[types.InputItem] = []
+        budget = _MAX_INPUT_CHARS
         dropped = 0
         for item in reversed(self._remote_chat_ctx.items):
             if (rendered := _render_item(item)) is None:
                 continue
             role, text = rendered
             budget -= len(text)
-            if budget < 0 or len(items) >= _MAX_INITIAL_ITEMS:
+            if budget < 0 or len(items) >= _MAX_INPUT_ITEMS:
                 dropped += 1
                 continue
             part = (
@@ -392,49 +398,41 @@ class GPTLiveSession(
                 if role == "assistant"
                 else types.InputTextPart(text=text)
             )
-            items.append(types.InitialItem(role=role, content=[part]))
-
+            items.append(types.InputItem(role=role, content=[part]))
         if dropped:
             logger.warning(
                 "gpt-live startup history exceeds what a session accepts; dropping the oldest",
                 extra={"dropped": dropped, "kept": len(items)},
             )
         items.reverse()
-        return items
 
-    def _build_opening(self) -> types.Opening | None:
-        """The protected passage, carried until someone has taken a turn."""
-        if not (text := self._opts.opening) or self._conversation_started:
-            return None
-        if len(text) > _MAX_OPENING_CHARS:
-            logger.warning(
-                "gpt-live opening exceeds the 250 token limit; truncating",
-                extra={"chars": len(text)},
-            )
-            text = text[:_MAX_OPENING_CHARS]
-        return types.Opening(text=text)
-
-    def _create_session_update_event(self) -> types.SessionUpdateEvent:
-        """The whole configuration, composed fresh for each connection."""
-        return types.SessionUpdateEvent(
-            event_id=utils.shortuuid("session_update_"),
+        return types.SessionStartEvent(
+            event_id=utils.shortuuid("session_start_"),
             session=types.SessionConfig(
+                model=self._opts.model,
                 instructions=self._instructions,
-                opening=self._build_opening(),
+                input=items or None,
                 audio=types.AudioConfig(
                     format=types.AudioFormat(type="audio/pcm", rate=SAMPLE_RATE),
                     output=types.AudioOutput(voice=self._opts.voice),
                 ),
                 delegation=self._build_delegation(),
-                initial_items=self._build_initial_items() or None,
             ),
         )
 
-    def _create_delegation_update_event(self) -> types.SessionUpdateEvent:
-        """Session.update replacing only the delegation; the rest is immutable after startup."""
-        return types.SessionUpdateEvent(
-            event_id=utils.shortuuid("delegation_update_"),
-            session=types.SessionConfig(delegation=self._build_delegation()),
+    def _send_delegation_update(self, **responses: Any) -> None:
+        """A sparse session.update: only the backend settings can change once started."""
+        if self._opts.delegation != "responses" or not self._session_start_sent:
+            return
+        self.send_event(
+            types.SessionUpdateEvent(
+                event_id=utils.shortuuid("delegation_update_"),
+                session=types.SessionUpdateConfig(
+                    delegation=types.Delegation(
+                        type="responses", responses=types.ResponsesConfig(**responses)
+                    )
+                ),
+            )
         )
 
     # -- connection loop -------------------------------------------------------------------------
@@ -457,7 +455,7 @@ class GPTLiveSession(
                         await self._run_ws(ws_conn)
                     finally:
                         # what arrives now is history for the next connection, not an append
-                        self._initial_config_sent = False
+                        self._session_start_sent = False
                 except APIError as e:
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
@@ -486,19 +484,15 @@ class GPTLiveSession(
             self._audio_ch.close()
 
     def _reset_for_reconnect(self) -> None:
-        # the mirror is left alone: the new connection is seeded with it
+        # a new connection is a new session, reseeded from the mirror; the rest of what the
+        # dropped one was carrying never arrives
         self._session_started_fut = asyncio.Future()
-        if self._assistant_turn_id is not None:
-            self._end_assistant_turn(self._assistant_turn_id)
-        self._turn_roles.clear()
-        self._user_transcripts.clear()
-        self._user_turn_started_at.clear()
-        self._assistant_transcripts.clear()
-        self._delegated_calls.clear()
-        # a new connection is a new session, so its usage counters restart from zero
+        self._end_speech("user")
+        self._speech.clear()
+        self._backend.clear()
+        self._delegation_of_call.clear()
         self._usage_total = types.Usage()
         self._session_id = None
-        self._opening_failed = False
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {
@@ -506,7 +500,11 @@ class GPTLiveSession(
             "Authorization": f"Bearer {self._opts.api_key}",
             "OpenAI-Alpha": ALPHA_VALUE,
         }
-        url = _build_live_url(self._opts.base_url, self._opts.model)
+        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
+        path = parsed.path.rstrip("/")
+        if not path.endswith("/live/sessions"):
+            path = f"{path}/live/sessions"
+        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
         if lk_oai_debug:
             logger.debug(f"connecting to GPT-Live API: {url}")
 
@@ -529,24 +527,21 @@ class GPTLiveSession(
             nonlocal closing
             # instructions, voice and history are immutable once the session starts
             await self._await_config()
-            config = self._create_session_update_event()
-            self._initial_config_sent = True
-            await self._ws_send(ws_conn, config)
+            start = self._session_start_event()
+            self._session_start_sent = True
+            await self._ws_send(ws_conn, start)
 
             async for msg in self._msg_ch:
-                # hold input audio until the server acknowledges the session; cancelled on close
-                if (
-                    isinstance(msg, types.InputAudioAppendEvent)
-                    and not self._session_started_fut.done()
-                ):
+                # every command waits for the server to acknowledge the session, as the protocol
+                # asks; audio and a greeting queued before it would otherwise race the startup
+                if not self._session_started_fut.done():
                     await self._session_started_fut
                 await self._ws_send(ws_conn, msg)
 
             closing = True
             with contextlib.suppress(Exception):
                 await self._ws_send(ws_conn, types.SessionCloseEvent())
-            # the service drains, then reports the final usage in session.closed. only worth
-            # waiting for when the session was actually running.
+            # the service drains, then reports the final usage in session.closed
             if self._session_started_fut.done() and not self._session_started_fut.cancelled():
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(
@@ -573,8 +568,7 @@ class GPTLiveSession(
 
                 event = json.loads(msg.data)
                 self.emit("openai_server_event_received", event)
-                # while closing, only the shutdown events matter; anything else would be
-                # emitted into a session the framework has already torn down
+                # while closing only the shutdown events matter; the framework has torn down
                 if self._closing and event.get("type") not in _CLOSING_EVENTS:
                     continue
                 try:
@@ -608,10 +602,9 @@ class GPTLiveSession(
     async def _ws_send(
         self, ws_conn: aiohttp.ClientWebSocketResponse, event: types.ClientEvent | dict[str, Any]
     ) -> None:
-        # apps subscribe to raw json, which is also what the escape hatch sends
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
         self.emit("openai_client_event_queued", raw)
-        if lk_oai_debug and raw.get("type") != "input_audio.append":
+        if lk_oai_debug and raw.get("type") != "session.input_audio.append":
             logger.debug(f">>> {raw}")
         await ws_conn.send_str(json.dumps(raw))
 
@@ -619,85 +612,54 @@ class GPTLiveSession(
 
     def _handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type", "")
-        if lk_oai_debug and etype != "output_audio.delta":
+        if lk_oai_debug and etype != "session.output_audio.delta":
             logger.debug(f"<<< {event}")
 
         if etype == "session.started":
             self._handle_session_started(types.SessionStartedEvent.construct(**event))
-        elif etype == "session.updated":
-            self._handle_session_updated(types.SessionUpdatedEvent.construct(**event))
-        elif etype == "output_audio.delta":
+        elif etype == "session.output_audio.delta":
             self._handle_output_audio_delta(types.OutputAudioDeltaEvent.construct(**event))
-        elif etype == "output_transcript.added":
-            self._handle_output_transcript_added(
-                types.OutputTranscriptAddedEvent.construct(**event)
+        elif etype == "session.output_transcript.delta":
+            self._handle_transcript_delta(
+                "assistant", types.TranscriptDeltaEvent.construct(**event)
             )
-        elif etype == "turn.created":
-            self._handle_turn_created(types.TurnCreatedEvent.construct(**event))
-        elif etype == "turn.delta":
-            self._handle_turn_delta(types.TurnDeltaEvent.construct(**event))
-        elif etype == "turn.done":
-            self._handle_turn_done(types.TurnDoneEvent.construct(**event))
-        elif etype == "delegation.created":
-            self._handle_delegation_created(types.DelegationCreatedEvent.construct(**event))
-        elif etype == "response.output_item.done":
-            self._handle_response_output_item_done(
-                types.ResponseOutputItemDoneEvent.construct(**event)
-            )
-        elif etype == "session.opening.started":
-            self._handle_opening_started(types.SessionOpeningStartedEvent.construct(**event))
-        elif etype == "session.opening.completed":
-            self._handle_opening_completed(types.SessionOpeningCompletedEvent.construct(**event))
+        elif etype == "session.input_transcript.delta":
+            self._handle_transcript_delta("user", types.TranscriptDeltaEvent.construct(**event))
+        elif etype == "session.delegation.created":
+            self._handle_delegation_created(types.SessionDelegationCreatedEvent.construct(**event))
+        elif etype == "response.event":
+            self._handle_response_event(types.ResponseEventEnvelope.construct(**event))
         elif etype == "session.usage.updated":
             self._handle_session_usage_updated(types.SessionUsageUpdatedEvent.construct(**event))
         elif etype == "session.closed":
             self._handle_session_closed(types.SessionClosedEvent.construct(**event))
         elif etype == "error":
             self._handle_error(types.ErrorEvent.construct(**event).error)
-        elif etype == "session.context_window.rolled_over":
-            self._handle_context_window_rolled_over(
-                types.ContextWindowRolledOverEvent.construct(**event)
+        elif etype in (
+            "session.updated",
+            "session.input_audio.muted",
+            "session.input_audio.unmuted",
+            "session.instructions.appended",
+            "session.thinking.appended",
+            "session.commentary.appended",
+        ):
+            # acknowledgments; nothing waits on them
+            logger.debug(
+                "gpt-live acknowledged a command",
+                extra={"type": etype, "client_event_id": event.get("client_event_id")},
             )
-        elif etype == "input_transcript.added":
-            self._handle_input_transcript_added(types.InputTranscriptAddedEvent.construct(**event))
         elif lk_oai_debug:
             logger.debug(f"unhandled gpt-live event: {etype}")
 
-    # -- model output ----------------------------------------------------------------------------
-
     def _handle_session_started(self, event: types.SessionStartedEvent) -> None:
-        if event.session.id:
-            self._session_id = event.session.id
+        self._session_id = event.session.id or self._session_id
         if not self._session_started_fut.done():
             self._session_started_fut.set_result(None)
 
-    def _handle_session_updated(self, event: types.SessionUpdatedEvent) -> None:
-        """A receipt for one sparse update, which nothing waits on yet.
-
-        Startup acknowledges with ``session.started``, and only that releases the audio hold. The
-        echoed ``event_id`` is where an update that has to be correlated would be answered.
-        """
-
-    def _handle_opening_started(self, event: types.SessionOpeningStartedEvent) -> None:
-        logger.debug("gpt-live is speaking its opening; the microphone is muted until it ends")
-
-    def _handle_opening_completed(self, event: types.SessionOpeningCompletedEvent) -> None:
-        # no failure means the caller heard it, whether or not any of it was transcribed
-        self._conversation_started = self._conversation_started or not self._opening_failed
-        logger.debug("gpt-live finished its opening")
-
-    def _handle_context_window_rolled_over(self, event: types.ContextWindowRolledOverEvent) -> None:
-        """The service summarised the earlier conversation in place, on its own terms."""
-        logger.info(
-            "gpt-live compacted the session context", extra={"rollover_id": event.rollover_id}
-        )
-
     def _handle_output_audio_delta(self, event: types.OutputAudioDeltaEvent) -> None:
-        data = base64.b64decode(event.audio) if event.audio else b""
-        if not data:
+        # every frame is published, silence included: the framework decides what plays
+        if not (data := base64.b64decode(event.delta or "")):
             return
-        # every frame is published, silence and inter-turn filler included: the model emits audio
-        # unconditionally and the framework is what decides which of it is worth playing
         frame = rtc.AudioFrame(
             data=data,
             sample_rate=SAMPLE_RATE,
@@ -705,263 +667,220 @@ class GPTLiveSession(
             samples_per_channel=len(data) // 2,
         )
         with contextlib.suppress(utils.aio.channel.ChanClosed):
-            self._audio_ch.send_nowait(
-                llm.DuplexAudioFrame(
-                    frame=frame,
-                    turn_id=self._assistant_turn_id,
-                    start_ms=event.start_ms,
+            self._audio_ch.send_nowait(llm.DuplexAudioFrame(frame=frame))
+
+    def _handle_transcript_delta(self, role: Role, event: types.TranscriptDeltaEvent) -> None:
+        if not event.delta:
+            return
+        speech = self._speech.get(role)
+        # a pause on the model's clock ends the message even when its fragments arrived together
+        if (
+            speech is not None
+            and speech.end_ms is not None
+            and event.start_ms is not None
+            and event.start_ms - speech.end_ms > _SPEECH_GAP_MS
+        ):
+            self._end_speech(role)
+            speech = None
+        if speech is None:
+            speech = self._speech[role] = _Speech(message_id=utils.shortuuid("speech_"))
+            if role == "user":
+                self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        speech.text += event.delta
+        speech.quiet_ms = 0
+        if event.end_ms is not None:
+            speech.end_ms = max(speech.end_ms or 0, event.end_ms)
+
+        # the mirror's copy of the message, restored if a context sync replaced the mirror
+        message = self._remote_chat_ctx.get_by_id(speech.message_id)
+        if isinstance(message, llm.ChatMessage):
+            message.content[0] = speech.text
+        else:
+            self._remote_chat_ctx.insert(
+                llm.ChatMessage(
+                    id=speech.message_id,
+                    role=role,
+                    content=[speech.text],
+                    # spoken, not typed: what tells the mirror's user messages from the app's
+                    transcript_confidence=1.0 if role == "user" else None,
                 )
             )
 
-    def _handle_output_transcript_added(self, event: types.OutputTranscriptAddedEvent) -> None:
-        if not (text := event.item.text):
+        if role == "user":
+            self.emit(
+                "input_audio_transcription_completed",
+                llm.InputTranscriptionCompleted(
+                    item_id=speech.message_id,
+                    transcript=speech.text,
+                    is_final=False,
+                    # the model answers over the caller, so the turn is stamped where it began
+                    turn_started_at=speech.started_at,
+                ),
+            )
+        else:
+            self.emit(
+                "transcript_delta",
+                llm.DuplexTranscriptDelta(
+                    text=event.delta, start_ms=event.start_ms, end_ms=event.end_ms
+                ),
+            )
+
+    def _end_speech(self, role: Role) -> None:
+        """Close a speaker's message; for the user this is the end of their turn."""
+        if (speech := self._speech.pop(role, None)) is None or role != "user":
             return
-        # only the open turn may label a fragment: item.id is per fragment, and the framework reads
-        # a change of id as a change of turn. before turn.created there is no id, and None says so
-        turn_id = self._assistant_turn_id
-        if turn_id is not None:
-            self._assistant_transcripts[turn_id] = (
-                self._assistant_transcripts.get(turn_id, "") + text
-            )
-        self.emit(
-            "transcript_delta",
-            llm.DuplexTranscriptDelta(
-                turn_id=turn_id,
-                text=text,
-                start_ms=event.start_ms,
-                end_ms=event.end_ms,
-            ),
-        )
-
-    def _handle_input_transcript_added(self, event: types.InputTranscriptAddedEvent) -> None:
-        """The user-side twin of output_transcript.added, which nothing here reads.
-
-        It repeats fragments turn.delta already carries, and only the agent's own speech is paced
-        against playout, so its per-fragment timing has no consumer.
-        """
-
-    def _end_assistant_turn(self, turn_id: str) -> None:
-        """End an assistant turn, recording what it said in the local conversation mirror."""
-        if self._assistant_turn_id == turn_id:
-            self._assistant_turn_id = None
-        if transcript := self._assistant_transcripts.pop(turn_id, ""):
-            self._remote_chat_ctx.items.append(
-                llm.ChatMessage(id=turn_id, role="assistant", content=[transcript])
-            )
-        self.emit("turn_ended", llm.DuplexTurnEndedEvent(turn_id=turn_id))
-
-    # -- user turns ------------------------------------------------------------------------------
-
-    def _emit_user_transcript(self, turn_id: str, *, is_final: bool) -> None:
+        # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
             "input_audio_transcription_completed",
             llm.InputTranscriptionCompleted(
-                item_id=turn_id,
-                transcript=self._user_transcripts.get(turn_id, ""),
-                is_final=is_final,
-                turn_started_at=self._user_turn_started_at.get(turn_id),
+                item_id=speech.message_id,
+                transcript=speech.text,
+                is_final=True,
+                turn_started_at=speech.started_at,
             ),
         )
+        self.emit(
+            "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
 
-    def _handle_turn_created(self, event: types.TurnCreatedEvent) -> None:
-        turn = event.turn
-        if not turn.id or turn.role not in ("user", "assistant"):
-            return
-        self._conversation_started = True
-        self._turn_roles[turn.id] = turn.role
-        if turn.role == "user":
-            # a user turn is a projection over transcript fragments, not a state change: the model
-            # may well keep speaking over it, so the open assistant turn is left alone and ends on
-            # its own turn.done
-            self._user_turn_started_at.setdefault(turn.id, time.time())
-            self._user_transcripts[turn.id] = turn.transcript or ""
-            self.emit("input_speech_started", llm.InputSpeechStartedEvent())
-            if self._user_transcripts[turn.id]:
-                self._emit_user_transcript(turn.id, is_final=False)
-        else:
-            self._assistant_turn_id = turn.id
-            self.emit("turn_started", llm.DuplexTurnStartedEvent(turn_id=turn.id))
+    def _handle_delegation_created(self, event: types.SessionDelegationCreatedEvent) -> None:
+        delegation = event.delegation
+        if not delegation.id:
+            logger.warning("gpt-live delegation has no id; nothing can answer it")
+        elif delegation.target == "client":
+            self.emit("delegation_created", GPTLiveDelegation(id=delegation.id))
 
-    def _handle_turn_delta(self, event: types.TurnDeltaEvent) -> None:
-        # only user transcript here; assistant text comes from output_transcript.added
-        if not event.turn_id or not event.delta:
-            return
-        if self._turn_roles.get(event.turn_id) == "user":
-            self._user_transcripts[event.turn_id] = (
-                self._user_transcripts.get(event.turn_id, "") + event.delta
-            )
-            self._emit_user_transcript(event.turn_id, is_final=False)
-
-    def _handle_turn_done(self, event: types.TurnDoneEvent) -> None:
-        turn = event.turn
-        if not (turn_id := turn.id):
-            return
-        role = self._turn_roles.pop(turn_id, None) or turn.role
-        if role == "user":
-            if turn.transcript:
-                self._user_transcripts[turn_id] = turn.transcript
-            self._emit_user_transcript(turn_id, is_final=True)
-            self._user_turn_started_at.pop(turn_id, None)
-            final_transcript = self._user_transcripts.pop(turn_id, "")
-            if final_transcript:
-                self._remote_chat_ctx.items.append(
-                    llm.ChatMessage(id=turn_id, role="user", content=[final_transcript])
+    def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
+        # the inner event carries no response id, so a delegation's responses are followed in
+        # sequence: a continuation is the next response.created under the same delegation
+        inner = envelope.event
+        response = inner.response
+        delegation = envelope.delegation_id or _APP_DELEGATION
+        if inner.type == "response.created":
+            self._backend[delegation] = _BackendResponse()
+        elif inner.type == "response.output_item.done":
+            # only the completed item carries the name, call id and arguments together
+            item = inner.item
+            if item is None or item.type != "function_call":
+                return
+            if not item.call_id or not item.name or item.arguments is None:
+                logger.warning(
+                    "gpt-live dropping function call with missing fields",
+                    extra={"call_id": item.call_id, "name": item.name},
                 )
-            self.emit(
-                "input_speech_stopped",
-                # user_transcription_enabled is not needed as the transcription arrives before this event
-                llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+                return
+            if (pending := self._backend.get(delegation)) is None:
+                logger.warning(
+                    "gpt-live function call outside a known response",
+                    extra={"call_id": item.call_id, "delegation_id": delegation},
+                )
+                pending = self._backend[delegation] = _BackendResponse(completed=True)
+            pending.call_ids.add(item.call_id)
+            self._delegation_of_call[item.call_id] = delegation
+
+            fnc_call = llm.FunctionCall(
+                id=item.id or utils.shortuuid("fc_"),
+                call_id=item.call_id,
+                name=item.name,
+                arguments=item.arguments,
             )
-        elif role == "assistant":
-            self._end_assistant_turn(turn_id)
-
-    # -- delegated work --------------------------------------------------------------------------
-
-    def _handle_delegation_created(self, event: types.DelegationCreatedEvent) -> None:
-        # a responses delegation is the backend's; only client-targeted work needs the app
-        if event.item.target != "client":
-            return
-        if not event.item.id:
-            logger.warning("gpt-live client delegation has no item id; nothing can answer it")
-            return
-        text = "\n".join(part.text for part in event.item.content if part.text)
-        self.emit("delegation_created", GPTLiveDelegation(id=event.item.id, text=text))
-
-    def _handle_response_output_item_done(self, event: types.ResponseOutputItemDoneEvent) -> None:
-        # only the completed item carries all three; the arguments event has no name or call id
-        item = event.item
-        if item.type != "function_call":
-            return
-        if not item.call_id or not item.name or item.arguments is None:
+            self._remote_chat_ctx.insert(fnc_call)  # so the context diff can match its output
+            self.emit("function_call", fnc_call)
+        elif inner.type == "response.completed":
+            if response is not None and (usage := response.usage) is not None:
+                # the voice model is billed by duration; these tokens are the backend's and are
+                # reported under its name
+                self.emit(
+                    "metrics_collected",
+                    LLMMetrics(
+                        label=self._live_model.label,
+                        request_id=response.id or "",
+                        timestamp=time.time(),
+                        duration=0,
+                        ttft=-1,
+                        cancelled=False,
+                        prompt_tokens=usage.input_tokens,
+                        prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                        cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
+                        completion_tokens=usage.output_tokens,
+                        reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+                        total_tokens=usage.total_tokens,
+                        tokens_per_second=0,
+                        metadata=Metadata(
+                            model_name=response.model or self._opts.backend_model,
+                            model_provider=self._live_model.provider,
+                        ),
+                    ),
+                )
+            if (pending := self._backend.get(delegation)) is not None:
+                pending.completed = True
+                self._maybe_continue_response(delegation)
+        elif inner.type in ("response.failed", "response.incomplete"):
             logger.warning(
-                "gpt-live dropping function call with missing fields",
+                "gpt-live backend response did not complete",
                 extra={
-                    "call_id": item.call_id,
-                    "name": item.name,
-                    "has_arguments": item.arguments is not None,
+                    "type": inner.type,
+                    "delegation_id": envelope.delegation_id,
+                    "error": response.error if response else None,
+                    "incomplete_details": response.incomplete_details if response else None,
                 },
             )
-            return
-        fnc_call = llm.FunctionCall(
-            id=item.id or utils.shortuuid("fc_"),
-            call_id=item.call_id,
-            name=item.name,
-            arguments=item.arguments,
-        )
-        # mirror the call so update_chat_ctx can diff the matching output
-        self._remote_chat_ctx.items.append(fnc_call)
-        self._delegated_calls.add(item.call_id)
-        self.emit("function_call", fnc_call)
+            if (pending := self._backend.pop(delegation, None)) is not None:
+                for call_id in pending.call_ids:
+                    self._delegation_of_call.pop(call_id, None)
 
-    # -- metrics and errors ----------------------------------------------------------------------
+    def _maybe_continue_response(self, delegation: str) -> None:
+        # queuing a result runs nothing: response.create does, once the response has finished
+        # asking and every call it made has its answer, or a partial batch is rejected
+        pending = self._backend.get(delegation)
+        if pending is None or not pending.completed or not pending.call_ids <= pending.returned:
+            return
+        del self._backend[delegation]
+        if not pending.call_ids:
+            return
+        for call_id in pending.call_ids:
+            self._delegation_of_call.pop(call_id, None)
+        self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
 
     def _handle_session_usage_updated(self, event: types.SessionUsageUpdatedEvent) -> None:
-        self._handle_usage(event.usage, event.usage_limit)
+        self._handle_usage(event.usage)
 
     def _handle_session_closed(self, event: types.SessionClosedEvent) -> None:
         self._handle_usage(event.usage)
         if not self._session_closed_fut.done():
             self._session_closed_fut.set_result(None)
 
-    def _handle_usage(self, usage: types.Usage, limit: types.UsageLimit | None = None) -> None:
-        # cumulative, so the backend entries stay empty until the model delegates something
-        logger.debug(
-            "gpt-live reported usage", extra={"usage": usage.model_dump(exclude_none=True)}
-        )
-        if limit is not None and limit.status:
-            logger.warning(
-                f"{self._live_model._provider_label} reported a usage limit",
-                extra={"status": limit.status, "reset_seconds": limit.reset_seconds},
-            )
-        # session.usage.updated and session.closed both report usage cumulatively for the whole
-        # session, so only the delta is reported for the collectors to sum
+    def _handle_usage(self, usage: types.Usage) -> None:
+        # reported cumulatively for the whole session, so only the delta goes to the collectors
         previous, self._usage_total = self._usage_total, usage
-
-        def delta(new: int, old: int) -> int:
-            return max(0, new - old)
-
-        if usage.backend_model_usage is not None or usage.audio_duration_ms:
-            # the frontend is billed by duration alone; every token here was spent by a model
-            # each entry names, so it is reported under that name rather than this session's
-            before = {entry.model: entry for entry in previous.backend_model_usage or []}
-            for entry in usage.backend_model_usage or []:
-                was = before.get(entry.model) or types.BackendModelUsage()
-                now_in, was_in = entry.input_tokens_details, was.input_tokens_details
-                now_out, was_out = entry.output_tokens_details, was.output_tokens_details
-                self.emit(
-                    "metrics_collected",
-                    LLMMetrics(
-                        label=self._live_model.label,
-                        request_id=self._session_id or "",
-                        timestamp=time.time(),
-                        duration=0,
-                        ttft=-1,
-                        cancelled=False,
-                        prompt_tokens=delta(entry.input_tokens, was.input_tokens),
-                        prompt_cached_tokens=delta(now_in.cached_tokens, was_in.cached_tokens),
-                        cache_creation_tokens=delta(
-                            now_in.cache_write_tokens, was_in.cache_write_tokens
-                        ),
-                        completion_tokens=delta(entry.output_tokens, was.output_tokens),
-                        reasoning_tokens=delta(now_out.reasoning_tokens, was_out.reasoning_tokens),
-                        total_tokens=delta(entry.total_tokens, was.total_tokens),
-                        tokens_per_second=0,
-                        metadata=Metadata(
-                            model_name=entry.model, model_provider=self._live_model.provider
-                        ),
-                    ),
-                )
-            input_tokens = output_tokens = total_tokens = 0
-            input_details = RealtimeModelMetrics.InputTokenDetails()
-            output_details = RealtimeModelMetrics.OutputTokenDetails()
-            session_duration = delta(usage.audio_duration_ms, previous.audio_duration_ms) / 1000
-        else:
-            new_in, old_in = usage.input_token_details, previous.input_token_details
-            new_out, old_out = usage.output_token_details, previous.output_token_details
-            input_tokens = delta(usage.input_tokens, previous.input_tokens)
-            output_tokens = delta(usage.output_tokens, previous.output_tokens)
-            total_tokens = delta(usage.total_tokens, previous.total_tokens)
-            input_details = RealtimeModelMetrics.InputTokenDetails(
-                audio_tokens=delta(new_in.audio_tokens, old_in.audio_tokens),
-                cached_tokens=delta(new_in.cached_tokens, old_in.cached_tokens),
-                text_tokens=delta(new_in.text_tokens, old_in.text_tokens),
-                image_tokens=delta(new_in.image_tokens, old_in.image_tokens),
-            )
-            output_details = RealtimeModelMetrics.OutputTokenDetails(
-                text_tokens=delta(new_out.text_tokens, old_out.text_tokens),
-                audio_tokens=delta(new_out.audio_tokens, old_out.audio_tokens),
-                image_tokens=delta(new_out.image_tokens, old_out.image_tokens),
-            )
-            session_duration = 0.0
-
-        metrics = RealtimeModelMetrics(
-            timestamp=time.time(),
-            request_id=self._session_id or "",
-            ttft=-1,
-            duration=0,
-            session_duration=session_duration,
-            cancelled=False,
-            label=self._live_model.label,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            tokens_per_second=0,
-            input_token_details=input_details,
-            output_token_details=output_details,
-            metadata=Metadata(
-                model_name=self._live_model.model, model_provider=self._live_model.provider
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                timestamp=time.time(),
+                request_id=self._session_id or "",
+                ttft=-1,
+                duration=0,
+                session_duration=max(0.0, usage.seconds - previous.seconds),
+                cancelled=False,
+                label=self._live_model.label,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                tokens_per_second=0,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._live_model.model, model_provider=self._live_model.provider
+                ),
             ),
         )
-        self.emit("metrics_collected", metrics)
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        if (error.code or "") in _OPENING_FAILURE_CODES:
-            self._opening_failed = True
         logger.error(
             f"{self._live_model._provider_label} returned an error",
             extra={"error": error.model_dump(exclude_none=True)},
         )
-        recoverable = not _is_fatal_error(error)
+        recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
         api_error = APIError(
             message=error.message or f"{self._live_model._provider_label} returned an error",
             body=error.model_dump(exclude_none=True),
@@ -985,11 +904,17 @@ class GPTLiveSession(
     # -- DuplexSession interface -----------------------------------------------------------------
 
     @property
+    def session_id(self) -> str | None:
+        """The service's id for the current connection."""
+        return self._session_id
+
+    @property
     def audio_stream(self) -> AsyncIterable[llm.DuplexAudioFrame]:
         return self._audio_ch
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
+        """The conversation so far, each speaker's message still in progress included."""
         return self._remote_chat_ctx.copy()
 
     @property
@@ -997,86 +922,70 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        for f in self._resample_audio(frame):
+        # the caller's turn ends on their own audio: this much pushed since their last fragment
+        if (speech := self._speech.get("user")) is not None:
+            speech.quiet_ms += round(frame.duration * 1000)
+            if speech.quiet_ms >= _SPEECH_GAP_MS:
+                self._end_speech("user")
+
+        if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
+            self._input_resampler = None
+        if self._input_resampler is None and (
+            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
+        ):
+            self._input_resampler = rtc.AudioResampler(
+                input_rate=frame.sample_rate, output_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
+            )
+        frames = self._input_resampler.push(frame) if self._input_resampler else [frame]
+        for f in frames:
             for nf in self._bstream.write(f.data.tobytes()):
                 self.send_event(
                     types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
                 )
 
-    def append_context(self, text: str, *, channel: types.Channel = "commentary") -> None:
-        """Give the model something to know, capped at 500 tokens.
+    def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
+        """Add a standing rule to the model's instructions, capped at 500 tokens."""
+        self._append(types.InstructionsAppendEvent, text, delegation_id)
 
-        ``commentary`` is silent; ``speakable`` prompts the model to act on the text now, which is
-        how an application makes it talk. Nothing added here reaches ``AgentSession.history``.
+    def append_thinking(self, text: str, *, delegation_id: str | None = None) -> None:
+        """Give the model something to know without saying it, capped at 500 tokens."""
+        self._append(types.ThinkingAppendEvent, text, delegation_id)
+
+    def append_commentary(self, text: str, *, delegation_id: str | None = None) -> None:
+        """Give the model something to say once, in its own words, capped at 500 tokens.
+
+        Under client delegation this answers a :class:`GPTLiveDelegation`; repeated calls with the
+        same ``delegation_id`` continue that work.
         """
-        if len(text) > _MAX_CONTEXT_CHARS:
+        self._append(types.CommentaryAppendEvent, text, delegation_id)
+
+    def _append(
+        self,
+        event_cls: type[types.InstructionsAppendEvent]
+        | type[types.ThinkingAppendEvent]
+        | type[types.CommentaryAppendEvent],
+        text: str,
+        delegation_id: str | None,
+    ) -> None:
+        if len(text) > _MAX_APPEND_CHARS:
             # a second event would be a second ask to speak, so an oversized one is cut instead
             logger.warning(
                 "gpt-live context append exceeds the 500 token limit; truncating",
-                extra={"channel": channel, "chars": len(text)},
+                extra={"type": event_cls.model_fields["type"].default, "chars": len(text)},
             )
-            text = text[:_MAX_CONTEXT_CHARS]
+            text = text[:_MAX_APPEND_CHARS]
         self.send_event(
-            types.SessionContextAppendEvent(
-                event_id=utils.shortuuid("context_"),
-                channel=channel,
-                content=[types.InputTextPart(text=text)],
+            event_cls(
+                event_id=utils.shortuuid("append_"), delegation_id=delegation_id, content=text
             )
         )
 
-    def send_delegation_context(
-        self, *, delegation_id: str, text: str, channel: types.Channel = "speakable"
-    ) -> None:
-        """Answer a :class:`GPTLiveDelegation`, capped at 500 tokens.
-
-        Repeated calls continue the same delegation rather than starting a new one;
-        ``commentary`` reports progress silently.
-        """
-        if len(text) > _MAX_CONTEXT_CHARS:
-            logger.warning(
-                "gpt-live delegation context exceeds the 500 token limit; truncating",
-                extra={"delegation_id": delegation_id, "chars": len(text)},
-            )
-            text = text[:_MAX_CONTEXT_CHARS]
-        self.send_event(
-            types.DelegationContextAppendEvent(
-                event_id=utils.shortuuid("delegation_context_"),
-                delegation_item_id=delegation_id,
-                channel=channel,
-                content=[types.InputTextPart(text=text)],
-            )
-        )
-
-    def update_delegation(self, target: types.DelegationTarget) -> None:
-        """Move delegated work between the backend model and the application, mid-session."""
-        self._opts.delegation = target
-        if self._initial_config_sent:
-            self.send_event(self._create_delegation_update_event())
-
-    def send_delegation_output(self, *, call_id: str, output: str) -> None:
-        """Return the result of a tool call the backend model delegated to the client."""
-        self.send_event(
-            types.DelegationFunctionCallOutputCreateEvent(
-                event_id=utils.shortuuid("fnc_output_"),
-                item=types.FunctionCallOutputItem(call_id=call_id, output=output),
-            )
-        )
-
-    def pause_input(self) -> None:
+    def mute_input(self) -> None:
         """Replace microphone input with silence; the model keeps generating and speaking."""
-        self.send_event(types.InputAudioPauseEvent())
+        self.send_event(types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_")))
 
-    def resume_input(self) -> None:
-        self.send_event(types.InputAudioResumeEvent())
-
-    def send_feedback(self, text: str) -> None:
-        """Record up to 4096 characters against the session, outside the model's context."""
-        if len(text) > _MAX_FEEDBACK_CHARS:
-            logger.warning(
-                "gpt-live feedback exceeds 4096 characters; truncating",
-                extra={"chars": len(text)},
-            )
-        self.send_event(types.SessionFeedbackEvent(text=text[:_MAX_FEEDBACK_CHARS]))
+    def unmute_input(self) -> None:
+        self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:
         self._closing = True
@@ -1091,7 +1000,7 @@ class GPTLiveSession(
     # -- framework hooks -------------------------------------------------------------------------
 
     async def _update_instructions(self, instructions: str) -> None:
-        if self._initial_config_sent:
+        if self._session_start_sent:
             if instructions != self._instructions:
                 logger.debug(
                     "gpt-live voice instructions are immutable after session start; ignoring update"
@@ -1101,8 +1010,15 @@ class GPTLiveSession(
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
-        if self._initial_config_sent:
-            self.send_event(self._create_delegation_update_event())
+        if self._opts.delegation == "client":
+            if tools:
+                logger.warning(
+                    "gpt-live client delegation has no tool channel; answer delegation_created "
+                    "with append_commentary instead",
+                    extra={"tools": [tool.id for tool in self._tools.flatten()]},
+                )
+            return
+        self._send_delegation_update(tools=_build_delegation_tools(self._tools.flatten()))
 
     async def _update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         # the framework hands over the whole context, so what is new is recovered by diffing it
@@ -1111,43 +1027,73 @@ class GPTLiveSession(
         remove_instructions(chat_ctx)
         diff = llm.utils.compute_chat_ctx_diff(self._remote_chat_ctx, chat_ctx)
 
-        if not self._initial_config_sent:
-            # still startup history, so an edit to it still applies; the connection seeds from it
+        if not self._session_start_sent:
+            # still startup history, so an edit to it still applies
             self._remote_chat_ctx = chat_ctx
             return
 
-        # a revision the model cannot apply is the same defect as a deletion it cannot apply
-        if stale := (diff.to_remove + [item_id for _, item_id in diff.to_update]):
+        # the framework names the transcript's messages itself, so those never match the mirror
+        # by id: the same speech, recorded twice. everything else is append-only on the wire
+        stale = [
+            item_id
+            for item_id in diff.to_remove
+            if (item := self._remote_chat_ctx.get_by_id(item_id)) is not None
+            and not _is_speech(item)
+        ]
+        stale += [
+            item_id
+            for _, item_id in diff.to_update
+            if (item := chat_ctx.get_by_id(item_id)) is not None and not _is_speech(item)
+        ]
+        if stale:
             logger.error(
                 "gpt-live context is append-only; the model keeps what it has been told",
                 extra={"item_ids": stale},
             )
 
+        # what is new is either context for the voice model or a result for the backend; the
+        # model's own transcript and calls the backend already made are neither
         lines: list[str] = []
+        response_outputs: list[tuple[llm.FunctionCallOutput, str]] = []
         for _, item_id in diff.to_create:
             item = chat_ctx.get_by_id(item_id)
-            if item is None:
+            if item is None or _is_speech(item):
                 continue
-            if isinstance(item, llm.FunctionCallOutput) and item.call_id in self._delegated_calls:
-                # answers a call still open on the backend, so it goes back on its own channel
-                self.send_delegation_output(call_id=item.call_id, output=item.output)
-            elif isinstance(item, llm.FunctionCall) and item.call_id in self._delegated_calls:
-                # a call this connection made is already the backend's; anything else is history
+            if isinstance(item, llm.FunctionCallOutput) and (
+                (delegation := self._delegation_of_call.get(item.call_id)) is not None
+            ):
+                response_outputs.append((item, delegation))
+            elif isinstance(item, llm.FunctionCall) and item.call_id in self._delegation_of_call:
                 continue
-            elif rendered := _render_item(item):
+            elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
-        # as few appends as the limit allows: split up, a transcript reads as loose fragments
+        # as few appends as the cap allows, since split up a transcript reads as loose fragments
         block: list[str] = []
         length = 0
         for line in lines:
-            if block and length + len(line) > _MAX_CONTEXT_CHARS:
-                self.append_context("\n".join(block))
+            if block and length + len(line) > _MAX_APPEND_CHARS:
+                self.append_thinking("\n".join(block))
                 block, length = [], 0
             block.append(line)
             length += len(line) + 1
         if block:
-            self.append_context("\n".join(block))
+            self.append_thinking("\n".join(block))
+
+        # an output goes back on the backend's own channel, and its response continues once every
+        # call has one
+        for item, delegation in response_outputs:
+            self.send_event(
+                types.ResponseItemCreateEvent(
+                    event_id=utils.shortuuid("tool_output_"),
+                    item=FunctionCallOutput(
+                        type="function_call_output", call_id=item.call_id, output=item.output
+                    ),
+                )
+            )
+            if (pending := self._backend.get(delegation)) is not None:
+                pending.returned.add(item.call_id)
+            self._maybe_continue_response(delegation)
 
         self._remote_chat_ctx = chat_ctx
 
@@ -1157,39 +1103,28 @@ class GPTLiveSession(
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[str | None]:
-        # there is no response.create: a speakable instruction asks, and the model may decline
-        self.append_context(
-            instructions if is_given(instructions) else _SPEAK_NOW, channel="speakable"
+    ) -> None:
+        # there is no response.create for speech: appended commentary asks, and the model may decline
+        if is_given(instructions):
+            self.append_commentary(f"{_ASK_INSTRUCTED}\n\n{instructions}")
+            return
+        # a typed message still the newest thing said rides in the ask, once; after speech has
+        # moved the conversation on, the ask points at the context instead
+        newest = self._remote_chat_ctx.items[-1] if self._remote_chat_ctx.items else None
+        typed = (
+            newest.text_content
+            if isinstance(newest, llm.ChatMessage)
+            and newest.role == "user"
+            and newest.transcript_confidence is None
+            and newest.id != self._asked_item_id
+            else None
         )
-        # nothing to wait for: acks echo no event id to correlate against and name no turn
-        fut: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
-        fut.set_result(None)
-        return fut
+        self._asked_item_id = newest.id if newest is not None else None
+        self.append_commentary(f"{_ASK_TYPED}\n\n{typed}" if typed else _ASK_BARE)
 
     def _update_options(
         self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     ) -> None:
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
-            if self._initial_config_sent:
-                self.send_event(self._create_delegation_update_event())
-
-    def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
-        if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
-                self._input_resampler = None
-
-        if self._input_resampler is None and (
-            frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
-        ):
-            self._input_resampler = rtc.AudioResampler(
-                input_rate=frame.sample_rate,
-                output_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-            )
-
-        if self._input_resampler:
-            yield from self._input_resampler.push(frame)
-        else:
-            yield frame
+            self._send_delegation_update(tool_choice=_to_tool_choice(tool_choice))

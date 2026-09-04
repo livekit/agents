@@ -1,22 +1,22 @@
-"""Wire types of the OpenAI GPT-Live API, as of the 2026-08-24 alpha.
+"""Wire types of the OpenAI GPT-Live API.
 
-Server events are read with ``Event.construct(**payload)``: it builds nested models without
-validating, so a field the alpha reshapes cannot break a live session. Client events serialise with
-``model_dump(exclude_none=True)``, which keeps a later ``session.update`` sparse.
+Server events are read with ``Event.construct(**payload)``, which does not validate, so a field the
+service reshapes cannot break a live session; client events serialise with ``exclude_none``.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from openai import BaseModel
+from pydantic import model_serializer
 
-TurnRole = Literal["user", "assistant"]
+from openai import BaseModel
+from openai.types.responses import ResponseInputItem
+
 DelegationTarget = Literal["responses", "client"]
 """``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
-InitialItemRole = Literal["system", "developer", "user", "assistant"]
-Channel = Literal["speakable", "commentary"]
-"""``speakable`` context prompts the model to act on the text now; ``commentary`` is silent."""
+InputRole = Literal["developer", "user", "assistant"]
+"""The roles startup history accepts; there is no ``system``."""
 
 # -- shared parts --------------------------------------------------------------------------------
 
@@ -33,19 +33,12 @@ class OutputTextPart(BaseModel):
     text: str = ""
 
 
-class InitialItem(BaseModel):
+class InputItem(BaseModel):
+    """One message of the startup history."""
+
     type: Literal["message"] = "message"
-    role: InitialItemRole = "user"
+    role: InputRole = "user"
     content: list[InputTextPart | OutputTextPart] = []
-
-
-class FunctionCallOutputItem(BaseModel):
-    """Sent to answer a call, and echoed back on acceptance."""
-
-    id: str | None = None
-    type: Literal["function_call_output"] = "function_call_output"
-    call_id: str = ""
-    output: str = ""
 
 
 # -- session configuration -----------------------------------------------------------------------
@@ -57,7 +50,8 @@ class AudioFormat(BaseModel):
 
 
 class AudioOutput(BaseModel):
-    voice: str | None = None
+    voice: str | dict[str, Any] | None = None
+    """A named voice, or ``{"id": "voice_..."}`` for an authorized custom voice."""
 
 
 class AudioConfig(BaseModel):
@@ -66,101 +60,121 @@ class AudioConfig(BaseModel):
 
 
 class ResponsesConfig(BaseModel):
-    """The backend Responses model a delegation is handed to."""
+    """The backend Responses model a delegation is handed to; sparse after startup."""
 
-    model: str = ""
+    model: str | None = None
     instructions: str | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
     reasoning: dict[str, Any] | None = None
     text: dict[str, Any] | None = None
     service_tier: str | None = None
     max_output_tokens: int | None = None
-    parallel_tool_calls: bool | None = None
 
 
 class Delegation(BaseModel):
+    """Chosen at startup; the type is immutable, the responses settings are not."""
+
     type: DelegationTarget = "responses"
     responses: ResponsesConfig | None = None
 
 
-class Opening(BaseModel):
-    """A passage the model speaks before microphone input can interrupt it."""
-
-    text: str = ""
-
-
 class SessionConfig(BaseModel):
-    """Startup configuration; a later update carries only the fields it changes."""
+    """The whole startup configuration; ``model`` is the only required field."""
 
+    model: str
     instructions: str | None = None
-    opening: Opening | None = None
+    input: list[InputItem] | None = None
     audio: AudioConfig | None = None
     delegation: Delegation | None = None
-    initial_items: list[InitialItem] | None = None
+
+
+class SessionUpdateConfig(BaseModel):
+    """What a running session still accepts: delegation settings within the startup mode."""
+
+    delegation: Delegation
 
 
 class SessionResource(BaseModel):
-    """The public session as the service reports it back, bounded to its identity."""
-
     id: str | None = None
-    expires_at: int | None = None
-    status: str | None = None
 
 
 # -- client events -------------------------------------------------------------------------------
 
 
-class SessionUpdateEvent(BaseModel):
-    type: Literal["session.update"] = "session.update"
+class SessionStartEvent(BaseModel):
+    type: Literal["session.start"] = "session.start"
     event_id: str | None = None
     session: SessionConfig
 
 
-class SessionFeedbackEvent(BaseModel):
-    type: Literal["session.feedback"] = "session.feedback"
-    text: str
+class SessionUpdateEvent(BaseModel):
+    type: Literal["session.update"] = "session.update"
+    event_id: str | None = None
+    session: SessionUpdateConfig
 
 
 class InputAudioAppendEvent(BaseModel):
-    type: Literal["input_audio.append"] = "input_audio.append"
-    event_id: str | None = None
+    type: Literal["session.input_audio.append"] = "session.input_audio.append"
     audio: str
 
 
-class InputAudioPauseEvent(BaseModel):
-    type: Literal["input_audio.pause"] = "input_audio.pause"
+class InputAudioMuteEvent(BaseModel):
+    type: Literal["session.input_audio.mute"] = "session.input_audio.mute"
     event_id: str | None = None
 
 
-class InputAudioResumeEvent(BaseModel):
-    type: Literal["input_audio.resume"] = "input_audio.resume"
+class InputAudioUnmuteEvent(BaseModel):
+    type: Literal["session.input_audio.unmute"] = "session.input_audio.unmute"
     event_id: str | None = None
 
 
-class SessionContextAppendEvent(BaseModel):
-    type: Literal["session.context.append"] = "session.context.append"
+class _ContextAppendEvent(BaseModel):
+    """Shared shape of the three appends, whose ``delegation_id`` is required even when null."""
+
     event_id: str | None = None
-    channel: Channel | None = None
-    content: list[InputTextPart]
+    delegation_id: str | None
+    content: str
+
+    @model_serializer(mode="wrap")
+    def _keep_delegation_id(self, handler: Any) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        data["delegation_id"] = self.delegation_id
+        return data
 
 
-class DelegationContextAppendEvent(BaseModel):
-    """Answers a client-targeted delegation; unused while delegation runs on Responses."""
+class InstructionsAppendEvent(_ContextAppendEvent):
+    """Developer instructions the model follows from now on; startup instructions stay."""
 
-    type: Literal["delegation.context.append"] = "delegation.context.append"
+    type: Literal["session.instructions.append"] = "session.instructions.append"
+
+
+class ThinkingAppendEvent(_ContextAppendEvent):
+    """Silent context: informs later replies without being spoken when appended."""
+
+    type: Literal["session.thinking.append"] = "session.thinking.append"
+
+
+class CommentaryAppendEvent(_ContextAppendEvent):
+    """Speakable context: the model paraphrases it aloud."""
+
+    type: Literal["session.commentary.append"] = "session.commentary.append"
+
+
+class ResponseItemCreateEvent(BaseModel):
+    """Queues any Responses API input item for the backend; nothing runs until ``response.create``."""
+
+    type: Literal["response.item.create"] = "response.item.create"
     event_id: str | None = None
-    delegation_item_id: str
-    channel: Channel | None = None
-    content: list[InputTextPart]
+    item: ResponseInputItem
 
 
-class DelegationFunctionCallOutputCreateEvent(BaseModel):
-    type: Literal["delegation.function_call_output.create"] = (
-        "delegation.function_call_output.create"
-    )
+class ResponseCreateEvent(BaseModel):
+    """Starts or continues delegated Responses work, with no body of its own."""
+
+    type: Literal["response.create"] = "response.create"
     event_id: str | None = None
-    item: FunctionCallOutputItem
 
 
 class SessionCloseEvent(BaseModel):
@@ -169,14 +183,16 @@ class SessionCloseEvent(BaseModel):
 
 
 ClientEvent = (
-    SessionUpdateEvent
-    | SessionFeedbackEvent
+    SessionStartEvent
+    | SessionUpdateEvent
     | InputAudioAppendEvent
-    | InputAudioPauseEvent
-    | InputAudioResumeEvent
-    | SessionContextAppendEvent
-    | DelegationContextAppendEvent
-    | DelegationFunctionCallOutputCreateEvent
+    | InputAudioMuteEvent
+    | InputAudioUnmuteEvent
+    | InstructionsAppendEvent
+    | ThinkingAppendEvent
+    | CommentaryAppendEvent
+    | ResponseItemCreateEvent
+    | ResponseCreateEvent
     | SessionCloseEvent
 )
 
@@ -189,220 +205,96 @@ class SessionStartedEvent(BaseModel):
     session: SessionResource = SessionResource()
 
 
-class SessionUpdatedEvent(BaseModel):
-    """Echoes ``event_id`` where the update carried one, so concurrent updates can be told apart."""
-
-    type: Literal["session.updated"] = "session.updated"
-    event_id: str | None = None
-    session: SessionResource = SessionResource()
-
-
-class ContextWindowApproachingEvent(BaseModel):
-    type: Literal["session.context_window.approaching"] = "session.context_window.approaching"
-    rollover_id: str = ""
-    expires_at: int | None = None
-
-
-class ContextWindowRolledOverEvent(BaseModel):
-    type: Literal["session.context_window.rolled_over"] = "session.context_window.rolled_over"
-    rollover_id: str = ""
-
-
-class SessionOpeningStartedEvent(BaseModel):
-    type: Literal["session.opening.started"] = "session.opening.started"
-
-
-class SessionOpeningCompletedEvent(BaseModel):
-    """The protected phase is over; it does not certify what the model said."""
-
-    type: Literal["session.opening.completed"] = "session.opening.completed"
-
-
-class InputAudioPausedEvent(BaseModel):
-    type: Literal["input_audio.paused"] = "input_audio.paused"
-
-
-class InputAudioResumedEvent(BaseModel):
-    type: Literal["input_audio.resumed"] = "input_audio.resumed"
-
-
-class InputAudioDtmfEventReceivedEvent(BaseModel):
-    type: Literal["input_audio.dtmf_event_received"] = "input_audio.dtmf_event_received"
-    event_id: str | None = None
-    event: str = ""
-
-
 class OutputAudioDeltaEvent(BaseModel):
-    """A gap between ranges is silence the service omitted, not time it compressed."""
+    """One frame of the continuous output stream; it carries no timing of its own."""
 
-    type: Literal["output_audio.delta"] = "output_audio.delta"
-    audio: str = ""
-    start_ms: int | None = None
-    end_ms: int | None = None
-
-
-class SessionContextAppendedEvent(BaseModel):
-    type: Literal["session.context.appended"] = "session.context.appended"
-    start_ms: int | None = None
-    end_ms: int | None = None
-
-
-class DelegationContextAppendedEvent(BaseModel):
-    type: Literal["delegation.context.appended"] = "delegation.context.appended"
-    delegation_item_id: str = ""
-    start_ms: int | None = None
-    end_ms: int | None = None
-
-
-class DelegationFunctionCallOutputCreatedEvent(BaseModel):
-    """The result was accepted; the delegation itself runs on until a terminal ``response.*``."""
-
-    type: Literal["delegation.function_call_output.created"] = (
-        "delegation.function_call_output.created"
-    )
-    item: FunctionCallOutputItem = FunctionCallOutputItem()
-
-
-class TranscriptItem(BaseModel):
-    id: str | None = None
-    type: str | None = None
-    text: str = ""
-
-
-class InputTranscriptAddedEvent(BaseModel):
-    type: Literal["input_transcript.added"] = "input_transcript.added"
-    start_ms: int | None = None
-    end_ms: int | None = None
-    item: TranscriptItem = TranscriptItem()
-
-
-class OutputTranscriptAddedEvent(BaseModel):
-    """One complete fragment; its boundaries follow cadence, not the turn."""
-
-    type: Literal["output_transcript.added"] = "output_transcript.added"
-    start_ms: int | None = None
-    end_ms: int | None = None
-    item: TranscriptItem = TranscriptItem()
-
-
-class Turn(BaseModel):
-    id: str = ""
-    role: TurnRole | None = None
-    start_ms: int | None = None
-    end_ms: int | None = None
-    transcript: str | None = None
-
-
-class TurnCreatedEvent(BaseModel):
-    type: Literal["turn.created"] = "turn.created"
-    turn: Turn = Turn()
-
-
-class TurnDeltaEvent(BaseModel):
-    type: Literal["turn.delta"] = "turn.delta"
-    turn_id: str = ""
-    start_ms: int | None = None
-    end_ms: int | None = None
+    type: Literal["session.output_audio.delta"] = "session.output_audio.delta"
     delta: str = ""
 
 
-class TurnDoneEvent(BaseModel):
-    type: Literal["turn.done"] = "turn.done"
-    turn: Turn = Turn()
+class TranscriptDeltaEvent(BaseModel):
+    """A fragment of user or assistant speech, over a half-open span of the session timeline."""
+
+    type: str = ""
+    delta: str = ""
+    start_ms: int | None = None
+    end_ms: int | None = None
 
 
-class DelegationItem(BaseModel):
+class DelegationInfo(BaseModel):
+    """Metadata only: the task itself is whatever the conversation says."""
+
     id: str | None = None
-    type: Literal["delegation"] = "delegation"
     target: DelegationTarget | None = None
-    response_id: str | None = None
-    content: list[InputTextPart] = []
 
 
-class DelegationCreatedEvent(BaseModel):
-    type: Literal["delegation.created"] = "delegation.created"
-    offset_ms: int | None = None
-    item: DelegationItem = DelegationItem()
+class SessionDelegationCreatedEvent(BaseModel):
+    type: Literal["session.delegation.created"] = "session.delegation.created"
+    delegation: DelegationInfo = DelegationInfo()
 
 
-class FunctionCallItem(BaseModel):
-    """Only the completed item carries the name and call id; the argument events do not."""
+class ResponseUsage(BaseModel):
+    class InputDetails(BaseModel):
+        cached_tokens: int = 0
+        cache_write_tokens: int = 0
+
+    class OutputDetails(BaseModel):
+        reasoning_tokens: int = 0
+
+    input_tokens: int = 0
+    input_tokens_details: InputDetails = InputDetails()
+    output_tokens: int = 0
+    output_tokens_details: OutputDetails = OutputDetails()
+    total_tokens: int = 0
+
+
+class ResponseSnapshot(BaseModel):
+    """A reduced Responses object: ``output`` is always empty here, so never read calls from it."""
+
+    id: str | None = None
+    model: str | None = None
+    usage: ResponseUsage | None = None
+    error: dict[str, Any] | None = None
+    incomplete_details: dict[str, Any] | None = None
+
+
+class OutputItem(BaseModel):
+    """Only a completed function-call item carries all of name, call id and arguments."""
 
     id: str | None = None
     type: str | None = None
-    status: str | None = None
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
 
 
-class ResponseOutputItemDoneEvent(BaseModel):
-    """One of the ``response.*`` family the Responses delegation emits without a wrapper."""
+class ResponsesEvent(BaseModel):
+    """The Responses streaming event nested in a ``response.event`` envelope."""
 
-    type: Literal["response.output_item.done"] = "response.output_item.done"
-    sequence_number: int | None = None
-    output_index: int | None = None
-    item: FunctionCallItem = FunctionCallItem()
-
-
-class InputTokenDetails(BaseModel):
-    text_tokens: int = 0
-    audio_tokens: int = 0
-    image_tokens: int = 0
-    cached_tokens: int = 0
+    type: str = ""
+    response: ResponseSnapshot | None = None
+    item: OutputItem | None = None
 
 
-class OutputTokenDetails(BaseModel):
-    text_tokens: int = 0
-    audio_tokens: int = 0
-    image_tokens: int = 0
-    cached_tokens: int = 0
-
-
-class BackendInputTokenDetails(BaseModel):
-    cached_tokens: int = 0
-    cache_write_tokens: int = 0
-
-
-class BackendOutputTokenDetails(BaseModel):
-    reasoning_tokens: int = 0
-
-
-class BackendModelUsage(BaseModel):
-    model: str = ""
-    input_tokens: int = 0
-    input_tokens_details: BackendInputTokenDetails = BackendInputTokenDetails()
-    output_tokens: int = 0
-    output_tokens_details: BackendOutputTokenDetails = BackendOutputTokenDetails()
-    total_tokens: int = 0
+class ResponseEventEnvelope(BaseModel):
+    type: Literal["response.event"] = "response.event"
+    delegation_id: str | None = None
+    event: ResponsesEvent = ResponsesEvent()
 
 
 class Usage(BaseModel):
-    """Cumulative for the whole session, in either the duration-based or the token-only shape."""
+    """Cumulative voice usage for the whole session, in seconds."""
 
-    audio_duration_ms: int = 0
-    backend_model_usage: list[BackendModelUsage] | None = None
-    total_tokens: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    input_token_details: InputTokenDetails = InputTokenDetails()
-    output_token_details: OutputTokenDetails = OutputTokenDetails()
-
-
-class UsageLimit(BaseModel):
-    status: str | None = None
-    reset_seconds: int | None = None
+    seconds: float = 0.0
 
 
 class SessionUsageUpdatedEvent(BaseModel):
     type: Literal["session.usage.updated"] = "session.usage.updated"
     usage: Usage = Usage()
-    usage_limit: UsageLimit | None = None
 
 
 class SessionClosedEvent(BaseModel):
     type: Literal["session.closed"] = "session.closed"
-    reason: str | None = None
     usage: Usage = Usage()
 
 
@@ -411,7 +303,7 @@ class ErrorBody(BaseModel):
     code: str | None = None
     message: str = ""
     param: str | None = None
-    event_id: str | None = None
+    client_event_id: str | None = None
 
 
 class ErrorEvent(BaseModel):
