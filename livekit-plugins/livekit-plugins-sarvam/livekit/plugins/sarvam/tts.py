@@ -99,6 +99,14 @@ _CODEC_TO_MIME: dict[str, str] = {
 
 _TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
+_SARVAM_SAMPLE_RATES: tuple[int, ...] = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
+_SARVAM_STREAMING_SAMPLE_RATES: tuple[int, ...] = (8000, 16000, 22050, 24000)
+_MODEL_PACE_RANGES: dict[str, tuple[float, float]] = {
+    "bulbul:v2": (0.3, 3.0),
+    "bulbul:v3-beta": (0.5, 2.0),
+    "bulbul:v3": (0.5, 2.0),
+}
+
 
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
@@ -106,6 +114,23 @@ def _codec_to_mime_type(codec: str) -> str:
     if mime is None:
         raise ValueError(f"Unsupported output_audio_codec: {codec}")
     return mime
+
+
+def _validate_pace(model: str, pace: float) -> None:
+    """Validate pace against the range supported by the selected model."""
+    min_pace, max_pace = _MODEL_PACE_RANGES.get(model, (0.3, 3.0))
+    if not min_pace <= pace <= max_pace:
+        raise ValueError(f"Pace for {model} must be between {min_pace} and {max_pace}")
+
+
+def _validate_streaming_sample_rate(sample_rate: int) -> None:
+    """Validate a sample rate before opening a Sarvam streaming connection."""
+    if sample_rate not in _SARVAM_STREAMING_SAMPLE_RATES:
+        supported = ", ".join(str(rate) for rate in _SARVAM_STREAMING_SAMPLE_RATES)
+        raise ValueError(
+            f"Sarvam streaming TTS supports only {supported} Hz; "
+            "32000, 44100, and 48000 Hz are available through synthesize() only"
+        )
 
 
 def _build_mulaw_table() -> np.ndarray:
@@ -211,6 +236,15 @@ SarvamTTSSpeakers = Literal[
     "amelia",
     "sophia",
     # bulbul:v3
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
     "suhani",
     "rupali",
     "tanya",
@@ -294,8 +328,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -317,6 +349,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
         "all": [
             "shubh",
@@ -342,13 +383,20 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
             "shruti",
             "kavitha",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
     },
 }
@@ -389,13 +437,14 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.3 to 3.0 for v2, 0.5 to 2.0 for v3/v3-beta)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
+        speech_sample_rate: Audio sample rate. REST synthesis supports 8000, 16000, 22050,
+            24000, 32000, 44100, and 48000 Hz; streaming supports the first four.
         enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
@@ -438,10 +487,11 @@ class TTS(tts.TTS):
         target_language_code: BCP-47 language code for supported Indian languages
         model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
-        speech_sample_rate: Audio sample rate in Hz
+        speech_sample_rate: Audio sample rate in Hz. REST synthesis supports all Sarvam
+            rates; streaming supports 8000, 16000, 22050, and 24000 Hz.
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.3 to 3.0 for v2, 0.5 to 2.0 for v3/v3-beta)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -483,7 +533,9 @@ class TTS(tts.TTS):
         output_audio_codec: str = "mp3",
     ) -> None:
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(
+                streaming=speech_sample_rate in _SARVAM_STREAMING_SAMPLE_RATES
+            ),
             sample_rate=speech_sample_rate,
             num_channels=num_channels,
         )
@@ -514,8 +566,7 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        _validate_pace(model, pace)
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -528,7 +579,7 @@ class TTS(tts.TTS):
             raise ValueError("min_buffer_size must be between 30 and 200")
         if not 50 <= max_chunk_length <= 500:
             raise ValueError("max_chunk_length must be between 50 and 500")
-        if speech_sample_rate not in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+        if speech_sample_rate not in _SARVAM_SAMPLE_RATES:
             raise ValueError(
                 "Sample rate must be one of 8000, 16000, 22050, 24000, 32000, 44100, or 48000 Hz"
             )
@@ -753,36 +804,42 @@ class TTS(tts.TTS):
         output_audio_codec: str | None = None,
     ) -> None:
         """Update TTS options with validation."""
+        opts = replace(self._opts)
+        model_changed = model is not None and model != opts.model
+        completion_event_changed = (
+            send_completion_event is not None
+            and send_completion_event != opts.send_completion_event
+        )
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            opts.target_language_code = LanguageCode(target_language_code)
 
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+            _validate_pace(model, opts.pace if pace is None else pace)
+            opts.model = model
+            if speaker is None and opts.speaker is not None:
+                if not validate_model_speaker_compatibility(opts.model, opts.speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get(
                         "all", []
                     )
                     raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers)}"
                     )
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
+            if not validate_model_speaker_compatibility(opts.model, speaker):
+                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
                 raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
+                    f"Speaker '{speaker}' incompatible with {opts.model}. "
                     f"Compatible speakers: {', '.join(compatible_speakers)}"
                 )
-            self._opts.speaker = speaker
+            opts.speaker = speaker
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
@@ -792,22 +849,21 @@ class TTS(tts.TTS):
                     pitch,
                 )
                 pitch = max(-0.75, min(0.75, pitch))
-            self._opts.pitch = pitch
+            opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
-            self._opts.pace = pace
+            _validate_pace(opts.model, pace)
+            opts.pace = pace
 
         if loudness is not None:
             if not 0.5 <= loudness <= 2.0:
                 raise ValueError("Loudness must be between 0.5 and 2.0")
-            self._opts.loudness = loudness
+            opts.loudness = loudness
 
         if temperature is not None:
             if not 0.01 <= temperature <= 2.0:
                 raise ValueError("Temperature must be between 0.01 and 2.0")
-            self._opts.temperature = temperature
+            opts.temperature = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -815,29 +871,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            opts.output_audio_bitrate = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            opts.min_buffer_size = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            opts.max_chunk_length = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            opts.enable_preprocessing = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            opts.dict_id = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            opts.enable_cached_responses = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            opts.send_completion_event = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -845,7 +901,11 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            opts.output_audio_codec = output_audio_codec
+
+        self._opts = opts
+        if model_changed or completion_event_changed:
+            self._pool.invalidate()
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -860,6 +920,7 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        _validate_streaming_sample_rate(self._opts.speech_sample_rate)
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
