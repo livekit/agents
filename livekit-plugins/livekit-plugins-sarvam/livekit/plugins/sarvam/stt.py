@@ -26,7 +26,6 @@ import logging
 import os
 import platform
 import time
-import weakref
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
@@ -530,7 +529,10 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
-        self._streams = weakref.WeakSet[SpeechStream]()
+        # Strong ownership: a stream that finishes and gets garbage-collected would
+        # otherwise take its still-open per-stream aiohttp.ClientSession with it.
+        # Streams discard themselves in SpeechStream.aclose() once closed.
+        self._streams: set[SpeechStream] = set()
         _warn_if_sunset_stt_model(model)
 
     @property
@@ -864,6 +866,23 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        """Close every stream this instance created.
+
+        ``stream()`` gives each ``SpeechStream`` its own ``aiohttp.ClientSession``,
+        and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
+        (see ``self._streams``) so a finished, garbage-collected stream cannot
+        take its open session with it; closed streams discard themselves, so the
+        set never grows without bound. ``stt_streaming.py`` in this package
+        already does the same.
+        """
+        closed = list(self._streams)
+        for stream in closed:
+            await stream.aclose()
+        # Remove only what this call closed: a stream created concurrently (or one
+        # whose aclose was cancelled mid-cleanup) stays tracked for a later close.
+        self._streams.difference_update(closed)
+
 
 class SpeechStream(stt.SpeechStream):
     """Sarvam.ai streaming speech-to-text implementation."""
@@ -1105,6 +1124,10 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._client_request_id = None
             self._server_request_id = None
+            # Release the STT's strong ownership only after session cleanup succeeds.
+            stt = self._stt
+            if self._session.closed and isinstance(stt, STT):
+                stt._streams.discard(self)
 
     def update_options(
         self,
