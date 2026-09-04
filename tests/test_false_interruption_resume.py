@@ -385,3 +385,28 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_resume_discards_the_stale_recognition_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a VAD-only turn that never commits is dropped by the resume; its speech anchors must not
+    # survive into the next real utterance's started_speaking_at (#7063)
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _session()
+    activity, _ = _paused_activity(session)
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+    recognition = _recognition(activity, last_speaking_time=t0 - VAD_MIN_SILENCE)
+    recognition._speech_start_time = t0 - 1.0
+    recognition._vad_speech_started = True
+    activity._audio_recognition = recognition
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert recognition._speech_start_time is None
+    assert recognition._vad_speech_started is False
