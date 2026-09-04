@@ -8,6 +8,7 @@ import os
 import random
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -58,7 +59,7 @@ from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
@@ -70,10 +71,10 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from . import trace_types, utils as telemetry_utils
+from . import pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
-    from ..llm import ChatContext, ChatItem
+    from ..llm import ChatItem
     from ..observability import Tagger
     from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
@@ -114,7 +115,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -125,7 +126,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -336,7 +337,10 @@ class _GatedSpanExporter(SpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         exportable = [
-            s
+            # PII filtered for third-party exporters is put back here: what LiveKit Cloud
+            # may receive is the project's setting, applied at its collector. restore_pii
+            # is a no-op once that setting mandates redaction.
+            pii.restore_pii(s)
             for s in spans
             if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
             and state.traces_enabled
@@ -398,14 +402,16 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
-        if telemetry_utils._redaction_enabled() and log_record.attributes:
+        if telemetry_utils.redaction_enabled() and log_record.attributes:
             attributes = dict(log_record.attributes)
             if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
                 attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
                     telemetry_utils.REDACTED_EXCEPTION_MESSAGE
                 )
             attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
-            log_record.attributes = attributes
+            # callers pass user data through `extra={"lk.pii.<name>": ...}` precisely
+            # because a log body cannot be redacted; drop those before export
+            log_record.attributes = pii.filter_attributes(attributes)
 
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
@@ -414,18 +420,99 @@ class _TraceLevelLoggingHandler(LoggingHandler):
         return log_record
 
 
+def _prepend_span_processor(provider: trace_sdk.TracerProvider, processor: SpanProcessor) -> None:
+    """Attach ``processor`` ahead of every processor already on ``provider``.
+
+    ``on_end`` is dispatched in registration order over a single shared span snapshot,
+    so a processor that rewrites the snapshot only protects the exporters registered
+    after it. Redaction has to come first, including ahead of exporters the integrator
+    attached before handing us their provider.
+    """
+    provider.add_span_processor(processor)
+
+    multi = getattr(provider, "_active_span_processor", None)
+    processors = getattr(multi, "_span_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        # a provider shape we don't recognise: the plain append above still covers
+        # every exporter the framework attaches itself
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._span_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._span_processors = reordered  # type: ignore[union-attr]
+
+
+_pii_redaction_installed: weakref.WeakSet[trace_sdk.TracerProvider] = weakref.WeakSet()
+
+
+def _prepend_log_processor(provider: LoggerProvider, processor: LogRecordProcessor) -> None:
+    """Log counterpart of :func:`_prepend_span_processor` — same dispatch-order reasoning."""
+    provider.add_log_record_processor(processor)
+
+    multi = getattr(provider, "_multi_log_record_processor", None)
+    processors = getattr(multi, "_log_record_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._log_record_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._log_record_processors = reordered  # type: ignore[union-attr]
+
+
+def _install_pii_redaction(
+    tracer_provider: trace_api.TracerProvider, *, allow_pii: bool | None = None
+) -> None:
+    """Install in-process PII stripping on an SDK provider, at most once per provider."""
+    if not isinstance(tracer_provider, trace_sdk.TracerProvider):
+        # processors can only be attached to an SDK provider; a no-op/proxy provider
+        # exports nothing, so there is nothing to strip
+        return
+    if tracer_provider in _pii_redaction_installed:
+        return
+    _pii_redaction_installed.add(tracer_provider)
+    if allow_pii is None:
+        allow_pii = telemetry_utils.allow_pii_from_env()
+    _prepend_span_processor(
+        tracer_provider,
+        # PII flows to every exporter unless withheld: the GenAI conventions are only
+        # useful to a backend that can render the conversation
+        pii._PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
+    )
+
+
 def set_tracer_provider(
-    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider,
+    *,
+    metadata: dict[str, AttributeValue] | None = None,
+    allow_pii: bool | None = None,
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
+        allow_pii (bool | None, optional): Whether the exporters on this provider *other
+            than LiveKit Cloud's* may receive conversational content, tool payloads and
+            other user data. What LiveKit Cloud receives is the project's PII setting in
+            the dashboard, which this cannot widen or narrow. Defaults to
+            ``True`` (or ``LIVEKIT_TELEMETRY_ALLOW_PII``, when set), since a GenAI
+            backend can only render the conversation if it receives it. Pass ``False``
+            to strip PII in-process before every exporter but LiveKit Cloud's, leaving
+            them the non-content attributes. Ignored when the project mandates redaction
+            — that setting is not weakened from here.
     """
     if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
+    _install_pii_redaction(tracer_provider, allow_pii=allow_pii)
     tracer.set_provider(tracer_provider)
 
 
@@ -704,6 +791,8 @@ class _CloudTelemetry:
             # processors can only be attached to an SDK provider
             return
 
+        _install_pii_redaction(provider)
+
         if provider is self._trace_provider_attached:
             return
 
@@ -752,6 +841,9 @@ class _CloudTelemetry:
             self._exit_targets.append(("LoggerProvider", owned.shutdown))
             set_logger_provider(owned)
             self._logger_provider = owned
+
+        # ahead of any exporter already on the provider, as for spans
+        _prepend_log_processor(self._logger_provider, pii._PIIFilteringLogProcessor())
 
     def _ensure_log_pipeline(self, url: str) -> None:
         if self._log_batch_processor is not None or self._logger_provider is None:
@@ -904,51 +996,6 @@ def _setup_cloud_tracer(
         enable_logs=enable_logs,
         metadata=metadata,
     )
-
-
-def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
-    role_to_event = {
-        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        # OpenAI's `developer` role is the successor to `system` on the
-        # Chat Completions API and carries equivalent instructional content,
-        # so surface it as the system-message span event rather than dropping
-        # it on the floor.
-        "developer": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
-        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-    }
-
-    events: list[tuple[str, Attributes]] = []
-    for item in chat_ctx.items:
-        if item.type == "message" and (event_name := role_to_event.get(item.role)):
-            # only support text content for now
-            events.append((event_name, {"content": item.raw_text_content or ""}))
-        elif item.type == "function_call":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            json.dumps(
-                                {
-                                    "function": {"name": item.name, "arguments": item.arguments},
-                                    "id": item.call_id,
-                                    "type": "function",
-                                }
-                            )
-                        ],
-                    },
-                )
-            )
-        elif item.type == "function_call_output":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
-                    {"content": item.output, "name": item.name, "id": item.call_id},
-                )
-            )
-    return events
 
 
 def _chat_item_span_attribute(item: ChatItem) -> dict:

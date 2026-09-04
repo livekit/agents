@@ -24,7 +24,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -205,11 +205,13 @@ async def _llm_inference_task(
         trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
         trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
     }
-    if model:
-        attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
-    if provider:
-        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
     current_span.set_attributes(attrs)
+
+    # the GenAI inference attributes belong to the nested `llm_request` span, which is the
+    # provider call the convention describes — setting them here as well would make a
+    # backend summing gen_ai.usage.* report twice the calls and tokens. A custom node that
+    # never builds an LLMStream has no such span, and records them here instead.
+    inference_recorded = gen_ai_telemetry.track_inference_span()
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -227,6 +229,16 @@ async def _llm_inference_task(
         data.generated_text = llm_node
         text_ch.send_nowait(llm_node)
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
+        _record_uninstrumented_inference(
+            current_span,
+            inference_recorded,
+            chat_ctx,
+            tools,
+            data,
+            model,
+            provider,
+            streaming=False,
+        )
         return True
 
     if not isinstance(llm_node, AsyncIterable):
@@ -301,6 +313,12 @@ async def _llm_inference_task(
                 last_content_at = now
                 data.generated_text += content
                 text_ch.send_nowait(content)
+    except BaseException as exc:
+        # a node that raises still made a request; without this it leaves no inference span
+        _record_uninstrumented_inference(
+            current_span, inference_recorded, chat_ctx, tools, data, model, provider, error=exc
+        )
+        raise
     finally:
         if isinstance(llm_node, _ACloseable):
             await llm_node.aclose()
@@ -321,7 +339,71 @@ async def _llm_inference_task(
     )
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
+    _record_uninstrumented_inference(
+        current_span, inference_recorded, chat_ctx, tools, data, model, provider, usage=usage
+    )
     return True
+
+
+def _record_uninstrumented_inference(
+    span: trace.Span,
+    inference_recorded: list[bool],
+    chat_ctx: ChatContext,
+    tools: list[llm.Tool],
+    data: _LLMGenerationData,
+    model: str | None,
+    provider: str | None,
+    *,
+    usage: CompletionUsage | None = None,
+    streaming: bool = True,
+    error: BaseException | None = None,
+) -> None:
+    """Describe the node itself as the inference, for a custom ``llm_node``.
+
+    An override may generate text without ever building an LLMStream — returning a plain
+    str, streaming its own chunks, or calling a third-party engine — and then there is no
+    nested ``llm_request`` span to carry the convention's attributes. When one was created,
+    this stands down so the counts are not reported twice.
+
+    The configured model and provider are only reported when that LLM served the request.
+    Reaching here means it did not, so a third-party engine is left unattributed rather
+    than credited to the model the agent happens to be configured with.
+    """
+    if inference_recorded:
+        # the configured LLM served this, so its identity describes the call
+        if model:
+            span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+        if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
+            span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
+        return
+
+    gen_ai_telemetry.set_request_attributes(
+        span,
+        operation=trace_types.GenAIOperationName.CHAT,
+        stream=streaming,
+        output_type=trace_types.GenAIOutputType.TEXT,
+    )
+    if error is not None:
+        gen_ai_telemetry.set_error_type(span, error)
+    finish_reason = gen_ai_telemetry.finish_reason_for(
+        function_calls=data.generated_functions, interrupted=error is not None
+    )
+    gen_ai_telemetry.set_response_attributes(
+        span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
+    )
+    gen_ai_telemetry.set_content_attributes(
+        span,
+        system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
+        input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+        tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
+        output_messages=gen_ai_telemetry.to_output_messages(
+            text=data.generated_text,
+            function_calls=data.generated_functions,
+            finish_reason=finish_reason,
+        ),
+    )
+    if usage is not None:
+        gen_ai_telemetry.set_usage_attributes(span, usage)
 
 
 @dataclass
@@ -901,7 +983,10 @@ async def _execute_tools_task(
 
                 @tracer.start_as_current_span("function_tool")
                 async def _traceable_fnc_tool(
-                    function_callable: Callable, fnc_call: llm.FunctionCall
+                    function_callable: Callable,
+                    fnc_call: llm.FunctionCall,
+                    tool_description: str | None,
+                    agent_label: str,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -911,7 +996,16 @@ async def _execute_tools_task(
                             trace_types.ATTR_FUNCTION_TOOL_ARGS: fnc_call.arguments,
                         }
                     )
+                    gen_ai_telemetry.set_tool_attributes(
+                        current_span,
+                        name=fnc_call.name,
+                        call_id=fnc_call.call_id,
+                        description=tool_description,
+                        arguments=fnc_call.arguments,
+                        agent_name=agent_label,
+                    )
 
+                    started_at = time.perf_counter()
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
@@ -939,12 +1033,27 @@ async def _execute_tools_task(
                     current_span.set_attribute(
                         trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, output.fnc_call_out.is_error
                     )
+                    gen_ai_telemetry.set_tool_result(
+                        current_span,
+                        result=output.fnc_call_out.output,
+                        is_error=output.fnc_call_out.is_error,
+                    )
+                    otel_metrics.record_execute_tool_duration(
+                        time.perf_counter() - started_at,
+                        tool_name=fnc_call.name,
+                        error=output.fnc_call_out.is_error,
+                    )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(function_callable, fnc_call),
+                    _traceable_fnc_tool(
+                        function_callable,
+                        fnc_call,
+                        _tool_description(function_tool),
+                        activity.agent.label,
+                    ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
@@ -987,6 +1096,29 @@ async def _execute_tools_task(
                 "tools execution completed",
                 extra={"speech_id": speech_handle.id},
             )
+
+
+def _tool_description(tool: llm.Tool | None) -> str | None:
+    """The tool's own description, for ``gen_ai.tool.description``.
+
+    The convention flags this attribute as potentially sensitive, so it is recorded
+    only when content capture is on (see ``gen_ai.set_tool_attributes``).
+    """
+    from ..llm.tool_context import (
+        get_function_info,
+        get_raw_function_info,
+        is_function_tool,
+        is_raw_function_tool,
+    )
+
+    if tool is None:
+        return None
+    if is_function_tool(tool):
+        return get_function_info(tool).description
+    if is_raw_function_tool(tool):
+        description = get_raw_function_info(tool).raw_schema.get("description")
+        return description if isinstance(description, str) else None
+    return None
 
 
 @dataclass
