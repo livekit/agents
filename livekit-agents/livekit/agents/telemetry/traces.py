@@ -59,7 +59,7 @@ from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
@@ -74,7 +74,7 @@ from ..types import (
 from . import pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
-    from ..llm import ChatContext, ChatItem
+    from ..llm import ChatItem
     from ..observability import Tagger
     from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
@@ -996,51 +996,6 @@ def _setup_cloud_tracer(
         enable_logs=enable_logs,
         metadata=metadata,
     )
-
-
-def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
-    role_to_event = {
-        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        # OpenAI's `developer` role is the successor to `system` on the
-        # Chat Completions API and carries equivalent instructional content,
-        # so surface it as the system-message span event rather than dropping
-        # it on the floor.
-        "developer": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
-        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-    }
-
-    events: list[tuple[str, Attributes]] = []
-    for item in chat_ctx.items:
-        if item.type == "message" and (event_name := role_to_event.get(item.role)):
-            # only support text content for now
-            events.append((event_name, {"content": item.raw_text_content or ""}))
-        elif item.type == "function_call":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            json.dumps(
-                                {
-                                    "function": {"name": item.name, "arguments": item.arguments},
-                                    "id": item.call_id,
-                                    "type": "function",
-                                }
-                            )
-                        ],
-                    },
-                )
-            )
-        elif item.type == "function_call_output":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
-                    {"content": item.output, "name": item.name, "id": item.call_id},
-                )
-            )
-    return events
 
 
 def _chat_item_span_attribute(item: ChatItem) -> dict:

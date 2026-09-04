@@ -961,6 +961,7 @@ async def _execute_tools_task(
                     function_callable: Callable,
                     fnc_call: llm.FunctionCall,
                     tool_description: str | None,
+                    agent_label: str,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -976,6 +977,7 @@ async def _execute_tools_task(
                         call_id=fnc_call.call_id,
                         description=tool_description,
                         arguments=fnc_call.arguments,
+                        agent_name=agent_label,
                     )
 
                     started_at = time.perf_counter()
@@ -1022,7 +1024,10 @@ async def _execute_tools_task(
 
                 task = asyncio.create_task(
                     _traceable_fnc_tool(
-                        function_callable, fnc_call, _tool_description(function_tool)
+                        function_callable,
+                        fnc_call,
+                        _tool_description(function_tool),
+                        session.current_agent.label,
                     ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )

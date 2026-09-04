@@ -389,6 +389,7 @@ def set_tool_attributes(
     tool_type: str = "function",
     description: str | None = None,
     arguments: str | None = None,
+    agent_name: str | None = None,
 ) -> None:
     if not span.is_recording():
         return
@@ -400,6 +401,12 @@ def set_tool_attributes(
     }
     if call_id:
         attrs[trace_types.ATTR_GEN_AI_TOOL_CALL_ID] = call_id
+    if agent_name:
+        # "the human-readable name of the agent executing the tool", conditionally required
+        attrs[trace_types.ATTR_GEN_AI_AGENT_NAME] = agent_name
+    # not in the convention's execute_tool table, but Datadog groups a session by this
+    # attribute rather than by trace membership, so a tool span without it drops out of
+    # the session view
     if (conv := _conversation_id()) is not None:
         attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if _capture_content:
