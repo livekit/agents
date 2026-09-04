@@ -339,6 +339,11 @@ def set_usage_attributes(span: trace.Span, usage: CompletionUsage | LLMMetrics) 
     }
     if cache_read:
         attrs[trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = cache_read
+        # the unofficial spelling is what Datadog's mapping table keys on, and the realtime
+        # path has always emitted it. #6852 deliberately left it off the pipeline path,
+        # which meant cached tokens — usually the largest cost lever in a multi-turn agent —
+        # were attributed for realtime sessions and silently absent for pipeline ones.
+        attrs[trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS] = cache_read
     if cache_write:
         attrs[trace_types.ATTR_GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS] = cache_write
     if reasoning:
@@ -367,6 +372,8 @@ def set_tool_attributes(
     }
     if call_id:
         attrs[trace_types.ATTR_GEN_AI_TOOL_CALL_ID] = call_id
+    if (conv := _conversation_id()) is not None:
+        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if _capture_content:
         if description:
             attrs[trace_types.ATTR_GEN_AI_TOOL_DESCRIPTION] = description

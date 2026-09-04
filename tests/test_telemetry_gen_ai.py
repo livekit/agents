@@ -263,3 +263,15 @@ def test_the_provider_tables_only_target_registry_values() -> None:
         *(v for _, v in trace_types._PROVIDER_BY_HOST_SUFFIX),
     }
     assert targets <= trace_types.GEN_AI_PROVIDER_NAMES
+
+
+def test_tool_spans_carry_the_conversation_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # execute_tool is a first-class GenAI operation; a backend that groups by
+    # gen_ai.conversation.id would otherwise drop tool spans out of the session view
+    monkeypatch.setattr(gen_ai, "_conversation_id", lambda: "room-42")
+
+    span, exporter = _exporting_span("function_tool")
+    gen_ai.set_tool_attributes(span, name="get_weather", call_id="call_1")
+    span.end()
+
+    assert _attributes(exporter)["gen_ai.conversation.id"] == "room-42"
