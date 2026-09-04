@@ -752,6 +752,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
                     "av",
                     "livekit.agents.inference._warmup",
+                    # Keep last so it freezes objects imported by every other preload.
+                    "livekit.agents.ipc._preload_freeze",
                 ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
