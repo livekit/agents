@@ -653,8 +653,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _serialize_tools(self) -> list[dict]:
         tool_definitions: list[dict] = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
-            definition = _to_phonic_tool_definition(tool_schema)
-            cfg = self._configs_for_tools.get(definition["name"], {})
+            cfg = self._configs_for_tools.get(tool_schema["function"]["name"], {})
             tool_definitions.append(
                 {
                     "type": "custom_websocket",
