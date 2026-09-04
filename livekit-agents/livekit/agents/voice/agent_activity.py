@@ -588,18 +588,25 @@ class AgentActivity(RecognitionHooks):
 
         return use_aligned_transcript is True
 
-    async def update_instructions(self, instructions: str) -> None:
+    async def update_instructions(self, instructions: str | Instructions) -> None:
         self._agent._instructions = instructions
 
-        # Record the configuration change
+        # Record the configuration change. Collapse modality variants for the
+        # record; audio-first matches the initial AgentConfigUpdate.
         config_update = llm.AgentConfigUpdate(
-            instructions=instructions,
+            instructions=(
+                instructions.render(modality="audio")
+                if isinstance(instructions, Instructions)
+                else instructions
+            ),
         )
         self._agent._chat_ctx.insert(config_update)
         self._session._chat_ctx.insert(config_update)
 
         if self._rt_session is not None:
-            await self._rt_session.update_instructions(instructions)
+            await self._rt_session.update_instructions(
+                self._render_realtime_instructions(instructions)
+            )
         else:
             update_instructions(
                 self._agent._chat_ctx, instructions=instructions, add_if_missing=True
