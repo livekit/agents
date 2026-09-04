@@ -212,9 +212,10 @@ async def _llm_inference_task(
     current_span.set_attributes(attrs)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
-    # provider call the convention describes. Setting them here as well made a backend
-    # summing gen_ai.usage.* over inference spans report twice the calls and tokens, and
-    # serialised the whole chat context onto both spans.
+    # provider call the convention describes — setting them here as well would make a
+    # backend summing gen_ai.usage.* report twice the calls and tokens. A custom node that
+    # never builds an LLMStream has no such span, and records them here instead.
+    inference_recorded = gen_ai_telemetry.track_inference_span()
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -232,6 +233,9 @@ async def _llm_inference_task(
         data.generated_text = llm_node
         text_ch.send_nowait(llm_node)
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, data.generated_text)
+        _record_uninstrumented_inference(
+            current_span, inference_recorded, chat_ctx, tools, data, model, provider
+        )
         return True
 
     if not isinstance(llm_node, AsyncIterable):
@@ -326,7 +330,58 @@ async def _llm_inference_task(
     )
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
+    _record_uninstrumented_inference(
+        current_span, inference_recorded, chat_ctx, tools, data, model, provider, usage=usage
+    )
     return True
+
+
+def _record_uninstrumented_inference(
+    span: trace.Span,
+    inference_recorded: list[bool],
+    chat_ctx: ChatContext,
+    tools: list[llm.Tool],
+    data: _LLMGenerationData,
+    model: str | None,
+    provider: str | None,
+    *,
+    usage: CompletionUsage | None = None,
+) -> None:
+    """Describe the node itself as the inference, for a custom ``llm_node``.
+
+    An override may generate text without ever building an LLMStream — returning a plain
+    str, streaming its own chunks, or calling a third-party engine — and then there is no
+    nested ``llm_request`` span to carry the convention's attributes. When one was created,
+    this stands down so the counts are not reported twice.
+    """
+    if inference_recorded:
+        return
+
+    gen_ai_telemetry.set_request_attributes(
+        span,
+        operation=trace_types.GenAIOperationName.CHAT,
+        provider=provider,
+        model=model,
+        stream=True,
+        output_type=trace_types.GenAIOutputType.TEXT,
+    )
+    finish_reason = gen_ai_telemetry.finish_reason_for(function_calls=data.generated_functions)
+    gen_ai_telemetry.set_response_attributes(
+        span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
+    )
+    gen_ai_telemetry.set_content_attributes(
+        span,
+        system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
+        input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+        tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
+        output_messages=gen_ai_telemetry.to_output_messages(
+            text=data.generated_text,
+            function_calls=data.generated_functions,
+            finish_reason=finish_reason,
+        ),
+    )
+    if usage is not None:
+        gen_ai_telemetry.set_usage_attributes(span, usage)
 
 
 @dataclass

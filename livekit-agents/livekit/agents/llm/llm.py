@@ -252,6 +252,10 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
+        # tells an enclosing `llm_node` span that this call is instrumented, so it does
+        # not record the convention's attributes a second time
+        gen_ai_telemetry.mark_inference_span_recorded()
+
         async def _traceable_main_task() -> None:
             with tracer.start_as_current_span(
                 self._llm_request_span_name, end_on_exit=False

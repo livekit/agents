@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 from collections.abc import Iterable, Sequence
@@ -43,6 +44,33 @@ def set_capture_content(enabled: bool) -> None:
 
 def capture_content_enabled() -> bool:
     return _capture_content
+
+
+# A custom `llm_node` may do the inference itself — returning a plain str, streaming its
+# own chunks, or calling a third-party engine — and never construct an LLMStream. Those
+# paths have no nested `llm_request` span to carry the convention's attributes, so the node
+# span records them instead. LLMStream marks the context when it does create one, which is
+# what tells the two cases apart.
+_inference_recorded: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar(
+    "lk_inference_recorded", default=None
+)
+
+
+def track_inference_span() -> list[bool]:
+    """Start tracking, returning a marker that fills in if an ``llm_request`` span is created.
+
+    No reset: the caller runs as its own asyncio task, so the context copy — and this
+    variable with it — is discarded when that task finishes.
+    """
+    recorded: list[bool] = []
+    _inference_recorded.set(recorded)
+    return recorded
+
+
+def mark_inference_span_recorded() -> None:
+    """Called where an ``llm_request`` span is created, so the enclosing node stands down."""
+    if (recorded := _inference_recorded.get()) is not None:
+        recorded.append(True)
 
 
 def _text_part(content: str) -> dict[str, Any]:
