@@ -363,14 +363,14 @@ def test_tts_rejects_invalid_sample_rate():
     from livekit.plugins.gnani import TTS
 
     with pytest.raises(ValueError, match="sample_rate"):
-        TTS(api_key="test-key", sample_rate=48000)
+        TTS(api_key="test-key", sample_rate=11025)
 
 
 def test_tts_all_sample_rates_accepted():
     """TTS accepts all documented sample rates."""
     from livekit.plugins.gnani import TTS
 
-    for rate in (8000, 16000, 22050, 44100):
+    for rate in (8000, 16000, 22050, 24000, 44100, 48000):
         tts = TTS(api_key="test-key", sample_rate=rate)
         assert tts.sample_rate == rate
 
@@ -421,3 +421,91 @@ def test_tts_websocket_chunked_stream_ws_url():
         stream = tts.synthesize("hello")
     assert isinstance(stream, WebSocketChunkedStream)
     assert stream._build_ws_url() == "wss://api.vachana.ai/api/v1/tts"
+
+
+def _patch_session_capture_post(tts, captured: dict) -> None:
+    """Short-circuit ``_ensure_session().post(...)`` right after capturing its
+    kwargs, so the request-building code runs without hitting the network."""
+    from unittest.mock import MagicMock
+
+    from livekit.agents import APIConnectionError
+
+    class _FakePostCM:
+        async def __aenter__(self):
+            raise APIConnectionError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    def _fake_post(url, *, headers=None, json=None, **kwargs):
+        captured.update(url=url, headers=headers, json=json)
+        return _FakePostCM()
+
+    fake_session = MagicMock()
+    fake_session.post = _fake_post
+    tts._session = fake_session
+
+
+async def test_tts_rest_headers_include_source_and_request_id():
+    """REST synthesis sends X-Source: livekit and a generated X-API-Request-ID."""
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", synthesize_method="rest")
+    captured: dict = {}
+    _patch_session_capture_post(tts, captured)
+
+    with pytest.raises(APIConnectionError):
+        async for _ in tts.synthesize("hello world"):
+            pass
+
+    assert captured["headers"]["X-Source"] == "livekit"
+    assert captured["headers"]["X-API-Request-ID"].startswith("lk_req_")
+
+
+async def test_tts_sse_headers_include_source_and_request_id():
+    """SSE synthesis sends X-Source: livekit and a generated X-API-Request-ID."""
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="test-key", synthesize_method="sse")
+    captured: dict = {}
+    _patch_session_capture_post(tts, captured)
+
+    with pytest.raises(APIConnectionError):
+        async for _ in tts.synthesize("hello world"):
+            pass
+
+    assert captured["headers"]["X-Source"] == "livekit"
+    assert captured["headers"]["X-API-Request-ID"].startswith("lk_req_")
+
+
+async def test_tts_websocket_headers_include_source_and_request_id():
+    """WebSocket synthesis sends X-Source: livekit and a generated X-API-Request-ID."""
+    from unittest.mock import patch
+
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.gnani import TTS
+
+    captured: dict = {}
+
+    class _FakeConnectCM:
+        async def __aenter__(self):
+            raise ConnectionRefusedError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    def _fake_connect(url, *, additional_headers=None, **kwargs):
+        captured.update(url=url, headers=additional_headers)
+        return _FakeConnectCM()
+
+    tts = TTS(api_key="test-key", synthesize_method="websocket")
+
+    with patch("websockets.connect", side_effect=_fake_connect):
+        with pytest.raises(APIConnectionError):
+            async for _ in tts.synthesize("hello world"):
+                pass
+
+    assert captured["headers"]["X-Source"] == "livekit"
+    assert captured["headers"]["X-API-Request-ID"].startswith("lk_req_")
