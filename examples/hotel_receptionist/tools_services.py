@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -9,6 +10,7 @@ from typing import Annotated, Literal
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from common import Userdata, _speak_code
+from end_call_check import run_goodbye_gate
 from hotel_db import (
     MAX_PARTY_SIZE,
     FollowupKind,
@@ -19,9 +21,96 @@ from hotel_db import (
 )
 from pydantic import Field
 
-from livekit.agents import RunContext, ToolError, function_tool
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    CloseEvent,
+    RunContext,
+    ToolError,
+    function_tool,
+    get_job_context,
+)
 
 logger = logging.getLogger("hotel-receptionist")
+
+# Strong refs to in-flight post-goodbye shutdown tasks (see say_goodbye_and_close_call).
+_pending_shutdowns: set[asyncio.Task[None]] = set()
+# At most one close watchdog may own a session. A newer close supersedes the old
+# timer so stale work can never shut down a later turn.
+_close_watchdogs: dict[AgentSession, asyncio.Task[None]] = {}
+
+# How long the line stays quiet after the goodbye before the agent hangs up itself.
+# Callers usually hang up within a couple of seconds of the farewell; this is only
+# the fallback for the ones who don't.
+_CALLER_HANGUP_GRACE = 10.0
+
+# The shorter quiet period for a REPEAT close: the farewell already happened and
+# the caller has indicated twice that they're done. New caller speech postpones this
+# timer by the full _CALLER_HANGUP_GRACE rather than cancelling it.
+_REPEAT_CLOSE_GRACE = 3.0
+
+
+def _arm_close_watchdog(session: AgentSession, *, grace: float) -> asyncio.Task[None]:
+    """Hang up after `grace` seconds of caller silence.
+
+    Caller speech postpones the close, it never cancels it: the farewell is already
+    spoken, so a caller who keeps answering it must not be able to hold the line open
+    for the rest of the call. Postponement is always the full caller-hangup grace, which
+    outlasts the reply to that utterance, so the session is never torn down mid-answer.
+    shutdown() is idempotent, so a caller who hangs up during the wait is a no-op.
+    """
+
+    if previous := _close_watchdogs.get(session):
+        previous.cancel()
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + grace
+
+    def _on_item_added(ev: object) -> None:
+        nonlocal deadline
+        item = getattr(ev, "item", None)
+        if item is not None and getattr(item, "role", None) == "user":
+            deadline = loop.time() + _CALLER_HANGUP_GRACE
+
+    async def _close_after_silence() -> None:
+        try:
+            while (remaining := deadline - loop.time()) > 0:
+                await asyncio.sleep(remaining)
+            session.shutdown()
+        except asyncio.CancelledError:
+            pass  # superseded by a newer close
+        finally:
+            session.off("conversation_item_added", _on_item_added)
+            if _close_watchdogs.get(session) is task:
+                del _close_watchdogs[session]
+
+    session.on("conversation_item_added", _on_item_added)
+    task = asyncio.create_task(_close_after_silence())
+    _close_watchdogs[session] = task
+    _pending_shutdowns.add(task)
+    task.add_done_callback(_pending_shutdowns.discard)
+    return task
+
+
+def _farewell_instruction(userdata: Userdata) -> str:
+    """The close path's reply instruction: one farewell per call, ever.
+
+    Callers routinely answer a goodbye ("you too!"), and the model then calls the
+    close tool again - without this guard that produced a "Goodbye!" / "Take care!" /
+    "Goodbye!" loop. The first close delivers the farewell; every later one answers
+    real questions only and otherwise stays quiet while the line closes on its own.
+    """
+    if not userdata.goodbye_said:
+        userdata.goodbye_said = True
+        return (
+            "The line closes right after your next utterance. Give ONE short, warm "
+            "goodbye now - no questions, no new information."
+        )
+    return (
+        "You've already said goodbye - do NOT give another farewell, sign-off, or "
+        "filler. If the caller just asked a real question, answer it in one short "
+        "sentence; otherwise say nothing. The line closes on its own once they stop."
+    )
 
 
 @function_tool
@@ -577,3 +666,58 @@ class ServicesToolsMixin:
             "for those dates and you'll reach out if something opens up - make clear nothing is "
             "held and it's not a guarantee."
         )
+
+    @function_tool
+    async def say_goodbye_and_close_call(self, ctx: RunContext[Userdata]) -> str:
+        """End the call once the caller indicates they're finished ("that's all", "thanks, bye"). NEVER say goodbye yourself - this tool delivers the farewell and then closes the line. It may instead hand back one last thing your standing policy still requires on this call: handle that with the caller first, then call this tool again. Don't call it when the caller is only pausing, holding, or mid-request."""
+        # Pre-hangup policy audit: re-read the standing policy against the transcript
+        # and, at most once per call, hand the agent back the one thing it still owes
+        # the caller instead of closing - the "offer before wind-down" policy grounded
+        # in a guaranteed action. Skipped on repeat closes (the farewell already
+        # happened; the call is winding down, not re-opening).
+        if not ctx.userdata.goodbye_said:
+            agent_instructions = self.instructions if isinstance(self, Agent) else ""
+            nudge = await run_goodbye_gate(
+                ctx.userdata,
+                ctx.session.llm,
+                instructions=agent_instructions if isinstance(agent_instructions, str) else "",
+                chat_ctx=ctx.session.history,
+            )
+            if nudge is not None:
+                return nudge
+
+        # Close path: the goodbye is this tool's reply, reusing the current speech
+        # handle. Don't hang up right after it - callers routinely answer a farewell
+        # ("okay, bye!"), and a session torn down under that reply leaves their turn
+        # hanging (observed in simulations as 60s turn timeouts). Do what a real
+        # receptionist does: say goodbye, give the caller the chance to hang up
+        # first, and only close the line after it stays quiet. On the FIRST close
+        # anything the caller says re-opens the conversation and cancels the pending
+        # close. Repeat closes use a shorter quiet period, but caller speech still
+        # cancels the old timer so it cannot shut down a newer active turn. When that
+        # turn finishes, a repeat close replaces the timer.
+        session = ctx.session
+        repeat_close = ctx.userdata.goodbye_said
+
+        def _arm_after_reply(_: object) -> None:
+            _arm_close_watchdog(
+                session,
+                grace=_REPEAT_CLOSE_GRACE if repeat_close else _CALLER_HANGUP_GRACE,
+            )
+
+        ctx.speech_handle.add_done_callback(_arm_after_reply)
+
+        @ctx.session.once("close")
+        def _on_close(ev: CloseEvent) -> None:
+            try:
+                job_ctx = get_job_context()
+            except RuntimeError:
+                return  # no job to shut down (console / tests)
+
+            async def _delete_room() -> None:
+                await job_ctx.delete_room()
+
+            job_ctx.add_shutdown_callback(_delete_room)
+            job_ctx.shutdown(reason=ev.reason.value)
+
+        return _farewell_instruction(ctx.userdata)
