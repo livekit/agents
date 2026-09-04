@@ -24,7 +24,9 @@ def to_chat_ctx(
             continue
 
         # one message can contain zero or more tool calls
-        msg = _to_chat_item(group.message) if group.message else {"role": "assistant"}
+        msg: dict[str, Any] = (
+            _to_chat_item(group.message) if group.message else {"role": "assistant"}
+        )
         tool_calls = []
         for tool_call in group.tool_calls:
             tc: dict[str, Any] = {
@@ -37,7 +39,15 @@ def to_chat_ctx(
                 tc["extra_content"] = extra_content
             tool_calls.append(tc)
         if tool_calls:
-            msg["tool_calls"] = tool_calls  # type: ignore[assignment]
+            msg["tool_calls"] = tool_calls
+            if not group.message:
+                # the gateway reads its routing stamp from the assistant message
+                livekit = next(
+                    (tc.extra["livekit"] for tc in group.tool_calls if tc.extra.get("livekit")),
+                    None,
+                )
+                if livekit:
+                    msg["extra_content"] = {"livekit": livekit}
         messages.append(msg)
 
         # append tool outputs following the tool calls

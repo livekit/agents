@@ -3686,6 +3686,12 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
+            if not forwarded_text and llm_gen_data.generated_extra:
+                # a turn with no text stores no assistant message, so the generation's
+                # extra (e.g. the gateway's routing stamp) has to ride on the calls
+                for call in new_calls:
+                    call.extra = {**llm_gen_data.generated_extra, **call.extra}
+
             tool_messages = new_calls + new_fnc_outputs
             # commit now so results survive even if the reply speech never runs (#3702)
             if tool_messages:

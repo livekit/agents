@@ -902,3 +902,25 @@ def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
+
+
+def test_openai_format_lifts_livekit_extra_onto_a_tool_only_assistant_message():
+    # the inference gateway reads its routing stamp from the assistant message,
+    # so a turn with no text still has to carry it there
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    chat_ctx.items.append(
+        FunctionCall(
+            call_id="c1",
+            name="f",
+            arguments="{}",
+            extra={"livekit": {"inference_deployment": "dep"}},
+        )
+    )
+    chat_ctx.items.append(FunctionCallOutput(call_id="c1", name="f", output="ok", is_error=False))
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assistant = messages[1]
+    assert assistant["role"] == "assistant"
+    assert assistant["extra_content"] == {"livekit": {"inference_deployment": "dep"}}
