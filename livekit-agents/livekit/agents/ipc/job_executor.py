@@ -8,9 +8,6 @@ from ..job import RunningJobInfo
 
 class JobExecutor(Protocol):
     @property
-    def id(self) -> str: ...
-
-    @property
     def started(self) -> bool: ...
 
     @property
