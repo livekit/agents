@@ -105,6 +105,8 @@ class InferenceRealtimeModel(RealtimeModel):
         resolved_voice = voice if is_given(voice) else "eve" if is_xai else DEFAULT_VOICE
         resolved_transcription = input_audio_transcription
         resolved_turn_detection = turn_detection
+        # Preserve whether xAI's server VAD is a default the framework may disable.
+        can_disable_turn_detection = not is_given(turn_detection)
         if is_xai:
             if not is_given(resolved_transcription):
                 resolved_transcription = _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION
@@ -129,6 +131,8 @@ class InferenceRealtimeModel(RealtimeModel):
             max_session_duration=max_session_duration,
             conn_options=conn_options,
         )
+        if is_xai:
+            self._capabilities.can_disable_turn_detection = can_disable_turn_detection
         self._inference_opts = _InferenceOptions(
             provider=provider,
             api_key=resolved_api_key,
@@ -180,9 +184,12 @@ class InferenceRealtimeSession(RealtimeSession):
 
     def _is_fatal_error(self, error: object | None) -> bool:
         code = getattr(error, "code", None) or getattr(error, "type", None)
-        return code in {
-            "unsupported_transcription_model",
-            "unsupported_audio_transport",
-            "unsupported_audio_format",
-            "invalid_audio_payload",
-        } or super()._is_fatal_error(error)
+        return (
+            isinstance(code, str)
+            and code
+            in {
+                "unsupported_transcription_model",
+                "unsupported_audio_transport",
+                "unsupported_audio_format",
+            }
+        ) or super()._is_fatal_error(error)

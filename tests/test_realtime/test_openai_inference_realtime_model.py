@@ -7,7 +7,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
+from livekit.agents._exceptions import APIError
 from livekit.plugins.openai.realtime import (
     InferenceRealtimeModel,
     inference_realtime_model as inference_realtime,
@@ -160,7 +162,6 @@ async def test_initial_session_update_omits_gateway_model_field(
         "unsupported_transcription_model",
         "unsupported_audio_transport",
         "unsupported_audio_format",
-        "invalid_audio_payload",
         "insufficient_quota",
     ],
 )
@@ -176,6 +177,97 @@ async def test_gateway_configuration_errors_are_fatal(
     session = model.session()
 
     assert session._is_fatal_error(SimpleNamespace(code=code))
+    await session.aclose()
+
+
+async def test_gateway_invalid_audio_payload_is_recoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+    emitted: list[tuple[APIError, bool]] = []
+    monkeypatch.setattr(
+        session,
+        "_emit_error",
+        lambda error, recoverable: emitted.append((error, recoverable)),
+    )
+
+    session._handle_error(
+        SimpleNamespace(
+            error=SimpleNamespace(
+                event_id=None,
+                message="malformed audio frame",
+                code="invalid_audio_payload",
+            )
+        )
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0][0].retryable is True
+    assert emitted[0][1] is True
+    await session.aclose()
+
+
+async def test_gateway_configuration_error_stops_reconnect(
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+
+    with pytest.raises(APIError) as exc_info:
+        session._handle_error(
+            SimpleNamespace(
+                error=SimpleNamespace(
+                    event_id=None,
+                    message="unsupported transport",
+                    code="unsupported_audio_transport",
+                )
+            )
+        )
+
+    assert exc_info.value.retryable is False
+    await session.aclose()
+
+
+async def test_gateway_malformed_error_code_is_recoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    paused_realtime_main: None,
+) -> None:
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+    emitted: list[tuple[APIError, bool]] = []
+    monkeypatch.setattr(
+        session,
+        "_emit_error",
+        lambda error, recoverable: emitted.append((error, recoverable)),
+    )
+
+    session._handle_error(
+        SimpleNamespace(
+            error=SimpleNamespace(
+                event_id=None,
+                message="malformed error event",
+                code=["unsupported_audio_transport"],
+            )
+        )
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0][0].retryable is True
+    assert emitted[0][1] is True
     await session.aclose()
 
 
@@ -199,6 +291,8 @@ async def test_xai_models_use_gateway_compatible_defaults(
     dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
 
     assert model._opts.voice == "eve"
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.can_disable_turn_detection is True
     assert dumped["session"]["audio"]["input"]["transcription"]["model"] == "grok-transcribe"
     assert dumped["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad"
     await session.aclose()
@@ -221,6 +315,28 @@ async def test_xai_gateway_defaults_can_be_overridden(
     dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
 
     assert model._opts.voice == "Ara"
+    assert model.capabilities.turn_detection is False
+    assert model.capabilities.can_disable_turn_detection is False
     assert dumped["session"]["audio"]["input"].get("transcription") is None
     assert dumped["session"]["audio"]["input"].get("turn_detection") is None
     await session.aclose()
+
+
+def test_xai_explicit_turn_detection_is_preserved() -> None:
+    turn_detection = ServerVad(
+        type="server_vad",
+        threshold=0.8,
+        create_response=False,
+        interrupt_response=False,
+    )
+
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-latest",
+        api_key="key",
+        api_secret="secret",
+        turn_detection=turn_detection,
+    )
+
+    assert model._opts.turn_detection == turn_detection
+    assert model.capabilities.turn_detection is False
+    assert model.capabilities.can_disable_turn_detection is False
