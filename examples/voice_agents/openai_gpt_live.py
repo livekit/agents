@@ -13,12 +13,12 @@ Notes for this alpha:
   reseeds the whole conversation, so the model picks up where the dropped one stopped.
 - ``delegation="client"`` hands work to the application instead of a backend model: it
   arrives as a ``GPTLiveDelegation`` on the session's ``delegation_created`` event, carrying
-  only an id. The ask is whatever the conversation says, which ``duplex_session.chat_ctx``
-  holds; answer with ``append_commentary(text, delegation_id=...)``. There is no tool channel
+  only an id. The ask is whatever the conversation says, which ``agent.chat_ctx`` holds;
+  answer with ``append_commentary(text, delegation_id=...)``. There is no tool channel
   in that mode, so ``@function_tool`` is ignored, and the mode is fixed for the session.
 - The Agent's ``instructions`` are the voice persona and are immutable once the session
   starts. ``generate_reply(instructions=...)`` asks the model to speak, which it does in its own
-  words. The backend reasoning model is configured via ``backend_instructions``.
+  words. The backend reasoning model is configured via ``responses_options``.
 
 Run it in the terminal (needs OPENAI_API_KEY and alpha access):
 
@@ -141,8 +141,10 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=GPTLiveModel(
             voice="marin",
             # backend Responses model that handles reasoning and tools
-            backend_model="gpt-5.6-sol",
-            backend_instructions="Use tools when current information is required.",
+            responses_options={
+                "model": "gpt-5.6-sol",
+                "instructions": "Use tools when current information is required.",
+            },
         ),
     )
 

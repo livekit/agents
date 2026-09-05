@@ -93,6 +93,15 @@ def _function_call_done(call_id: str, name: str = "_get_weather") -> dict[str, A
     }
 
 
+def _transcript(role: str, text: str, start_ms: int) -> dict[str, Any]:
+    return {
+        "type": f"session.{'input' if role == 'user' else 'output'}_transcript.delta",
+        "delta": text,
+        "start_ms": start_ms,
+        "end_ms": start_ms + 200,
+    }
+
+
 def _completed(response_id: str) -> dict[str, Any]:
     return {
         "type": "response.completed",
@@ -115,11 +124,13 @@ def _completed(response_id: str) -> dict[str, Any]:
 async def test_a_session_awaiting_config_sends_nothing_until_it_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The connection may win the race with the configuration, and must still wait for it."""
+    """The connection may win the race with the configuration, and must still wait for it: the
+    adapter configures every session before use, and a session built directly is configured by
+    the same call."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
+    session = model.session()
     try:
         await asyncio.sleep(0.05)  # let the connection open well ahead of any configuration
         assert not ws.sent, "session.start went out before the configuration arrived"
@@ -135,23 +146,6 @@ async def test_a_session_awaiting_config_sends_nothing_until_it_arrives(
         await model.aclose()
 
 
-async def test_a_session_built_directly_starts_without_waiting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Nobody promised this one a configuration, so waiting for one would hang it."""
-    ws = _connect_hook(monkeypatch)
-
-    model = GPTLiveModel(api_key="sk-test", instructions="From the constructor.")
-    session = model.session()
-    try:
-        await asyncio.sleep(0.05)
-        assert [e["type"] for e in ws.sent] == ["session.start"]
-        assert ws.sent[0]["session"]["instructions"] == "From the constructor."
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
 async def test_closing_releases_a_session_still_waiting_for_its_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,7 +156,7 @@ async def test_closing_releases_a_session_still_waiting_for_its_config(
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
+    session = model.session()
     await asyncio.sleep(0.05)
 
     started = time.perf_counter()
@@ -178,8 +172,10 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
 ) -> None:
     ws = _connect_hook(monkeypatch)
 
-    model = GPTLiveModel(api_key="sk-test", voice="marin", parallel_tool_calls=False)
-    session = model.session(wait_for_config=True)
+    model = GPTLiveModel(
+        api_key="sk-test", voice="marin", responses_options={"parallel_tool_calls": False}
+    )
+    session = model.session()
     try:
         await session._update_session(
             instructions="Be concise.", chat_ctx=_chat_ctx(), tools=[_get_weather]
@@ -218,6 +214,7 @@ async def test_a_custom_voice_is_sent_as_an_object(monkeypatch: pytest.MonkeyPat
     model = GPTLiveModel(api_key="sk-test", voice={"id": "voice_123"})
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         assert ws.sent[0]["session"]["audio"]["output"]["voice"] == {"id": "voice_123"}
     finally:
@@ -230,7 +227,7 @@ async def test_a_hosted_tool_is_delegated_to_the_backend(monkeypatch: pytest.Mon
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
+    session = model.session()
     try:
         await session._update_session(
             instructions="Be concise.",
@@ -254,7 +251,7 @@ async def test_a_running_session_only_updates_its_backend_settings(
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
+    session = model.session()
     try:
         await session._update_session(instructions="Be concise.", tools=[])
         await asyncio.sleep(0.05)
@@ -284,7 +281,7 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
 
     model = GPTLiveModel(api_key="sk-test", delegation="client")
     assert model.capabilities.mutable_tools is False
-    session = model.session(wait_for_config=True)
+    session = model.session()
     delegations: list[GPTLiveDelegation] = []
     session.on("delegation_created", delegations.append)
     try:
@@ -307,6 +304,9 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
         )
         assert not delegations
 
+        # the model delegates before the caller's turn closes, so the words that triggered it
+        # ride on the event rather than waiting a second for the chat context
+        session._handle_event(_transcript("user", "What is the weather", 1000))
         session._handle_event(
             {
                 "type": "session.delegation.created",
@@ -319,7 +319,9 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
             }
         )
         # a plugin type, not the wire event: the wire shape must not reach the application
-        assert delegations == [GPTLiveDelegation(id="item_delegation_123")]
+        assert delegations == [
+            GPTLiveDelegation(id="item_delegation_123", pending_transcript="What is the weather")
+        ]
 
         session.append_commentary("62 and raining.", delegation_id=delegations[0].id)
         session.append_thinking("Still checking the forecast.", delegation_id=delegations[0].id)
@@ -344,6 +346,7 @@ async def test_general_context_carries_an_explicit_null_delegation(
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session.append_thinking("The caller is a premium customer.")
         session.append_instructions("Speak slowly.")
@@ -364,6 +367,7 @@ async def test_a_reply_is_asked_for_as_commentary_to_speak_now(
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session._generate_reply(instructions="Greet the caller.")
         await asyncio.sleep(0.05)
@@ -385,6 +389,7 @@ async def test_only_session_started_releases_the_queued_commands(
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session._generate_reply(instructions="Greet the caller.")
         session._handle_event(
@@ -410,6 +415,7 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         import base64
 
@@ -432,7 +438,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
+    session = model.session()
     calls: list[llm.FunctionCall] = []
     session.on("function_call", calls.append)
     try:
@@ -445,14 +451,14 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
         assert [c.call_id for c in calls] == ["call_1"]
 
-        # the framework runs the tool and hands back the context with its output
-        chat_ctx = session.chat_ctx
-        chat_ctx.items.append(
-            llm.FunctionCallOutput(
-                call_id="call_1", name="_get_weather", output="rainy", is_error=False
-            )
+        # the framework runs the tool and the adapter hands over the new output
+        await session._append_items(
+            [
+                llm.FunctionCallOutput(
+                    call_id="call_1", name="_get_weather", output="rainy", is_error=False
+                )
+            ]
         )
-        await session._update_chat_ctx(chat_ctx)
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.item.create"
         assert ws.sent[-1]["item"] == {
@@ -464,7 +470,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.create"
-        assert not session._backend and not session._delegation_of_call
+        assert not session._delegated_responses and not session._fnc_call_to_delegation
     finally:
         await session.aclose()
         await model.aclose()
@@ -479,6 +485,7 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session._handle_event(
             _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
@@ -487,19 +494,15 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
         session._handle_event(_response_event("item_d1", _function_call_done("call_b")))
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
 
-        chat_ctx = session.chat_ctx
-        chat_ctx.items.append(
-            llm.FunctionCallOutput(call_id="call_a", output="one", is_error=False)
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_a", output="one", is_error=False)]
         )
-        await session._update_chat_ctx(chat_ctx)
         await asyncio.sleep(0.05)
         assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
 
-        chat_ctx = session.chat_ctx
-        chat_ctx.items.append(
-            llm.FunctionCallOutput(call_id="call_b", output="two", is_error=False)
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_b", output="two", is_error=False)]
         )
-        await session._update_chat_ctx(chat_ctx)
         await asyncio.sleep(0.05)
         assert [e["type"] for e in ws.sent[1:]] == [
             "response.item.create",
@@ -522,6 +525,7 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
     collected: list[Any] = []
     session.on("metrics_collected", collected.append)
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session._handle_event({"type": "session.usage.updated", "usage": {"seconds": 14.0}})
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
@@ -548,42 +552,6 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
         await model.aclose()
 
 
-async def test_the_models_own_speech_is_never_echoed_back_as_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The framework names assistant messages itself, so they never match the mirror by id."""
-    ws = _connect_hook(monkeypatch)
-
-    model = GPTLiveModel(api_key="sk-test")
-    session = model.session(wait_for_config=True)
-    try:
-        await session._update_session(instructions="Be concise.", tools=[])
-        await asyncio.sleep(0.05)
-        sent_before = len(ws.sent)
-
-        chat_ctx = session.chat_ctx
-        chat_ctx.add_message(role="assistant", content="Hello there.", id="item_framework")
-        chat_ctx.add_message(role="user", content="typed by the app", id="typed_1")
-        await session._update_chat_ctx(chat_ctx)
-        await asyncio.sleep(0.05)
-
-        new = ws.sent[sent_before:]
-        assert [e["type"] for e in new] == ["session.thinking.append"]
-        assert new[0]["content"] == "user: typed by the app"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-def _transcript(role: str, text: str, start_ms: int) -> dict[str, Any]:
-    return {
-        "type": f"session.{'input' if role == 'user' else 'output'}_transcript.delta",
-        "delta": text,
-        "start_ms": start_ms,
-        "end_ms": start_ms + 200,
-    }
-
-
 def _user_events(session: GPTLiveSession) -> list[tuple[str, Any]]:
     events: list[tuple[str, Any]] = []
     for name in (
@@ -605,15 +573,16 @@ def _silence(duration_ms: int) -> rtc.AudioFrame:
 async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The model's fragments go to the adapter as they are; the mirror still needs messages, so
-    a speaker's fragments extend one until a pause on the model's clock."""
+    """The model's fragments go to the adapter as they are; the history a reconnect reseeds from
+    still needs messages, so a speaker's fragments extend one until a pause on the model's clock."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
-    deltas: list[llm.DuplexTranscriptDelta] = []
+    deltas: list[llm.DuplexOutputTranscriptDelta] = []
     session.on("transcript_delta", deltas.append)
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         for role, text, start in (
             ("user", " What is", 7000),
@@ -629,13 +598,12 @@ async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
             (" check.", 7600, 7800),
             ("Sixty-two.", 9000, 9200),
         ]
-        messages = [m for m in session.chat_ctx.items if isinstance(m, llm.ChatMessage)]
-        assert [(m.role, m.text_content) for m in messages] == [
+        history = session._session_start_event().session.input or []
+        assert [(m.role, m.content[0].text) for m in history] == [
             ("user", " What is the weather"),
             ("assistant", "Let me check."),
             ("assistant", "Sixty-two."),
         ]
-        assert all(m.transcript_confidence is not None for m in messages if m.role == "user")
     finally:
         await session.aclose()
         await model.aclose()
@@ -650,6 +618,7 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
     session = model.session()
     events = _user_events(session)
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         for _ in range(20):
             session.push_audio(_silence(100))  # audio already pushed must not count as quiet
@@ -679,7 +648,6 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         assert (final.transcript, final.is_final) == (" What is the", True)
         assert final.item_id == interim.item_id
         assert final.turn_started_at == interim.turn_started_at
-        assert session.chat_ctx.items[-1].id == final.item_id
     finally:
         await session.aclose()
         await model.aclose()
@@ -695,6 +663,7 @@ async def test_a_pause_on_the_models_clock_splits_fragments_that_arrive_together
     session = model.session()
     events = _user_events(session)
     try:
+        await session._update_session()
         await asyncio.sleep(0.05)
         session._handle_event(_transcript("user", "Hello", 1000))
         session._handle_event(_transcript("user", "Again", 4000))
@@ -706,8 +675,8 @@ async def test_a_pause_on_the_models_clock_splits_fragments_that_arrive_together
         ]
         assert finals == ["Hello"]
         assert [name for name, _ in events].count("input_speech_started") == 2
-        messages = [m for m in session.chat_ctx.items if isinstance(m, llm.ChatMessage)]
-        assert [m.text_content for m in messages] == ["Hello", "Again"]
+        history = session._session_start_event().session.input or []
+        assert [m.content[0].text for m in history] == ["Hello", "Again"]
     finally:
         await session.aclose()
         await model.aclose()
@@ -718,23 +687,19 @@ async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_sai
     monkeypatch: pytest.MonkeyPatch, delegation: str
 ) -> None:
     """A typed message is context like any other item, and the ask that follows carries it: read
-    from the context rather than tracked, and only once. The model's own transcript, which the
-    framework hands back under its own ids, goes nowhere."""
+    from the history rather than tracked, and only once."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test", delegation=delegation)
-    session = model.session(wait_for_config=True)
+    session = model.session()
     try:
         await session._update_session(instructions="Be concise.", tools=[])
         await asyncio.sleep(0.05)
         sent_before = len(ws.sent)
 
-        chat_ctx = session.chat_ctx
-        spoken = chat_ctx.add_message(role="user", content="hello there", id="item_adapter")
-        spoken.transcript_confidence = 1.0
-        chat_ctx.add_message(role="assistant", content="Hi.", id="item_framework")
-        chat_ctx.add_message(role="user", content="What is the weather in Paris?", id="typed_1")
-        await session._update_chat_ctx(chat_ctx)
+        await session._append_items(
+            [llm.ChatMessage(role="user", content=["What is the weather in Paris?"], id="typed_1")]
+        )
         session._generate_reply()
         await asyncio.sleep(0.05)
 
@@ -747,9 +712,9 @@ async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_sai
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["content"] == gpt_live_model._ASK_BARE
 
-        chat_ctx = session.chat_ctx
-        chat_ctx.add_message(role="user", content="Never mind.", id="typed_2")
-        await session._update_chat_ctx(chat_ctx)
+        await session._append_items(
+            [llm.ChatMessage(role="user", content=["Never mind."], id="typed_2")]
+        )
         session._handle_event(_transcript("assistant", "Okay.", 1))
         session._generate_reply()  # speech has moved the conversation on since the typed message
         await asyncio.sleep(0.05)

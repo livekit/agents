@@ -11,14 +11,15 @@ from typing import Any, Literal
 from pydantic import model_serializer
 
 from openai import BaseModel
-from openai.types.responses import ResponseInputItem
+from openai.types.responses import ResponseInputItem, ResponseTextConfigParam
+from openai.types.shared_params import Reasoning
 
 DelegationTarget = Literal["responses", "client"]
 """``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
 InputRole = Literal["developer", "user", "assistant"]
 """The roles startup history accepts; there is no ``system``."""
 
-# -- shared parts --------------------------------------------------------------------------------
+# shared parts
 
 
 class InputTextPart(BaseModel):
@@ -41,7 +42,7 @@ class InputItem(BaseModel):
     content: list[InputTextPart | OutputTextPart] = []
 
 
-# -- session configuration -----------------------------------------------------------------------
+# session configuration
 
 
 class AudioFormat(BaseModel):
@@ -67,9 +68,9 @@ class ResponsesConfig(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
-    reasoning: dict[str, Any] | None = None
-    text: dict[str, Any] | None = None
-    service_tier: str | None = None
+    reasoning: Reasoning | None = None
+    text: ResponseTextConfigParam | None = None
+    service_tier: Literal["auto", "default", "flex", "priority"] | None = None
     max_output_tokens: int | None = None
 
 
@@ -100,7 +101,7 @@ class SessionResource(BaseModel):
     id: str | None = None
 
 
-# -- client events -------------------------------------------------------------------------------
+# client events
 
 
 class SessionStartEvent(BaseModel):
@@ -197,7 +198,7 @@ ClientEvent = (
 )
 
 
-# -- server events -------------------------------------------------------------------------------
+# server events
 
 
 class SessionStartedEvent(BaseModel):
