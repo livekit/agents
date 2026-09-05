@@ -8,7 +8,7 @@ from livekit import api, rtc
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
-from ...telemetry import trace_types, tracer, utils as telemetry_utils
+from ...telemetry import rpc as rpc_tracing, trace_types, tracer, utils as telemetry_utils
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -182,6 +182,8 @@ class RoomIO:
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
         if self._room.isconnected():
+            # a room connected outside JobContext.connect() (which installs it itself)
+            rpc_tracing.install(self._room.local_participant)
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
         self._init_atask = asyncio.create_task(self._init_task())
