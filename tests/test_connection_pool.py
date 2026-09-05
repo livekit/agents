@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -269,3 +270,73 @@ async def test_invalidate_mid_stream_lets_the_stream_finish_then_reconnects():
     reused = await pool.get(timeout=10.0)
     assert reused is fresh, "Expected the post-invalidate connection to be the reusable one."
     assert speaking in closed
+
+
+@pytest.mark.asyncio
+async def test_invalidate_during_a_handshake_retires_the_new_connection():
+    """A connection negotiated with the old options must not be pooled for reuse."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    counter = 0
+    closed: list[DummyConnection] = []
+
+    async def slow_connect(timeout: float):
+        nonlocal counter
+        counter += 1
+        started.set()
+        await release.wait()
+        return DummyConnection(counter)
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
+
+    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    await started.wait()
+    pool.invalidate()  # options changed while the socket was still being negotiated
+    release.set()
+    stale = await acquiring
+
+    # the caller asked before the change and still gets its connection
+    assert stale is not None
+    pool.put(stale)
+    assert stale not in pool._available, "A connection negotiated with stale options was pooled."
+
+    started.clear()
+    release.set()
+    fresh = await pool.get(timeout=10.0)
+    assert fresh is not stale, "Expected a connection negotiated after the option change."
+    assert stale in closed, "Expected the stale connection to be closed once returned."
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    counter = 0
+    closed: list[DummyConnection] = []
+
+    async def slow_connect(timeout: float):
+        nonlocal counter
+        counter += 1
+        started.set()
+        await release.wait()
+        return DummyConnection(counter)
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
+
+    pool.prewarm()
+    await started.wait()
+    pool.invalidate()
+    release.set()
+    task = pool._prewarm_task()
+    assert task is not None
+    await task
+
+    assert not pool._available, "A prewarmed connection with stale options stayed available."
+    await pool.aclose()
+    assert len(closed) == 1, "Expected the discarded prewarm connection to be closed."
