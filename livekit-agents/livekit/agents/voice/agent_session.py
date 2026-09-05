@@ -64,6 +64,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .generation import remove_instructions
 from .ivr import IVRActivity
 from .keyterm_detection import (
     KeytermDetector,
@@ -659,7 +660,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._forward_video_atask: asyncio.Task[None] | None = None
         self._update_activity_atask: asyncio.Task[None] | None = None
         self._activity_lock = asyncio.Lock()
+        self._add_conversation_item_lock = asyncio.Lock()
         self._lock = asyncio.Lock()
+
+        # IDs pushed through add_conversation_item are local-to-remote updates. Realtime
+        # providers may echo them before update_chat_ctx completes, so activity callbacks
+        # must not insert them as server-originated placeholders.
+        self._locally_pushed_conversation_item_ids: set[str] = set()
 
         # used to keep a reference to the room io
         self._room_io: room_io.RoomIO | None = None
@@ -1530,6 +1537,75 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state._watch_handle(handle)
 
         return handle
+
+    async def add_conversation_item(self, item: llm.ChatMessage) -> bool:
+        """Add a conversation item to the session history and the active agent's context.
+
+        Inserts ``item`` into ``session.history`` and, when an agent is running,
+        into its chat context.  Emits ``conversation_item_added`` so that event
+        listeners (transcript capture, analytics, etc.) observe the item the
+        same way they observe items produced by the normal audio pipeline.
+
+        With a realtime model, the item is first pushed to the live model
+        context and only a successful push commits the item locally.  A failed
+        push raises ``llm.RealtimeError`` and leaves the session untouched, so
+        retrying with the same item id works.  Realtime models without a
+        mutable chat context raise ``llm.RealtimeError``.
+
+        The call is idempotent: if an item with the same ``id`` already exists
+        in the session history the method returns ``False`` and does nothing.
+
+        Items added before ``start()`` reach the session history and the event
+        only — they are never backfilled into the agent's context.
+
+        Args:
+            item: The ChatMessage to add.
+
+        Returns:
+            ``True`` if the item was added, ``False`` if it was already present.
+        """
+        async with self._add_conversation_item_lock:
+            # Keep the active activity, agent, and realtime session coherent across the
+            # provider await. Agent handoffs wait until this transaction is committed.
+            async with self._activity_lock:
+                if self._chat_ctx.get_by_id(item.id) is not None:
+                    return False
+
+                activity = self._activity
+                agent = activity.agent if activity is not None else None
+                rt_session = activity._rt_session if activity is not None else None
+
+                if rt_session is not None:
+                    if not rt_session.capabilities.mutable_chat_context:
+                        raise llm.RealtimeError(
+                            "add_conversation_item is not supported by realtime models"
+                            " without a mutable chat context"
+                        )
+
+                    assert agent is not None
+
+                    # push-then-commit: on a failed push nothing was mutated locally,
+                    # so the caller can retry with the same item id
+                    candidate = agent._chat_ctx.copy()
+                    if candidate.get_by_id(item.id) is None:
+                        candidate.insert(item)
+                    remove_instructions(candidate)
+                    self._locally_pushed_conversation_item_ids.add(item.id)
+                    try:
+                        await rt_session.update_chat_ctx(candidate)
+
+                        if agent._chat_ctx.get_by_id(item.id) is None:
+                            agent._chat_ctx.insert(item)
+                        self._conversation_item_added(item)
+                        return True
+                    finally:
+                        self._locally_pushed_conversation_item_ids.discard(item.id)
+
+                if agent is not None and agent._chat_ctx.get_by_id(item.id) is None:
+                    agent._chat_ctx.insert(item)
+
+                self._conversation_item_added(item)
+                return True
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """Interrupt the current speech generation.
