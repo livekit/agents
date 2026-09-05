@@ -11,7 +11,8 @@ each call into a span following the OpenTelemetry RPC semantic conventions:
   session's root span so it lands on the session timeline.
 
 Request and response payloads are recorded truncated under ``lk.pii`` keys so the cloud
-collector can redact them; identities are tagged the same way. On an SDK without the hook, ``install`` is a
+collector can redact them. Participant identities are application identifiers, not end-user
+data, and are recorded as is. On an SDK without the hook, ``install`` is a
 no-op and logs once at debug level.
 """
 
