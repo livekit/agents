@@ -54,6 +54,9 @@ class SpeechHandle:
         self._agent_turn_context: otel_context.Context | None = None
         self._scheduled_at: float | None = None
         self._authorized_at: float | None = None
+        # telemetry: who interrupted this speech, recorded by the caller that knows
+        self._interrupt_source: str | None = None
+        self._interruption_recorded = False
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
@@ -347,6 +350,11 @@ class SpeechHandle:
             self._scheduled_at = time.perf_counter()
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
+
+    def _set_interrupt_source(self, source: str) -> None:
+        """Name the cause of an upcoming ``interrupt()`` for the agent_turn trace; first wins."""
+        if self._interrupt_source is None:
+            self._interrupt_source = source
 
     def _queue_wait(self) -> float | None:
         """Seconds between scheduling and the first generation authorization, once known."""

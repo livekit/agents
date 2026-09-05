@@ -7,11 +7,14 @@ from collections.abc import AsyncGenerator, AsyncIterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from opentelemetry import trace
+
 from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
 from .stream_adapter import StreamAdapter
@@ -169,6 +172,19 @@ class FallbackAdapter(
             t.off("metrics_collected", self._on_metrics_collected)
 
 
+def _record_fallback_failure(tts: TTS, index: int) -> None:
+    trace.get_current_span().add_event(
+        "fallback_provider_failed",
+        {trace_types.ATTR_FALLBACK_LABEL: tts.label, trace_types.ATTR_FALLBACK_INDEX: index},
+    )
+
+
+def _record_fallback_served(tts: TTS, index: int) -> None:
+    trace.get_current_span().set_attributes(
+        {trace_types.ATTR_FALLBACK_LABEL: tts.label, trace_types.ATTR_FALLBACK_INDEX: index}
+    )
+
+
 class FallbackChunkedStream(ChunkedStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
 
@@ -281,8 +297,10 @@ class FallbackChunkedStream(ChunkedStream):
                         for rf in resampler.flush():
                             output_emitter.push(rf.data.tobytes())
 
+                    _record_fallback_served(tts, i)
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
+                    _record_fallback_failure(tts, i)
                     if tts_status.available:
                         tts_status.available = False
                         self._tts.emit(
@@ -467,8 +485,10 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             else:
                                 output_emitter.push(synthesized_audio.frame.data.tobytes())
 
+                        _record_fallback_served(tts, i)
                         return
                     except Exception:
+                        _record_fallback_failure(tts, i)
                         if tts_status.available:
                             tts_status.available = False
                             self._tts.emit(

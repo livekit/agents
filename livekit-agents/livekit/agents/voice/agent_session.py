@@ -1783,6 +1783,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
+            # a handoff as one bar: drain and on_exit of the old agent, then start and
+            # on_enter of the new one nest under it (the initial start is under session_start)
+            handoff_span: trace.Span | None = None
+            if self._activity is not None and self._next_activity is not None:
+                handoff_span = tracer.start_span(
+                    "update_agent",
+                    attributes={
+                        trace_types.ATTR_PREVIOUS_AGENT_LABEL: self._activity.agent.label,
+                        trace_types.ATTR_AGENT_LABEL: self._next_activity.agent.label,
+                    },
+                )
+                otel_context.attach(trace.set_span_in_context(handoff_span))
+
             reuse_resources: _ReusableResources | None = None
             try:
                 previous_activity_v = self._activity
@@ -1835,10 +1848,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                 elif new_activity == "resume":
                     await self._activity.resume(reuse_resources=reuse_resources)
-            except BaseException:
+            except BaseException as e:
+                if handoff_span is not None and isinstance(e, Exception):
+                    trace_utils.record_exception(handoff_span, e)
                 if reuse_resources is not None:
                     await reuse_resources.cleanup()
                 raise
+            finally:
+                if handoff_span is not None:
+                    handoff_span.end()
+                    if self._root_span_context is not None:
+                        otel_context.attach(self._root_span_context)
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:

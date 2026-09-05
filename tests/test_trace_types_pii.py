@@ -163,6 +163,14 @@ SAFE_KEYS = frozenset(
         "gen_ai.client.token.usage",
         "gen_ai.execute_tool.duration",
         "gen_ai.invoke_agent.duration",
+        # interruptions, handoff, fallback, text input (enums, labels, sizes)
+        "lk.interruption.source",
+        "lk.playout.position",
+        "lk.false_interruption.resumed",
+        "lk.previous_agent_label",
+        "lk.fallback.label",
+        "lk.fallback.index",
+        "lk.text_input.size",
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
         "rpc.method",
         "lk.rpc.request_id",
