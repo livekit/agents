@@ -313,9 +313,7 @@ class STTv2(stt.STT):
 
 
 class SpeechStreamv2(stt.SpeechStream):
-    # _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
-    # _FINALIZE_MSG: str = json.dumps({"type": "Finalize"})
 
     def __init__(
         self,
@@ -460,17 +458,6 @@ class SpeechStreamv2(stt.SpeechStream):
     async def _run(self) -> None:
         closing_ws = False
 
-        # async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-        #     # if we want to keep the connection alive even if no audio is sent,
-        #     # Deepgram expects a keepalive message.
-        #     # https://developers.deepgram.com/reference/listen-live#stream-keepalive
-        #     try:
-        #         while True:
-        #             await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-        #             await asyncio.sleep(5)
-        #     except Exception:
-        #         return
-
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -554,7 +541,6 @@ class SpeechStreamv2(stt.SpeechStream):
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                    # asyncio.create_task(keepalive_task(ws)),
                 ]
                 tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
