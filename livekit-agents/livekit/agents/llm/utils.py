@@ -520,7 +520,17 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
         if field_info.description is None:
             field_attrs["description"] = param_docs.get(param_name, None)
 
-        field_info = FieldInfo.merge_field_infos(field_info, **field_attrs)
+        merge_field_infos = getattr(FieldInfo, "merge_field_infos", None)
+        if merge_field_infos is None:
+            # Pydantic 2.0 has no merge_field_infos or attribute tracking.
+            for attr, value in field_attrs.items():
+                setattr(field_info, attr, value)
+        else:
+            merged_field_info = merge_field_infos(field_info, **field_attrs)
+            # Early Pydantic versions drop these during the merge.
+            merged_field_info.annotation = field_info.annotation
+            merged_field_info.metadata = field_info.metadata
+            field_info = merged_field_info
         fields[param_name] = (field_info.annotation, field_info)
 
     return create_model(model_name, **fields)

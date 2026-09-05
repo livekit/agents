@@ -503,6 +503,27 @@ class TestToolExecution:
         first.value.append("one")
         assert model().value == []
 
+    def test_annotated_field_docstring_and_default_fallbacks(self):
+        metadata = Field(gt=0)
+
+        @function_tool
+        async def book(count: Annotated[int, metadata] = 2) -> str:
+            """Book items.
+
+            Args:
+                count: Number of items.
+            """
+            return str(count)
+
+        for _ in range(2):
+            model = function_arguments_to_pydantic_model(book)
+            assert model().count == 2
+            prop = model.model_json_schema()["properties"]["count"]
+            assert prop["description"] == "Number of items."
+            assert prop["exclusiveMinimum"] == 0
+        assert metadata.is_required()
+        assert metadata.description is None
+
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments='{"arg1": "test", "opt_arg2": "test2"}'
