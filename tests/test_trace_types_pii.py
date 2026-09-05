@@ -166,6 +166,8 @@ SAFE_KEYS = frozenset(
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
         "rpc.method",
         "lk.rpc.request_id",
+        "lk.rpc.caller_identity",
+        "lk.rpc.destination_identity",
         "lk.rpc.payload_size",
         "lk.rpc.response_size",
         "lk.rpc.response_timeout",
