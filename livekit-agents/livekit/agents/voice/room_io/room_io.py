@@ -8,6 +8,7 @@ from livekit import api, rtc
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
+from ...telemetry import trace_types, tracer, utils as telemetry_utils
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -344,11 +345,18 @@ class RoomIO:
     async def _init_task(self) -> None:
         await self._room_connected_fut
 
-        # check existing participants
-        for participant in self._room.remote_participants.values():
-            self._on_participant_connected(participant)
+        with tracer.start_as_current_span(
+            "wait_for_participant",
+            attributes={
+                trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: self._participant_identity is not None
+            },
+        ) as wait_span:
+            # check existing participants
+            for participant in self._room.remote_participants.values():
+                self._on_participant_connected(participant)
 
-        participant = await self._participant_available_fut
+            participant = await self._participant_available_fut
+            wait_span.set_attributes(telemetry_utils.participant_attributes(participant))
         self.set_participant(participant.identity)
 
         # init outputs
@@ -378,6 +386,10 @@ class RoomIO:
                 self._user_tr_output.flush()
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
+        self._agent_session._add_session_event(
+            "connection_state_changed",
+            {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
+        )
         if self._room.isconnected() and not self._room_connected_fut.done():
             self._room_connected_fut.set_result(None)
 
@@ -406,6 +418,15 @@ class RoomIO:
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
+        self._agent_session._add_session_event(
+            "participant_disconnected",
+            {
+                **telemetry_utils.participant_attributes(participant),
+                trace_types.ATTR_DISCONNECT_REASON: rtc.DisconnectReason.Name(
+                    participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                ),
+            },
+        )
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
         if (

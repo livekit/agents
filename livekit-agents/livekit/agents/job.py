@@ -38,7 +38,13 @@ from livekit.protocol import agent, models
 
 from .log import logger
 from .observability import Tagger
-from .telemetry import _upload_session_report, otel_metrics
+from .telemetry import (
+    _upload_session_report,
+    otel_metrics,
+    trace_types,
+    tracer,
+    utils as telemetry_utils,
+)
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
@@ -146,6 +152,15 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
+    # dispatch timeline, unix seconds; 0.0 when unknown (simulation, console, resumed jobs)
+    received_at: float = 0.0
+    """The worker received the availability request."""
+    accepted_at: float = 0.0
+    """The request handler accepted the job."""
+    assigned_at: float = 0.0
+    """The server's assignment (room token) arrived."""
+    launched_at: float = 0.0
+    """A process was acquired from the pool and handed the job."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -595,6 +610,9 @@ class JobContext:
             async def wrapper(_: str) -> None:
                 await callback()  # type: ignore
 
+            # keep the user's name: the job_shutdown trace labels each callback by it
+            wrapper.__name__ = getattr(callback, "__name__", wrapper.__name__)
+            wrapper.__qualname__ = getattr(callback, "__qualname__", wrapper.__qualname__)
             self._shutdown_callbacks.append(wrapper)
 
     async def wait_for_participant(
@@ -614,7 +632,13 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
-        return await wait_for_participant(self._room, identity=identity, kind=kind)
+        with tracer.start_as_current_span(
+            "wait_for_participant",
+            attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
+        ) as span:
+            participant = await wait_for_participant(self._room, identity=identity, kind=kind)
+            span.set_attributes(telemetry_utils.participant_attributes(participant))
+            return participant
 
     @deprecate_params({"e2ee": "Use `encryption` instead."})
     async def connect(
@@ -647,7 +671,25 @@ class JobContext:
                 single_peer_connection=single_peer_connection,
             )
 
-            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            with tracer.start_as_current_span(
+                "room_connect",
+                attributes={
+                    trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
+                    trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
+                    trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
+                    trace_types.ATTR_ROOM_E2EE: encryption is not None,
+                },
+            ) as connect_span:
+                await self._room.connect(self._info.url, self._info.token, options=room_options)
+                connect_span.set_attributes(
+                    {
+                        trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
+                        trace_types.ATTR_PARTICIPANT_IDENTITY: self._room.local_participant.identity,  # noqa: E501
+                        trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT: len(
+                            self._room.remote_participants
+                        ),
+                    }
+                )
             self._on_connect()
 
             # Always registered: the callback ignores participants without the

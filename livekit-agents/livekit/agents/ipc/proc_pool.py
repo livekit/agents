@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
 from typing import Any, Literal
@@ -171,6 +172,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             finally:
                 self._jobs_waiting_for_process -= 1
 
+            # dispatch timeline: a warm process is now handling this job
+            info.launched_at = time.time()
             try:
                 await proc.launch_job(info)
                 self.emit("process_job_launched", proc)

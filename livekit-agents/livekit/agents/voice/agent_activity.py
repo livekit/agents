@@ -857,7 +857,12 @@ class AgentActivity(RecognitionHooks):
 
         return task
 
-    async def start(self, *, reuse_resources: _ReusableResources | None = None) -> None:
+    async def start(
+        self,
+        *,
+        reuse_resources: _ReusableResources | None = None,
+        trace_context: otel_context.Context | None = None,
+    ) -> None:
         # `start` must only be called by AgentSession
 
         async with self._lock:
@@ -866,6 +871,7 @@ class AgentActivity(RecognitionHooks):
 
             start_span = tracer.start_span(
                 "start_agent_activity",
+                context=trace_context,
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             gen_ai_telemetry.set_agent_attributes(
@@ -890,7 +896,11 @@ class AgentActivity(RecognitionHooks):
 
                 # one-shot — not re-run on resume, so toolsets and MCP connections
                 # survive pause/resume
-                await self._setup_toolsets()
+                with (
+                    tracer.use_span(start_span, end_on_exit=False),
+                    tracer.start_as_current_span("setup_toolsets"),
+                ):
+                    await self._setup_toolsets()
 
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
