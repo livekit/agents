@@ -76,8 +76,8 @@ ATTR_NEW_STATE = "lk.new_state"
 # session close / job shutdown
 ATTR_CLOSE_REASON = "lk.close_reason"
 ATTR_CLOSE_DRAIN = "lk.close.drain"
-ATTR_SHUTDOWN_REASON = "lk.pii.shutdown.reason"
-"""Free text passed to ``JobContext.shutdown(reason=...)`` by user code, hence ``pii``."""
+ATTR_SHUTDOWN_REASON = "lk.shutdown.reason"
+"""The string passed to ``JobContext.shutdown(reason=...)``; developer-authored, like a log line."""
 ATTR_SHUTDOWN_USER_INITIATED = "lk.shutdown.user_initiated"
 ATTR_CALLBACK_NAME = "lk.callback.name"
 
