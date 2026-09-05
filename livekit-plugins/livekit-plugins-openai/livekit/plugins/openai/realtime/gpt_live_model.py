@@ -960,21 +960,21 @@ class GPTLiveSession(
 
         # a tool result answering a call the backend delegated goes back on the backend's channel;
         # everything else is context for the voice model, as one append
-        outputs: list[tuple[llm.FunctionCallOutput, str | None]] = []
+        backend_outputs: list[tuple[llm.FunctionCallOutput, str | None]] = []
         lines: list[str] = []
         for item in items:
             if (
                 isinstance(item, llm.FunctionCallOutput)
                 and item.call_id in self._fnc_call_to_delegation
             ):
-                outputs.append((item, self._fnc_call_to_delegation[item.call_id]))
+                backend_outputs.append((item, self._fnc_call_to_delegation[item.call_id]))
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
         if lines:
             self.append_thinking("\n".join(lines))
 
-        for output, delegation_id in outputs:
+        for output, delegation_id in backend_outputs:
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -986,6 +986,10 @@ class GPTLiveSession(
             if (pending := self._delegated_responses.get(delegation_id)) is not None:
                 pending.returned.add(output.call_id)
             self._maybe_continue_response(delegation_id)
+
+        # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
+        # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
+        # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
 
     def _generate_reply(
         self,
