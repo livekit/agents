@@ -1055,6 +1055,8 @@ class TTS(tts.TTS):
             self._opts.bit_rate = bit_rate
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+            # keep the base class property in sync; the framework reads tts.sample_rate
+            self._sample_rate = sample_rate
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
         if is_given(temperature):
