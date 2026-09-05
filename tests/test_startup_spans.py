@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from livekit import rtc
 from livekit.agents import Agent, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
@@ -233,6 +234,58 @@ def test_shutdown_callback_wrapper_keeps_the_user_name() -> None:
     ctx.add_shutdown_callback(flush_crm)
     [wrapped] = ctx._shutdown_callbacks
     assert _callback_name(wrapped).endswith("flush_crm")
+
+
+# -- SIP join keys --
+
+
+async def test_sip_participant_attributes_copied_with_only_the_number_tagged(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.0, "Hi", stt_delay=0.1)
+    actions.add_llm("Hello", ttft=0.05, duration=0.1)
+    actions.add_tts(0.2, ttfb=0.05, duration=0.1)
+    session = create_session(actions, speed_factor=4.0)
+
+    sip = MagicMock()
+    sip.sid, sip.identity = "PA_sip", "sip_+15550001111"
+    sip.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    sip.attributes = {
+        "sip.callID": "SCL_abc",
+        "sip.trunkID": "ST_xyz",
+        "sip.trunkPhoneNumber": "+15550009999",
+        "sip.phoneNumber": "+15550001111",
+        "sip.h.x-custom": "route-7",
+        "unrelated": "ignored",
+    }
+
+    # link the SIP participant once the session is up; run_session owns start/close so the
+    # fake pipeline and the transcript synchronizer are torn down cleanly
+    linked_once = False
+
+    def _link(ev: object) -> None:
+        nonlocal linked_once
+        if not linked_once:
+            linked_once = True
+            session._on_room_io_participant_linked(sip)
+
+    session.on("agent_state_changed", _link)
+    await run_session(session, Agent(instructions="test"), drain_delay=0.5)
+
+    [root] = _spans(span_exporter, "agent_session")
+    attrs = root.attributes or {}
+    # the customer's own identifiers stay plain
+    assert attrs["lk.sip.callID"] == "SCL_abc"
+    assert attrs["lk.sip.trunkID"] == "ST_xyz"
+    assert attrs["lk.sip.trunkPhoneNumber"] == "+15550009999"
+    assert attrs["lk.sip.h.x-custom"] == "route-7"
+    # the end user's number is the one PII value
+    assert attrs[trace_types.ATTR_SIP_PHONE_NUMBER] == "+15550001111"
+    assert "lk.sip.phoneNumber" not in attrs
+    assert "lk.sip.unrelated" not in attrs
+    [linked] = [e for e in root.events if e.name == "participant_linked"]
+    assert (linked.attributes or {})[trace_types.ATTR_PARTICIPANT_KIND] == "PARTICIPANT_KIND_SIP"
 
 
 # -- session_start / session_close --

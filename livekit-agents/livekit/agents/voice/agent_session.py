@@ -1964,10 +1964,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if (span := self._session_span) is not None and span.is_recording():
             span.add_event("participant_linked", trace_utils.participant_attributes(participant))
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-                # the SIP call's own ids, so this session can be joined with the telephony trace
+                # the SIP call's own ids, so this session can be joined with the telephony
+                # trace; only the end user's number is personal data
                 span.set_attributes(
                     {
-                        trace_types.ATTR_SIP_PREFIX + key.removeprefix("sip."): value
+                        (
+                            trace_types.ATTR_SIP_PHONE_NUMBER
+                            if key == "sip.phoneNumber"
+                            else trace_types.ATTR_SIP_PREFIX + key.removeprefix("sip.")
+                        ): value
                         for key, value in participant.attributes.items()
                         if key.startswith("sip.")
                     }
