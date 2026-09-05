@@ -6,6 +6,7 @@ descriptive form the serializer produces instead."""
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -125,6 +126,34 @@ def test_not_given_and_none_attributes_are_skipped() -> None:
         label = NOT_GIVEN
 
     assert _describe_option_object(Sparse()) == "Sparse(model=m)"
+
+
+def test_custom_sequence_and_set_values_keep_their_elements() -> None:
+    # tts_text_transforms accepts any Sequence; a user-defined one must not collapse to
+    # its class name
+    class Transforms(Sequence[str]):
+        def __init__(self, *items: str) -> None:
+            self._items = items
+
+        def __getitem__(self, i: Any) -> Any:
+            return self._items[i]
+
+        def __len__(self) -> int:
+            return len(self._items)
+
+    class Det:
+        model = "m"
+
+    out = _serialize_option_value(
+        {"tts_text_transforms": Transforms("filter_markdown", "filter_emoji"), "s": {2, 1}}
+    )
+    assert out == {
+        "tts_text_transforms": ["filter_markdown", "filter_emoji"],
+        "s": [1, 2],
+    }
+    assert _serialize_option_value(Transforms("a")) == ["a"]
+    assert _serialize_option_value([Det()]) == ["Det(model=m)"]
+    _assert_report_safe(out)
 
 
 def test_nested_containers_and_key_aliases() -> None:
