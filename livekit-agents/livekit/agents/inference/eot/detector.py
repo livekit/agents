@@ -130,6 +130,24 @@ class TurnDetector(_BaseStreamingTurnDetector):
     def model(self) -> TurnDetectorModels:
         return self._model
 
+    @property
+    def sample_rate(self) -> int:
+        return self._opts.sample_rate
+
+    @property
+    def local_fallback(self) -> bool:
+        return self._local_fallback
+
+    @property
+    def threshold_overrides(self) -> NotGivenOr[float | dict[str, float]]:
+        """User ``unlikely_threshold`` override(s); NOT_GIVEN when server defaults apply."""
+        return self._opts.thresholds.overrides
+
+    @property
+    def backchannel_threshold_overrides(self) -> NotGivenOr[float | dict[str, float]]:
+        """User ``backchannel_threshold`` override(s); NOT_GIVEN when server defaults apply."""
+        return self._opts.thresholds.backchannel_overrides
+
     def _warn_threshold_override(self) -> None:
         thresholds = self._opts.thresholds
         if is_given(overrides := thresholds.overrides):
