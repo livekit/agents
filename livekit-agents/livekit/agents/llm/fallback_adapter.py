@@ -7,8 +7,11 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
+from opentelemetry import trace
+
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
@@ -286,8 +289,21 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
+                    trace.get_current_span().set_attributes(
+                        {
+                            trace_types.ATTR_FALLBACK_LABEL: llm.label,
+                            trace_types.ATTR_FALLBACK_INDEX: i,
+                        }
+                    )
                     return
                 except Exception:  # exceptions already logged inside _try_generate
+                    trace.get_current_span().add_event(
+                        "fallback_provider_failed",
+                        {
+                            trace_types.ATTR_FALLBACK_LABEL: llm.label,
+                            trace_types.ATTR_FALLBACK_INDEX: i,
+                        },
+                    )
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(
