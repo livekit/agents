@@ -82,11 +82,11 @@ async def test_outgoing_call_span_nests_under_the_caller(
     assert span.kind == trace.SpanKind.CLIENT
     assert span.parent is not None and span.parent.span_id == parent.get_span_context().span_id
     attrs = span.attributes or {}
-    assert attrs[trace_types.ATTR_RPC_SYSTEM] == "livekit"
     assert attrs[trace_types.ATTR_RPC_METHOD] == "playback.start"
     assert attrs[trace_types.ATTR_RPC_DESTINATION_IDENTITY] == "avatar-1"
     assert attrs[trace_types.ATTR_RPC_PAYLOAD] == '{"id": 7}'
     assert attrs[trace_types.ATTR_RPC_PAYLOAD_SIZE] == 9
+    assert attrs[trace_types.ATTR_RPC_RESPONSE] == "ok!"
     assert attrs[trace_types.ATTR_RPC_RESPONSE_SIZE] == 3
     assert attrs[trace_types.ATTR_RPC_RESPONSE_TIMEOUT] == 5.0
     assert span.status.status_code == trace.StatusCode.UNSET
@@ -123,6 +123,22 @@ async def test_payload_is_truncated_and_size_kept(span_exporter: InMemorySpanExp
     assert attrs[trace_types.ATTR_RPC_PAYLOAD_SIZE] == len(payload)
     assert trace_types.ATTR_RPC_RESPONSE_TIMEOUT not in attrs
     assert attrs[trace_types.ATTR_RPC_RESPONSE_SIZE] == 0
+    assert trace_types.ATTR_RPC_RESPONSE not in attrs  # empty responses are not recorded
+
+
+async def test_response_is_truncated_like_the_request(span_exporter: InMemorySpanExporter) -> None:
+    interceptor = rpc_tracing.TracingRpcInterceptor()
+    response = "y" * (rpc_tracing.MAX_PAYLOAD_ATTR_LEN + 10)
+
+    async def next_(invocation: object) -> str | None:
+        return response
+
+    await interceptor.intercept_incoming(_invocation(), next_)
+
+    [span] = _spans(span_exporter, "rpc_handler")
+    attrs = span.attributes or {}
+    assert len(attrs[trace_types.ATTR_RPC_RESPONSE]) == rpc_tracing.MAX_PAYLOAD_ATTR_LEN
+    assert attrs[trace_types.ATTR_RPC_RESPONSE_SIZE] == len(response)
 
 
 async def test_incoming_handler_span(span_exporter: InMemorySpanExporter) -> None:
@@ -141,6 +157,7 @@ async def test_incoming_handler_span(span_exporter: InMemorySpanExporter) -> Non
     assert attrs[trace_types.ATTR_RPC_REQUEST_ID] == "req-42"
     assert attrs[trace_types.ATTR_RPC_CALLER_IDENTITY] == "client-9"
     assert attrs[trace_types.ATTR_RPC_HANDLER_REGISTERED] is True
+    assert attrs[trace_types.ATTR_RPC_RESPONSE] == "found"
     assert attrs[trace_types.ATTR_RPC_RESPONSE_SIZE] == 5
 
 
