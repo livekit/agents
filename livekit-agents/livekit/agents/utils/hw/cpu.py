@@ -47,28 +47,74 @@ class CGroupV2CPUMonitor(CPUMonitor):
         env_cpus = _cpu_count_from_env()
         if env_cpus is not None:
             return env_cpus
-        quota, period = self._read_cpu_max()
-        if quota == "max":
-            return psutil.cpu_count() or 1.0
-        return 1.0 * int(quota) / period
+        cgroup_path = os.path.dirname(self._cpu_stat_path())
+        quota_limit: float | None = None
+        while True:
+            quota, period = self._read_cpu_max(cgroup_path)
+            if quota != "max":
+                limit = int(quota) / period
+                quota_limit = limit if quota_limit is None else min(quota_limit, limit)
+
+            if cgroup_path == "/sys/fs/cgroup":
+                break
+            parent = os.path.dirname(cgroup_path)
+            if parent == cgroup_path:
+                break
+            cgroup_path = parent
+
+        capacity_limits = [quota_limit] if quota_limit is not None else []
+        host_cpus = psutil.cpu_count()
+        if host_cpus is not None and host_cpus > 0:
+            capacity_limits.append(float(host_cpus))
+        # Linux affinity is already intersected with cpuset restrictions.
+        try:
+            affinity_cpus = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            pass
+        else:
+            if affinity_cpus > 0:
+                capacity_limits.append(float(affinity_cpus))
+
+        return min(capacity_limits) if capacity_limits else 1.0
 
     def cpu_percent(self, interval: float = 0.5) -> float:
         cpu_usage_start = self._read_cpu_usage()
+        t0 = time.monotonic()
         time.sleep(interval)
         cpu_usage_end = self._read_cpu_usage()
+        elapsed = time.monotonic() - t0
+        if elapsed <= 0:
+            return 0.0
+
         cpu_usage_diff = cpu_usage_end - cpu_usage_start
+        # cpu.max is an average limit, so a sample can span a quota boundary or use
+        # accumulated burst runtime. Only host CPU capacity is a hard upper bound.
+        host_cpus = psutil.cpu_count()
+        max_diff_usec = (
+            elapsed * host_cpus * 1_000_000 if host_cpus is not None and host_cpus > 0 else None
+        )
+        if cpu_usage_diff < 0 or (
+            max_diff_usec is not None and cpu_usage_diff > max_diff_usec * 1.05
+        ):
+            logger.warning(
+                "discarding impossible cgroup v2 cpu sample: start=%s end=%s elapsed=%.3fs "
+                "host_ncpu=%s",
+                cpu_usage_start,
+                cpu_usage_end,
+                elapsed,
+                host_cpus,
+            )
+            return 0.0
 
         # microseconds to seconds
         cpu_usage_seconds = cpu_usage_diff / 1_000_000
-
         num_cpus = self.cpu_count()
-        cpu_usage_percent = cpu_usage_seconds / (interval * num_cpus)
+        cpu_usage_percent = cpu_usage_seconds / (elapsed * num_cpus)
+        return max(min(cpu_usage_percent, 1.0), 0.0)
 
-        return min(cpu_usage_percent, 1)
-
-    def _read_cpu_max(self) -> tuple[str, int]:
+    def _read_cpu_max(self, cgroup_path: str = "/sys/fs/cgroup") -> tuple[str, int]:
         try:
-            with open("/sys/fs/cgroup/cpu.max") as f:
+            with open(os.path.join(cgroup_path, "cpu.max")) as f:
                 data = f.read().strip().split()
             quota = data[0]
             period = int(data[1]) if len(data) > 1 else 100000
@@ -77,8 +123,31 @@ class CGroupV2CPUMonitor(CPUMonitor):
             period = 100000
         return quota, period
 
+    def _cpu_stat_path(self) -> str:
+        """Prefer this process's contained cgroup; fall back to the root cgroup."""
+        cgroup_root = "/sys/fs/cgroup"
+        try:
+            with open("/proc/self/cgroup") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("0::"):
+                        rel = line.split("::", 1)[1]
+                        if not rel.startswith("/") or any(
+                            part in {".", ".."} for part in rel.split("/")
+                        ):
+                            continue
+                        cgroup_path = os.path.realpath(os.path.join(cgroup_root, rel.lstrip("/")))
+                        if os.path.commonpath((cgroup_root, cgroup_path)) != cgroup_root:
+                            continue
+                        path = os.path.join(cgroup_path, "cpu.stat")
+                        if os.path.exists(path):
+                            return path
+        except (OSError, ValueError):
+            pass
+        return os.path.join(cgroup_root, "cpu.stat")
+
     def _read_cpu_usage(self) -> int:
-        with open("/sys/fs/cgroup/cpu.stat") as f:
+        with open(self._cpu_stat_path()) as f:
             for line in f:
                 if line.startswith("usage_usec"):
                     return int(line.split()[1])
