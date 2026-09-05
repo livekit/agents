@@ -9,7 +9,7 @@ import random
 import threading
 import time
 import weakref
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -71,6 +71,7 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
+from ..utils import is_given
 from . import pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
@@ -84,17 +85,75 @@ _SESSION_OPTION_KEY_ALIASES = {
     "keyterms": "lk.pii.keyterms",
 }
 
+# Option keys never written to the report: prompt text authored by the customer
+# (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
+# business or users, and the report has no use for it.
+_SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
+
+
+# Public, non-callable attributes worth showing when a model-like object (turn detector,
+# interruption detector, ...) appears in the session options. Read in this order; missing,
+# NOT_GIVEN and None values are skipped. Kept to a whitelist so a plugin's credentials or
+# internals never end up in the report.
+_OPTION_OBJECT_DESCRIPTOR_ATTRS = (
+    "model",
+    "provider",
+    "label",
+    "sample_rate",
+    "local_fallback",
+    "threshold_overrides",
+    "backchannel_threshold_overrides",
+)
+
+_OPTION_PRIMITIVES = (str, bool, int, float)
+
+
+def _describe_option_object(obj: object) -> str:
+    """Render a model-like object from the session options as ``ClassName(k=v, ...)``.
+
+    The OTel log exporter stringifies anything that is not a primitive, which for these
+    objects yields the default ``<... object at 0x...>`` repr. Build a stable description
+    from whitelisted public attributes instead.
+    """
+    parts: list[str] = []
+    for name in _OPTION_OBJECT_DESCRIPTOR_ATTRS:
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if value is None or not is_given(value) or callable(value):
+            continue
+        if isinstance(value, Mapping):
+            rendered = json.dumps(value, sort_keys=True, default=str)
+        elif isinstance(value, _OPTION_PRIMITIVES):
+            rendered = str(value)
+        else:
+            continue
+        parts.append(f"{name}={rendered}")
+    return f"{type(obj).__name__}({', '.join(parts)})"
+
+
+def _serialize_option_value(value: Any) -> Any:
+    if value is None or isinstance(value, _OPTION_PRIMITIVES):
+        return value
+    if isinstance(value, Mapping):
+        return {
+            _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
+            for k, v in value.items()
+            if k not in _SESSION_OPTION_OMITTED_KEYS
+        }
+    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
+        # any Sequence is a valid option value (tts_text_transforms accepts one), so
+        # serialize the elements rather than collapsing the container to its class name
+        items = sorted(value, key=str) if isinstance(value, Set) else value
+        return [_serialize_option_value(v) for v in items]
+    return _describe_option_object(value)
+
 
 def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
-    def _serialize(value: dict[str, Any]) -> dict[str, Any]:
-        return {
-            _SESSION_OPTION_KEY_ALIASES.get(key, key): (
-                _serialize(nested_value) if isinstance(nested_value, dict) else nested_value
-            )
-            for key, nested_value in value.items()
-        }
-
-    return _serialize(vars(options))
+    serialized = _serialize_option_value(vars(options))
+    assert isinstance(serialized, dict)
+    return serialized
 
 
 class _DynamicTracer(Tracer):
