@@ -92,6 +92,9 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     )
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eot_wait_span = None
+    ar._eot_wait_started_at = None
+    ar._eot_wait_rearms = 0
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
     ar._final_transcript_confidence = []
