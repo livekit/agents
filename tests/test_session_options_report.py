@@ -156,6 +156,28 @@ def test_custom_sequence_and_set_values_keep_their_elements() -> None:
     _assert_report_safe(out)
 
 
+def test_customer_prompt_text_is_omitted() -> None:
+    # a keyterm-detection prompt override is customer-authored text; it never reaches the
+    # report, at any nesting depth
+    session = AgentSession(
+        stt_context_options={
+            "keyterms": ["Acme"],
+            "keyterm_detection": {
+                "enabled": True,
+                "instructions": "Extract product names for Acme customer Jane Doe",
+            },
+        }
+    )
+    serialized = _serialize_session_options(session.options)
+    detection = serialized["stt_context_options"]["keyterm_detection"]
+    assert "instructions" not in detection
+    assert detection["enabled"] is True
+    assert serialized["stt_context_options"]["lk.pii.keyterms"] == ["Acme"]
+    assert "Jane Doe" not in json.dumps(serialized)
+
+    assert _serialize_option_value({"a": {"instructions": "x", "keep": 1}}) == {"a": {"keep": 1}}
+
+
 def test_nested_containers_and_key_aliases() -> None:
     class Det:
         model = "m"

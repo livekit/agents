@@ -85,6 +85,11 @@ _SESSION_OPTION_KEY_ALIASES = {
     "keyterms": "lk.pii.keyterms",
 }
 
+# Option keys never written to the report: prompt text authored by the customer
+# (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
+# business or users, and the report has no use for it.
+_SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
+
 
 # Public, non-callable attributes worth showing when a model-like object (turn detector,
 # interruption detector, ...) appears in the session options. Read in this order; missing,
@@ -135,6 +140,7 @@ def _serialize_option_value(value: Any) -> Any:
         return {
             _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
             for k, v in value.items()
+            if k not in _SESSION_OPTION_OMITTED_KEYS
         }
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
         # any Sequence is a valid option value (tts_text_transforms accepts one), so
