@@ -99,7 +99,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | --- | --- | --- |
 | `api_key` | `str` | Phonic API key. Falls back to `PHONIC_API_KEY` environment variable |
 | `phonic_agent` | `str` | Phonic agent name. Options set explicitly here override agent settings |
-| `voice` | `str` | Voice ID — `sabrina`, `grant`, `virginia`, `landon`, `eleanor`, `shelby`, `nolan` |
+| `voice` | `str` | Voice ID — see [available voices](https://docs.phonic.ai/docs/build/agents/voices) |
 | `welcome_message` | `str` | Message the agent says when the conversation starts. Ignored when `generate_welcome_message` is True |
 | `generate_welcome_message` | `bool` | Auto-generate the welcome message (ignores `welcome_message`) |
 | `project` | `str` | Project name (default: `main`) |
