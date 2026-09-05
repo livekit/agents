@@ -340,10 +340,8 @@ ATTR_BLOCKING_DURATION = "lk.blocking.duration"
 ATTR_BLOCKING_THRESHOLD = "lk.blocking.threshold"
 ATTR_BLOCKING_SEVERITY = "lk.blocking.severity"
 """``warning`` or ``error``, by which threshold the block crossed."""
-ATTR_BLOCKING_TASK = "lk.pii.blocking.task"
-"""Name of the asyncio task that was running when the loop thread was sampled. Task names
-are free text: the framework embeds participant identities in some, and user code may
-name tasks anything, hence the ``pii`` segment."""
+ATTR_BLOCKING_TASK = "lk.blocking.task"
+"""Name of the asyncio task that was running when the loop thread was sampled."""
 ATTR_BLOCKING_STACK = "lk.blocking.stack"
 """Loop-thread stack sampled while blocked (source locations only, no values)."""
 ATTR_BLOCKING_GC_TIME = "lk.blocking.gc_time"
