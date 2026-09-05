@@ -119,6 +119,7 @@ docs = [
     { name = "pdoc3" },
     { name = "setuptools" },
 ]
+lint = [{ name = "ruff" }]
 typing = [
     { name = "pandas-stubs", specifier = ">=3.0.3.260530" },
     { name = "scipy-stubs", specifier = ">=1.17.1.5" },
