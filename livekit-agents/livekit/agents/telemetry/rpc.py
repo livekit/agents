@@ -10,8 +10,8 @@ each call into a span following the OpenTelemetry RPC semantic conventions:
 * ``rpc_handler`` (``SpanKind.SERVER``) for incoming invocations, parented to the primary agent
   session's root span so it lands on the session timeline.
 
-Payload contents are recorded truncated under an ``lk.pii`` key so the cloud collector can
-redact them; identities are tagged the same way. On an SDK without the hook, ``install`` is a
+Request and response payloads are recorded truncated under ``lk.pii`` keys so the cloud
+collector can redact them; identities are tagged the same way. On an SDK without the hook, ``install`` is a
 no-op and logs once at debug level.
 """
 
@@ -28,20 +28,30 @@ from ..log import logger
 from . import trace_types
 from .traces import tracer
 
-RPC_SYSTEM = "livekit"
 MAX_PAYLOAD_ATTR_LEN = 1024
-"""Payloads longer than this many characters are truncated in span attributes."""
+"""Request and response payloads longer than this many characters are truncated in span
+attributes."""
 
 _RpcInterceptorBase: type = getattr(rtc, "RpcInterceptor", object)
 _warned_unsupported = False
 
 
+def _truncate(payload: str) -> str:
+    return payload if len(payload) <= MAX_PAYLOAD_ATTR_LEN else payload[:MAX_PAYLOAD_ATTR_LEN]
+
+
 def _payload_attributes(payload: str) -> dict[str, Any]:
     attrs: dict[str, Any] = {trace_types.ATTR_RPC_PAYLOAD_SIZE: len(payload.encode("utf-8"))}
     if payload:
-        attrs[trace_types.ATTR_RPC_PAYLOAD] = (
-            payload if len(payload) <= MAX_PAYLOAD_ATTR_LEN else payload[:MAX_PAYLOAD_ATTR_LEN]
-        )
+        attrs[trace_types.ATTR_RPC_PAYLOAD] = _truncate(payload)
+    return attrs
+
+
+def _response_attributes(response: str | None) -> dict[str, Any]:
+    response = response or ""
+    attrs: dict[str, Any] = {trace_types.ATTR_RPC_RESPONSE_SIZE: len(response.encode("utf-8"))}
+    if response:
+        attrs[trace_types.ATTR_RPC_RESPONSE] = _truncate(response)
     return attrs
 
 
@@ -63,7 +73,6 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
 
     async def intercept_outgoing(self, call: Any, next: Callable[[Any], Awaitable[str]]) -> str:
         attributes: dict[str, Any] = {
-            trace_types.ATTR_RPC_SYSTEM: RPC_SYSTEM,
             trace_types.ATTR_RPC_METHOD: call.method,
             trace_types.ATTR_RPC_DESTINATION_IDENTITY: call.destination_identity,
             **_payload_attributes(call.payload),
@@ -79,16 +88,13 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             except rtc.RpcError as e:
                 span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(e.code))
                 raise
-            span.set_attribute(
-                trace_types.ATTR_RPC_RESPONSE_SIZE, len((response or "").encode("utf-8"))
-            )
+            span.set_attributes(_response_attributes(response))
             return response
 
     async def intercept_incoming(
         self, invocation: Any, next: Callable[[Any], Awaitable[str | None]]
     ) -> str | None:
         attributes: dict[str, Any] = {
-            trace_types.ATTR_RPC_SYSTEM: RPC_SYSTEM,
             trace_types.ATTR_RPC_METHOD: getattr(invocation, "method", ""),
             trace_types.ATTR_RPC_REQUEST_ID: invocation.request_id,
             trace_types.ATTR_RPC_CALLER_IDENTITY: invocation.caller_identity,
@@ -110,9 +116,7 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
                     # a client called a method this agent never registered
                     span.set_attribute(trace_types.ATTR_RPC_HANDLER_REGISTERED, False)
                 raise
-            span.set_attribute(
-                trace_types.ATTR_RPC_RESPONSE_SIZE, len((response or "").encode("utf-8"))
-            )
+            span.set_attributes(_response_attributes(response))
             return response
 
 

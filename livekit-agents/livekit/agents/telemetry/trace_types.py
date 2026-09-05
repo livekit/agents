@@ -76,8 +76,7 @@ ATTR_DISCONNECT_REASON = "lk.disconnect_reason"
 ATTR_OLD_STATE = "lk.old_state"
 ATTR_NEW_STATE = "lk.new_state"
 
-# rpc (OpenTelemetry RPC semantic conventions plus lk.rpc.* details)
-ATTR_RPC_SYSTEM = "rpc.system"
+# rpc (``rpc.method`` from the OpenTelemetry RPC semantic conventions, plus lk.rpc.* details)
 ATTR_RPC_METHOD = "rpc.method"
 ATTR_RPC_REQUEST_ID = "lk.rpc.request_id"
 ATTR_RPC_CALLER_IDENTITY = "lk.pii.rpc.caller_identity"
@@ -85,6 +84,8 @@ ATTR_RPC_DESTINATION_IDENTITY = "lk.pii.rpc.destination_identity"
 ATTR_RPC_PAYLOAD = "lk.pii.rpc.payload"
 """Request payload, truncated to ``telemetry.rpc.MAX_PAYLOAD_ATTR_LEN`` characters."""
 ATTR_RPC_PAYLOAD_SIZE = "lk.rpc.payload_size"
+ATTR_RPC_RESPONSE = "lk.pii.rpc.response"
+"""Response payload, truncated like the request."""
 ATTR_RPC_RESPONSE_SIZE = "lk.rpc.response_size"
 ATTR_RPC_RESPONSE_TIMEOUT = "lk.rpc.response_timeout"
 ATTR_RPC_ERROR_CODE = "lk.rpc.error_code"

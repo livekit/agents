@@ -164,7 +164,6 @@ SAFE_KEYS = frozenset(
         "gen_ai.execute_tool.duration",
         "gen_ai.invoke_agent.duration",
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
-        "rpc.system",
         "rpc.method",
         "lk.rpc.request_id",
         "lk.rpc.payload_size",
