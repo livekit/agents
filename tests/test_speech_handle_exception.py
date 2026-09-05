@@ -16,6 +16,7 @@ import asyncio
 
 import pytest
 
+from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.llm import RealtimeError
 from livekit.agents.voice.run_result import RunResult
 from livekit.agents.voice.speech_handle import SpeechHandle
@@ -62,6 +63,22 @@ async def test_error_ignored_after_done() -> None:
     exc = handle.exception()
     assert isinstance(exc, RealtimeError)
     assert str(exc) == "first"
+
+
+async def test_retryable_api_error_round_trips_through_exception() -> None:
+    # a reply discarded on reconnect is reported as a retryable APIError;
+    # apps distinguish "safe to re-prompt" without string-matching the message
+    handle = SpeechHandle.create()
+    handle._mark_done(
+        error=APIConnectionError(message="pending response discarded due to session reconnection")
+    )
+
+    result = await handle
+    assert result is handle
+
+    exc = handle.exception()
+    assert isinstance(exc, APIError)
+    assert exc.retryable is True
 
 
 async def test_run_result_propagates_speech_handle_error() -> None:
