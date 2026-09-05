@@ -222,16 +222,22 @@ class ConnectionPool(Generic[T]):
 
         async def _prewarm_impl() -> None:
             try:
-                async with self._connect_lock:
-                    if not self._connections:
+                # an invalidation landing mid-handshake discards the connection being
+                # warmed. retry once so the pool does not stay cold just because
+                # options changed while it was warming up; bounded so repeated
+                # invalidations cannot spin here.
+                for _ in range(2):
+                    async with self._connect_lock:
+                        if self._connections:
+                            return
                         conn = await self._connect(timeout=self._connect_timeout)
                         if conn in self._connections:
                             self._available.add(conn)
-                        else:
-                            # retired mid-handshake; nothing ever used it, so it can
-                            # go straight to the close queue.
-                            self._retired.discard(conn)
-                            self._to_close.add(conn)
+                            return
+                        # retired mid-handshake; nothing ever used it, so it can
+                        # go straight to the close queue.
+                        self._retired.discard(conn)
+                        self._to_close.add(conn)
             except Exception as e:
                 # exception details can contain request headers or URL credentials.
                 logger.warning(

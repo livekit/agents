@@ -337,6 +337,15 @@ async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
     assert task is not None
     await task
 
-    assert not pool._available, "A prewarmed connection with stale options stayed available."
+    stale = DummyConnection(1)
+    assert all(c.id != stale.id for c in pool._available), (
+        "A prewarmed connection with stale options stayed available."
+    )
+    # the discarded attempt must not leave the pool cold
+    assert len(pool._available) == 1, "Expected prewarm to retry after a mid-handshake invalidate."
+    assert next(iter(pool._available)).id == 2
+
     await pool.aclose()
-    assert len(closed) == 1, "Expected the discarded prewarm connection to be closed."
+    assert sorted(c.id for c in closed) == [1, 2], (
+        "Expected both the discarded and the replacement connection to be closed."
+    )
