@@ -3,7 +3,7 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
@@ -415,6 +415,55 @@ class TestToolExecution:
         for bad in (0, 11):
             with pytest.raises(ValidationError):
                 model(count=bad)
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    def test_annotated_type_constraints_preserved(self, with_field: bool):
+        annotation = (
+            Annotated[PositiveInt, Field(description="how many")] if with_field else PositiveInt
+        )
+
+        @function_tool
+        async def book(count: annotation) -> str:
+            """Book a thing."""
+            return str(count)
+
+        model = function_arguments_to_pydantic_model(book)
+        assert model.model_json_schema()["properties"]["count"]["exclusiveMinimum"] == 0
+        for bad in (0, -1):
+            with pytest.raises(ValidationError):
+                model(count=bad)
+        assert prepare_function_arguments(fnc=book, json_arguments='{"count": 2}')[0] == (2,)
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    async def test_annotated_validators_run_in_order(self, with_field: bool):
+        calls: list[str] = []
+
+        def before(value: str) -> str:
+            calls.append("before")
+            return value.strip()
+
+        def after(value: str) -> str:
+            calls.append("after")
+            return value.upper()
+
+        annotation = Annotated[
+            str,
+            BeforeValidator(before),
+            AfterValidator(after),
+        ]
+        if with_field:
+            annotation = Annotated[annotation, Field(description="label")]
+
+        @function_tool
+        async def label(value: annotation) -> str:
+            """Normalize a label."""
+            return value
+
+        args, kwargs = prepare_function_arguments(
+            fnc=label, json_arguments='{"value": "  hello  "}'
+        )
+        assert await label(*args, **kwargs) == "HELLO"
+        assert calls == ["before", "after"]
 
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(

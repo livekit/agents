@@ -519,7 +519,6 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
         # Annotated[str, Field(description="...")]
         if get_origin(type_hint) is Annotated:
             annotated_args = get_args(type_hint)
-            type_hint = annotated_args[0]
             annotated_field = next(
                 (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
             )
@@ -527,11 +526,6 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
                 # `asdict` is available after pydantic 2.12
                 field_dict = annotated_field.asdict()
                 field_attrs = field_dict["attributes"]
-                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
-                # in `metadata`, not `attributes`. Re-attach them to the annotation
-                # so `Field(...)` constraints on a tool argument are preserved.
-                if field_dict["metadata"]:
-                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
             elif annotated_field:
                 field_attrs["default"] = annotated_field.default
                 field_attrs["description"] = annotated_field.description
