@@ -40,17 +40,21 @@ def replace_words(
     def _process_words(text: str, words: list[tuple[str, int, int]]) -> tuple[str, int]:
         offset = 0
         processed_index = 0
+        punctuations = "".join(tokenizer.PUNCTUATIONS)
         for word, start_index, end_index in words:
-            no_punctuation = word.rstrip("".join(tokenizer.PUNCTUATIONS))
-            punctuation_off = len(word) - len(no_punctuation)
-            replacement = replacements.get(no_punctuation.lower())
+            # strip punctuation on both sides so quoted/parenthesized words like
+            # "(world)" still match, and keep whatever punctuation surrounded them
+            core = word.strip(punctuations)
+            leading_off = len(word) - len(word.lstrip(punctuations))
+            trailing_off = len(word) - len(word.rstrip(punctuations))
+            replacement = replacements.get(core.lower())
             if replacement:
                 text = (
-                    text[: start_index + offset]
+                    text[: start_index + offset + leading_off]
                     + replacement
-                    + text[end_index + offset - punctuation_off :]
+                    + text[end_index + offset - trailing_off :]
                 )
-                offset += len(replacement) - len(word) + punctuation_off
+                offset += len(replacement) - len(core)
 
             processed_index = end_index + offset
 
