@@ -18,17 +18,18 @@ import asyncio
 import contextlib
 import contextvars
 import socket
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
+from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
-from ..telemetry import loop_monitor, trace_types, tracer
+from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -229,6 +230,7 @@ class _JobProc:
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
         self._exit_proc_flag = asyncio.Event()
         self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
+        self._entrypoint_span_context: otel_context.Context | None = None
 
         @log_exceptions(logger=logger)
         async def _read_ipc_task() -> None:
@@ -326,18 +328,33 @@ class _JobProc:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
-        @tracer.start_as_current_span("job_entrypoint")
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:
             job = job_ctx.job
-            current_span = trace.get_current_span()
-            current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
-            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
-            current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
-            # blocked-loop reports emitted from the heartbeat need this job's context (for
-            # attribution) and the job_entrypoint span (as the parent when no session is up)
-            if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
-                monitor.set_report_context(contextvars.copy_context())
-            await self._job_entrypoint_fnc(job_ctx)
+            info = job_ctx._info
+            entrypoint_started_at = time.time()
+            # back-dated to the availability request so the span covers the whole dispatch
+            start_time_ns = int(info.received_at * 1e9) if info.received_at else None
+            with tracer.start_as_current_span(
+                "job_entrypoint", start_time=start_time_ns
+            ) as current_span:
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_JOB_ID: job.id,
+                        trace_types.ATTR_AGENT_NAME: job.agent_name,
+                        trace_types.ATTR_ROOM_NAME: job.room.name,
+                        trace_types.ATTR_ROOM_SID: job.room.sid,
+                        trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
+                        trace_types.ATTR_WORKER_ID: info.worker_id,
+                        trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
+                    }
+                )
+                _record_dispatch_timeline(current_span, info, entrypoint_started_at)
+                self._entrypoint_span_context = otel_context.get_current()
+                # blocked-loop reports emitted from the heartbeat need this job's context (for
+                # attribution) and the job_entrypoint span (as the parent when no session is up)
+                if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
+                    monitor.set_report_context(contextvars.copy_context())
+                await self._job_entrypoint_fnc(job_ctx)
 
         job_entry_task = asyncio.create_task(
             _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
@@ -382,6 +399,26 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
+        with tracer.start_as_current_span(
+            "job_shutdown",
+            context=self._entrypoint_span_context,
+            attributes={
+                trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
+                trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
+            },
+        ):
+            await self._shutdown_job(job_entry_task, shutdown_info)
+
+        if tasks := self._job_ctx._pending_tasks:
+            await aio.cancel_and_wait(*tasks)
+
+        self._job_ctx._on_cleanup()
+        await http_context._close_http_ctx()
+        _JobContextVar.reset(job_ctx_token)
+
+    async def _shutdown_job(
+        self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
+    ) -> None:
         # wait for the entrypoint to finish, cancel if it takes too long
         if not job_entry_task.done():
             try:
@@ -405,20 +442,28 @@ class _JobProc:
                 )
 
         if self._session_end_fnc:
-            try:
-                await asyncio.wait_for(
-                    self._session_end_fnc(self._job_ctx),
-                    timeout=self._session_end_timeout,
-                )
-            except asyncio.TimeoutError:
-                logger.error("on_session_end timed out after %ds", self._session_end_timeout)
-            except Exception:
-                logger.exception("error while executing the on_session_end callback")
+            with tracer.start_as_current_span(
+                "on_session_end",
+                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(self._session_end_fnc)},
+            ) as span:
+                try:
+                    await asyncio.wait_for(
+                        self._session_end_fnc(self._job_ctx),
+                        timeout=self._session_end_timeout,
+                    )
+                except asyncio.TimeoutError as e:
+                    trace_utils.record_exception(span, e)
+                    logger.error("on_session_end timed out after %ds", self._session_end_timeout)
+                except Exception as e:
+                    trace_utils.record_exception(span, e)
+                    logger.exception("error while executing the on_session_end callback")
 
-        try:
-            await self._job_ctx._on_session_end()
-        except Exception:
-            logger.exception("error in job_ctx._on_session_end")
+        with tracer.start_as_current_span("session_end_upload") as span:
+            try:
+                await self._job_ctx._on_session_end()
+            except Exception as e:
+                trace_utils.record_exception(span, e)
+                logger.exception("error in job_ctx._on_session_end")
 
         await self._client.send(ShuttingDown())
 
@@ -427,14 +472,25 @@ class _JobProc:
             extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
-        await self._room.disconnect()
+        with tracer.start_as_current_span("room_disconnect"):
+            await self._room.disconnect()
+
+        async def _traced_shutdown_callback(
+            callback: Callable[[str], Awaitable[None]],
+        ) -> None:
+            # a hung callback here is why jobs hit the supervisor's shutdown deadline
+            with tracer.start_as_current_span(
+                "shutdown_callback",
+                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(callback)},
+            ):
+                await callback(shutdown_info.reason)
 
         try:
             shutdown_tasks = []
             for callback in self._job_ctx._shutdown_callbacks:
                 shutdown_tasks.append(
                     asyncio.create_task(
-                        callback(shutdown_info.reason), name="job_shutdown_callback"
+                        _traced_shutdown_callback(callback), name="job_shutdown_callback"
                     )
                 )
 
@@ -442,12 +498,62 @@ class _JobProc:
         except Exception:
             logger.exception("error while shutting down the job")
 
-        if tasks := self._job_ctx._pending_tasks:
-            await aio.cancel_and_wait(*tasks)
 
-        self._job_ctx._on_cleanup()
-        await http_context._close_http_ctx()
-        _JobContextVar.reset(job_ctx_token)
+def _callback_name(fnc: Any) -> str:
+    return str(getattr(fnc, "__qualname__", None) or getattr(fnc, "__name__", None) or repr(fnc))
+
+
+def _server_timestamp_seconds(value: int) -> float:
+    """``JobState`` timestamps are int64; the server writes unix nanoseconds. Be tolerant
+    of milliseconds/seconds should that ever change."""
+    if value > 1e17:
+        return value / 1e9
+    if value > 1e11:
+        return value / 1e3
+    return float(value)
+
+
+def _record_dispatch_timeline(
+    span: trace.Span, info: RunningJobInfo, entrypoint_started_at: float
+) -> None:
+    """Stamp the dispatch stages on ``job_entrypoint`` as timestamped events plus latencies.
+
+    Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
+    is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
+    stages = [
+        ("job_received", trace_types.ATTR_JOB_RECEIVED_AT, info.received_at),
+        ("job_accepted", trace_types.ATTR_JOB_ACCEPTED_AT, info.accepted_at),
+        ("job_assigned", trace_types.ATTR_JOB_ASSIGNED_AT, info.assigned_at),
+        ("process_assigned", trace_types.ATTR_JOB_LAUNCHED_AT, info.launched_at),
+        ("entrypoint_started", trace_types.ATTR_JOB_ENTRYPOINT_STARTED_AT, entrypoint_started_at),
+    ]
+    for event_name, attr, ts in stages:
+        if not ts:
+            continue
+        span.set_attribute(attr, ts)
+        span.add_event(event_name, timestamp=int(ts * 1e9))
+
+    if info.received_at and info.accepted_at:
+        span.set_attribute(
+            trace_types.ATTR_JOB_ACCEPT_LATENCY, max(info.accepted_at - info.received_at, 0.0)
+        )
+    if info.accepted_at and info.assigned_at:
+        span.set_attribute(
+            trace_types.ATTR_JOB_ASSIGNMENT_LATENCY, max(info.assigned_at - info.accepted_at, 0.0)
+        )
+    if info.assigned_at:
+        span.set_attribute(
+            trace_types.ATTR_JOB_LAUNCH_LATENCY, max(entrypoint_started_at - info.assigned_at, 0.0)
+        )
+    if info.received_at:
+        span.set_attribute(
+            trace_types.ATTR_JOB_DISPATCH_LATENCY,
+            max(entrypoint_started_at - info.received_at, 0.0),
+        )
+    if (server_started := info.job.state.started_at) > 0:
+        started = _server_timestamp_seconds(server_started)
+        span.set_attribute(trace_types.ATTR_JOB_SERVER_STARTED_AT, started)
+        span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 
 
 @dataclass
