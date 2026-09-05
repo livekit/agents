@@ -465,6 +465,44 @@ class TestToolExecution:
         assert await label(*args, **kwargs) == "HELLO"
         assert calls == ["before", "after"]
 
+    def test_annotated_field_constraint_runs_after_validator(self):
+        @function_tool
+        async def label(
+            value: Annotated[str, AfterValidator(lambda value: ""), Field(min_length=1)],
+        ) -> str:
+            """Require a nonempty normalized label."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        with pytest.raises(ValidationError, match="at least 1"):
+            model(value="hello")
+
+    def test_annotated_field_attributes_and_defaults_preserved(self):
+        metadata = Field(default="ready", description="status", alias="status")
+
+        @function_tool
+        async def label(value: Annotated[str, metadata] = "fallback") -> str:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        assert model().value == "ready"
+        assert model(status="done").value == "done"
+        assert model.model_json_schema()["properties"]["status"]["description"] == "status"
+        assert metadata.default == "ready"
+        assert metadata.description == "status"
+
+    def test_annotated_field_default_factory_preserved(self):
+        @function_tool
+        async def label(value: Annotated[list[str], Field(default_factory=list)]) -> list[str]:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        first = model()
+        first.value.append("one")
+        assert model().value == []
+
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(
             fnc=mock_tool_1, json_arguments='{"arg1": "test", "opt_arg2": "test2"}'
