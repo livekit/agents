@@ -9,7 +9,7 @@ import random
 import threading
 import time
 import weakref
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -136,8 +136,11 @@ def _serialize_option_value(value: Any) -> Any:
             _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
             for k, v in value.items()
         }
-    if isinstance(value, (list, tuple)):
-        return [_serialize_option_value(v) for v in value]
+    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
+        # any Sequence is a valid option value (tts_text_transforms accepts one), so
+        # serialize the elements rather than collapsing the container to its class name
+        items = sorted(value, key=str) if isinstance(value, Set) else value
+        return [_serialize_option_value(v) for v in items]
     return _describe_option_object(value)
 
 
