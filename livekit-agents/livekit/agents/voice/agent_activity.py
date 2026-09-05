@@ -3709,11 +3709,24 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error("expected to receive only one AgentTask from the tool executions")
-                    ignore_task_switch = True
-                    # TODO(long): should we mark the function call as failed to notify the LLM?
+                    if sanitized_out.agent_task is not new_agent_task:
+                        # genuinely different handoff targets in a single turn: ambiguous,
+                        # refuse the switch (unchanged behavior).
+                        logger.error(
+                            "expected to receive only one AgentTask from the tool executions"
+                        )
+                        ignore_task_switch = True
+                        # TODO(long): should we mark the function call as failed to notify the LLM?
+                    # else: the LLM requested the SAME handoff target more than once in one
+                    # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
+                    # a single handoff instead of discarding it (livekit/agents#5990).
 
-                new_agent_task = sanitized_out.agent_task
+                # Only a tool that actually returned an AgentTask may set the target.
+                # Assigning unconditionally let a later non-handoff tool (agent_task is
+                # None) overwrite an earlier handoff, so whether the switch happened
+                # depended on the order the LLM emitted the calls in.
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -4411,12 +4424,23 @@ class AgentActivity(RecognitionHooks):
                 self._session._tool_items_added([sanitized_out.fnc_call_out])
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error(
-                        "expected to receive only one Agent from the tool executions",
-                    )
-                    ignore_task_switch = True
+                    if sanitized_out.agent_task is not new_agent_task:
+                        # genuinely different handoff targets in a single turn: ambiguous,
+                        # refuse the switch (unchanged behavior).
+                        logger.error(
+                            "expected to receive only one Agent from the tool executions",
+                        )
+                        ignore_task_switch = True
+                    # else: the LLM requested the SAME handoff target more than once in one
+                    # turn (parallel/duplicate tool calls, common with real LLMs). Collapse to
+                    # a single handoff instead of discarding it (livekit/agents#5990).
 
-                new_agent_task = sanitized_out.agent_task
+                # Only a tool that actually returned an AgentTask may set the target.
+                # Assigning unconditionally let a later non-handoff tool (agent_task is
+                # None) overwrite an earlier handoff, so whether the switch happened
+                # depended on the order the LLM emitted the calls in.
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
