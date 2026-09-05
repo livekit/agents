@@ -73,6 +73,17 @@ ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_EOU_SOURCE = "lk.eou.source"
 ATTR_EOU_DETECTION_DELAY = "lk.eou.detection_delay"
 ATTR_EOU_FROM_CACHE = "lk.eou.from_cache"
+# eot_wait span: from the user's last speech to the turn decision
+ATTR_EOU_OUTCOME = "lk.eou.outcome"
+"""How the wait ended: ``committed``, ``user_resumed``, or ``dropped``."""
+ATTR_EOU_WAIT_DURATION = "lk.eou.wait_duration"
+"""Seconds from the end of the user's speech to the turn decision."""
+ATTR_EOU_REARM_COUNT = "lk.eou.rearm_count"
+"""Times the endpointing wait restarted on a later trigger (late transcript, VAD)."""
+
+# speech scheduling
+ATTR_SPEECH_QUEUE_WAIT = "lk.speech.queue_wait"
+"""Seconds a speech handle waited in the queue before generation was authorized."""
 
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"

@@ -330,6 +330,10 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._user_turn_start: float | None = None
+        # eot_wait: one span per user turn, from the last speech anchor to the turn decision
+        self._eot_wait_span: trace.Span | None = None
+        self._eot_wait_started_at: float | None = None
+        self._eot_wait_rearms: int = 0
         self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
         self.__stt_context: BaseModel | None = None
@@ -1349,6 +1353,7 @@ class AudioRecognition:
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
+            self._end_eot_wait_span("user_resumed", end_time=ev.speech_start_time or now)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
@@ -1369,6 +1374,7 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             self._cancel_transcription_timeout()
+            self._end_eot_wait_span("user_resumed", end_time=speech_start_time)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
@@ -1511,6 +1517,11 @@ class AudioRecognition:
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
             user_turn_span = self._ensure_user_turn_span()
+            eot_wait_span = self._ensure_eot_wait_span(
+                user_turn_span,
+                trigger=trigger,
+                last_speaking_time=last_speaking_time,
+            )
 
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
@@ -1521,8 +1532,8 @@ class AudioRecognition:
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
                     with (
-                        tracer.use_span(user_turn_span),
-                        tracer.start_as_current_span("eou_detection") as eou_detection_span,
+                        tracer.use_span(eot_wait_span),
+                        tracer.start_as_current_span("eot_detection") as eou_detection_span,
                     ):
                         from_cache = False
                         prediction_event: TurnDetectionEvent | None = None
@@ -1676,6 +1687,8 @@ class AudioRecognition:
                                 prediction_event.detection_delay,
                             )
 
+            eot_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
+
             extra_sleep = endpointing_delay
             if last_speaking_time:
                 extra_sleep += last_speaking_time - time.time()
@@ -1736,6 +1749,7 @@ class AudioRecognition:
                     user_turn_span.set_attribute(
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
+                self._end_eot_wait_span("committed")
                 user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
@@ -1757,6 +1771,9 @@ class AudioRecognition:
                     self._turn_detector_stream.flush(reason="turn committed")
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
+
+            elif eot_wait_span.is_recording():
+                eot_wait_span.add_event("not_committed")
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
@@ -1957,7 +1974,64 @@ class AudioRecognition:
         return self._user_turn_span
 
     def _end_user_turn_span(self) -> None:
+        # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
+        self._end_eot_wait_span("dropped")
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
             self._user_turn_span.end()
         self._user_turn_span = None
         self._user_turn_start = None
+
+    def _ensure_eot_wait_span(
+        self,
+        user_turn_span: trace.Span,
+        *,
+        trigger: str,
+        last_speaking_time: float | None,
+    ) -> trace.Span:
+        """The turn's ``eot_wait`` span, created on the first end-of-turn trigger.
+
+        The span is back-dated to ``last_speaking_time`` so it starts where the user stopped
+        talking. Later triggers for the same turn (a late STT final, another VAD end of
+        speech) re-arm the wait rather than start a new span; each re-arm is an event, so the
+        bar stays whole and the reason for a long wait is readable off it.
+        """
+        span = self._eot_wait_span
+        if span is not None and span.is_recording():
+            self._eot_wait_rearms += 1
+            span.add_event("rearmed", {trace_types.ATTR_EOU_SOURCE: trigger})
+            span.set_attribute(trace_types.ATTR_EOU_SOURCE, trigger)
+            return span
+
+        now = time.time()
+        started_at = min(last_speaking_time, now) if last_speaking_time is not None else now
+        with tracer.use_span(user_turn_span):
+            span = tracer.start_span(
+                "eot_wait",
+                start_time=int(started_at * 1_000_000_000),
+                attributes={trace_types.ATTR_EOU_SOURCE: trigger},
+            )
+        self._eot_wait_span = span
+        self._eot_wait_started_at = started_at
+        self._eot_wait_rearms = 0
+        return span
+
+    def _end_eot_wait_span(self, outcome: str, *, end_time: float | None = None) -> None:
+        span, self._eot_wait_span = self._eot_wait_span, None
+        started_at, self._eot_wait_started_at = self._eot_wait_started_at, None
+        rearms, self._eot_wait_rearms = self._eot_wait_rearms, 0
+        if span is None or not span.is_recording():
+            return
+
+        ended_at = end_time if end_time is not None else time.time()
+        if started_at is not None:
+            ended_at = max(ended_at, started_at)
+        span.set_attributes(
+            {
+                trace_types.ATTR_EOU_OUTCOME: outcome,
+                trace_types.ATTR_EOU_WAIT_DURATION: (
+                    ended_at - started_at if started_at is not None else 0.0
+                ),
+                trace_types.ATTR_EOU_REARM_COUNT: rearms,
+            }
+        )
+        span.end(end_time=int(ended_at * 1_000_000_000))
