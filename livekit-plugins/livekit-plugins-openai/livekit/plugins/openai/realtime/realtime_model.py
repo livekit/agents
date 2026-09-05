@@ -900,6 +900,7 @@ class RealtimeSession(
         self._tools = llm.ToolContext.empty()
         self._msg_ch = utils.aio.Chan[RealtimeClientEvent | dict[str, Any]]()
         self._input_resampler: rtc.AudioResampler | None = None
+        self._ws_send_lock = asyncio.Lock()
 
         self._instructions: str | None = None
         # set on aclose; trailing server events are ignored while it's set
@@ -950,10 +951,163 @@ class RealtimeSession(
         # value cannot, because a late transcript would consume the next turn's value.
         self._input_speech_started_at: dict[str, float] = {}
 
+    def _prepare_connection_replay(
+        self,
+    ) -> tuple[
+        list[RealtimeClientEvent | dict[str, Any]], llm.remote_chat_context.RemoteChatContext
+    ]:
+        events: list[RealtimeClientEvent | dict[str, Any]] = [self._create_session_update_event()]
+        tools = self._tools.flatten()
+        if tools:
+            events.append(self._create_tools_update_event(tools))
+
+        # The turn state goes first, since what it settles belongs in the mirror replayed below.
+        self._reset_input_turn_state()
+        chat_ctx = self.chat_ctx.copy(
+            exclude_function_call=True,
+            exclude_instructions=True,
+            exclude_empty_message=True,
+            exclude_handoff=True,
+            exclude_config_update=True,
+        )
+        old_chat_ctx = self._remote_chat_ctx
+        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+        events.extend(self._create_update_chat_ctx_events(chat_ctx))
+        return events, old_chat_ctx
+
+    def _on_reconnect_connection_state_discarded(self) -> None:
+        pass
+
+    def _discard_pending_client_events(
+        self,
+        *,
+        preserve_session_updates: bool = False,
+        settle_all_pending: bool = False,
+    ) -> list[RealtimeClientEvent | dict[str, Any]]:
+        preserved: list[RealtimeClientEvent | dict[str, Any]] = []
+        dropped_response_ids: set[str] = set()
+        dropped_chat_events: list[tuple[str | None, str | None, str]] = []
+
+        while not self._msg_ch.empty():
+            event = self._msg_ch.recv_nowait()
+            event_type = event.get("type") if isinstance(event, dict) else event.type
+            if preserve_session_updates and event_type == "session.update":
+                preserved.append(event)
+                continue
+
+            event_id = (
+                event.get("event_id")
+                if isinstance(event, dict)
+                else getattr(event, "event_id", None)
+            )
+            if event_type == "response.create" and event_id:
+                dropped_response_ids.add(event_id)
+            elif event_type == "conversation.item.create":
+                item = (
+                    event.get("item") if isinstance(event, dict) else getattr(event, "item", None)
+                )
+                item_type = (
+                    item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+                )
+                if item_type == "force_message" and event_id:
+                    dropped_response_ids.add(event_id)
+                    continue
+                item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+                dropped_chat_events.append((event_id, item_id, "create"))
+            elif event_type == "conversation.item.delete":
+                item_id = (
+                    event.get("item_id")
+                    if isinstance(event, dict)
+                    else getattr(event, "item_id", None)
+                )
+                dropped_chat_events.append((event_id, item_id, "delete"))
+
+        def _fail_pending(fut: asyncio.Future[Any], message: str) -> None:
+            if not fut.done():
+                fut.set_exception(llm.RealtimeError(message))
+
+        if settle_all_pending:
+            pending_chat_ctx_futures = {
+                id(fut): fut
+                for futures in (
+                    self._item_delete_future.values(),
+                    self._item_create_future.values(),
+                    self._chat_ctx_event_futures.values(),
+                )
+                for fut in futures
+            }
+            for pending_fut in pending_chat_ctx_futures.values():
+                _fail_pending(pending_fut, "pending event discarded due to session reconnection")
+            self._item_delete_future.clear()
+            self._item_create_future.clear()
+            self._chat_ctx_event_futures.clear()
+
+            for pending_fut in self._response_created_futures.values():
+                _fail_pending(pending_fut, "pending response discarded due to session reconnection")
+            self._response_created_futures.clear()
+        else:
+            for event_id, item_id, operation in dropped_chat_events:
+                chat_fut = (
+                    self._chat_ctx_event_futures.pop(event_id)
+                    if event_id and event_id in self._chat_ctx_event_futures
+                    else None
+                )
+                item_futures = (
+                    self._item_create_future if operation == "create" else self._item_delete_future
+                )
+                item_fut = item_futures.get(item_id) if item_id else None
+                if chat_fut is None:
+                    chat_fut = item_fut
+                if item_id and item_futures.get(item_id) is chat_fut:
+                    item_futures.pop(item_id)
+                if chat_fut is not None:
+                    _fail_pending(chat_fut, "pending event discarded due to session reconnection")
+
+            for event_id in dropped_response_ids:
+                if event_id in self._response_created_futures:
+                    response_fut = self._response_created_futures.pop(event_id)
+                    _fail_pending(
+                        response_fut, "pending response discarded due to session reconnection"
+                    )
+
+        self._on_reconnect_connection_state_discarded()
+        self._discarded_event_ids.clear()
+        self._close_current_generation("session reconnection")
+        self._pushed_duration_s = 0
+        self._bstream = utils.audio.AudioByteStream(
+            SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
+        )
+        return preserved
+
+    async def _send_ws_event(
+        self,
+        ws_conn: aiohttp.ClientWebSocketResponse,
+        event: RealtimeClientEvent | dict[str, Any],
+    ) -> None:
+        if isinstance(event, BaseModel):
+            event = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+
+        if self._opts.is_azure and self._opts.api_version:
+            _normalize_azure_client_event(event)
+
+        self.emit("openai_client_event_queued", event)
+        await ws_conn.send_str(json.dumps(event))
+
+        if lk_oai_debug and event["type"] != "input_audio_buffer.append":
+            logger.debug(">>>", extra={"lk.pii.event": event})
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         num_retries: int = 0
         max_retries = self._opts.conn_options.max_retry
+
+        def _can_retry(error: BaseException) -> bool:
+            return (
+                isinstance(error, APIError)
+                and max_retries > 0
+                and error.retryable
+                and num_retries < max_retries
+            )
 
         async def _reconnect() -> None:
             logger.debug(
@@ -961,60 +1115,37 @@ class RealtimeSession(
                 extra={"max_session_duration": self._opts.max_session_duration},
             )
 
-            events: list[RealtimeClientEvent | dict[str, Any]] = []
-
-            # options and instructions
-            events.append(self._create_session_update_event())
-
-            # tools
-            tools = self._tools.flatten()
-            if tools:
-                events.append(self._create_tools_update_event(tools))
-
-            # chat context. the turn state goes first, since what it settles belongs in the
-            # mirror that is replayed below
-            self._reset_input_turn_state()
-            chat_ctx = self.chat_ctx.copy(
-                exclude_function_call=True,
-                exclude_instructions=True,
-                exclude_empty_message=True,
-                exclude_handoff=True,
-                exclude_config_update=True,
-            )
-            old_chat_ctx = self._remote_chat_ctx
-            self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-            events.extend(self._create_update_chat_ctx_events(chat_ctx))
-
+            old_chat_ctx: llm.remote_chat_context.RemoteChatContext | None = None
+            # Release updates still waiting for acknowledgements from the dead socket.
+            self._discard_pending_client_events(settle_all_pending=True)
             try:
-                for ev in events:
-                    # certain events could already be in dict format
-                    if isinstance(ev, BaseModel):
-                        ev = ev.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=False
-                        )
+                await self._update_chat_ctx_lock.acquire()
+                try:
+                    await self._update_fnc_ctx_lock.acquire()
+                    try:
+                        self._discard_pending_client_events(settle_all_pending=True)
+                        events, old_chat_ctx = self._prepare_connection_replay()
 
-                    if self._opts.is_azure and self._opts.api_version:
-                        _normalize_azure_client_event(ev)
-
-                    self.emit("openai_client_event_queued", ev)
-                    await ws_conn.send_str(json.dumps(ev))
+                        async with self._ws_send_lock:
+                            for ev in events:
+                                await self._send_ws_event(ws_conn, ev)
+                    finally:
+                        self._update_fnc_ctx_lock.release()
+                finally:
+                    self._update_chat_ctx_lock.release()
             except Exception as e:
-                self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
+                if old_chat_ctx is not None:
+                    self._remote_chat_ctx = old_chat_ctx
                 raise APIConnectionError(
                     message=(
                         f"Failed to send message to {self._realtime_model._provider_label} during session re-connection"
                     ),
                 ) from e
 
-            for fut in self._response_created_futures.values():
-                if not fut.done():
-                    fut.set_exception(
-                        llm.RealtimeError("pending response discarded due to session reconnection")
-                    )
-            self._response_created_futures.clear()
-            self._discarded_event_ids.clear()
-            self._close_current_generation("session reconnection")
-
+            preserved = self._discard_pending_client_events(preserve_session_updates=True)
+            if not self._msg_ch.closed:
+                for event in preserved:
+                    self._msg_ch.send_nowait(event)
             logger.debug(f"reconnected to {self._realtime_model._provider_label}")
             self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
@@ -1023,30 +1154,35 @@ class RealtimeSession(
             while not self._msg_ch.closed:
                 try:
                     ws_conn = await self._create_ws_conn()
-                    if reconnecting:
-                        await _reconnect()
-                        num_retries = 0  # reset the retry counter
+                    try:
+                        if reconnecting:
+                            await _reconnect()
+                            num_retries = 0  # reset the retry counter
+                    except BaseException as e:
+                        if not _can_retry(e):
+                            self._closing = True
+                        with contextlib.suppress(Exception):
+                            await ws_conn.close()
+                        raise
                     await self._run_ws(ws_conn)
 
                 except APIError as e:
-                    if max_retries == 0 or not e.retryable:
+                    if not _can_retry(e):
                         self._emit_error(e, recoverable=False)
+                        if max_retries > 0 and e.retryable and num_retries == max_retries:
+                            raise APIConnectionError(
+                                f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
+                            ) from e
                         raise
-                    elif num_retries == max_retries:
-                        self._emit_error(e, recoverable=False)
-                        raise APIConnectionError(
-                            f"{self._realtime_model._provider_label} connection failed after {num_retries} attempts",
-                        ) from e
-                    else:
-                        self._emit_error(e, recoverable=True)
 
-                        retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
-                        logger.warning(
-                            f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
-                            exc_info=e,
-                            extra={"attempt": num_retries, "max_retries": max_retries},
-                        )
-                        await asyncio.sleep(retry_interval)
+                    self._emit_error(e, recoverable=True)
+                    retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
+                    logger.warning(
+                        f"{self._realtime_model._provider_label} connection failed, retrying in {retry_interval}s",
+                        exc_info=e,
+                        extra={"attempt": num_retries, "max_retries": max_retries},
+                    )
+                    await asyncio.sleep(retry_interval)
                     num_retries += 1
 
                 except Exception as e:
@@ -1055,6 +1191,7 @@ class RealtimeSession(
 
                 reconnecting = True
         finally:
+            self._closing = True
             # the session loop has exited (fatal server error, retries exhausted, or
             # close); close any in-progress generation and fail any pending
             # generate_reply futures so consumers don't hang and callers don't wait
@@ -1112,21 +1249,8 @@ class RealtimeSession(
             nonlocal closing
             async for msg in self._msg_ch:
                 try:
-                    if isinstance(msg, BaseModel):
-                        msg = msg.model_dump(
-                            by_alias=True, exclude_unset=True, exclude_defaults=False
-                        )
-
-                    # Azure uses "text" for assistant content parts, while
-                    # the new API uses "output_text" for assistant content.
-                    if self._opts.is_azure and self._opts.api_version:
-                        _normalize_azure_client_event(msg)
-
-                    self.emit("openai_client_event_queued", msg)
-                    await ws_conn.send_str(json.dumps(msg))
-
-                    if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
-                        logger.debug(">>>", extra={"lk.pii.event": msg})
+                    async with self._ws_send_lock:
+                        await self._send_ws_event(ws_conn, msg)
                 except Exception:
                     logger.exception("failed to send event")
 
@@ -1458,6 +1582,9 @@ class RealtimeSession(
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         async with self._update_chat_ctx_lock:
+            if getattr(self, "_closing", False):
+                raise llm.RealtimeError("realtime session closed")
+
             chat_ctx = chat_ctx.copy(
                 exclude_handoff=True,
                 exclude_config_update=True,
@@ -1574,6 +1701,9 @@ class RealtimeSession(
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         async with self._update_fnc_ctx_lock:
+            if getattr(self, "_closing", False):
+                raise llm.RealtimeError("realtime session closed")
+
             ev = self._create_tools_update_event(tools)
             self.send_event(ev)
 
@@ -1793,7 +1923,8 @@ class RealtimeSession(
     async def aclose(self) -> None:
         self._closing = True
         self._close_current_generation("session closed")
-        self._msg_ch.close()
+        if not self._msg_ch.closed:
+            self._msg_ch.close()
         await self._main_atask
 
     def _close_current_generation(self, reason: str | None = None) -> None:
