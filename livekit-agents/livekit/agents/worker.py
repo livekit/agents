@@ -23,6 +23,7 @@ import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -1352,6 +1353,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        received_at = time.time()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1378,6 +1380,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async def _on_accept(args: JobAcceptArguments) -> None:
             nonlocal answered
             answered = True
+            accepted_at = time.time()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1414,6 +1417,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=job_assign.token,
                 worker_id=self._id,
                 fake_job=False,
+                received_at=received_at,
+                accepted_at=accepted_at,
+                assigned_at=time.time(),
             )
 
             await self._proc_pool.launch_job(running_info)

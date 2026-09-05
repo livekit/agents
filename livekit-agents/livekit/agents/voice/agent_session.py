@@ -35,7 +35,7 @@ from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
-from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer, utils as trace_utils
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -704,6 +704,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+        # set while start() runs so startup spans (start_agent_activity, room io, connect)
+        # nest under session_start without re-parenting the long-lived pipeline tasks
+        self._session_start_context: otel_context.Context | None = None
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
@@ -962,6 +965,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
             gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
 
+            # startup as one bar: room connect, participant wait, model prewarm, on_enter
+            session_start_span = tracer.start_span("session_start")
+            self._session_start_context = trace.set_span_in_context(session_start_span)
+
             self._agent = agent
             self._update_agent_state("initializing")
 
@@ -1018,7 +1025,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_options.text_output = False
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
-                await self._room_io.start()
+                with tracer.use_span(session_start_span, end_on_exit=False):
+                    await self._room_io.start()
 
                 if hosting:
                     # only the primary session can have a session host
@@ -1051,12 +1059,24 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
 
-                current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
-                current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
-                current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_ROOM_NAME: job_ctx.room.name,
+                        trace_types.ATTR_JOB_ID: job_ctx.job.id,
+                        trace_types.ATTR_AGENT_NAME: job_ctx.job.agent_name,
+                        # join keys shared with server, SIP and client traces
+                        trace_types.ATTR_ROOM_SID: job_ctx.job.room.sid,
+                        trace_types.ATTR_DISPATCH_ID: job_ctx.job.dispatch_id,
+                        trace_types.ATTR_WORKER_ID: job_ctx._info.worker_id,
+                        trace_types.ATTR_JOB_AGENT_ID: job_ctx.job.state.agent_id,
+                    }
+                )
                 if self._room_io:
                     # automatically connect to the room when room io is used
-                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
+                    with tracer.use_span(session_start_span, end_on_exit=False):
+                        tasks.append(
+                            asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect")
+                        )
 
                 # session can be restarted, register the callbacks only once
                 if not self._job_context_cb_registered:
@@ -1080,12 +1100,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
 
             try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.cancel_and_wait(*tasks)
 
-            if self._session_host is not None:
-                await self._session_host.start()
+                if self._session_host is not None:
+                    await self._session_host.start()
+            except Exception as e:
+                trace_utils.record_exception(session_start_span, e)
+                raise
+            finally:
+                session_start_span.end()
+                self._session_start_context = None
 
             # important: no await should be done after this!
 
@@ -1217,6 +1244,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
+            # teardown as one bar under agent_session; drain and on_exit nest inside it
+            close_span = tracer.start_span(
+                "session_close",
+                attributes={
+                    trace_types.ATTR_CLOSE_REASON: reason.value,
+                    trace_types.ATTR_CLOSE_DRAIN: drain,
+                },
+            )
+            if error is not None:
+                close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
+            otel_context.attach(trace.set_span_in_context(close_span))
+
             self._closing = True
             self._cancel_user_away_timer()
             self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
@@ -1296,6 +1335,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     return_exceptions=True,
                 )
 
+            close_span.end()
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
@@ -1789,7 +1829,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
                 if new_activity == "start":
-                    await self._activity.start(reuse_resources=reuse_resources)
+                    await self._activity.start(
+                        reuse_resources=reuse_resources,
+                        trace_context=self._session_start_context,
+                    )
                 elif new_activity == "resume":
                     await self._activity.resume(reuse_resources=reuse_resources)
             except BaseException:
@@ -1918,6 +1961,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aec_warmup_timer = None
 
     def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        if (span := self._session_span) is not None and span.is_recording():
+            span.add_event("participant_linked", trace_utils.participant_attributes(participant))
+            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                # the SIP call's own ids, so this session can be joined with the telephony
+                # trace; only the end user's number is personal data
+                span.set_attributes(
+                    {
+                        (
+                            trace_types.ATTR_SIP_PHONE_NUMBER
+                            if key == "sip.phoneNumber"
+                            else trace_types.ATTR_SIP_PREFIX + key.removeprefix("sip.")
+                        ): value
+                        for key, value in participant.attributes.items()
+                        if key.startswith("sip.")
+                    }
+                )
+
         if self._aec_warmup_duration_explicit:
             return
 
@@ -1931,6 +1991,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_outbound_sip and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
+
+    def _add_session_event(
+        self, name: str, attributes: dict[str, Any], *, timestamp: float | None = None
+    ) -> None:
+        """Timestamped marker on the agent_session span (state changes, room events)."""
+        if (span := self._session_span) is None or not span.is_recording():
+            return
+        span.add_event(
+            name,
+            attributes,
+            timestamp=int(timestamp * 1_000_000_000) if timestamp is not None else None,
+        )
 
     def _update_agent_state(
         self,
@@ -1986,6 +2058,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._agent_state
         self._agent_state = state
+        self._add_session_event(
+            "agent_state_changed",
+            {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
+        )
         self.emit(
             "agent_state_changed",
             AgentStateChangedEvent(old_state=old_state, new_state=state),
@@ -2030,6 +2106,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
+        self._add_session_event(
+            "user_state_changed",
+            {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
+            timestamp=last_speaking_time,
+        )
         self.emit(
             "user_state_changed",
             UserStateChangedEvent(

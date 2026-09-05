@@ -11,6 +11,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from ...tts._provider_format import (
     ExpressiveTag,
     TranscriptMarkupStripper,
@@ -97,7 +98,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
     async def start(self) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
-        await self._publish_track()
+        with tracer.start_as_current_span("publish_audio_output") as span:
+            await self._publish_track()
+            if self._publication is not None:
+                span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
         if self._flush_task:
