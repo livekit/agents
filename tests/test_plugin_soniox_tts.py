@@ -19,6 +19,7 @@ import pytest
 from livekit.agents import APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
+from livekit.plugins.soniox.tts import _Char, _timed_words
 
 pytestmark = [
     pytest.mark.plugin("soniox"),
@@ -171,3 +172,60 @@ async def test_invalid_stream_idle_timeout_rejected() -> None:
         soniox.TTS(api_key="fake-key", stream_idle_timeout=0)
     with pytest.raises(ValueError):
         soniox.TTS(api_key="fake-key", stream_idle_timeout=-1.0)
+
+
+def _emit(text: str, chunk_at: list[int] | None = None) -> list:
+    """Feed ``text`` through ``_timed_words`` one message at a time (like the recv
+    loop), generating per-character start/end times 0.1s apart, and return every
+    emitted ``TimedString``. ``chunk_at`` = code-point indices to split messages at
+    (to exercise words spanning messages)."""
+    cuts = chunk_at or [len(text)]
+    buf: list = []
+    out: list = []
+    t = 0.0
+    prev = 0
+    for cut in cuts:
+        for ch in text[prev:cut]:
+            start = round(t, 1)
+            t = round(t + 0.1, 1)
+            buf.append(_Char(ch, start, t))
+        prev = cut
+        words, buf = _timed_words(buf, flush=False)
+        out += words
+    words, _ = _timed_words(buf, flush=True)
+    out += words
+    return out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hi, how are you today?",
+        "好的，OK。",  # CJK + punctuation (regression: punctuation was dropped)
+        "First point.\nSecond point.",  # newline boundary (regression: glued words)
+        "double  space  here",  # repeated spaces (regression: collapsed)
+        "สวัสดีครับ",  # Thai (regression: emitted as one giant word)
+    ],
+)
+def test_deltas_reconstruct_the_original_text(text: str) -> None:
+    # The concatenated transcript deltas must equal the spoken text exactly —
+    # this is what becomes the chat-history message fed back to the LLM.
+    assert "".join(_emit(text)) == text
+
+
+def test_thai_splits_per_character_not_one_blob() -> None:
+    out = _emit("สวัสดี")
+    assert len(out) == len("สวัสดี")
+
+
+def test_end_time_populated_and_monotonic() -> None:
+    out = _emit("hello world")
+    assert out
+    for w in out:
+        assert isinstance(w.start_time, float) and isinstance(w.end_time, float)
+        assert w.start_time <= w.end_time
+
+
+def test_word_spanning_messages_reconstructs() -> None:
+    # "hello" arrives split across two messages: "hel" then "lo world".
+    assert "".join(_emit("hello world", chunk_at=[3, 11])) == "hello world"
