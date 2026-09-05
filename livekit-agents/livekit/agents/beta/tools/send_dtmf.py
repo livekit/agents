@@ -1,6 +1,6 @@
 import asyncio
 
-from ... import function_tool
+from ... import StopResponse, function_tool
 from ...job import get_job_context
 from ...voice.events import RunContext
 from ..workflows.utils import DtmfEvent, dtmf_event_to_code
@@ -15,6 +15,9 @@ async def send_dtmf_events(
 ) -> str:
     """
     Send a list of DTMF events to the telephony provider.
+
+    After successfully sending all events, yields the turn back to the remote
+    party (IVR or caller) so the agent waits silently for the next prompt.
 
     Call when:
     - User wants to send DTMF events
@@ -32,4 +35,4 @@ async def send_dtmf_events(
         except Exception as e:
             return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
 
-    return f"Successfully sent DTMF events: {', '.join(events)}"
+    raise StopResponse()
