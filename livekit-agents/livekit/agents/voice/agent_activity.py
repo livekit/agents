@@ -1802,6 +1802,13 @@ class AgentActivity(RecognitionHooks):
             skip_reply=skip_reply,
         )
 
+    def _record_queue_wait(self, speech_handle: SpeechHandle) -> None:
+        """Stamp how long the speech sat in the queue on its agent_turn span."""
+        if (queue_wait := speech_handle._queue_wait()) is None:
+            return
+        span = trace.get_current_span(context=speech_handle._agent_turn_context)
+        span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
+
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
         # when force=True, we still allow to schedule a new speech even if
         # `pause_speech_scheduling` is waiting for the schedule_task to drain.
@@ -2601,15 +2608,24 @@ class AgentActivity(RecognitionHooks):
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
         start_time = time.perf_counter()
-        try:
-            await self._agent.on_user_turn_completed(
-                temp_mutable_chat_ctx, new_message=user_message
-            )
-        except StopResponse:
-            return  # ignore this turn
-        except Exception:
-            logger.exception("error occurred during on_user_turn_completed")
-            return
+        # user code that gates the reply: a slow hook here is a gap between user_turn and
+        # agent_turn that nothing else explains
+        with tracer.start_as_current_span(
+            "on_user_turn_completed",
+            context=self._session._root_span_context,
+            attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+        ) as hook_span:
+            try:
+                await self._agent.on_user_turn_completed(
+                    temp_mutable_chat_ctx, new_message=user_message
+                )
+            except StopResponse:
+                hook_span.add_event("stop_response")
+                return  # ignore this turn
+            except Exception as e:
+                trace_utils.record_exception(hook_span, e)
+                logger.exception("error occurred during on_user_turn_completed")
+                return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
@@ -2942,6 +2958,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        self._record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3418,6 +3435,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        self._record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3803,6 +3821,7 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
+        self._record_queue_wait(speech_handle)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
             return
@@ -4044,6 +4063,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        self._record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             # nothing was played, but the response may still be generating server-side

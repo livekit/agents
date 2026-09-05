@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -51,6 +52,8 @@ class SpeechHandle:
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
         self._agent_turn_context: otel_context.Context | None = None
+        self._scheduled_at: float | None = None
+        self._authorized_at: float | None = None
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
@@ -298,6 +301,8 @@ class SpeechHandle:
     def _authorize_generation(self) -> None:
         fut = asyncio.Future[None]()
         self._generations.append(fut)
+        if self._authorized_at is None:
+            self._authorized_at = time.perf_counter()
         self._authorize_event.set()
 
     def _clear_authorization(self) -> None:
@@ -338,5 +343,13 @@ class SpeechHandle:
             self._interrupt_timeout_handle = None
 
     def _mark_scheduled(self) -> None:
+        if self._scheduled_at is None:
+            self._scheduled_at = time.perf_counter()
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
+
+    def _queue_wait(self) -> float | None:
+        """Seconds between scheduling and the first generation authorization, once known."""
+        if self._scheduled_at is None or self._authorized_at is None:
+            return None
+        return max(self._authorized_at - self._scheduled_at, 0.0)
