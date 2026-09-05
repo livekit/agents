@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ..job import JobExecutorType
 from ..log import logger
+from ..telemetry import loop_monitor
 from ..voice import AgentSession, io
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
@@ -312,6 +313,8 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
+    # a blocked worker loop delays job dispatch; flag it the same way as the job loops
+    loop_monitor.start_monitoring(loop, name="worker")
 
     # exit signalling. A plain `signal.signal` handler runs on the main thread at
     # an arbitrary bytecode boundary — raising from it can land inside whatever
@@ -455,6 +458,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
         except Exception:
             pass
         finally:
+            loop_monitor.stop_monitoring(loop)
             try:
                 loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.run_until_complete(loop.shutdown_default_executor())
