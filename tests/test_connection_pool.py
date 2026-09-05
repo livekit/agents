@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -171,3 +172,180 @@ async def test_prewarm_retries_after_failure():
 
     assert attempts == 2
     assert len(pool._available) == 1
+
+
+def _closing_pool(max_session_duration: float | None = 60):
+    """A pool that records every connection handed to its close callback."""
+    closed: list[DummyConnection] = []
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(
+        max_session_duration=max_session_duration,
+        connect_cb=dummy_connect_factory(),
+        close_cb=close_cb,
+    )
+    return pool, closed
+
+
+@pytest.mark.asyncio
+async def test_invalidate_does_not_close_a_connection_still_in_use():
+    pool, closed = _closing_pool()
+
+    # checked out and never returned: something is streaming on it right now
+    in_use = await pool.get(timeout=10.0)
+    pool.invalidate()
+
+    # a second acquisition drains the close queue; the in-flight connection must survive
+    other = await pool.get(timeout=10.0)
+    assert other is not in_use, "Expected a fresh connection after invalidate()."
+    assert in_use not in closed, "invalidate() closed a connection that was still checked out."
+
+
+@pytest.mark.asyncio
+async def test_invalidate_closes_idle_connections_immediately():
+    pool, closed = _closing_pool()
+
+    idle = await pool.get(timeout=10.0)
+    pool.put(idle)
+    pool.invalidate()
+
+    await pool.get(timeout=10.0)
+    assert idle in closed, "Expected an idle connection to be closed by the next drain."
+
+
+@pytest.mark.asyncio
+async def test_retired_connection_is_closed_once_returned():
+    pool, closed = _closing_pool()
+
+    in_use = await pool.get(timeout=10.0)
+    pool.invalidate()
+    pool.put(in_use)  # the stream finished with it
+
+    assert in_use not in pool._available, "A retired connection must not be reused."
+    await pool.get(timeout=10.0)
+    assert in_use in closed, "Expected a retired connection to be closed once returned."
+
+
+@pytest.mark.asyncio
+async def test_retired_connection_is_closed_when_removed_after_an_error():
+    pool, closed = _closing_pool()
+
+    in_use = await pool.get(timeout=10.0)
+    pool.invalidate()
+    pool.remove(in_use)  # the stream raised; connection() calls remove()
+
+    await pool.get(timeout=10.0)
+    assert in_use in closed, "Expected a retired connection to be closed when removed."
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_retired_connections_never_returned():
+    pool, closed = _closing_pool()
+
+    leaked = await pool.get(timeout=10.0)
+    pool.invalidate()
+    await pool.aclose()
+
+    assert leaked in closed, "aclose() must close retired connections that were never returned."
+
+
+@pytest.mark.asyncio
+async def test_invalidate_mid_stream_lets_the_stream_finish_then_reconnects():
+    """The update_options case: options change while one stream is speaking."""
+    pool, closed = _closing_pool()
+
+    speaking = await pool.get(timeout=10.0)
+    pool.invalidate()  # e.g. update_options(voice=...) on the TTS
+
+    # a new stream starts and must not reuse the old settings
+    fresh = await pool.get(timeout=10.0)
+    assert fresh is not speaking
+    assert speaking not in closed, "The speaking connection was cut off mid-utterance."
+
+    # the first stream finishes normally and its connection retires
+    pool.put(speaking)
+    pool.put(fresh)
+    reused = await pool.get(timeout=10.0)
+    assert reused is fresh, "Expected the post-invalidate connection to be the reusable one."
+    assert speaking in closed
+
+
+@pytest.mark.asyncio
+async def test_invalidate_during_a_handshake_retires_the_new_connection():
+    """A connection negotiated with the old options must not be pooled for reuse."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    counter = 0
+    closed: list[DummyConnection] = []
+
+    async def slow_connect(timeout: float):
+        nonlocal counter
+        counter += 1
+        started.set()
+        await release.wait()
+        return DummyConnection(counter)
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
+
+    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    await started.wait()
+    pool.invalidate()  # options changed while the socket was still being negotiated
+    release.set()
+    stale = await acquiring
+
+    # the caller asked before the change and still gets its connection
+    assert stale is not None
+    pool.put(stale)
+    assert stale not in pool._available, "A connection negotiated with stale options was pooled."
+
+    started.clear()
+    release.set()
+    fresh = await pool.get(timeout=10.0)
+    assert fresh is not stale, "Expected a connection negotiated after the option change."
+    assert stale in closed, "Expected the stale connection to be closed once returned."
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    counter = 0
+    closed: list[DummyConnection] = []
+
+    async def slow_connect(timeout: float):
+        nonlocal counter
+        counter += 1
+        started.set()
+        await release.wait()
+        return DummyConnection(counter)
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
+
+    pool.prewarm()
+    await started.wait()
+    pool.invalidate()
+    release.set()
+    task = pool._prewarm_task()
+    assert task is not None
+    await task
+
+    stale = DummyConnection(1)
+    assert all(c.id != stale.id for c in pool._available), (
+        "A prewarmed connection with stale options stayed available."
+    )
+    # the discarded attempt must not leave the pool cold
+    assert len(pool._available) == 1, "Expected prewarm to retry after a mid-handshake invalidate."
+    assert next(iter(pool._available)).id == 2
+
+    await pool.aclose()
+    assert sorted(c.id for c in closed) == [1, 2], (
+        "Expected both the discarded and the replacement connection to be closed."
+    )
