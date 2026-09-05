@@ -32,7 +32,7 @@ Hermetic coverage for the id-less delete-ack fix:
 ```bash
 ./scripts/xai-realtime-repro/run.sh unit
 # same as:
-uv run pytest tests/test_realtime/test_xai_realtime_model.py -q
+uv run pytest tests/test_realtime/test_xai_realtime_model.py --unit -q
 ```
 
 Expect every test to pass (including

@@ -26,7 +26,7 @@ EOF
 
 run_unit() {
   cd "$ROOT"
-  uv run pytest tests/test_realtime/test_xai_realtime_model.py -q
+  uv run pytest tests/test_realtime/test_xai_realtime_model.py --unit -q
 }
 
 cmd="${1:-}"
