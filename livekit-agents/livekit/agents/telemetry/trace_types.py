@@ -37,8 +37,11 @@ ATTR_ROOM_SID = "lk.room_sid"
 ATTR_DISPATCH_ID = "lk.dispatch_id"
 ATTR_WORKER_ID = "lk.job.worker_id"
 ATTR_JOB_AGENT_ID = "lk.job.agent_id"
-ATTR_SIP_PREFIX = "lk.pii.sip."
-"""Prefix under which a linked SIP participant's ``sip.*`` attributes are copied."""
+ATTR_SIP_PREFIX = "lk.sip."
+"""Prefix under which a linked SIP participant's ``sip.*`` attributes are copied (call id,
+trunk id and number, rule id, hostname, status, headers)."""
+ATTR_SIP_PHONE_NUMBER = "lk.pii.sip.phoneNumber"
+"""The end user's phone number (``sip.phoneNumber``), the one SIP attribute that is PII."""
 
 # job dispatch timeline (job_entrypoint span). Unix timestamps in seconds.
 ATTR_JOB_RECEIVED_AT = "lk.job.received_at"

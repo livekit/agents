@@ -168,6 +168,7 @@ SAFE_KEYS = frozenset(
         "lk.dispatch_id",
         "lk.job.worker_id",
         "lk.job.agent_id",
+        "lk.sip.",
         "lk.job.received_at",
         "lk.job.accepted_at",
         "lk.job.assigned_at",
