@@ -52,6 +52,7 @@ import asyncio
 import contextlib
 import contextvars
 import gc
+import math
 import os
 import sys
 import threading
@@ -125,8 +126,12 @@ def _env_seconds(name: str, default: float) -> float:
             "invalid %s=%r, expected milliseconds; using %.0fms", name, raw, default * 1000
         )
         return default
-    if value_ms < 0:
-        logger.warning("invalid %s=%r, must be >= 0; using %.0fms", name, raw, default * 1000)
+    if not math.isfinite(value_ms) or value_ms < 0:
+        # NaN would slip past a plain "< 0" check and compare false against every lag, so
+        # every heartbeat would look like a stall
+        logger.warning(
+            "invalid %s=%r, must be finite and >= 0; using %.0fms", name, raw, default * 1000
+        )
         return default
     return value_ms / 1000.0
 
@@ -319,11 +324,25 @@ class EventLoopMonitor:
         watchdog_gap: float,
         samples: list[_StackSample],
     ) -> BlockedReport:
-        # the watchdog is an independent thread; if it too woke late by most of the stall,
-        # the process as a whole was descheduled (host contention, CPU quota, a suspended
-        # machine) rather than this loop running slow code. That is still worth seeing on the
-        # timeline, but it is not the agent's fault: it is never more than a warning.
-        process_descheduled = watchdog_gap >= lag * 0.5
+        # the watchdog is an independent thread. If it too woke late by most of the stall,
+        # either the process as a whole was descheduled (host contention, CPU quota, a
+        # suspended machine) or the loop thread held the GIL the whole time (a native call
+        # that never releases it). The loop thread's own CPU time tells them apart: a
+        # descheduled process burns none, a GIL-holding call burns all of it. Only the former
+        # is not the agent's fault, and it is never more than a warning.
+        watchdog_starved = watchdog_gap >= lag * 0.5
+        process_descheduled = watchdog_starved and cpu_time < lag * 0.5
+        stacks = [
+            f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
+            + _format_frames(s.frames)
+            for s in samples
+            if s.frames
+        ]
+        if not stacks and watchdog_starved and not process_descheduled:
+            stacks = [
+                "# no sample: the loop thread held the GIL for the whole stall, so the sampler "
+                "could not run (a native call that does not release the GIL)"
+            ]
         return BlockedReport(
             duration=lag,
             # the block started no earlier than the last on-time tick
@@ -335,12 +354,7 @@ class EventLoopMonitor:
             watchdog_gap=watchdog_gap,
             process_descheduled=process_descheduled,
             task_name=next((s.task_name for s in samples if s.task_name), None),
-            stacks=[
-                f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
-                + _format_frames(s.frames)
-                for s in samples
-                if s.frames
-            ],
+            stacks=stacks,
         )
 
     def _on_gc(self, phase: str, info: dict[str, Any]) -> None:
@@ -353,6 +367,12 @@ class EventLoopMonitor:
             self._gc_started_at = None
 
     def _report(self, report: BlockedReport) -> None:
+        # the histogram counts every stall: it is cheap, and a dashboard must not undercount
+        # exactly when stalls become frequent enough to hit the span and log rate limits
+        try:
+            otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
+        except Exception:
+            logger.exception("failed to record the blocked event loop metric")
         now = time.monotonic()
         emit_span = self._span_limiter.allow(now)
         emit_log = self._log_limiter.allow(now)
@@ -362,8 +382,6 @@ class EventLoopMonitor:
         def _emit() -> None:
             if emit_span and self._emit_spans:
                 self._emit_span(report, suppressed=self._span_limiter.take_suppressed())
-            elif emit_span:
-                otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
             if emit_log:
                 self._emit_log(report)
             if self._on_report is not None:
@@ -415,7 +433,6 @@ class EventLoopMonitor:
                 session._record_loop_stall(report.duration, timestamp_ns=end_ns)
         else:
             session_context.defer_to_session(recorded)
-        otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
 
     def _emit_log(self, report: BlockedReport) -> None:
         location = _innermost_location(report.stacks[-1]) if report.stacks else None

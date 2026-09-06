@@ -479,6 +479,67 @@ def test_host_descheduling_span_is_not_an_error() -> None:
     assert not blocked.process_descheduled and blocked.severity == "error"
 
 
+def test_gil_holding_call_is_blocked_code_not_descheduling() -> None:
+    """A native call that never releases the GIL also stops the watchdog thread, so the
+    watchdog gap alone looks like host descheduling. The loop thread's CPU time separates
+    them: a descheduled process burns none, a GIL-holding call burns all of it."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        gil_held = m._build_report(0.4, gc_time=0.0, cpu_time=0.39, watchdog_gap=0.39, samples=[])
+        descheduled = m._build_report(
+            0.4, gc_time=0.0, cpu_time=0.01, watchdog_gap=0.39, samples=[]
+        )
+    finally:
+        loop.close()
+
+    assert not gil_held.process_descheduled and gil_held.severity == "error"
+    # the sampler could not run either; the report says why instead of staying silent
+    assert gil_held.stacks and "held the GIL" in gil_held.stacks[0]
+    assert descheduled.process_descheduled and descheduled.severity == "warning"
+    assert descheduled.stacks == []
+
+
+async def test_gil_holding_native_call_is_reported_end_to_end(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    # one C call that holds the GIL throughout; sized well above WARN on any machine
+    sum(range(20_000_000))
+    await _settle()
+
+    reports = _loop_blocks(monitor)
+    assert len(reports) == 1, _describe(monitor.reports)  # type: ignore[attr-defined]
+    [report] = reports
+    assert report.cpu_time >= report.duration * 0.5
+    [span] = _blocked_spans(span_exporter)
+    assert "held the GIL" in str((span.attributes or {})[trace_types.ATTR_BLOCKING_STACK])
+
+
+def test_metric_is_recorded_for_every_stall_past_the_rate_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[float] = []
+    monkeypatch.setattr(
+        loop_monitor.otel_metrics,
+        "record_event_loop_blocked",
+        lambda duration, *, severity: recorded.append(duration),
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(
+            loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+        )
+        emitted: list[BlockedReport] = []
+        m._on_report = emitted.append
+        for _ in range(40):
+            m._report(m._build_report(0.1, gc_time=0.0, cpu_time=0.1, watchdog_gap=0.0, samples=[]))
+    finally:
+        loop.close()
+
+    assert len(recorded) == 40  # every stall, the histogram is never rate limited
+    assert len(emitted) == 30  # spans (and the on_report callback) stop at the span limit
+
+
 def test_rate_limiter_counts_suppressed() -> None:
     limiter = _RateLimiter(2)
     assert limiter.allow(100.0)
@@ -508,6 +569,11 @@ def test_thresholds_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # garbage falls back to the default rather than disabling
     monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, "fast")
     assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.05, error=1.0)
+
+    # so do NaN and infinity: NaN compares false against every lag and would report each tick
+    for bad in ("NaN", "inf", "-inf"):
+        monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, bad)
+        assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.05, error=1.0)
 
     # error below warn is clamped up to warn
     monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, "200")
