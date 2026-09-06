@@ -155,7 +155,7 @@ class STT(stt.STT):
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         **kwargs: Any,
     ):
-        """Create a new instance of Speechmatics STT.
+        """Create a new instance of Speechmatics STT using Agent STT SDK.
 
         Args:
             api_key: Speechmatics API key. Can be set via `api_key` argument
