@@ -10,6 +10,7 @@ import asyncio
 import contextvars
 import time
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import pytest
 from opentelemetry import trace
@@ -49,14 +50,56 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
         provider.shutdown()
 
 
+def _fake_job_context(session: object | None = None) -> SimpleNamespace:
+    """The JobContext surface the monitor and the session-span queue touch."""
+    from livekit.agents.job import JobContext
+
+    ctx = SimpleNamespace(
+        _primary_agent_session=session,
+        _pending_session_spans=[],
+        # read by the span processors main installs (PII stripping, job attribution)
+        _redaction_enabled=False,
+        _telemetry_state=None,
+        job=SimpleNamespace(id="AJ_test", room=SimpleNamespace(sid="RM_test")),
+    )
+    ctx._defer_session_span = lambda rec: JobContext._defer_session_span(ctx, rec)  # type: ignore[arg-type]
+    ctx._flush_pending_session_spans = lambda parent: JobContext._flush_pending_session_spans(
+        ctx,  # type: ignore[arg-type]
+        parent,
+    )
+    return ctx
+
+
+def _job_report_context(job_ctx: object) -> contextvars.Context:
+    from livekit.agents.job import _JobContextVar
+
+    token = _JobContextVar.set(job_ctx)  # type: ignore[arg-type]
+    try:
+        return contextvars.copy_context()
+    finally:
+        _JobContextVar.reset(token)
+
+
 @pytest.fixture
-async def monitor() -> Iterator[EventLoopMonitor]:  # type: ignore[misc]
+async def monitor(span_exporter: InMemorySpanExporter) -> Iterator[EventLoopMonitor]:  # type: ignore[misc]
+    """A monitor reporting into a fake job whose primary session is already running, so spans
+    are emitted immediately under a live ``agent_session`` root (the common case). Tests for
+    the pre-session and no-job paths replace the report context themselves."""
     m = EventLoopMonitor(
         asyncio.get_running_loop(), warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK
     )
     reports: list[BlockedReport] = []
     m._on_report = reports.append
     m.reports = reports  # type: ignore[attr-defined]
+
+    root = tracer.start_span("agent_session")
+    session = SimpleNamespace(
+        _root_span_context=trace.set_span_in_context(root),
+        _record_loop_stall=lambda duration, *, timestamp_ns: None,
+    )
+    m.set_report_context(_job_report_context(_fake_job_context(session=session)))
+    m.session_root = root  # type: ignore[attr-defined]
+
     m.start()
     # let the heartbeat arm and settle before the test blocks the loop
     await asyncio.sleep(WARN)
@@ -64,6 +107,7 @@ async def monitor() -> Iterator[EventLoopMonitor]:  # type: ignore[misc]
         yield m
     finally:
         m.stop()
+        root.end()
 
 
 def _blocked_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
@@ -149,20 +193,96 @@ async def test_cooperative_work_is_not_reported(
     assert _loop_blocks(monitor) == []
 
 
-async def test_report_context_parents_span_and_carries_job_context(
+async def test_stall_before_the_session_is_held_then_emitted_under_it(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
-    # emulate job_proc_lazy_main handing over the job_entrypoint span's context
-    with tracer.start_as_current_span("job_entrypoint") as parent:
-        monitor.set_report_context(contextvars.copy_context())
+    """The trace view is organised around agent_session; a stall in the entrypoint before
+    session.start() must still end up under it, at its original time."""
+    job_ctx = _fake_job_context(session=None)
+    monitor.set_report_context(_job_report_context(job_ctx))
 
     _block_loop_synchronously(0.07)
     await _settle()
 
-    spans = _blocked_spans(span_exporter)
-    assert len(spans) == 1
-    assert spans[0].parent is not None
-    assert spans[0].parent.span_id == parent.get_span_context().span_id
+    # recorded and held: no span yet, no root to attach it to
+    assert _blocked_spans(span_exporter) == []
+    assert len(job_ctx._pending_session_spans) == 1
+    held = job_ctx._pending_session_spans[0]
+    assert held.name == SPAN_NAME and held.end_ns is not None
+
+    # the session starts later and adopts what happened before it
+    with tracer.start_as_current_span("agent_session") as root:
+        flushed = job_ctx._flush_pending_session_spans(trace.set_span_in_context(root))
+    assert flushed == [held]
+    [span] = _blocked_spans(span_exporter)
+    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
+    # back-dated to when it happened, which is before the session existed
+    assert span.start_time is not None and span.end_time is not None
+    assert span.end_time <= root.start_time  # type: ignore[operator]
+    attrs = span.attributes or {}
+    assert attrs[trace_types.ATTR_BLOCKING_SEVERITY] == "warning"
+    assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
+
+
+async def test_stall_without_a_job_is_log_only(
+    span_exporter: InMemorySpanExporter,
+    monitor: EventLoopMonitor,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # no job context in the report context: the worker process, or a bare loop. There will
+    # never be a session to attach a span to, so the log carries it.
+    monitor.set_report_context(None)
+    with caplog.at_level("WARNING", logger="livekit.agents"):
+        _block_loop_synchronously(0.07)
+        await _settle()
+    assert _blocked_spans(span_exporter) == []
+    assert len(monitor.reports) == 1  # type: ignore[attr-defined]
+    assert any("event loop blocked for" in r.getMessage() for r in caplog.records)
+
+
+async def test_stall_during_a_session_lands_under_it_and_is_summarised(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    from livekit.agents import Agent
+
+    from .fake_session import FakeActions, create_session, run_session
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.0, "Hi", stt_delay=0.1)
+    actions.add_llm("Hello", ttft=0.05, duration=0.1)
+    actions.add_tts(0.2, ttfb=0.05, duration=0.1)
+    session = create_session(actions, speed_factor=4.0)
+
+    job_ctx = _fake_job_context(session=session)
+    monitor.set_report_context(_job_report_context(job_ctx))
+
+    blocked = False
+
+    def _block_once(ev: object) -> None:
+        nonlocal blocked
+        if not blocked:
+            blocked = True
+            _block_loop_synchronously(0.07)  # synchronous work inside a session callback
+
+    session.on("agent_state_changed", _block_once)
+    await run_session(session, Agent(instructions="test"), drain_delay=0.5)
+
+    [root] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_session"]
+    stalls = _blocked_spans(span_exporter)
+    assert stalls, "the stall during the session was not emitted"
+    for stall in stalls:
+        assert stall.parent is not None and stall.parent.span_id == root.context.span_id
+
+    # the session span carries the summary so the session list can flag it
+    attrs = root.attributes or {}
+    assert attrs[trace_types.ATTR_BLOCKING_COUNT] == len(stalls)
+    assert attrs[trace_types.ATTR_BLOCKING_MAX_DURATION] >= 0.05
+    assert (
+        attrs[trace_types.ATTR_BLOCKING_TOTAL_DURATION]
+        >= attrs[trace_types.ATTR_BLOCKING_MAX_DURATION]
+    )
+    events = [e for e in root.events if e.name == SPAN_NAME]
+    assert len(events) == len(stalls)
 
 
 async def test_stop_is_idempotent_and_quiets_the_monitor(

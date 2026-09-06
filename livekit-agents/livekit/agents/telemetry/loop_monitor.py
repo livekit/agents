@@ -19,8 +19,11 @@ This module observes a single loop without patching asyncio:
   stack, the task that was running, GC time that fell inside the block, and the loop thread's
   CPU time. It also logs a warning and records a histogram measurement.
 
-Spans are parented to the primary agent session's root span when a job is running so they land
-on the session timeline next to the turn they delayed. Output is rate limited so a
+Spans are children of the primary agent session's root span so they land on the session
+timeline next to the turn they delayed, and the session span carries a per-stall event plus a
+count / total / max summary. A stall before the session starts is held and emitted under the
+session once it exists (``telemetry.session_context``); in the worker process, where no session will
+ever exist, only the log and the metric are produced. Output is rate limited so a
 pathologically blocked loop cannot flood the exporter.
 
 What a report means
@@ -59,11 +62,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from opentelemetry import context as otel_context, trace
+from opentelemetry import trace
 
 from ..log import logger
-from . import otel_metrics, trace_types
-from .traces import tracer
+from . import session_context, otel_metrics, trace_types
 
 DEFAULT_WARN_THRESHOLD = 0.05
 """Blocks at or above this many seconds are reported as warnings."""
@@ -382,20 +384,27 @@ class EventLoopMonitor:
         if suppressed:
             attributes[trace_types.ATTR_BLOCKING_SUPPRESSED] = suppressed
 
-        span = tracer.start_span(
-            SPAN_NAME,
-            context=_resolve_parent_context(),
-            start_time=start_ns,
-            attributes=attributes,
-        )
+        recorded = session_context.RecordedSpan(SPAN_NAME, start_ns=start_ns, attributes=attributes)
         if report.severity == "error":
-            span.set_status(
+            recorded.set_status(
                 trace.Status(
                     trace.StatusCode.ERROR,
                     f"event loop blocked for {report.duration * 1000:.0f}ms",
                 )
             )
-        span.end(end_time=end_ns)
+        recorded.end(end_time=end_ns)
+
+        # the trace view is organised around agent_session: a stall is only useful there.
+        # During a session it is a child of the root and summarised on it; before the session
+        # it waits for the session to start; with no job at all (the worker) the log is it.
+        session = session_context.primary_session()
+        parent = session_context.session_root_context()
+        if parent is not None:
+            recorded.emit(parent)
+            if session is not None:
+                session._record_loop_stall(report.duration, timestamp_ns=end_ns)
+        else:
+            session_context.defer_to_session(recorded)
         otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
 
     def _emit_log(self, report: BlockedReport) -> None:
@@ -519,19 +528,6 @@ def _innermost_location(stack: str) -> str | None:
     if not lines:
         return None
     return lines[-1].strip().removeprefix("File ")
-
-
-def _resolve_parent_context() -> otel_context.Context | None:
-    """The primary agent session's root span context when a job is running, else current."""
-    from ..job import get_job_context
-
-    job_ctx = get_job_context(required=False)
-    if job_ctx is None:
-        return None
-    session = job_ctx._primary_agent_session
-    if session is not None and session._root_span_context is not None:
-        return session._root_span_context
-    return None
 
 
 # -- per-loop registry --

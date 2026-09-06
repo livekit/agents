@@ -172,6 +172,9 @@ SAFE_KEYS = frozenset(
         "lk.blocking.gc_time",
         "lk.blocking.cpu_time",
         "lk.blocking.suppressed",
+        "lk.blocking.count",
+        "lk.blocking.total_duration",
+        "lk.blocking.max_duration",
     }
 )
 

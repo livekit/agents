@@ -1,4 +1,14 @@
-from . import gen_ai, http_server, loop_monitor, metrics, otel_metrics, pii, trace_types, utils
+from . import (
+    session_context,
+    gen_ai,
+    http_server,
+    loop_monitor,
+    metrics,
+    otel_metrics,
+    pii,
+    trace_types,
+    utils,
+)
 from .traces import (
     DescribesOptions,
     _setup_cloud_tracer,
@@ -17,6 +27,7 @@ __all__ = [
     "trace_types",
     "http_server",
     "loop_monitor",
+    "session_context",
     "set_tracer_provider",
     "utils",
     "_setup_cloud_tracer",
