@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
-from livekit.agents import Agent, JobContext
+from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
     _defer_dispatch_span,
@@ -222,6 +222,40 @@ def test_preload_for_jobs_imports_the_lazy_sdk_tree(monkeypatch: pytest.MonkeyPa
     assert "openai.resources" in sys.modules
 
 
+def test_framework_callbacks_are_not_user_callbacks() -> None:
+    from livekit.agents.ipc.job_proc_lazy_main import _is_framework_callback
+    from livekit.agents.utils import aio
+
+    async def log_usage() -> None: ...
+
+    assert not _is_framework_callback(log_usage)
+    assert not _is_framework_callback(lambda: None)
+    assert _is_framework_callback(aio.cancel_and_wait)  # livekit.agents.utils.aio
+    assert _is_framework_callback(AgentSession.aclose)
+
+
+def test_session_trace_context_survives_close(span_exporter: InMemorySpanExporter) -> None:
+    root = tracer.start_span("agent_session")
+    session = MagicMock()
+    session._trace_root_context = trace.set_span_in_context(root)
+    job = MagicMock()
+    job._primary_agent_session = session
+    root.end()
+    ctx = session_context.session_trace_context(job)
+    assert ctx is not None
+    with tracer.start_as_current_span("job_shutdown", context=ctx):
+        pass
+    [shutdown] = _spans(span_exporter, "job_shutdown")
+    assert shutdown.parent is not None
+    assert shutdown.parent.span_id == root.get_span_context().span_id
+
+    job._primary_agent_session = None
+    assert session_context.session_trace_context(job) is None
+    # a minimal session stand-in without the field (tests plant these) is not an error
+    job._primary_agent_session = object()
+    assert session_context.session_trace_context(job) is None
+
+
 def test_server_timestamp_units() -> None:
     assert _server_timestamp_seconds(1_700_000_000_123_456_789) == pytest.approx(1_700_000_000.123)
     assert _server_timestamp_seconds(1_700_000_000_123) == pytest.approx(1_700_000_000.123)
@@ -318,6 +352,12 @@ def test_shutdown_callback_wrapper_keeps_the_user_name() -> None:
     ctx.add_shutdown_callback(flush_crm)
     [wrapped] = ctx._shutdown_callbacks
     assert _callback_name(wrapped).endswith("flush_crm")
+    # the wrapper lives in livekit.agents.job; it must not make the user's callback look
+    # like one of the framework's own (those get no shutdown_callback span)
+    from livekit.agents.ipc.job_proc_lazy_main import _is_framework_callback
+
+    assert wrapped.__module__ == flush_crm.__module__
+    assert not _is_framework_callback(wrapped)
 
 
 # -- SIP join keys --
@@ -466,6 +506,8 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     assert start.end_time >= activity_start.end_time
 
     # the long-lived pipeline is not re-parented: turns stay directly under agent_session
+    # (user_turn is pinned to the root explicitly: a late STT final during session_close
+    # used to nest it under the close span)
     for name in ("user_turn", "agent_turn"):
         for turn in _spans(span_exporter, name):
             assert turn.parent is not None

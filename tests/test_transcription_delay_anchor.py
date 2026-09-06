@@ -45,6 +45,7 @@ def _make_recognition(
     """Wire the attributes ``_on_stt_event`` touches for transcript events."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._session.amd = None
     ar._session._room_io = None
     ar._hooks = MagicMock()

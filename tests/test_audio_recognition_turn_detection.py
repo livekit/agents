@@ -54,6 +54,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     a fake audio turn-detector — used by the speaking-guard tests."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._hooks = MagicMock()
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None

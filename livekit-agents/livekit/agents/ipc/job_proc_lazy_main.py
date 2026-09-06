@@ -401,9 +401,15 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
+        # under agent_session when there was one: the cloud view is organised around it and
+        # would otherwise never show how the job wound down. The session span has ended by
+        # now; a child created after its parent ended is valid and lands in the same view.
+        shutdown_parent = (
+            session_context.session_trace_context(self._job_ctx) or self._entrypoint_span_context
+        )
         with tracer.start_as_current_span(
             "job_shutdown",
-            context=self._entrypoint_span_context,
+            context=shutdown_parent,
             attributes={
                 trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
                 trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
@@ -480,6 +486,11 @@ class _JobProc:
         async def _traced_shutdown_callback(
             callback: Callable[[str], Awaitable[None]],
         ) -> None:
+            if _is_framework_callback(callback):
+                # the session's own close hook, already covered by session_close; a span here
+                # would read as a second user callback
+                await callback(shutdown_info.reason)
+                return
             # a hung callback here is why jobs hit the supervisor's shutdown deadline
             with tracer.start_as_current_span(
                 "shutdown_callback",
@@ -535,6 +546,12 @@ def _preload_for_jobs() -> None:
 
     _step("the livekit-rtc native library", _rtc_ffi)
     _step("the openai SDK resources", _openai_resources)
+
+
+def _is_framework_callback(fnc: Any) -> bool:
+    """Registered by livekit-agents itself rather than by the user's entrypoint."""
+    module = getattr(fnc, "__module__", None) or ""
+    return module == "livekit.agents" or module.startswith("livekit.agents.")
 
 
 def _callback_name(fnc: Any) -> str:

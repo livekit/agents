@@ -616,9 +616,11 @@ class JobContext:
             async def wrapper(_: str) -> None:
                 await callback()  # type: ignore
 
-            # keep the user's name: the job_shutdown trace labels each callback by it
+            # keep the user's identity: the job_shutdown trace labels each callback by name,
+            # and tells the user's callbacks from the framework's own by module
             wrapper.__name__ = getattr(callback, "__name__", wrapper.__name__)
             wrapper.__qualname__ = getattr(callback, "__qualname__", wrapper.__qualname__)
+            wrapper.__module__ = getattr(callback, "__module__", wrapper.__module__)
             self._shutdown_callbacks.append(wrapper)
 
     async def wait_for_participant(

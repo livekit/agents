@@ -44,6 +44,19 @@ def session_root_context(job_ctx: JobContext | None = None) -> otel_context.Cont
     return None
 
 
+def session_trace_context(job_ctx: JobContext | None = None) -> otel_context.Context | None:
+    """The primary session's root context, kept even after the session closed.
+
+    For work that belongs to the session's view but runs after ``agent_session`` ended: the
+    job's shutdown sequence. A closed session no longer accepts events, but a child span
+    created after the parent ended is valid and lands in the same view."""
+    session = primary_session(job_ctx)
+    # getattr: tests plant minimal session stand-ins on the job, and shutdown must not
+    # depend on a telemetry field being there
+    ctx = getattr(session, "_trace_root_context", None) if session is not None else None
+    return ctx if isinstance(ctx, otel_context.Context) else None
+
+
 @contextmanager
 def session_span(
     name: str,
