@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -758,11 +759,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return None
         budget = options.get("budget")
         warning = options.get("warning")
-        if budget is None or budget <= 0:
-            raise ValueError("latency_budget['budget'] must be greater than zero")
-        if warning is not None and (warning <= 0 or warning > budget):
+        if budget is None or not math.isfinite(budget) or budget <= 0:
+            raise ValueError("latency_budget['budget'] must be finite and greater than zero")
+        if warning is not None and (not math.isfinite(warning) or warning <= 0 or warning > budget):
             raise ValueError(
-                "latency_budget['warning'] must be greater than zero and no greater than budget"
+                "latency_budget['warning'] must be finite, greater than zero, and no greater "
+                "than budget"
             )
         return LatencyBudgetOptions(**options)
 
