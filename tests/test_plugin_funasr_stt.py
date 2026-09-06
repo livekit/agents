@@ -229,6 +229,7 @@ async def test_public_recognition_redacts_model_identifier_from_metrics(
         "https://private-user:private-password@example.invalid/model?token=private-token"
     )
     provider = funasr_stt.FunASRSTT(model=private_model)
+    assert provider.model == private_model
     events: list[Any] = []
     provider.on("metrics_collected", events.append)
 
@@ -242,6 +243,11 @@ async def test_public_recognition_redacts_model_identifier_from_metrics(
     serialized = events[0].model_dump_json()
     for value in (private_model, "private-user", "private-password", "private-token"):
         assert value not in serialized
+
+
+def test_public_model_preserves_default_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    funasr_stt = _load_funasr_stt_module(monkeypatch, lambda **kwargs: [{"text": "hello"}])
+    assert funasr_stt.FunASRSTT().model == "iic/SenseVoiceSmall"
 
 
 def test_plugin_version_matches_livekit_agents_release() -> None:

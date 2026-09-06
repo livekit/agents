@@ -748,10 +748,15 @@ class AgentActivity(RecognitionHooks):
             self._agent._stt = new_stt
             resolved_stt = self.stt
             if self._audio_recognition is not None:
+                stt_metadata = (
+                    Metadata(**resolved_stt.metrics_metadata)
+                    if isinstance(resolved_stt, stt.STT)
+                    else Metadata()
+                )
                 self._audio_recognition._update_stt(
                     self._agent.stt_node if resolved_stt else None,
-                    model=resolved_stt.model if isinstance(resolved_stt, stt.STT) else None,
-                    provider=resolved_stt.provider if isinstance(resolved_stt, stt.STT) else None,
+                    model=stt_metadata.model_name,
+                    provider=stt_metadata.model_provider,
                     aligned_transcript=bool(resolved_stt.capabilities.aligned_transcript)
                     if isinstance(resolved_stt, stt.STT)
                     else False,
@@ -1160,6 +1165,7 @@ class AgentActivity(RecognitionHooks):
         wired_vad = self.vad
         if wired_vad is not None and self.using_default_vad and self._rt_turn_detection_enabled:
             wired_vad = None
+        stt_metadata = Metadata(**self.stt.metrics_metadata) if self.stt else Metadata()
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
@@ -1168,8 +1174,8 @@ class AgentActivity(RecognitionHooks):
             interruption_detection=self._interruption_detector,
             endpointing=create_endpointing(self.endpointing_opts),
             turn_detection=self._turn_detection,
-            stt_model=self.stt.model if self.stt else None,
-            stt_provider=self.stt.provider if self.stt else None,
+            stt_model=stt_metadata.model_name,
+            stt_provider=stt_metadata.model_provider,
             stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
             if self.stt
             else False,

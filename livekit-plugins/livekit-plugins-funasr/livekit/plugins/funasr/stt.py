@@ -108,8 +108,8 @@ class FunASRSTT(stt.STT):
 
     @property
     def model(self) -> str:
-        """Return a privacy-safe model label for framework telemetry."""
-        return "FunASR"
+        """Return the configured model name or identifier."""
+        return self._model_name
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
