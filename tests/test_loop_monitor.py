@@ -567,6 +567,38 @@ def test_metric_carries_the_job_even_when_rate_limited(monkeypatch: pytest.Monke
     assert all(ctx is job for ctx in seen), "a measurement lost its job attribution"
 
 
+def test_stack_format_collapses_import_machinery() -> None:
+    """A lazy import stalls through a dozen importlib frames per package level; the sample
+    must still show the caller that triggered it, not twenty lines of importlib."""
+    import traceback
+
+    def frame(filename: str, lineno: int, name: str) -> traceback.FrameSummary:
+        return traceback.FrameSummary(filename, lineno, name, line="")
+
+    frames = [frame("/app/agent.py", 10, "entrypoint")]
+    frames += [frame("/app/plugin/llm.py", 55, "prewarm")]
+    frames += [
+        frame("<frozen importlib._bootstrap>", 1360 + i, "_find_and_load") for i in range(12)
+    ]
+    frames += [frame("/site-packages/sdk/resources/__init__.py", 11, "<module>")]
+    frames += [
+        frame("<frozen importlib._bootstrap_external>", 1500 + i, "find_spec") for i in range(9)
+    ]
+    frames += [frame("<frozen importlib._bootstrap_external>", 152, "_path_stat")]
+
+    out = loop_monitor._format_frames(frames)
+    lines = out.splitlines()
+    assert any("agent.py" in ln for ln in lines) and any("prewarm" in ln for ln in lines)
+    assert "[import system: 12 frames]" in out
+    assert "[import system: 9 frames]" in out
+    assert "resources/__init__.py" in out
+    # the innermost frame stays real: it names the syscall the loop was stuck in
+    assert lines[-1].strip().startswith('File "<frozen importlib._bootstrap_external>", line 152')
+    assert len([ln for ln in lines if ln.strip().startswith("File ")]) == 4
+    # and the innermost real location is what the log message points at
+    assert loop_monitor._innermost_location(out) is not None
+
+
 def test_rate_limiter_counts_suppressed() -> None:
     limiter = _RateLimiter(2)
     assert limiter.allow(100.0)

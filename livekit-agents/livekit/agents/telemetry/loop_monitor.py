@@ -541,6 +541,10 @@ class BlockedReport:
 _ASYNCIO_DIR = os.path.dirname(asyncio.__file__) + os.sep
 
 
+def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
+    return (frame.filename or "").startswith("<frozen importlib")
+
+
 def _format_frames(frames: list[traceback.FrameSummary]) -> str:
     # drop the event loop machinery (run_forever, _run_once, Handle._run) since it is the same
     # in every sample, but never the innermost frame: a C call scheduled directly as a callback
@@ -550,8 +554,23 @@ def _format_frames(frames: list[traceback.FrameSummary]) -> str:
         for i, f in enumerate(frames)
         if i == len(frames) - 1 or not (f.filename or "").startswith(_ASYNCIO_DIR)
     ]
-    trimmed = trimmed[-MAX_STACK_FRAMES:]
-    return "".join(traceback.format_list(trimmed)).rstrip()
+    # a lazy import stalls through a dozen importlib frames per module level; left as they
+    # are they fill the frame budget and push out the one frame that matters, the caller that
+    # triggered the import. Collapse each run of them into a single line, keeping the
+    # innermost frame real for the same reason as above.
+    entries: list[str] = []
+    run = 0
+    for i, f in enumerate(trimmed):
+        if _is_import_machinery(f) and i != len(trimmed) - 1:
+            run += 1
+            continue
+        if run:
+            entries.append(f"  [import system: {run} frames]\n")
+            run = 0
+        entries.append("".join(traceback.format_list([f])))
+    if run:
+        entries.append(f"  [import system: {run} frames]\n")
+    return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()
 
 
 def _innermost_location(stack: str) -> str | None:
