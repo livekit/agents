@@ -417,6 +417,35 @@ async def test_worker_mode_logs_and_records_the_metric_without_spans(
     assert any("event loop blocked for" in r.getMessage() for r in caplog.records)
 
 
+def test_host_descheduling_is_not_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """When the watchdog stalled along with the loop, the host did not run the process; that
+    is not a programming issue and must not show up as a warning or error."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        report = BlockedReport(
+            duration=0.8,
+            started_at=time.time() - 0.8,
+            warn_threshold=WARN,
+            severity="error",
+            gc_time=0.0,
+            cpu_time=0.001,
+            watchdog_gap=0.75,
+            process_descheduled=True,
+            task_name=None,
+            stacks=[],
+        )
+        with caplog.at_level("DEBUG", logger="livekit.agents"):
+            m._emit_log(report)
+    finally:
+        loop.close()
+
+    records = [r for r in caplog.records if "event loop" in r.getMessage()]
+    assert records, "the stall still leaves a debug trail"
+    assert all(r.levelname == "DEBUG" for r in records)
+    assert all("not scheduled" in r.getMessage() for r in records)
+
+
 def test_rate_limiter_counts_suppressed() -> None:
     limiter = _RateLimiter(2)
     assert limiter.allow(100.0)
