@@ -436,6 +436,7 @@ def test_host_descheduling_is_not_a_warning(caplog: pytest.LogCaptureFixture) ->
             process_descheduled=True,
             task_name=None,
             stacks=[],
+            parent_span_context=None,
         )
         with caplog.at_level("DEBUG", logger="livekit.agents"):
             m._emit_log(report)
@@ -702,3 +703,49 @@ def test_session_summary_counts_every_stall_past_the_span_limit() -> None:
     finally:
         loop.close()
     assert len(recorded) == 40  # 30 spans were emitted, the summary saw all 40
+
+
+@pytest.mark.skipif(not hasattr(asyncio.Task, "get_context"), reason="Task.get_context is 3.12+")
+async def test_stall_nests_under_the_blocked_tasks_span(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    """A stall inside an rpc handler (or a tool, or the user hook) is that span's problem: the
+    watchdog sample carries the blocked task's current span and the stall nests under it."""
+
+    async def handler() -> None:
+        with tracer.start_as_current_span("rpc_handler"):
+            _block_loop_synchronously(0.08)
+
+    await asyncio.create_task(handler(), name="rpc_handler_task")
+    await _settle()
+
+    [handler_span] = [s for s in span_exporter.get_finished_spans() if s.name == "rpc_handler"]
+    [stall] = _blocked_spans(span_exporter)
+    assert stall.parent is not None
+    assert stall.parent.span_id == handler_span.context.span_id
+    assert (stall.attributes or {})[trace_types.ATTR_BLOCKING_TASK] == "rpc_handler_task"
+
+
+def test_stack_format_cuts_through_the_job_runner() -> None:
+    import traceback
+
+    def frame(filename: str, lineno: int, name: str) -> traceback.FrameSummary:
+        return traceback.FrameSummary(filename, lineno, name, line="")
+
+    ipc = "/site/livekit/agents/ipc/"
+    frames = [
+        frame("/py/multiprocessing/spawn.py", 1, "_main"),
+        frame(ipc + "job_proc_lazy_main.py", 100, "proc_main"),
+        frame(ipc + "proc_client.py", 70, "run"),
+        frame(ipc + "job_proc_lazy_main.py", 350, "_traceable_entrypoint"),
+        frame("/site/livekit/rtc/participant.py", 600, "_handle_rpc"),
+        frame("/app/agent.py", 147, "_test_call"),
+        frame("/py/time.py", 1, "sleep"),
+    ]
+    out = loop_monitor._format_frames(frames)
+    assert "job_proc_lazy_main" not in out and "proc_client" not in out and "spawn.py" not in out
+    assert "participant.py" in out and "agent.py" in out and out.rstrip().endswith("in sleep")
+
+    # a stall entirely inside the runner keeps its frames: there is nothing else to show
+    inside = frames[:4]
+    assert "job_proc_lazy_main" in loop_monitor._format_frames(inside)

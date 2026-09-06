@@ -63,7 +63,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 
 from ..log import logger
 from . import otel_metrics, session_context, trace_types
@@ -165,6 +165,8 @@ class _StackSample:
     lag: float
     task_name: str | None
     frames: list[traceback.FrameSummary]
+    # the span that was current in the blocked task (Python 3.12+ exposes a task's context)
+    span_context: trace.SpanContext | None = None
 
 
 @dataclass
@@ -360,6 +362,9 @@ class EventLoopMonitor:
             process_descheduled=process_descheduled,
             task_name=next((s.task_name for s in samples if s.task_name), None),
             stacks=stacks,
+            parent_span_context=next(
+                (s.span_context for s in samples if s.span_context is not None), None
+            ),
         )
 
     def _on_gc(self, phase: str, info: dict[str, Any]) -> None:
@@ -438,7 +443,13 @@ class EventLoopMonitor:
             # no job, no trace to belong to (a bare loop): a root span here would be a stray
             # one-span trace, so the log carries it
             return
-        parent = session_context.session_root_context()
+        if report.parent_span_context is not None:
+            # under the span the blocked task was in (an rpc_handler, a tool, the user hook)
+            parent: otel_context.Context | None = trace.set_span_in_context(
+                trace.NonRecordingSpan(report.parent_span_context)
+            )
+        else:
+            parent = session_context.session_root_context()
         span = tracer.start_span(
             SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes
         )
@@ -544,10 +555,17 @@ class EventLoopMonitor:
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
+        span_context: trace.SpanContext | None = None
         with contextlib.suppress(Exception):
             task = asyncio.current_task(loop=self._loop)
             if task is not None:
                 task_name = task.get_name()
+                # the stall belongs under whatever the blocked task was doing (an rpc_handler,
+                # a function_tool, the user hook); Task.get_context() is 3.12+, older
+                # interpreters fall back to the session root
+                get_context = getattr(task, "get_context", None)
+                if get_context is not None:
+                    span_context = _current_span_in(get_context())
 
         frames: list[traceback.FrameSummary] = []
         ident = self._loop_thread_ident
@@ -555,7 +573,7 @@ class EventLoopMonitor:
             frame = sys._current_frames().get(ident)
             if frame is not None:
                 frames = list(traceback.extract_stack(frame))
-        return _StackSample(lag=lag, task_name=task_name, frames=frames)
+        return _StackSample(lag=lag, task_name=task_name, frames=frames, span_context=span_context)
 
 
 @dataclass
@@ -570,9 +588,25 @@ class BlockedReport:
     process_descheduled: bool
     task_name: str | None
     stacks: list[str]
+    parent_span_context: trace.SpanContext | None = None
+    """The span current in the blocked task when sampled; the stall span nests under it."""
+
+
+def _current_span_in(task_context: contextvars.Context) -> trace.SpanContext | None:
+    """The span current in another task's context, read without entering it.
+
+    OpenTelemetry keeps its own ``Context`` in a context variable; a task's
+    ``contextvars.Context`` is a mapping of those variables, so the OTel context is one of its
+    values. Entering the context is not an option (the blocked task is inside it right now)."""
+    for value in task_context.values():
+        if isinstance(value, otel_context.Context):
+            current = trace.get_current_span(value).get_span_context()
+            return current if current.is_valid else None
+    return None
 
 
 _ASYNCIO_DIR = os.path.dirname(asyncio.__file__) + os.sep
+_IPC_DIR_FRAGMENT = os.sep + os.path.join("livekit", "agents", "ipc") + os.sep
 
 
 def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
@@ -588,6 +622,13 @@ def _format_frames(frames: list[traceback.FrameSummary]) -> str:
         for i, f in enumerate(frames)
         if i == len(frames) - 1 or not (f.filename or "").startswith(_ASYNCIO_DIR)
     ]
+    # the job runner (ipc/) and everything above it is the same in every sample: the process
+    # bootstrap, the client loop, the entrypoint wrapper. Cut through the innermost runner
+    # frame, keeping whatever the runner called; a stall entirely inside the runner keeps
+    # its innermost frames as before.
+    runner = [i for i, f in enumerate(trimmed) if _IPC_DIR_FRAGMENT in (f.filename or "")]
+    if runner and runner[-1] < len(trimmed) - 1:
+        trimmed = trimmed[runner[-1] + 1 :]
     # a lazy import stalls through a dozen importlib frames per module level; left as they
     # are they fill the frame budget and push out the one frame that matters, the caller that
     # triggered the import. Collapse each run of them into a single line, keeping the
