@@ -76,6 +76,11 @@ class _EndOfTurnInfo:
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
+    user_turn_span: trace.Span | None = None
+    """The turn's open ``user_turn`` span. The activity that schedules ``on_user_turn_completed``
+    takes ownership (``user_turn_span_adopted``) and ends it after the hook, so the hook nests
+    under the turn and the turn covers the wait for it; otherwise recognition ends it here."""
+    user_turn_span_adopted: bool = False
 
 
 def _compute_end_of_turn_metrics(
@@ -1727,15 +1732,15 @@ class AudioRecognition:
                 last_final_transcript_time=last_final_transcript_time,
                 now=time.time(),
             )
-            committed = self._hooks.on_end_of_turn(
-                _EndOfTurnInfo(
-                    skip_reply=skip_reply,
-                    new_transcript=self._audio_transcript,
-                    transcript_confidence=confidence_avg,
-                    metrics=metrics,
-                    backchannel_over_agent=self._turn_backchannel_over_agent,
-                )
+            end_of_turn = _EndOfTurnInfo(
+                skip_reply=skip_reply,
+                new_transcript=self._audio_transcript,
+                transcript_confidence=confidence_avg,
+                metrics=metrics,
+                backchannel_over_agent=self._turn_backchannel_over_agent,
+                user_turn_span=user_turn_span,
             )
+            committed = self._hooks.on_end_of_turn(end_of_turn)
             if committed:
                 logger.debug(
                     "user turn committed",
@@ -1762,7 +1767,8 @@ class AudioRecognition:
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
                 self._end_eou_wait_span("committed")
-                user_turn_span.end()
+                if not end_of_turn.user_turn_span_adopted:
+                    user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
                 self._stt_request_ids = []

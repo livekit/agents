@@ -372,6 +372,10 @@ async def test_full_session_turn_handoff_spans(span_exporter: InMemorySpanExport
     assert hook.end_time is not None
     assert (hook.end_time - hook.start_time) / 1e9 >= 0.05
     assert (hook.attributes or {})[trace_types.ATTR_AGENT_LABEL] == "_hook_agent"
+    # the hook is part of the turn: it nests under user_turn, which ends after it (a
+    # preemptive generation may already have started its agent_turn by then; that is fine)
+    assert hook.parent is not None and hook.parent.span_id == user_turn.context.span_id
+    assert user_turn.end_time is not None and user_turn.end_time >= hook.end_time
 
     # the reply's agent_turn records how long it sat in the speech queue
     turns = [

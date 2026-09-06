@@ -215,6 +215,17 @@ class _PausedSpeechInfo:
 
 
 # NOTE: AgentActivity isn't exposed to the public API
+def _end_user_turn(info: _EndOfTurnInfo) -> None:
+    """End the ``user_turn`` span the activity adopted from recognition: the turn is over once
+    ``on_user_turn_completed`` has run (or the turn was skipped), just before any reply.
+
+    Module-level for the same reason as ``_record_queue_wait``."""
+    if info.user_turn_span_adopted and info.user_turn_span is not None:
+        if info.user_turn_span.is_recording():
+            info.user_turn_span.end()
+        info.user_turn_span_adopted = False
+
+
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
     """Stamp how long the speech sat in the queue on its agent_turn span.
 
@@ -2560,6 +2571,8 @@ class AgentActivity(RecognitionHooks):
             self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask
+        # the turn is not over until the user hook has run: take the span and end it there
+        info.user_turn_span_adopted = info.user_turn_span is not None
         self._user_turn_completed_atask = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
             name="AgentActivity._user_turn_completed_task",
@@ -2568,6 +2581,14 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
+        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
+    ) -> None:
+        try:
+            await self._user_turn_completed_impl(old_task, info)
+        finally:
+            _end_user_turn(info)
+
+    async def _user_turn_completed_impl(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
         if old_task is not None:
@@ -2654,7 +2675,11 @@ class AgentActivity(RecognitionHooks):
         # agent_turn that nothing else explains
         with tracer.start_as_current_span(
             "on_user_turn_completed",
-            context=self._session._root_span_context,
+            context=(
+                trace.set_span_in_context(info.user_turn_span)
+                if info.user_turn_span_adopted and info.user_turn_span is not None
+                else self._session._root_span_context
+            ),
             attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
         ) as hook_span:
             try:
@@ -2675,6 +2700,7 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("error occurred during on_user_turn_completed")
                 return
 
+        _end_user_turn(info)
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
