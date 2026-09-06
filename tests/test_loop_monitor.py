@@ -124,6 +124,16 @@ async def _settle() -> None:
     await asyncio.sleep(TICK * 4)
 
 
+def _describe(reports: list[BlockedReport]) -> str:
+    """Everything a failure needs to be diagnosed from CI output alone."""
+    return "\n".join(
+        f"{r.duration * 1000:.0f}ms (gc {r.gc_time * 1000:.0f}ms, cpu {r.cpu_time * 1000:.0f}ms, "
+        f"watchdog gap {r.watchdog_gap * 1000:.0f}ms, task {r.task_name}) "
+        + " | ".join(s.replace(chr(10), " / ") for s in r.stacks)
+        for r in reports
+    )
+
+
 def _loop_blocks(monitor: EventLoopMonitor) -> list[BlockedReport]:
     """Reports attributable to this loop. A loaded CI host can deschedule the whole process
     for tens of milliseconds; the monitor reports that too (the loop really did stall) but
@@ -344,7 +354,7 @@ async def test_sustained_cooperative_load_is_not_reported(
     # watchdog-gap tag only catches starvation concentrated in one stall
     if workers_took > 1.0:
         pytest.skip(f"host starved the test process: workers took {workers_took:.2f}s")
-    assert _loop_blocks(monitor) == []
+    assert _loop_blocks(monitor) == [], _describe(_loop_blocks(monitor))
 
 
 async def test_one_iteration_of_many_ready_callbacks_is_one_stall(
