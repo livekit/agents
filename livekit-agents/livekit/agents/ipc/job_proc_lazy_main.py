@@ -29,7 +29,7 @@ from livekit import rtc
 
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
-from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
+from ..telemetry import session_context, loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -349,6 +349,7 @@ class _JobProc:
                     }
                 )
                 _record_dispatch_timeline(current_span, info, entrypoint_started_at)
+                _defer_dispatch_span(job_ctx, info, entrypoint_started_at)
                 self._entrypoint_span_context = otel_context.get_current()
                 # blocked-loop reports emitted from the heartbeat need this job's context (for
                 # attribution) and the job_entrypoint span (as the parent when no session is up)
@@ -514,9 +515,9 @@ def _server_timestamp_seconds(value: int) -> float:
 
 
 def _record_dispatch_timeline(
-    span: trace.Span, info: RunningJobInfo, entrypoint_started_at: float
+    span: trace.Span | session_context.RecordedSpan, info: RunningJobInfo, entrypoint_started_at: float
 ) -> None:
-    """Stamp the dispatch stages on ``job_entrypoint`` as timestamped events plus latencies.
+    """Stamp the dispatch stages on ``span`` as timestamped events plus latencies.
 
     Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
     is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
@@ -554,6 +555,31 @@ def _record_dispatch_timeline(
         started = _server_timestamp_seconds(server_started)
         span.set_attribute(trace_types.ATTR_JOB_SERVER_STARTED_AT, started)
         span.add_event("job_started_on_server", timestamp=int(started * 1e9))
+
+
+def _defer_dispatch_span(
+    job_ctx: JobContext, info: RunningJobInfo, entrypoint_started_at: float
+) -> None:
+    """Hold a ``job_dispatch`` span, received_at to entrypoint start, for ``agent_session``.
+
+    The same stages are stamped on ``job_entrypoint``, but the cloud view is organised around
+    the session span, so the dispatch wait is repeated as its first back-dated child (ahead of
+    ``room_connect``) where the session's own waterfall can show it. Nothing is recorded when
+    the worker did not stamp a receive time (simulation, console, resumed job)."""
+    if not info.received_at:
+        return
+    recorded = session_context.RecordedSpan(
+        "job_dispatch",
+        start_ns=int(info.received_at * 1e9),
+        attributes={
+            trace_types.ATTR_JOB_ID: info.job.id,
+            trace_types.ATTR_DISPATCH_ID: info.job.dispatch_id,
+            trace_types.ATTR_WORKER_ID: info.worker_id,
+        },
+    )
+    _record_dispatch_timeline(recorded, info, entrypoint_started_at)
+    recorded.end(int(entrypoint_started_at * 1e9))
+    job_ctx._defer_session_span(recorded)
 
 
 @dataclass

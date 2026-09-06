@@ -22,6 +22,7 @@ from livekit import rtc
 from livekit.agents import Agent, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
+    _defer_dispatch_span,
     _record_dispatch_timeline,
     _server_timestamp_seconds,
 )
@@ -147,6 +148,60 @@ def test_unknown_dispatch_stages_are_skipped(span_exporter: InMemorySpanExporter
     assert trace_types.ATTR_JOB_DISPATCH_LATENCY not in attrs
     assert trace_types.ATTR_JOB_ACCEPT_LATENCY not in attrs
     assert trace_types.ATTR_JOB_SERVER_STARTED_AT not in attrs
+
+
+def test_dispatch_span_is_held_for_the_session(span_exporter: InMemorySpanExporter) -> None:
+    # the stages also live on job_entrypoint, but the session view only shows agent_session's
+    # subtree: the dispatch wait is replayed there as a back-dated child ending at entrypoint start
+    t0 = 1_700_000_000.0
+    info = _info(received_at=t0, accepted_at=t0 + 0.2, assigned_at=t0 + 0.5, launched_at=t0 + 0.6)
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+
+    _defer_dispatch_span(ctx, info, entrypoint_started_at=t0 + 1.0)
+    assert _spans(span_exporter, "job_dispatch") == []
+    assert [r.name for r in ctx._pending_session_spans] == ["job_dispatch"]
+
+    with tracer.start_as_current_span("agent_session") as root:
+        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
+    [span] = _spans(span_exporter, "job_dispatch")
+    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
+    ns = 1_000_000_000
+    assert span.start_time == pytest.approx(t0 * ns, abs=1000)
+    assert span.end_time == pytest.approx((t0 + 1.0) * ns, abs=1000)
+    attrs = span.attributes or {}
+    assert attrs[trace_types.ATTR_JOB_ID] == "AJ_1"
+    assert attrs[trace_types.ATTR_DISPATCH_ID] == "AD_1"
+    assert attrs[trace_types.ATTR_JOB_DISPATCH_LATENCY] == pytest.approx(1.0)
+    assert attrs[trace_types.ATTR_JOB_ACCEPT_LATENCY] == pytest.approx(0.2)
+    assert [e.name for e in span.events] == [
+        "job_received",
+        "job_accepted",
+        "job_assigned",
+        "process_assigned",
+        "entrypoint_started",
+    ]
+
+
+def test_dispatch_span_skipped_without_a_receive_time(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=_info(),
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    _defer_dispatch_span(ctx, ctx._info, entrypoint_started_at=1001.0)
+    assert ctx._pending_session_spans == []
 
 
 def test_server_timestamp_units() -> None:
