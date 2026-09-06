@@ -362,7 +362,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
-    def _on_cleanup(self) -> None:
+    async def _on_cleanup(self) -> None:
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
         if self._early_log_handler is not None and not self._recording_initialized:
@@ -376,11 +376,17 @@ class JobContext:
                 logger.exception("failed to initialize crash log upload")
                 self._stop_log_buffering()
 
-        self._tempdir.cleanup()
-        # telemetry registrations are per job: releasing this job's flushes its
-        # remaining telemetry and leaves any concurrent job's export untouched
-        if self._telemetry_state is not None:
-            _shutdown_telemetry(self.job.id)
+        def _cleanup_blocking() -> None:
+            self._tempdir.cleanup()
+            # telemetry registrations are per job: releasing this job's flushes its
+            # remaining telemetry and leaves any concurrent job's export untouched
+            if self._telemetry_state is not None:
+                _shutdown_telemetry(self.job.id)
+
+        # the telemetry release joins exporter flush threads doing network I/O, and the
+        # tempdir may hold large recordings: neither belongs on the event loop (the loop
+        # monitor rightfully reports the stall, and THREAD-executor jobs share the process)
+        await asyncio.to_thread(_cleanup_blocking)
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)

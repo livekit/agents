@@ -1351,7 +1351,7 @@ def _job_ctx_active(ctx: MagicMock) -> Iterator[None]:
         _JobContextVar.reset(token)
 
 
-def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
+async def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
     """_on_cleanup runs for every job, including ones that never configured
     telemetry (recording disabled, no observability URL). Such a job must not
     release a concurrent recorded job's registration — in THREAD mode that would
@@ -1375,11 +1375,11 @@ def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
         return ctx
 
     with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
-        _make_ctx(configured=False)._on_cleanup()
+        await _make_ctx(configured=False)._on_cleanup()
     mock_shutdown.assert_not_called()
 
     with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
-        _make_ctx(configured=True)._on_cleanup()
+        await _make_ctx(configured=True)._on_cleanup()
     mock_shutdown.assert_called_once_with("job-x")
 
 

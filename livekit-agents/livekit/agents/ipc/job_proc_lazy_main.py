@@ -413,7 +413,7 @@ class _JobProc:
         if tasks := self._job_ctx._pending_tasks:
             await aio.cancel_and_wait(*tasks)
 
-        self._job_ctx._on_cleanup()
+        await self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 
