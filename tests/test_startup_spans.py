@@ -208,6 +208,20 @@ def test_dispatch_span_skipped_without_a_receive_time(
     assert ctx._pending_session_spans == []
 
 
+def test_preload_for_jobs_imports_the_lazy_sdk_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The openai SDK imports its resources tree on first client use; inside a job that was a
+    300 ms stall at session start. The warm-up does it before any job exists."""
+    import sys
+
+    from livekit.agents.ipc.job_proc_lazy_main import _preload_for_jobs
+
+    for name in [m for m in sys.modules if m.startswith("openai.resources")]:
+        monkeypatch.delitem(sys.modules, name)
+    assert "openai.resources" not in sys.modules
+    _preload_for_jobs()
+    assert "openai.resources" in sys.modules
+
+
 def test_server_timestamp_units() -> None:
     assert _server_timestamp_seconds(1_700_000_000_123_456_789) == pytest.approx(1_700_000_000.123)
     assert _server_timestamp_seconds(1_700_000_000_123) == pytest.approx(1_700_000_000.123)

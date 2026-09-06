@@ -224,7 +224,7 @@ class _JobProc:
             user_arguments=self._user_arguments,
             http_proxy=init_req.http_proxy or None,
         )
-        _preload_rtc_ffi()
+        _preload_for_jobs()
         self._initialize_process_fnc(self._job_proc)
 
     @log_exceptions(logger=logger)
@@ -501,25 +501,40 @@ class _JobProc:
             logger.exception("error while shutting down the job")
 
 
-def _preload_rtc_ffi() -> None:
-    """Load the livekit-rtc native library while the process is still warming up.
+def _preload_for_jobs() -> None:
+    """Do the framework's own lazy one-time work while the process is still warming up.
 
-    The SDK loads it on the first FFI call. Without this that call happens inside the job
-    (creating the AudioProcessingModule at session start) and blocks the event loop for
-    100+ ms: a real stall on the session's timeline that no user code caused."""
-    started = time.perf_counter()
-    try:
+    Each of these otherwise happens inside the first job, on the event loop, and shows up
+    as a 100-300 ms ``event_loop_blocked`` at session start that no user code caused:
+
+    - the livekit-rtc native library loads on the first FFI call (the AudioProcessingModule
+      created at session start);
+    - the openai SDK, which ``livekit.agents.inference`` is built on, imports its whole
+      ``resources`` tree on the first client attribute access (the LLM prewarm).
+
+    Failures are logged at debug level only: the first real use reports a proper error."""
+
+    def _step(name: str, fnc: Callable[[], Any]) -> None:
+        started = time.perf_counter()
+        try:
+            fnc()
+        except Exception:
+            logger.debug("could not preload %s", name, exc_info=True)
+            return
+        logger.debug(
+            "preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)}
+        )
+
+    def _rtc_ffi() -> None:
         from livekit.rtc._ffi_client import FfiClient
 
         _ = FfiClient.instance
-    except Exception:
-        # the first real FFI call will report a proper error; this is only a warm-up
-        logger.debug("could not preload the livekit-rtc native library", exc_info=True)
-        return
-    logger.debug(
-        "preloaded the livekit-rtc native library",
-        extra={"elapsed": round(time.perf_counter() - started, 3)},
-    )
+
+    def _openai_resources() -> None:
+        import openai.resources  # noqa: F401
+
+    _step("the livekit-rtc native library", _rtc_ffi)
+    _step("the openai SDK resources", _openai_resources)
 
 
 def _callback_name(fnc: Any) -> str:
