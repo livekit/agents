@@ -332,7 +332,7 @@ class AudioRecognition:
         self._user_turn_start: float | None = None
         # eot_wait: one span per user turn, from the last speech anchor to the turn decision
         self._eot_wait_span: trace.Span | None = None
-        self._eot_wait_started_at: float | None = None
+        self._eot_wait_started_at_ns: int | None = None
         self._eot_wait_rearms: int = 0
         self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
@@ -2004,34 +2004,42 @@ class AudioRecognition:
 
         now = time.time()
         started_at = min(last_speaking_time, now) if last_speaking_time is not None else now
+        # the span's own start; lk.eou.wait_duration is derived from this same value at the end
+        # so the attribute and the bar are exactly the same length
+        started_at_ns = int(started_at * 1_000_000_000)
         with tracer.use_span(user_turn_span):
             span = tracer.start_span(
                 "eot_wait",
-                start_time=int(started_at * 1_000_000_000),
+                start_time=started_at_ns,
                 attributes={trace_types.ATTR_EOU_SOURCE: trigger},
             )
         self._eot_wait_span = span
-        self._eot_wait_started_at = started_at
+        self._eot_wait_started_at_ns = started_at_ns
         self._eot_wait_rearms = 0
         return span
 
     def _end_eot_wait_span(self, outcome: str, *, end_time: float | None = None) -> None:
         span, self._eot_wait_span = self._eot_wait_span, None
-        started_at, self._eot_wait_started_at = self._eot_wait_started_at, None
+        started_at_ns, self._eot_wait_started_at_ns = self._eot_wait_started_at_ns, None
         rearms, self._eot_wait_rearms = self._eot_wait_rearms, 0
         if span is None or not span.is_recording():
             return
 
-        ended_at = end_time if end_time is not None else time.time()
-        if started_at is not None:
-            ended_at = max(ended_at, started_at)
+        ended_at_ns = int((end_time if end_time is not None else time.time()) * 1_000_000_000)
+        if started_at_ns is not None:
+            # resumed speech can carry a VAD timestamp from before the anchor; never negative
+            ended_at_ns = max(ended_at_ns, started_at_ns)
         span.set_attributes(
             {
                 trace_types.ATTR_EOU_OUTCOME: outcome,
+                # from the same two integers the span is bounded by, so the attribute equals
+                # the bar's length exactly
                 trace_types.ATTR_EOU_WAIT_DURATION: (
-                    ended_at - started_at if started_at is not None else 0.0
+                    (ended_at_ns - started_at_ns) / 1_000_000_000
+                    if started_at_ns is not None
+                    else 0.0
                 ),
                 trace_types.ATTR_EOU_REARM_COUNT: rearms,
             }
         )
-        span.end(end_time=int(ended_at * 1_000_000_000))
+        span.end(end_time=ended_at_ns)

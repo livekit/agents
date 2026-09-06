@@ -104,7 +104,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._user_turn_span = None
     ar._user_turn_start = None
     ar._eot_wait_span = None
-    ar._eot_wait_started_at = None
+    ar._eot_wait_started_at_ns = None
     ar._eot_wait_rearms = 0
     ar._closing = asyncio.Event()
 
@@ -187,7 +187,8 @@ async def test_wait_span_covers_last_speech_to_commit(span_exporter: InMemorySpa
     assert isinstance(wait_duration, float)
     assert 0.3 <= wait_duration < 0.6
     assert wait.end_time is not None
-    assert abs((wait.end_time - wait.start_time) / 1e9 - wait_duration) < 1e-6
+    # the attribute is derived from the span's own start/end nanoseconds: identical, not close
+    assert (wait.end_time - wait.start_time) / 1e9 == wait_duration
     # the wait closes before the turn does
     assert user_turn.end_time is not None and wait.end_time <= user_turn.end_time
     assert ar._eot_wait_span is None

@@ -84,7 +84,7 @@ def _make_recognition(
     ar._user_turn_span = None
     ar._user_turn_start = None
     ar._eot_wait_span = None
-    ar._eot_wait_started_at = None
+    ar._eot_wait_started_at_ns = None
     ar._eot_wait_rearms = 0
     ar._stt_model = None
     ar._stt_provider = None
