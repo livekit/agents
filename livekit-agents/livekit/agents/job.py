@@ -40,9 +40,9 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import (
     _upload_session_report,
+    session_context,
     otel_metrics,
     trace_types,
-    tracer,
     utils as telemetry_utils,
 )
 from .telemetry.traces import (
@@ -632,9 +632,12 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
-        with tracer.start_as_current_span(
+        # session_context.session_span: called before session.start() this still lands under
+        # agent_session once it exists, as the session's opening act
+        with session_context.session_span(
             "wait_for_participant",
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
+            job_ctx=self,
         ) as span:
             participant = await wait_for_participant(self._room, identity=identity, kind=kind)
             span.set_attributes(telemetry_utils.participant_attributes(participant))
@@ -671,7 +674,7 @@ class JobContext:
                 single_peer_connection=single_peer_connection,
             )
 
-            with tracer.start_as_current_span(
+            with session_context.session_span(
                 "room_connect",
                 attributes={
                     trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
@@ -679,6 +682,7 @@ class JobContext:
                     trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
                     trace_types.ATTR_ROOM_E2EE: encryption is not None,
                 },
+                job_ctx=self,
             ) as connect_span:
                 await self._room.connect(self._info.url, self._info.token, options=room_options)
                 connect_span.set_attributes(

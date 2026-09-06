@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -186,9 +187,17 @@ async def test_room_connect_span(span_exporter: InMemorySpanExporter) -> None:
     )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-
     room.connect.assert_awaited_once()
+
+    # no session yet: the span is held on the job, then becomes a back-dated child of
+    # agent_session when the session starts (the entrypoint usually connects first)
+    assert _spans(span_exporter, "room_connect") == []
+    assert [r.name for r in ctx._pending_session_spans] == ["room_connect"]
+    with tracer.start_as_current_span("agent_session") as root:
+        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
     [span] = _spans(span_exporter, "room_connect")
+    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
+    assert span.end_time is not None and span.end_time <= root.start_time  # type: ignore[operator]
     attrs = span.attributes or {}
     assert attrs[trace_types.ATTR_ROOM_NAME] == "room-1"
     assert attrs[trace_types.ATTR_ROOM_SID] == "RM_1"
@@ -214,6 +223,8 @@ async def test_room_connect_failure_is_an_error_span(span_exporter: InMemorySpan
     with pytest.raises(RuntimeError):
         await ctx.connect()
 
+    with tracer.start_as_current_span("agent_session") as root:
+        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
     [span] = _spans(span_exporter, "room_connect")
     assert span.status.status_code.name == "ERROR"
     assert any(e.name == "exception" for e in span.events)
