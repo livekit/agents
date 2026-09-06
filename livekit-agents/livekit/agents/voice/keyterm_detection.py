@@ -4,6 +4,7 @@ import asyncio
 import os
 from typing import TYPE_CHECKING, Literal
 
+from opentelemetry import context as otel_context, trace
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -324,8 +325,16 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._detect_task is not None and not self._detect_task.done():
             return
 
+        # the event fires from the reply that answers this user message, so the pass nests
+        # under that agent_turn: it is the agent's work on the turn. Fired from anywhere else
+        # (a skipped reply, user code editing the history) it falls back to the session root.
+        parent = (
+            otel_context.get_current()
+            if trace.get_current_span().is_recording()
+            else getattr(session, "_root_span_context", None)
+        )
         # snapshot the transcript now so the pass isn't affected by later turns
-        self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session)))
+        self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session), parent))
 
     @staticmethod
     def _snapshot(session: AgentSession) -> ChatContext:
@@ -337,15 +346,17 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         )
 
     @utils.log_exceptions(logger=logger)
-    async def _run_once(self, chat_ctx: ChatContext) -> None:
+    async def _run_once(
+        self, chat_ctx: ChatContext, parent: otel_context.Context | None = None
+    ) -> None:
         if not isinstance(self._llm, LLM):
             return
 
-        # its own span under the session, not under the reply whose task happened to fire
-        # the event: this LLM call is STT context for the next turns, not part of any reply
+        # its own span, so the LLM call reads as keyterm detection rather than a second
+        # inference step of the reply it runs alongside
         with tracer.start_as_current_span(
             "keyterm_detection",
-            context=getattr(self._session, "_root_span_context", None),
+            context=parent,
             attributes={
                 trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
                 trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
