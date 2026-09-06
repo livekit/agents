@@ -7,7 +7,7 @@ from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from opentelemetry import context as otel_context
+from opentelemetry import context as otel_context, trace
 
 from .. import llm, utils
 from ..log import logger
@@ -57,7 +57,12 @@ class SpeechHandle:
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
+        # one agent_turn span for the whole speech, however many generations (LLM steps) it
+        # takes; opened by the first reply task, ended with the speech in _mark_done
+        self._agent_turn_span: trace.Span | None = None
         self._agent_turn_context: otel_context.Context | None = None
+        self._agent_turn_started_at: float | None = None
+        self._agent_turn_agent_name: str | None = None
         self._scheduled_at: float | None = None
         self._authorized_at: float | None = None
         self._interrupt_source: InterruptionSource | None = None  # first interrupt's cause
@@ -349,6 +354,7 @@ class SpeechHandle:
             if error is not None:
                 self._error = error
             self._done_fut.set_result(None)
+        self._end_agent_turn(error)
 
         if self._generations:
             self._mark_generation_done()
@@ -356,6 +362,22 @@ class SpeechHandle:
         if self._interrupt_timeout_handle is not None:
             self._interrupt_timeout_handle.cancel()
             self._interrupt_timeout_handle = None
+
+    def _end_agent_turn(self, error: BaseException | None) -> None:
+        """Close the speech's ``agent_turn`` span: the speech is done, whatever step it was on."""
+        span, self._agent_turn_span = self._agent_turn_span, None
+        if span is None or not span.is_recording():
+            return
+        from ..telemetry import otel_metrics, utils as trace_utils
+
+        if isinstance(error, Exception):
+            trace_utils.record_exception(span, error)
+        if self._agent_turn_started_at is not None and self._agent_turn_agent_name is not None:
+            otel_metrics.record_invoke_agent_duration(
+                time.perf_counter() - self._agent_turn_started_at,
+                agent_name=self._agent_turn_agent_name,
+            )
+        span.end()
 
     def _mark_scheduled(self) -> None:
         if self._scheduled_at is None:

@@ -107,7 +107,12 @@ ATTR_CALLBACK_NAME = "lk.callback.name"
 
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
+"""On ``agent_turn``: the latest generation (LLM step) of the speech; each step is also a
+``generation`` event carrying its own id."""
 ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"
+ATTR_GENERATION_COUNT = "lk.generation_count"
+"""On ``agent_turn``: how many generations (LLM steps) the speech took; more than one means
+tool calls were executed before the final reply."""
 ATTR_USER_INPUT = "lk.pii.user_input"
 ATTR_INSTRUCTIONS = "lk.pii.instructions"
 ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
