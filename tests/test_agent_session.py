@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterable
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -20,6 +21,8 @@ from livekit.agents import (
     ConversationItemAddedEvent,
     FlushSentinel,
     LanguageCode,
+    LatencyBudgetEvent,
+    LatencyBudgetOptions,
     MetricsCollectedEvent,
     ModelSettings,
     NotGivenOr,
@@ -102,6 +105,46 @@ class MyAgent(Agent):
 
 
 SESSION_TIMEOUT = 60.0
+
+
+def test_latency_budget_options_validation() -> None:
+    with pytest.raises(ValueError, match="budget.*greater than zero"):
+        AgentSession(latency_budget={"budget": 0})
+
+    with pytest.raises(ValueError, match="warning.*no greater than budget"):
+        AgentSession(latency_budget={"budget": 1.0, "warning": 1.1})
+
+
+@pytest.mark.parametrize(
+    ("latency_budget", "expected_level", "expected_threshold"),
+    [
+        ({"budget": 0.4, "warning": 0.2}, "exceeded", 0.4),
+        ({"budget": 0.9, "warning": 0.4}, "warning", 0.4),
+    ],
+)
+async def test_latency_budget_event_on_first_output(
+    latency_budget: LatencyBudgetOptions,
+    expected_level: Literal["warning", "exceeded"],
+    expected_threshold: float,
+) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    actions.add_llm("Hi!", ttft=0.1, duration=0.3)
+    actions.add_tts(0.5, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget(latency_budget)
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    assert len(events) == 1
+    assert events[0].level == expected_level
+    assert events[0].threshold == expected_threshold
+    assert events[0].budget == latency_budget["budget"]
+    assert events[0].latency == pytest.approx(0.7, abs=0.01)
+    assert events[0].speech_id
 
 
 def test_realtime_user_input_transcription_preserves_item_id() -> None:

@@ -3470,6 +3470,9 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
+                self._session._evaluate_latency_budget(
+                    latency=early_metrics["e2e_latency"], speech_id=speech_handle.id
+                )
             self._session._early_assistant_metrics = early_metrics
 
             self._session._update_agent_state(
