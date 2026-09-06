@@ -367,19 +367,21 @@ class EventLoopMonitor:
             self._gc_started_at = None
 
     def _report(self, report: BlockedReport) -> None:
-        # the histogram counts every stall: it is cheap, and a dashboard must not undercount
-        # exactly when stalls become frequent enough to hit the span and log rate limits
-        try:
-            otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
-        except Exception:
-            logger.exception("failed to record the blocked event loop metric")
         now = time.monotonic()
         emit_span = self._span_limiter.allow(now)
         emit_log = self._log_limiter.allow(now)
-        if not emit_span and not emit_log:
-            return
 
         def _emit() -> None:
+            # the histogram counts every stall: it is cheap, and a dashboard must not
+            # undercount exactly when stalls become frequent enough to hit the span and log
+            # rate limits. Recorded inside the job's context so the measurement carries the
+            # job attributes like every other span and log
+            try:
+                otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
+            except Exception:
+                logger.exception("failed to record the blocked event loop metric")
+            if not emit_span and not emit_log:
+                return
             if emit_span and self._emit_spans:
                 self._emit_span(report, suppressed=self._span_limiter.take_suppressed())
             if emit_log:

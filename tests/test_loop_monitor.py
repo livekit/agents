@@ -540,6 +540,33 @@ def test_metric_is_recorded_for_every_stall_past_the_rate_limits(
     assert len(emitted) == 30  # spans (and the on_report callback) stop at the span limit
 
 
+def test_metric_carries_the_job_even_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The heartbeat runs in the monitor's own context, which predates the job; the metric
+    must be recorded inside the saved job context or `_job_attrs` finds no job."""
+    from livekit.agents.job import get_job_context
+
+    seen: list[object] = []
+    monkeypatch.setattr(
+        loop_monitor.otel_metrics,
+        "record_event_loop_blocked",
+        lambda duration, *, severity: seen.append(get_job_context(required=False)),
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(
+            loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+        )
+        job = _fake_job_context()
+        m.set_report_context(_job_report_context(job))
+        for _ in range(40):
+            m._report(m._build_report(0.1, gc_time=0.0, cpu_time=0.1, watchdog_gap=0.0, samples=[]))
+    finally:
+        loop.close()
+
+    assert len(seen) == 40
+    assert all(ctx is job for ctx in seen), "a measurement lost its job attribution"
+
+
 def test_rate_limiter_counts_suppressed() -> None:
     limiter = _RateLimiter(2)
     assert limiter.allow(100.0)
