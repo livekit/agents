@@ -517,43 +517,35 @@ def _server_timestamp_seconds(value: int) -> float:
 def _record_dispatch_timeline(
     span: trace.Span | session_context.RecordedSpan, info: RunningJobInfo, entrypoint_started_at: float
 ) -> None:
-    """Stamp the dispatch stages on ``span`` as timestamped events plus latencies.
+    """Stamp the dispatch stages on ``span``: one timestamped event per stage instant, and
+    the seconds between adjacent stages as attributes (they sum to the dispatch latency).
 
     Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
     is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
     stages = [
-        ("job_received", trace_types.ATTR_JOB_RECEIVED_AT, info.received_at),
-        ("job_accepted", trace_types.ATTR_JOB_ACCEPTED_AT, info.accepted_at),
-        ("job_assigned", trace_types.ATTR_JOB_ASSIGNED_AT, info.assigned_at),
-        ("process_assigned", trace_types.ATTR_JOB_LAUNCHED_AT, info.launched_at),
-        ("entrypoint_started", trace_types.ATTR_JOB_ENTRYPOINT_STARTED_AT, entrypoint_started_at),
+        ("job_received", info.received_at),
+        ("job_accepted", info.accepted_at),
+        ("job_assigned", info.assigned_at),
+        ("process_assigned", info.launched_at),
+        ("entrypoint_started", entrypoint_started_at),
     ]
-    for event_name, attr, ts in stages:
-        if not ts:
-            continue
-        span.set_attribute(attr, ts)
-        span.add_event(event_name, timestamp=int(ts * 1e9))
+    for event_name, ts in stages:
+        if ts:
+            span.add_event(event_name, timestamp=int(ts * 1e9))
 
-    if info.received_at and info.accepted_at:
-        span.set_attribute(
-            trace_types.ATTR_JOB_ACCEPT_LATENCY, max(info.accepted_at - info.received_at, 0.0)
-        )
-    if info.accepted_at and info.assigned_at:
-        span.set_attribute(
-            trace_types.ATTR_JOB_ASSIGNMENT_LATENCY, max(info.assigned_at - info.accepted_at, 0.0)
-        )
-    if info.assigned_at:
-        span.set_attribute(
-            trace_types.ATTR_JOB_LAUNCH_LATENCY, max(entrypoint_started_at - info.assigned_at, 0.0)
-        )
-    if info.received_at:
-        span.set_attribute(
-            trace_types.ATTR_JOB_DISPATCH_LATENCY,
-            max(entrypoint_started_at - info.received_at, 0.0),
-        )
+    def _gap(attr: str, start: float, end: float) -> None:
+        if start and end:
+            span.set_attribute(attr, max(end - start, 0.0))
+
+    _gap(trace_types.ATTR_JOB_ACCEPT_LATENCY, info.received_at, info.accepted_at)
+    _gap(trace_types.ATTR_JOB_ASSIGNMENT_LATENCY, info.accepted_at, info.assigned_at)
+    _gap(trace_types.ATTR_JOB_LAUNCH_LATENCY, info.assigned_at, info.launched_at)
+    _gap(trace_types.ATTR_JOB_ENTRYPOINT_LATENCY, info.launched_at, entrypoint_started_at)
+    _gap(trace_types.ATTR_JOB_DISPATCH_LATENCY, info.received_at, entrypoint_started_at)
     if (server_started := info.job.state.started_at) > 0:
+        # the server's own record of the start: the first anchor for lining the agent trace
+        # up with server-side events later
         started = _server_timestamp_seconds(server_started)
-        span.set_attribute(trace_types.ATTR_JOB_SERVER_STARTED_AT, started)
         span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 
 

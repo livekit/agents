@@ -96,10 +96,13 @@ def test_start_job_request_round_trips_dispatch_timestamps() -> None:
     decoded.read(buf)
     out = decoded.running_job
     assert out.job.id == "AJ_1" and out.worker_id == "W_1" and out.token == "tok"
-    assert out.received_at == pytest.approx(1_700_000_000.1)
-    assert out.accepted_at == pytest.approx(1_700_000_000.2)
-    assert out.assigned_at == pytest.approx(1_700_000_000.5)
-    assert out.launched_at == pytest.approx(1_700_000_000.6)
+    # sub-millisecond, not approx: a 32-bit float would round all four to the same value
+    # (128 s resolution at this magnitude) and every latency would come out as 0
+    assert abs(out.received_at - 1_700_000_000.1) < 1e-4
+    assert abs(out.accepted_at - 1_700_000_000.2) < 1e-4
+    assert abs(out.assigned_at - 1_700_000_000.5) < 1e-4
+    assert abs(out.launched_at - 1_700_000_000.6) < 1e-4
+    assert out.accepted_at - out.received_at == pytest.approx(0.1, abs=1e-4)
 
 
 def test_dispatch_timeline_events_and_latencies(span_exporter: InMemorySpanExporter) -> None:
@@ -112,12 +115,14 @@ def test_dispatch_timeline_events_and_latencies(span_exporter: InMemorySpanExpor
 
     [entry] = _spans(span_exporter, "job_entrypoint")
     attrs = entry.attributes or {}
+    # adjacent stages, summing to the total
     assert attrs[trace_types.ATTR_JOB_ACCEPT_LATENCY] == pytest.approx(0.2)
     assert attrs[trace_types.ATTR_JOB_ASSIGNMENT_LATENCY] == pytest.approx(0.3)
-    assert attrs[trace_types.ATTR_JOB_LAUNCH_LATENCY] == pytest.approx(0.5)
+    assert attrs[trace_types.ATTR_JOB_LAUNCH_LATENCY] == pytest.approx(0.1)
+    assert attrs[trace_types.ATTR_JOB_ENTRYPOINT_LATENCY] == pytest.approx(0.4)
     assert attrs[trace_types.ATTR_JOB_DISPATCH_LATENCY] == pytest.approx(1.0)
-    assert attrs[trace_types.ATTR_JOB_SERVER_STARTED_AT] == pytest.approx(t0 + 0.05)
-    assert attrs[trace_types.ATTR_JOB_ENTRYPOINT_STARTED_AT] == t0 + 1.0
+    # instants are events on the timeline, not raw unix timestamps in the attribute list
+    assert not any(k.endswith("_at") for k in attrs)
 
     ns = 1_000_000_000
     events = {e.name: e.timestamp for e in entry.events}
@@ -145,9 +150,7 @@ def test_unknown_dispatch_stages_are_skipped(span_exporter: InMemorySpanExporter
     [entry] = _spans(span_exporter, "job_entrypoint")
     attrs = entry.attributes or {}
     assert [e.name for e in entry.events] == ["entrypoint_started"]
-    assert trace_types.ATTR_JOB_DISPATCH_LATENCY not in attrs
-    assert trace_types.ATTR_JOB_ACCEPT_LATENCY not in attrs
-    assert trace_types.ATTR_JOB_SERVER_STARTED_AT not in attrs
+    assert not any(k.startswith("lk.job.") and k.endswith("_latency") for k in attrs)
 
 
 def test_dispatch_span_is_held_for_the_session(span_exporter: InMemorySpanExporter) -> None:
