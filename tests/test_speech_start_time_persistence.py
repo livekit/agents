@@ -54,6 +54,8 @@ class TestUserTurnStartPersistence:
         audio_recognition._eou_wait_span = None
         audio_recognition._eou_wait_started_at_ns = None
         audio_recognition._eou_wait_rearms = 0
+        audio_recognition._eou_wait_floor_ns = None
+        audio_recognition._eou_detection_span = None
         audio_recognition._user_turn_committed = False
         # disable EOU detection from EOS branch — we're testing VAD state, not EOT
         audio_recognition._vad_base_turn_detection = False

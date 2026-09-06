@@ -20,6 +20,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from livekit.agents import Agent, llm, vad
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry.utils import REDACTED_EXCEPTION_MESSAGE
+from livekit.agents.voice.agent_session import _RECORDING_ALL_OFF
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
@@ -106,6 +108,8 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._eou_wait_span = None
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_detection_span = None
     ar._closing = asyncio.Event()
 
     endpointing = MagicMock()
@@ -287,6 +291,59 @@ async def test_detection_nests_under_wait(span_exporter: InMemorySpanExporter) -
     assert (wait.attributes or {})[trace_types.ATTR_EOU_DELAY] == 0.01
 
 
+async def test_resumed_speech_during_detection_keeps_the_child_inside(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """VAD reports a resumed speech start after the fact; if the detector was still running
+    the wait cannot end back there, or eou_detection would outlive its parent."""
+    ar = _make_recognition(min_delay=1.0, with_detector=True)
+    pending: asyncio.Future[TurnDetectionEvent] = asyncio.Future()
+    ar._turn_detector_prediction_fut = pending  # inference never answers
+    ar._turn_detector_stream.prediction_timeout = 10.0  # type: ignore[union-attr]
+    ar._last_speaking_time = time.time()
+    ar._run_eou_detection(llm.ChatContext(), trigger="vad")
+    await asyncio.sleep(0.05)
+    assert ar._eou_detection_span is not None and ar._eou_detection_span.is_recording()
+
+    await ar._on_vad_event(_start_of_speech())  # started 0.5 s ago, before the detection began
+    await _cancel_bounce(ar)
+
+    [wait] = _spans(span_exporter, "eou_wait")
+    [detection] = _spans(span_exporter, "eou_detection")
+    assert detection.parent is not None and detection.parent.span_id == wait.context.span_id
+    assert wait.start_time <= detection.start_time
+    assert detection.end_time is not None and wait.end_time is not None
+    assert detection.end_time <= wait.end_time
+    assert [e.name for e in detection.events] == ["superseded"]
+    attrs = wait.attributes or {}
+    assert attrs[trace_types.ATTR_EOU_OUTCOME] == "user_resumed"
+    assert attrs[trace_types.ATTR_EOU_WAIT_DURATION] == pytest.approx(
+        (wait.end_time - wait.start_time) / 1e9
+    )
+    # the real resume time survives as an event inside the bar
+    [resumed] = _events(wait, "user_resumed")
+    assert wait.start_time <= resumed.timestamp <= wait.end_time
+    ar._end_user_turn_span()
+
+
+async def test_turn_mode_change_drops_an_open_wait(span_exporter: InMemorySpanExporter) -> None:
+    ar = _make_recognition(min_delay=1.0)
+    ar._last_speaking_time = time.time()
+    ar._run_eou_detection(llm.ChatContext(), trigger="vad")
+    await asyncio.sleep(0.02)
+    assert ar._eou_wait_span is not None
+
+    ar._update_options(turn_detection="manual")
+    await asyncio.sleep(0)  # let the cancelled bounce task unwind
+
+    [wait] = _spans(span_exporter, "eou_wait")
+    assert (wait.attributes or {})[trace_types.ATTR_EOU_OUTCOME] == "dropped"
+    assert ar._eou_wait_span is None and ar._end_of_turn_task is None
+    # the user turn is still open for whatever the manual mode does with the next speech
+    assert ar._user_turn_span is not None and ar._user_turn_span.is_recording()
+    ar._end_user_turn_span()
+
+
 class _HookAgent(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="test")
@@ -326,3 +383,46 @@ async def test_full_session_turn_handoff_spans(span_exporter: InMemorySpanExport
     for turn in turns:
         queue_wait = (turn.attributes or {})[trace_types.ATTR_SPEECH_QUEUE_WAIT]
         assert isinstance(queue_wait, float) and 0.0 <= queue_wait < 5.0
+
+
+class _RaisingHookAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="test")
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        raise RuntimeError(f"lookup failed for {new_message.text_content}")
+
+
+async def test_hook_exception_honours_session_redaction(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """``record={"redaction": True}`` on the session alone (no job flag) must still keep the
+    hook's exception message, which can quote the transcript, out of the trace."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "My name is Jane Doe", stt_delay=0.1)
+    actions.add_llm("Sorry about that.", ttft=0.1, duration=0.2)
+    actions.add_tts(0.5, ttfb=0.1, duration=0.2)
+
+    session = create_session(actions, speed_factor=2.0)
+    await asyncio.wait_for(
+        run_session(
+            session,
+            _RaisingHookAgent(),
+            drain_delay=1.0,
+            record={**_RECORDING_ALL_OFF, "redaction": True},  # type: ignore[typeddict-item]
+        ),
+        timeout=30,
+    )
+    assert session._redaction_enabled
+
+    [hook] = _spans(span_exporter, "on_user_turn_completed")
+    assert hook.status.status_code.name == "ERROR"
+    attrs = hook.attributes or {}
+    assert attrs[trace_types.ATTR_EXCEPTION_TYPE] == "RuntimeError"
+    assert attrs[trace_types.ATTR_EXCEPTION_MESSAGE] == REDACTED_EXCEPTION_MESSAGE
+    rendered = repr(hook.attributes) + repr(
+        [(e.name, dict(e.attributes or {})) for e in hook.events]
+    )
+    assert "Jane Doe" not in rendered and "lookup failed" not in rendered

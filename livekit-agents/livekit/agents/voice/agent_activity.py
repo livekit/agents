@@ -2665,7 +2665,13 @@ class AgentActivity(RecognitionHooks):
                 hook_span.add_event("stop_response")
                 return  # ignore this turn
             except Exception as e:
-                trace_utils.record_exception(hook_span, e)
+                # the hook is user code and its message can quote the transcript; honour a
+                # redaction switched on for this session alone as well as the job's
+                trace_utils.record_exception(
+                    hook_span,
+                    e,
+                    redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
+                )
                 logger.exception("error occurred during on_user_turn_completed")
                 return
 
