@@ -176,7 +176,7 @@ class STT(stt.STT):
                 nothing is finalized. `VAD` instead lets the STT service run its own VAD
                 and close turns itself. Defaults to `TurnDetectionMode.EXTERNAL`.
 
-            model: The transcription model (operating point) to use, e.g. `"linden-1"`.
+            model: The transcription model to use, e.g. `"linden-1"`.
                 Defaults to the SDK's default model. Preferred over `operating_point`.
 
             operating_point: Deprecated alias for `model`. If both are given they must
