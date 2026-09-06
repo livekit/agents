@@ -71,8 +71,9 @@ from speechmatics.agent_stt import (
 from .log import logger
 from .version import __version__ as lk_version
 
-# Endpoint resolution. The default is the Agent STT endpoint; the env var overrides it,
-# and an explicit `base_url` argument overrides both.
+# Endpoint resolution. The default is the global real-time Agent STT host; the env var
+# overrides it (e.g. to target a regional or self-hosted endpoint), and an explicit
+# `base_url` argument overrides both.
 DEFAULT_BASE_URL = "wss://global.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 
@@ -161,9 +162,12 @@ class STT(stt.STT):
             api_key: Speechmatics API key. Can be set via `api_key` argument
                 or `SPEECHMATICS_API_KEY` environment variable.
 
-            base_url: Custom base URL for the API. Can be set via `base_url`
-                argument or `SPEECHMATICS_RT_URL` environment variable. Falls back to
-                `DEFAULT_BASE_URL` (the Agent STT endpoint) when neither is set.
+            base_url: Custom base URL for the API. Use this to target a specific
+                Speechmatics real-time host (e.g. a regional or self-hosted endpoint).
+                Can be set via `base_url` argument or `SPEECHMATICS_RT_URL` environment
+                variable. Falls back to `DEFAULT_BASE_URL` (the global real-time Agent
+                STT host, `wss://global.rt.speechmatics.com/v2/agent`) when neither is
+                set.
 
             turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
                 default) hands turn control to the caller, who drives it via `finalize()`
