@@ -94,7 +94,7 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "tts_fallback_adapter": {"tts_node"},
         "tts_request_run": {"tts_request", "tts_fallback_adapter"},
         # -- session-scoped features
-        "keyterm_detection": {"agent_session"},
+        "keyterm_detection": {"agent_turn", "agent_session"},
         "amd": {"agent_session"},
         "judge_evaluation": {"agent_session", ROOT},
         # -- RPC: handlers are session events, calls follow their caller
@@ -120,6 +120,10 @@ MAY_OUTLIVE_PARENT: dict[tuple[str, str], str] = {
         "event_loop_blocked",
         ANY,
     ): "the heartbeat notices a stall one tick after the blocked call returned",
+    (
+        "keyterm_detection",
+        "agent_turn",
+    ): "the pass runs alongside the reply and can outlast a short or interrupted turn",
 }
 """Child/parent edges where the child may end after its parent, with the reason. Deliberate:
 each is a known property of the code, and a viewer draws them poking out of the parent."""
