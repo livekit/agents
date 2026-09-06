@@ -419,9 +419,10 @@ async def test_worker_mode_logs_and_records_the_metric_without_spans(
     assert any("event loop blocked for" in r.getMessage() for r in caplog.records)
 
 
-def test_host_descheduling_is_not_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_host_descheduling_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
     """When the watchdog stalled along with the loop, the host did not run the process; that
-    is not a programming issue and must not show up as a warning or error."""
+    is not a programming issue and must not show up in the logs at all (the span and the
+    metric keep the record)."""
     loop = asyncio.new_event_loop()
     try:
         m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
@@ -443,10 +444,7 @@ def test_host_descheduling_is_not_a_warning(caplog: pytest.LogCaptureFixture) ->
     finally:
         loop.close()
 
-    records = [r for r in caplog.records if "event loop" in r.getMessage()]
-    assert records, "the stall still leaves a debug trail"
-    assert all(r.levelname == "DEBUG" for r in records)
-    assert all("not scheduled" in r.getMessage() for r in records)
+    assert not [r for r in caplog.records if "event loop" in r.getMessage()]
 
 
 def test_host_descheduling_span_is_not_an_error() -> None:

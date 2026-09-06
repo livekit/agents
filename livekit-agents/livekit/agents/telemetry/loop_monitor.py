@@ -476,16 +476,9 @@ class EventLoopMonitor:
             extra["stack"] = report.stacks[-1]
         where = f" at {location}" if location else ""
         if report.process_descheduled:
-            # nothing for the developer to fix: the host did not run the process. Keep it
-            # out of the warning stream; debug level leaves a trail for capacity questions.
-            extra["process_descheduled"] = True
-            logger.debug(
-                "event loop stalled for %.0fms%s; the process itself was not scheduled for most "
-                "of it (host CPU contention or a CPU quota), not slow code on the loop",
-                report.duration * 1000,
-                where,
-                extra=extra,
-            )
+            # nothing for the developer to fix: the host did not run the process. The span
+            # (warning severity) and the metric keep the record; a log line for every one of
+            # these was noise on a busy laptop, so there is none.
             return
         logger.warning(
             "event loop blocked for %.0fms%s; synchronous work on the agent loop delays "
