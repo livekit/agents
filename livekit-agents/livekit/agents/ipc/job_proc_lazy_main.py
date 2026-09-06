@@ -519,7 +519,9 @@ def _preload_for_jobs() -> None:
     - the openai SDK, which ``livekit.agents.inference`` is built on, imports its whole
       ``resources`` tree on the first client attribute access (the LLM prewarm);
     - httpx builds the process's SSL context from the CA bundle on the first client (the
-      inference LLM, STT and TTS each construct one).
+      inference LLM, STT and TTS each construct one);
+    - the turn detector's local fallback model loads on the first stream (creating the
+      stream is part of starting the agent activity).
 
     Failures are logged at debug level only: the first real use reports a proper error."""
 
@@ -549,9 +551,17 @@ def _preload_for_jobs() -> None:
 
         httpx.AsyncClient()
 
+    def _local_eot_model() -> None:
+        # the turn detector's local fallback model: the first construction in a process
+        # loads the native library and the model (~50 ms of GIL-held CPU), later ones are free
+        from livekit.local_inference import EOT
+
+        EOT()
+
     _step("the livekit-rtc native library", _rtc_ffi)
     _step("the openai SDK resources", _openai_resources)
     _step("the httpx client and its SSL context", _httpx_client)
+    _step("the local end-of-turn model", _local_eot_model)
 
 
 def _is_framework_callback(fnc: Any) -> bool:

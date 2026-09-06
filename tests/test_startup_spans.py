@@ -165,6 +165,7 @@ def test_preload_for_jobs_imports_the_lazy_sdk_tree(monkeypatch: pytest.MonkeyPa
     assert "openai.resources" not in sys.modules
     _preload_for_jobs()
     assert "openai.resources" in sys.modules
+    assert "livekit.local_inference" in sys.modules  # the local end-of-turn model is loaded
 
 
 def test_framework_callbacks_are_not_user_callbacks() -> None:
