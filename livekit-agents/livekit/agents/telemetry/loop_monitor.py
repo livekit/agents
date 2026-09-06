@@ -22,6 +22,25 @@ This module observes a single loop without patching asyncio:
 Spans are parented to the primary agent session's root span when a job is running so they land
 on the session timeline next to the turn they delayed. Output is rate limited so a
 pathologically blocked loop cannot flood the exporter.
+
+What a report means
+-------------------
+A report says the loop could not run its timers for ``lk.blocking.duration`` seconds. That is
+exactly what delays audio frames and turn handling, whatever the cause:
+
+* one synchronous call (``time.sleep``, a blocking HTTP client, heavy numpy): the stack sample
+  lands inside it and names the line;
+* one loop iteration with many ready callbacks that add up (a burst of frames each taking a
+  few ms): still a stall of that length; the sample lands in whichever callback was running,
+  so read it as "the loop was busy here", not as the single culprit;
+* the process itself was not running (host CPU contention, container CPU quota, a suspended
+  laptop): ``lk.blocking.cpu_time`` near zero with a stack sitting in ordinary code, or no
+  stack at all, is the tell;
+* a garbage-collection pass on a large heap: reported separately as ``lk.blocking.gc_time``
+  so it is not blamed on the surrounding code.
+
+What is never reported: work handed to ``run_in_executor`` / ``asyncio.to_thread``, or an idle
+loop waiting in ``select``; both leave the heartbeat on time.
 """
 
 from __future__ import annotations
@@ -160,6 +179,7 @@ class EventLoopMonitor:
         error_threshold: float = DEFAULT_ERROR_THRESHOLD,
         tick_interval: float = DEFAULT_TICK_INTERVAL,
         name: str = "event-loop",
+        emit_spans: bool = True,
     ) -> None:
         if warn_threshold <= 0:
             raise ValueError("warn_threshold must be > 0")
@@ -173,6 +193,9 @@ class EventLoopMonitor:
         self._error = error_threshold
         self._tick = tick_interval
         self._name = name
+        # the worker loop has no job or session to attach a span to; it logs and records the
+        # metric only
+        self._emit_spans = emit_spans
 
         # written by the loop thread, read by the watchdog
         self._last_tick_at: float = 0.0
@@ -186,6 +209,9 @@ class EventLoopMonitor:
         self._gc_started_at: float | None = None
         self._gc_time: float = 0.0
         self._last_thread_cpu: float = 0.0
+        # largest late wake-up the watchdog thread itself saw since the last heartbeat: when
+        # it stalled along with the loop, the whole process was not being scheduled
+        self._watchdog_max_gap: float = 0.0
 
         self._timer: asyncio.TimerHandle | None = None
         self._watchdog: threading.Thread | None = None
@@ -268,6 +294,7 @@ class EventLoopMonitor:
         self._tick_seq += 1
         self._last_tick_at = now
         self._last_thread_cpu = thread_cpu
+        watchdog_gap, self._watchdog_max_gap = self._watchdog_max_gap, 0.0
         self._timer = self._loop.call_later(self._tick, self._on_tick)
 
         if lag < self._warn:
@@ -289,8 +316,18 @@ class EventLoopMonitor:
                 severity="error" if lag >= self._error else "warning",
                 gc_time=min(gc_time, lag),
                 cpu_time=cpu_time,
+                watchdog_gap=watchdog_gap,
+                # the watchdog is an independent thread; if it too woke late by most of the
+                # stall, the process as a whole was descheduled (host contention, CPU quota,
+                # a suspended machine) rather than this loop running slow code
+                process_descheduled=watchdog_gap >= lag * 0.5,
                 task_name=next((s.task_name for s in samples if s.task_name), None),
-                stacks=[_format_frames(s.frames) for s in samples if s.frames],
+                stacks=[
+                    f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
+                    + _format_frames(s.frames)
+                    for s in samples
+                    if s.frames
+                ],
             )
         )
 
@@ -311,8 +348,10 @@ class EventLoopMonitor:
             return
 
         def _emit() -> None:
-            if emit_span:
+            if emit_span and self._emit_spans:
                 self._emit_span(report, suppressed=self._span_limiter.take_suppressed())
+            elif emit_span:
+                otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
             if emit_log:
                 self._emit_log(report)
             if self._on_report is not None:
@@ -372,6 +411,16 @@ class EventLoopMonitor:
         if report.stacks:
             extra["stack"] = report.stacks[-1]
         where = f" at {location}" if location else ""
+        if report.process_descheduled:
+            extra["process_descheduled"] = True
+            logger.warning(
+                "event loop stalled for %.0fms%s; the process itself was not scheduled for most "
+                "of it (host CPU contention or a CPU quota), not slow code on the loop",
+                report.duration * 1000,
+                where,
+                extra=extra,
+            )
+            return
         logger.warning(
             "event loop blocked for %.0fms%s; synchronous work on the agent loop delays "
             "audio and turn handling, move it to a thread or an async client",
@@ -383,7 +432,13 @@ class EventLoopMonitor:
     # -- watchdog thread --
 
     def _watchdog_main(self) -> None:
-        while not self._stop_event.wait(self._tick):
+        while True:
+            before = time.monotonic()
+            if self._stop_event.wait(self._tick):
+                return
+            gap = time.monotonic() - before - self._tick
+            if gap > self._watchdog_max_gap:
+                self._watchdog_max_gap = gap
             try:
                 self._watchdog_check()
             except Exception:
@@ -437,6 +492,8 @@ class BlockedReport:
     severity: str
     gc_time: float
     cpu_time: float
+    watchdog_gap: float
+    process_descheduled: bool
     task_name: str | None
     stacks: list[str]
 
@@ -445,10 +502,14 @@ _ASYNCIO_DIR = os.path.dirname(asyncio.__file__) + os.sep
 
 
 def _format_frames(frames: list[traceback.FrameSummary]) -> str:
-    # drop the event loop machinery at the base of the stack; it is the same in every sample
-    trimmed = [f for f in frames if not (f.filename or "").startswith(_ASYNCIO_DIR)]
-    if not trimmed:
-        trimmed = frames
+    # drop the event loop machinery (run_forever, _run_once, Handle._run) since it is the same
+    # in every sample, but never the innermost frame: a C call scheduled directly as a callback
+    # has no frame of its own, and the dispatch frame is then the only pointer to it
+    trimmed = [
+        f
+        for i, f in enumerate(frames)
+        if i == len(frames) - 1 or not (f.filename or "").startswith(_ASYNCIO_DIR)
+    ]
     trimmed = trimmed[-MAX_STACK_FRAMES:]
     return "".join(traceback.format_list(trimmed)).rstrip()
 
@@ -484,6 +545,7 @@ def start_monitoring(
     *,
     thresholds: LoopMonitorThresholds | None = None,
     name: str = "event-loop",
+    emit_spans: bool = True,
 ) -> EventLoopMonitor | None:
     """Start monitoring ``loop`` with thresholds from ``thresholds`` or the environment.
 
@@ -504,6 +566,7 @@ def start_monitoring(
             error_threshold=thresholds.error,
             tick_interval=min(DEFAULT_TICK_INTERVAL, thresholds.warn),
             name=name,
+            emit_spans=emit_spans,
         )
         _monitors[loop] = monitor
     monitor.start()

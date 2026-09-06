@@ -80,6 +80,13 @@ async def _settle() -> None:
     await asyncio.sleep(TICK * 4)
 
 
+def _loop_blocks(monitor: EventLoopMonitor) -> list[BlockedReport]:
+    """Reports attributable to this loop. A loaded CI host can deschedule the whole process
+    for tens of milliseconds; the monitor reports that too (the loop really did stall) but
+    tags it, and it is not what the negative tests here are checking for."""
+    return [r for r in monitor.reports if not r.process_descheduled]  # type: ignore[attr-defined]
+
+
 async def test_blocking_call_is_reported_as_span(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
@@ -108,6 +115,8 @@ async def test_blocking_call_is_reported_as_span(
     assert isinstance(stack, str)
     assert "_block_loop_synchronously" in stack
     assert "time.sleep" in stack
+    # each sample says when in the stall it was taken: it is a sample, not a profile
+    assert "loop thread sampled" in stack and "ms into the stall" in stack
     # the sample names the task that was running
     assert attrs.get(trace_types.ATTR_BLOCKING_TASK)
     # time.sleep is a wait, not compute: the loop thread burned almost no CPU
@@ -137,8 +146,7 @@ async def test_cooperative_work_is_not_reported(
         await asyncio.sleep(0)
     await asyncio.sleep(WARN * 2)
 
-    assert _blocked_spans(span_exporter) == []
-    assert monitor.reports == []  # type: ignore[attr-defined]
+    assert _loop_blocks(monitor) == []
 
 
 async def test_report_context_parents_span_and_carries_job_context(
@@ -165,6 +173,128 @@ async def test_stop_is_idempotent_and_quiets_the_monitor(
     _block_loop_synchronously(0.07)
     await _settle()
     assert _blocked_spans(span_exporter) == []
+
+
+async def test_idle_loop_is_not_reported(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    # an idle loop sits in select() until the heartbeat is due; the timer fires on time
+    await asyncio.sleep(WARN * 12)
+    assert _loop_blocks(monitor) == []
+
+
+async def test_blocking_work_in_an_executor_is_not_reported(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    # the whole point of run_in_executor / to_thread: the loop keeps ticking
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, time.sleep, WARN * 6)
+    await asyncio.to_thread(time.sleep, WARN * 6)
+    await _settle()
+    assert _loop_blocks(monitor) == []
+
+
+async def test_sustained_cooperative_load_is_not_reported(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    """Heavy but cooperative work: many callbacks each well under the threshold, timers,
+    executor round trips, and tasks yielding to each other, for ~0.6 s of wall time."""
+    loop = asyncio.get_running_loop()
+    fired: list[int] = []
+
+    async def worker(n: int) -> None:
+        for _ in range(60):
+            time.sleep(0.002)  # a small synchronous slice, well under WARN
+            await asyncio.sleep(0)
+        fired.append(n)
+
+    handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(40)]
+    await asyncio.gather(*(worker(n) for n in range(4)))
+    await loop.run_in_executor(None, time.sleep, 0.05)
+    await asyncio.sleep(0.45)
+    for h in handles:
+        h.cancel()
+    await _settle()
+
+    assert _loop_blocks(monitor) == []
+    assert len([f for f in fired if f < 1000]) == 4
+
+
+async def test_one_iteration_of_many_ready_callbacks_is_one_stall(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    """A burst of ready callbacks runs within one loop iteration, so the heartbeat cannot fire
+    in between: that is reported as a single stall of the burst's length, and the stack sample
+    lands in one of the callbacks."""
+    loop = asyncio.get_running_loop()
+    for _ in range(60):
+        loop.call_soon(time.sleep, 0.002)  # ~120 ms of back-to-back callbacks
+    await asyncio.sleep(0)
+    await _settle()
+
+    spans = _blocked_spans(span_exporter)
+    assert len(spans) == 1
+    attrs = spans[0].attributes or {}
+    duration = attrs[trace_types.ATTR_BLOCKING_DURATION]
+    assert isinstance(duration, float) and 0.09 <= duration <= 0.3
+    # time.sleep is a C function scheduled directly, so it has no frame of its own: the
+    # innermost frame is asyncio's dispatch of the callback, which must be kept
+    stack = attrs[trace_types.ATTR_BLOCKING_STACK]
+    assert isinstance(stack, str) and "_run" in stack and "self._callback" in stack
+
+
+async def test_gc_pause_is_attributed(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    import gc
+
+    # a large heap of container objects makes a full collection measurably slow
+    heap = [{"i": i, "l": [i]} for i in range(400_000)]
+    gc.collect()  # baseline, outside the measurement window
+    await _settle()
+    before = len(monitor.reports)  # type: ignore[attr-defined]
+
+    start = time.perf_counter()
+    gc.collect()
+    elapsed = time.perf_counter() - start
+    await _settle()
+    del heap
+
+    reports = monitor.reports[before:]  # type: ignore[attr-defined]
+    if elapsed < WARN:
+        pytest.skip(f"gc.collect took only {elapsed * 1000:.0f}ms on this machine")
+    assert len(reports) == 1
+    report = reports[0]
+    # the pause is a GC pause, and the span says so instead of blaming the coroutine
+    assert report.gc_time > 0
+    assert report.gc_time <= report.duration + 1e-3
+    assert report.gc_time >= report.duration * 0.5
+
+
+async def test_worker_mode_logs_and_records_the_metric_without_spans(
+    span_exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
+) -> None:
+    m = EventLoopMonitor(
+        asyncio.get_running_loop(),
+        warn_threshold=WARN,
+        error_threshold=ERROR,
+        tick_interval=TICK,
+        emit_spans=False,
+    )
+    reports: list[BlockedReport] = []
+    m._on_report = reports.append
+    m.start()
+    await asyncio.sleep(WARN)
+    try:
+        with caplog.at_level("WARNING", logger="livekit.agents"):
+            _block_loop_synchronously(0.08)
+            await _settle()
+    finally:
+        m.stop()
+
+    assert _blocked_spans(span_exporter) == []
+    assert len(reports) == 1
+    assert any("event loop blocked for" in r.getMessage() for r in caplog.records)
 
 
 def test_rate_limiter_counts_suppressed() -> None:

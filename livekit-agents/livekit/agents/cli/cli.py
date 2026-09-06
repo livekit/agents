@@ -313,8 +313,9 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
-    # a blocked worker loop delays job dispatch; flag it the same way as the job loops
-    loop_monitor.start_monitoring(loop, name="worker")
+    # a blocked worker loop delays job dispatch; there is no session to attach a span to here,
+    # so this one logs (and records the metric) only
+    loop_monitor.start_monitoring(loop, name="worker", emit_spans=False)
 
     # exit signalling. A plain `signal.signal` handler runs on the main thread at
     # an arbitrary bytecode boundary — raising from it can land inside whatever
