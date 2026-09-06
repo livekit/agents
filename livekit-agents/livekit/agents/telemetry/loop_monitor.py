@@ -309,28 +309,38 @@ class EventLoopMonitor:
             incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
         )
 
-        self._report(
-            BlockedReport(
-                duration=lag,
-                # the block started no earlier than the last on-time tick
-                started_at=time.time() - lag,
-                warn_threshold=self._warn,
-                severity="error" if lag >= self._error else "warning",
-                gc_time=min(gc_time, lag),
-                cpu_time=cpu_time,
-                watchdog_gap=watchdog_gap,
-                # the watchdog is an independent thread; if it too woke late by most of the
-                # stall, the process as a whole was descheduled (host contention, CPU quota,
-                # a suspended machine) rather than this loop running slow code
-                process_descheduled=watchdog_gap >= lag * 0.5,
-                task_name=next((s.task_name for s in samples if s.task_name), None),
-                stacks=[
-                    f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
-                    + _format_frames(s.frames)
-                    for s in samples
-                    if s.frames
-                ],
-            )
+        self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
+
+    def _build_report(
+        self,
+        lag: float,
+        gc_time: float,
+        cpu_time: float,
+        watchdog_gap: float,
+        samples: list[_StackSample],
+    ) -> BlockedReport:
+        # the watchdog is an independent thread; if it too woke late by most of the stall,
+        # the process as a whole was descheduled (host contention, CPU quota, a suspended
+        # machine) rather than this loop running slow code. That is still worth seeing on the
+        # timeline, but it is not the agent's fault: it is never more than a warning.
+        process_descheduled = watchdog_gap >= lag * 0.5
+        return BlockedReport(
+            duration=lag,
+            # the block started no earlier than the last on-time tick
+            started_at=time.time() - lag,
+            warn_threshold=self._warn,
+            severity="error" if lag >= self._error and not process_descheduled else "warning",
+            gc_time=min(gc_time, lag),
+            cpu_time=cpu_time,
+            watchdog_gap=watchdog_gap,
+            process_descheduled=process_descheduled,
+            task_name=next((s.task_name for s in samples if s.task_name), None),
+            stacks=[
+                f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
+                + _format_frames(s.frames)
+                for s in samples
+                if s.frames
+            ],
         )
 
     def _on_gc(self, phase: str, info: dict[str, Any]) -> None:

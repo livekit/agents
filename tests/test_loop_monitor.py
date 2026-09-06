@@ -446,6 +446,22 @@ def test_host_descheduling_is_not_a_warning(caplog: pytest.LogCaptureFixture) ->
     assert all("not scheduled" in r.getMessage() for r in records)
 
 
+def test_host_descheduling_span_is_not_an_error() -> None:
+    """A stall the host caused is reported at warning severity whatever its length, so the
+    span keeps UNSET status; the ERROR status is reserved for code that blocked the loop."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        # the loop thread and the watchdog both woke ~1s late: nothing ran in between
+        descheduled = m._build_report(1.0, gc_time=0.0, cpu_time=0.0, watchdog_gap=0.9, samples=[])
+        blocked = m._build_report(1.0, gc_time=0.0, cpu_time=0.9, watchdog_gap=0.0, samples=[])
+    finally:
+        loop.close()
+
+    assert descheduled.process_descheduled and descheduled.severity == "warning"
+    assert not blocked.process_descheduled and blocked.severity == "error"
+
+
 def test_rate_limiter_counts_suppressed() -> None:
     limiter = _RateLimiter(2)
     assert limiter.allow(100.0)
