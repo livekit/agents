@@ -31,6 +31,7 @@ from livekit.agents.voice.turn import (
 )
 
 from .fake_session import FakeActions, create_session, run_session
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -424,6 +425,8 @@ async def test_full_session_turn_handoff_spans(span_exporter: InMemorySpanExport
     for turn in turns:
         queue_wait = (turn.attributes or {})[trace_types.ATTR_SPEECH_QUEUE_WAIT]
         assert isinstance(queue_wait, float) and 0.0 <= queue_wait < 5.0
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
     # the reply that answered the turn carries the user-side stages next to lk.e2e_latency,
     # so the per-turn breakdown reads off one span
@@ -483,3 +486,5 @@ async def test_hook_exception_honours_session_redaction(
         [(e.name, dict(e.attributes or {})) for e in hook.events]
     )
     assert "Jane Doe" not in rendered and "lookup failed" not in rendered
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
