@@ -58,6 +58,13 @@ ATTR_JOB_ENTRYPOINT_LATENCY = "lk.job.entrypoint_latency"
 ATTR_JOB_DISPATCH_LATENCY = "lk.job.dispatch_latency"
 """Seconds from the availability request to the entrypoint running: the whole chain."""
 
+# keyterm detection (keyterm_detection span): counts only, the terms themselves are the
+# customer's vocabulary and travel as lk.pii.keyterms in the session report
+ATTR_KEYTERMS_COUNT = "lk.keyterms.count"
+"""Keyterms in effect after the pass (static + confirmed)."""
+ATTR_KEYTERMS_ADDED = "lk.keyterms.added"
+ATTR_KEYTERMS_REMOVED = "lk.keyterms.removed"
+
 # room connect / room io
 ATTR_ROOM_AUTO_SUBSCRIBE = "lk.room.auto_subscribe"
 ATTR_ROOM_E2EE = "lk.room.e2ee"
