@@ -393,8 +393,15 @@ class RoomIO:
             if ev.is_final:
                 self._user_tr_output.flush()
 
+    def _emit_session_event(self, name: str, attributes: dict[str, Any]) -> None:
+        """Timestamped marker on the agent_session span. Tolerates the lightweight session
+        stand-ins the tests drive RoomIO with, which have no telemetry surface."""
+        add_event = getattr(self._agent_session, "_add_session_event", None)
+        if add_event is not None:
+            add_event(name, attributes)
+
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        self._agent_session._add_session_event(
+        self._emit_session_event(
             "connection_state_changed",
             {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
         )
@@ -426,7 +433,7 @@ class RoomIO:
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
-        self._agent_session._add_session_event(
+        self._emit_session_event(
             "participant_disconnected",
             {
                 **telemetry_utils.participant_attributes(participant),
