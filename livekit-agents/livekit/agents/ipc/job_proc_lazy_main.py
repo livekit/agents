@@ -517,7 +517,9 @@ def _preload_for_jobs() -> None:
     - the livekit-rtc native library loads on the first FFI call (the AudioProcessingModule
       created at session start);
     - the openai SDK, which ``livekit.agents.inference`` is built on, imports its whole
-      ``resources`` tree on the first client attribute access (the LLM prewarm).
+      ``resources`` tree on the first client attribute access (the LLM prewarm);
+    - httpx builds the process's SSL context from the CA bundle on the first client (the
+      inference LLM, STT and TTS each construct one).
 
     Failures are logged at debug level only: the first real use reports a proper error."""
 
@@ -540,8 +542,16 @@ def _preload_for_jobs() -> None:
     def _openai_resources() -> None:
         import openai.resources  # noqa: F401
 
+    def _httpx_client() -> None:
+        # the first AsyncClient builds the process's SSL context from the CA bundle (~50 ms,
+        # GIL held); later clients reuse it. The inference LLM, STT and TTS each build one.
+        import httpx
+
+        httpx.AsyncClient()
+
     _step("the livekit-rtc native library", _rtc_ffi)
     _step("the openai SDK resources", _openai_resources)
+    _step("the httpx client and its SSL context", _httpx_client)
 
 
 def _is_framework_callback(fnc: Any) -> bool:
