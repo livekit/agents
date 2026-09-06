@@ -690,7 +690,10 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+                message="Rime HTTP request failed",
+                status_code=e.status,
+                request_id=None,
+                body=None,
             ) from None
-        except Exception as e:
-            raise APIConnectionError() from e
+        except Exception:
+            raise APIConnectionError("Rime HTTP request failed") from None

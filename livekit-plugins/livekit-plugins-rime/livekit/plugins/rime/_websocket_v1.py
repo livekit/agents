@@ -351,7 +351,7 @@ async def connect(
         raise APITimeoutError("Timed out waiting for the Rime v1 ready event") from None
     except aiohttp.ClientResponseError as e:
         raise APIStatusError(
-            message=e.message,
+            message="Rime v1 WebSocket handshake failed",
             status_code=e.status,
             request_id=None,
             body=None,
