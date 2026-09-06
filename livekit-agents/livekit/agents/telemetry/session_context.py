@@ -1,11 +1,13 @@
 """Trace-context helpers for the primary agent session.
 
 The job's trace is rooted at ``job_entrypoint`` and ``agent_session`` is a child of it, so
-work done before or after the session lands under the job in the ambient context and needs
-no special handling. What does need help is code running on a task whose context predates
-the session, the event loop monitor's heartbeat above all: it resolves the running session
-through the job so its spans nest under ``agent_session`` while one exists.
-:func:`session_span` nests startup work under ``session_start`` while the session is starting.
+work done before or after the session (the room connect in the entrypoint, an event loop
+stall while models load, the job's shutdown) lands under the job in the ambient context and
+needs no special handling. What does need help is code running on a task whose context
+predates the session, the event loop monitor's heartbeat above all: it resolves the running
+session through the job (:func:`session_root_context`) so its spans nest under
+``agent_session`` while one exists. :func:`session_span` nests startup work under
+``session_start`` while the session is starting.
 """
 
 from __future__ import annotations
@@ -42,19 +44,6 @@ def session_root_context(job_ctx: JobContext | None = None) -> otel_context.Cont
     if session is not None and session._root_span_context is not None:
         return session._root_span_context
     return None
-
-
-def session_trace_context(job_ctx: JobContext | None = None) -> otel_context.Context | None:
-    """The primary session's root context, kept even after the session closed.
-
-    For work that belongs to the session's view but runs after ``agent_session`` ended: the
-    job's shutdown sequence. A closed session no longer accepts events, but a child span
-    created after the parent ended is valid and lands in the same view."""
-    session = primary_session(job_ctx)
-    # getattr: tests plant minimal session stand-ins on the job, and shutdown must not
-    # depend on a telemetry field being there
-    ctx = getattr(session, "_trace_root_context", None) if session is not None else None
-    return ctx if isinstance(ctx, otel_context.Context) else None
 
 
 @contextmanager

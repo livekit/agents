@@ -725,9 +725,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
-        # kept after close: the cloud view is organised around agent_session, so the job's
-        # shutdown (which runs after the session closed) still parents to it
-        self._trace_root_context: otel_context.Context | None = None
         # event loop stalls seen while this session ran, summarised on the agent_session span
         self._loop_stall_count = 0
         self._loop_stall_total = 0.0
@@ -987,7 +984,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._closing = False
             self._root_span_context = otel_context.get_current()
-            self._trace_root_context = self._root_span_context
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
             self._loop_stall_count = 0

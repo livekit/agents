@@ -23,7 +23,6 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
-    _defer_dispatch_span,
     _record_dispatch_timeline,
     _server_timestamp_seconds,
 )
@@ -154,60 +153,6 @@ def test_unknown_dispatch_stages_are_skipped(span_exporter: InMemorySpanExporter
     assert not any(k.startswith("lk.job.") and k.endswith("_latency") for k in attrs)
 
 
-def test_dispatch_span_is_held_for_the_session(span_exporter: InMemorySpanExporter) -> None:
-    # the stages also live on job_entrypoint, but the session view only shows agent_session's
-    # subtree: the dispatch wait is replayed there as a back-dated child ending at entrypoint start
-    t0 = 1_700_000_000.0
-    info = _info(received_at=t0, accepted_at=t0 + 0.2, assigned_at=t0 + 0.5, launched_at=t0 + 0.6)
-    ctx = JobContext(
-        proc=MagicMock(),
-        info=info,
-        room=_mock_room(),
-        on_connect=lambda: None,
-        on_shutdown=lambda reason: None,
-        inference_executor=MagicMock(),
-    )
-
-    _defer_dispatch_span(ctx, info, entrypoint_started_at=t0 + 1.0)
-    assert _spans(span_exporter, "job_dispatch") == []
-    assert [r.name for r in ctx._pending_session_spans] == ["job_dispatch"]
-
-    with tracer.start_as_current_span("agent_session") as root:
-        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
-    [span] = _spans(span_exporter, "job_dispatch")
-    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
-    ns = 1_000_000_000
-    assert span.start_time == pytest.approx(t0 * ns, abs=1000)
-    assert span.end_time == pytest.approx((t0 + 1.0) * ns, abs=1000)
-    attrs = span.attributes or {}
-    assert attrs[trace_types.ATTR_JOB_ID] == "AJ_1"
-    assert attrs[trace_types.ATTR_DISPATCH_ID] == "AD_1"
-    assert attrs[trace_types.ATTR_JOB_DISPATCH_LATENCY] == pytest.approx(1.0)
-    assert attrs[trace_types.ATTR_JOB_ACCEPT_LATENCY] == pytest.approx(0.2)
-    assert [e.name for e in span.events] == [
-        "job_received",
-        "job_accepted",
-        "job_assigned",
-        "process_assigned",
-        "entrypoint_started",
-    ]
-
-
-def test_dispatch_span_skipped_without_a_receive_time(
-    span_exporter: InMemorySpanExporter,
-) -> None:
-    ctx = JobContext(
-        proc=MagicMock(),
-        info=_info(),
-        room=_mock_room(),
-        on_connect=lambda: None,
-        on_shutdown=lambda reason: None,
-        inference_executor=MagicMock(),
-    )
-    _defer_dispatch_span(ctx, ctx._info, entrypoint_started_at=1001.0)
-    assert ctx._pending_session_spans == []
-
-
 def test_preload_for_jobs_imports_the_lazy_sdk_tree(monkeypatch: pytest.MonkeyPatch) -> None:
     """The openai SDK imports its resources tree on first client use; inside a job that was a
     300 ms stall at session start. The warm-up does it before any job exists."""
@@ -232,28 +177,6 @@ def test_framework_callbacks_are_not_user_callbacks() -> None:
     assert not _is_framework_callback(lambda: None)
     assert _is_framework_callback(aio.cancel_and_wait)  # livekit.agents.utils.aio
     assert _is_framework_callback(AgentSession.aclose)
-
-
-def test_session_trace_context_survives_close(span_exporter: InMemorySpanExporter) -> None:
-    root = tracer.start_span("agent_session")
-    session = MagicMock()
-    session._trace_root_context = trace.set_span_in_context(root)
-    job = MagicMock()
-    job._primary_agent_session = session
-    root.end()
-    ctx = session_context.session_trace_context(job)
-    assert ctx is not None
-    with tracer.start_as_current_span("job_shutdown", context=ctx):
-        pass
-    [shutdown] = _spans(span_exporter, "job_shutdown")
-    assert shutdown.parent is not None
-    assert shutdown.parent.span_id == root.get_span_context().span_id
-
-    job._primary_agent_session = None
-    assert session_context.session_trace_context(job) is None
-    # a minimal session stand-in without the field (tests plant these) is not an error
-    job._primary_agent_session = object()
-    assert session_context.session_trace_context(job) is None
 
 
 def test_server_timestamp_units() -> None:
@@ -293,18 +216,15 @@ async def test_room_connect_span(span_exporter: InMemorySpanExporter) -> None:
         inference_executor=MagicMock(),
     )
 
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    # the entrypoint usually connects before session.start(): the span lands under the
+    # job's own span right away, no session needed
+    with tracer.start_as_current_span("job_entrypoint") as entrypoint:
+        await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     room.connect.assert_awaited_once()
 
-    # no session yet: the span is held on the job, then becomes a back-dated child of
-    # agent_session when the session starts (the entrypoint usually connects first)
-    assert _spans(span_exporter, "room_connect") == []
-    assert [r.name for r in ctx._pending_session_spans] == ["room_connect"]
-    with tracer.start_as_current_span("agent_session") as root:
-        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
     [span] = _spans(span_exporter, "room_connect")
-    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
-    assert span.end_time is not None and span.end_time <= root.start_time  # type: ignore[operator]
+    assert span.parent is not None
+    assert span.parent.span_id == entrypoint.get_span_context().span_id
     attrs = span.attributes or {}
     assert attrs[trace_types.ATTR_ROOM_NAME] == "room-1"
     assert attrs[trace_types.ATTR_ROOM_SID] == "RM_1"
@@ -330,8 +250,6 @@ async def test_room_connect_failure_is_an_error_span(span_exporter: InMemorySpan
     with pytest.raises(RuntimeError):
         await ctx.connect()
 
-    with tracer.start_as_current_span("agent_session") as root:
-        ctx._flush_pending_session_spans(trace.set_span_in_context(root))
     [span] = _spans(span_exporter, "room_connect")
     assert span.status.status_code.name == "ERROR"
     assert any(e.name == "exception" for e in span.events)

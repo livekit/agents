@@ -40,8 +40,8 @@ from .log import logger
 from .observability import Tagger
 from .telemetry import (
     _upload_session_report,
-    session_context,
     otel_metrics,
+    session_context,
     trace_types,
     utils as telemetry_utils,
 )
