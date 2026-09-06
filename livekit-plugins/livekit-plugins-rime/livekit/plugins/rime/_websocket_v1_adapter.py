@@ -25,7 +25,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from . import _websocket_v1
-from .log import logger
+from ._pool_manager import PoolManager
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
@@ -98,10 +98,7 @@ class WebSocketV1Adapter:
             if sentence_tokenizer is not None
             else tokenize.blingfire.SentenceTokenizer(min_sentence_len=1)
         )
-        self._retired_pools: set[_Pool] = set()
-        self._pool_stream_counts: dict[_Pool, int] = {}
-        self._pool_close_tasks: set[asyncio.Task[None]] = set()
-        self._pool = self._new_pool()
+        self._pools = PoolManager(self._new_pool())
 
     def _new_pool(self) -> _Pool:
         websocket_v1_url = self._websocket_v1_url
@@ -130,7 +127,7 @@ class WebSocketV1Adapter:
         options: V1SynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> _WebSocketV1SynthesizeStream:
-        pool = self._pool
+        pool = self._pools.current
         stream = _WebSocketV1SynthesizeStream(
             tts_instance=tts_instance,
             pool=pool,
@@ -138,16 +135,11 @@ class WebSocketV1Adapter:
             conn_options=conn_options,
             sentence_tokenizer=self._sentence_tokenizer,
         )
-        self._retain_pool(pool)
-
-        def _release_pool(_: asyncio.Task[None]) -> None:
-            self._release_pool(pool)
-
-        stream._task.add_done_callback(_release_pool)
+        self._pools.track_stream(pool, stream._task)
         return stream
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._pools.current.prewarm()
 
     def update_endpoint(self, websocket_v1_url: str, *, model_changed: bool) -> None:
         """Update the connection URL after validating its model binding."""
@@ -162,58 +154,11 @@ class WebSocketV1Adapter:
         if websocket_v1_url == self._websocket_v1_url:
             return
 
-        old_pool = self._pool
         self._websocket_v1_url = websocket_v1_url
-        self._pool = self._new_pool()
-        self._retire_pool(old_pool)
+        self._pools.replace(self._new_pool())
 
     async def aclose(self) -> None:
-        await self._pool.aclose()
-        for pool in list(self._retired_pools):
-            await pool.aclose()
-        self._retired_pools.clear()
-        if self._pool_close_tasks:
-            await asyncio.gather(*list(self._pool_close_tasks), return_exceptions=True)
-
-    def _retain_pool(self, pool: _Pool) -> None:
-        self._pool_stream_counts[pool] = self._pool_stream_counts.get(pool, 0) + 1
-
-    def _release_pool(self, pool: _Pool) -> None:
-        stream_count = self._pool_stream_counts.get(pool, 0)
-        if stream_count > 1:
-            self._pool_stream_counts[pool] = stream_count - 1
-            return
-
-        self._pool_stream_counts.pop(pool, None)
-        self._schedule_retired_pool_close(pool)
-
-    def _retire_pool(self, pool: _Pool) -> None:
-        self._retired_pools.add(pool)
-        if self._pool_stream_counts.get(pool, 0) == 0:
-            self._schedule_retired_pool_close(pool)
-
-    def _schedule_retired_pool_close(self, pool: _Pool) -> None:
-        if pool not in self._retired_pools:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-
-        self._retired_pools.remove(pool)
-        task = loop.create_task(pool.aclose())
-        self._pool_close_tasks.add(task)
-        task.add_done_callback(self._on_retired_pool_closed)
-
-    def _on_retired_pool_closed(self, task: asyncio.Task[None]) -> None:
-        self._pool_close_tasks.discard(task)
-        if task.cancelled():
-            return
-        if error := task.exception():
-            logger.warning(
-                "failed to close a retired Rime WebSocket pool",
-                extra={"exception_type": type(error).__name__},
-            )
+        await self._pools.aclose()
 
 
 class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):

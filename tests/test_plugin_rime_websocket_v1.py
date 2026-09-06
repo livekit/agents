@@ -825,6 +825,67 @@ async def test_v1_interruption_stays_cancelled_without_retry() -> None:
     assert _payloads(server).count("start") == 1
 
 
+@pytest.mark.parametrize("payload", ["start", "text", "end", "cancel"])
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_blocked_write_times_out(
+    payload: str, websocket_protocol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+    send_method = "send_bytes" if websocket_protocol == "binary" else "send_str"
+    original_send = getattr(aiohttp.ClientWebSocketResponse, send_method)
+
+    async def blocked_send(
+        websocket: aiohttp.ClientWebSocketResponse, data: bytes | str, **kwargs: Any
+    ) -> None:
+        request = proto.WebSocketRequest()
+        if isinstance(data, bytes):
+            request.ParseFromString(data)
+        else:
+            json_format.Parse(data, request)
+        if request.WhichOneof("payload") == payload:
+            write_started.set()
+            await release_write.wait()
+        await original_send(websocket, data, **kwargs)
+
+    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, send_method, blocked_send)
+    async with _RimeV1Server(response_mode="no_audio") as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.03))
+        stream.push_text("Please synthesize this sentence. Pending")
+        if payload == "cancel":
+            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
+            task = asyncio.create_task(stream.aclose())
+        else:
+            stream.end_input()
+            task = asyncio.create_task(_collect(stream))
+
+        try:
+            await asyncio.wait_for(write_started.wait(), timeout=2)
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            assert task in done, f"blocked {payload} write exceeded the configured timeout"
+            if payload == "cancel":
+                await task
+            else:
+                with pytest.raises(APITimeoutError):
+                    await task
+            await asyncio.wait_for(server.connection_closed.wait(), timeout=1)
+
+            # A timed-out write leaves an uncertain context. Do not reuse its socket.
+            empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            try:
+                empty.end_input()
+                assert await _collect(empty) == []
+            finally:
+                await empty.aclose()
+            assert server.connections == 2
+        finally:
+            release_write.set()
+            await stream.aclose()
+            await asyncio.gather(task, return_exceptions=True)
+            await tts.aclose()
+
+
 async def test_v1_cancels_when_start_write_is_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1420,21 +1481,28 @@ async def test_v1_closes_idle_retired_pools_after_url_changes() -> None:
             await tts.aclose()
 
 
-async def test_v1_closes_retired_pool_after_its_last_stream_finishes() -> None:
+@pytest.mark.parametrize("stream_count", [1, 2])
+async def test_v1_closes_retired_pool_after_its_last_stream_finishes(stream_count: int) -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server)
-        first_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        streams = [
+            tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            for _ in range(stream_count)
+        ]
         tts.update_options(websocket_url=second_server.websocket_url)
 
-        first_stream.push_text("first")
-        first_stream.end_input()
         try:
-            events = await _collect(first_stream)
+            for stream in streams:
+                assert not first_server.connection_closed.is_set()
+                stream.push_text("first")
+                stream.end_input()
+                events = await _collect(stream)
+                assert events[-1].is_final
             await asyncio.wait_for(first_server.connection_closed.wait(), timeout=1)
         finally:
-            await first_stream.aclose()
+            for stream in streams:
+                await stream.aclose()
             await tts.aclose()
 
-    assert events[-1].is_final
-    assert first_server.closed_connections == 1
+    assert first_server.closed_connections == stream_count
     assert second_server.connections == 0

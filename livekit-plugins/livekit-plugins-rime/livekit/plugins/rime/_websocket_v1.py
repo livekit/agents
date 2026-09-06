@@ -387,19 +387,28 @@ async def run_context(
     terminal_received = asyncio.Event()
     state = _ContextState()
 
+    async def _write(payload: str, value: object) -> None:
+        try:
+            await asyncio.wait_for(
+                _send_envelope(connection, context_id, payload, value), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError("Timed out writing to the Rime v1 WebSocket") from None
+
     async def _send() -> None:
         async for event in input_events:
             if not event:
                 continue
             if not state.active:
                 state.active = True
-                await _send_envelope(connection, context_id, "start", _start_payload(options))
+                # Start the response watchdog before writing, since the write can stall.
                 context_started.set()
+                await _write("start", _start_payload(options))
                 mark_started()
-            await _send_envelope(connection, context_id, "text", event)
+            await _write("text", event)
 
         if state.active:
-            await _send_envelope(connection, context_id, "end", None)
+            await _write("end", None)
             input_ended.set()
         else:
             input_complete.set()
@@ -642,9 +651,9 @@ def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None)
 
 async def _cancel_and_drain(connection: Connection, *, context_id: str, timeout: float) -> bool:
     try:
-        await _send_envelope(connection, context_id, "cancel", None)
 
-        async def _drain() -> None:
+        async def _cancel() -> None:
+            await _send_envelope(connection, context_id, "cancel", None)
             while True:
                 envelope = await _receive_envelope(connection, timeout=timeout)
                 payload = _payload(envelope)
@@ -660,7 +669,7 @@ async def _cancel_and_drain(connection: Connection, *, context_id: str, timeout:
                         f"Unexpected Rime v1 event while cancelling: {payload!r}"
                     )
 
-        await asyncio.wait_for(_drain(), timeout=timeout)
+        await asyncio.wait_for(_cancel(), timeout=timeout)
         return True
     except (Exception, asyncio.CancelledError):
         return False

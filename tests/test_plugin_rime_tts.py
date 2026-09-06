@@ -569,14 +569,14 @@ def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
     )
     adapter = tts._websocket_v1_adapter
     assert adapter is not None
-    previous_pool = adapter._pool
+    previous_pool = adapter._pools.current
     updated_websocket_url = "wss://tigerstripe.aws-us-east-1.whiteglove.rime.ai/ws?token=rotated"
 
     tts.update_options(websocket_url=updated_websocket_url, model="coda")
 
     assert tts.model == "coda"
     assert adapter._websocket_v1_url == updated_websocket_url
-    assert adapter._pool is not previous_pool
+    assert adapter._pools.current is not previous_pool
 
 
 def test_v1_dedicated_endpoint_allows_model_change_with_new_url() -> None:
@@ -635,10 +635,12 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     assert exc_info.value.__cause__ is None
 
 
-async def test_ws3_stream_keeps_options_after_parent_update() -> None:
+@pytest.mark.parametrize("stream_count", [1, 2])
+async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -> None:
     from livekit.plugins.rime import TTS
 
     request_models: list[str] = []
+    coda_closed = asyncio.Event()
 
     async def websocket(request: web.Request) -> web.WebSocketResponse:
         request_models.append(request.query["modelId"])
@@ -658,6 +660,9 @@ async def test_ws3_stream_keeps_options_after_parent_update() -> None:
             elif payload.get("operation") == "eos":
                 await ws.send_json({"type": "done"})
                 break
+        await ws.close()
+        if request.query["modelId"] == "coda":
+            coda_closed.set()
         return ws
 
     app = web.Application()
@@ -679,7 +684,10 @@ async def test_ws3_stream_keeps_options_after_parent_update() -> None:
             )
             metrics = []
             tts.on("metrics_collected", metrics.append)
-            coda_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            coda_streams = [
+                tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+                for _ in range(stream_count)
+            ]
             tts.update_options(model="mistv2")
             mist_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
 
@@ -691,13 +699,19 @@ async def test_ws3_stream_keeps_options_after_parent_update() -> None:
                 finally:
                     await stream.aclose()
 
-            coda_events = await collect(coda_stream)
+            coda_events = []
+            for stream in coda_streams:
+                assert not coda_closed.is_set()
+                coda_events.extend(await collect(stream))
+            await asyncio.wait_for(coda_closed.wait(), timeout=1)
             mist_events = await collect(mist_stream)
             await tts.aclose()
     finally:
         await runner.cleanup()
 
-    assert request_models == ["coda", "mistv2"]
+    assert sorted(request_models) == ["coda"] * stream_count + ["mistv2"]
     assert {event.frame.sample_rate for event in coda_events} == {24000}
     assert {event.frame.sample_rate for event in mist_events} == {22050}
-    assert [metric.metadata.model_name for metric in metrics] == ["coda", "mistv2"]
+    assert [metric.metadata.model_name for metric in metrics] == ["coda"] * stream_count + [
+        "mistv2"
+    ]
