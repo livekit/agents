@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Iterator
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -125,3 +126,42 @@ async def test_plain_reply_is_one_generation(span_exporter: InMemorySpanExporter
     assert attrs[trace_types.ATTR_AGENT_TURN_ID] == f"{attrs[trace_types.ATTR_SPEECH_ID]}_1"
     assert len([e for e in turn.events if e.name == "generation"]) == 1
     assert trace_types.ATTR_AGENT_PARENT_TURN_ID not in attrs
+
+
+def test_discarded_preemptive_generation_hands_its_turn_to_the_successor(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """A preemptive attempt discarded for the real reply (or a newer attempt) must not leave a
+    second agent_turn behind: the successor continues the span, the discarded speech ends
+    without touching it."""
+    from livekit.agents.voice.agent_activity import _agent_turn, _continue_discarded_turn
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    root = tracer.start_span("agent_session")
+    root_ctx = trace.set_span_in_context(root)
+    attempt = SpeechHandle.create(allow_interruptions=True)
+    with _agent_turn(attempt, root_context=root_ctx, agent_label="a"):
+        pass  # the attempt's first generation ran here
+
+    reply = SpeechHandle.create(allow_interruptions=True)
+    _continue_discarded_turn(attempt, reply)
+    attempt._mark_done()  # the cancelled attempt finishes: the span must survive it
+    assert _spans(span_exporter, "agent_turn") == []
+
+    with _agent_turn(reply, root_context=root_ctx, agent_label="a"):
+        pass
+    reply._mark_done()
+    root.end()
+
+    [turn] = _spans(span_exporter, "agent_turn")
+    attrs = turn.attributes or {}
+    assert attrs[trace_types.ATTR_SPEECH_ID] == reply.id
+    assert attrs[trace_types.ATTR_GENERATION_COUNT] == 1  # the reply's own step count
+    events = [e.name for e in turn.events]
+    assert events == ["generation", "preemptive_generation_discarded", "generation"]
+    [discarded] = [e for e in turn.events if e.name == "preemptive_generation_discarded"]
+    assert (discarded.attributes or {})[trace_types.ATTR_SPEECH_ID] == attempt.id
+
+    # nothing to hand over: a plain successor is untouched
+    _continue_discarded_turn(None, reply)
+    _continue_discarded_turn(reply, reply)

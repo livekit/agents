@@ -11,6 +11,7 @@ from opentelemetry import context as otel_context, trace
 
 from .. import llm, utils
 from ..log import logger
+from ..telemetry import trace_types
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
 
@@ -362,6 +363,38 @@ class SpeechHandle:
         if self._interrupt_timeout_handle is not None:
             self._interrupt_timeout_handle.cancel()
             self._interrupt_timeout_handle = None
+
+    def _take_agent_turn(self) -> tuple[trace.Span, float | None, str | None] | None:
+        """Detach this speech's open ``agent_turn`` so a successor can continue it.
+
+        Used when a preemptive generation is discarded for another speech answering the same
+        user turn: the wasted generation stays visible under the one turn instead of becoming
+        a turn of its own. After this the speech ends without touching the span."""
+        span = self._agent_turn_span
+        if span is None:
+            return None
+        carry = (span, self._agent_turn_started_at, self._agent_turn_agent_name)
+        self._agent_turn_span = None
+        self._agent_turn_context = None
+        self._agent_turn_started_at = None
+        self._agent_turn_agent_name = None
+        return carry
+
+    def _continue_agent_turn(
+        self, carry: tuple[trace.Span, float | None, str | None], *, discarded: SpeechHandle
+    ) -> None:
+        """Adopt the ``agent_turn`` taken from ``discarded`` (see ``_take_agent_turn``)."""
+        span, started_at, agent_name = carry
+        if not span.is_recording():
+            return
+        span.add_event(
+            "preemptive_generation_discarded", {trace_types.ATTR_SPEECH_ID: discarded.id}
+        )
+        span.set_attribute(trace_types.ATTR_SPEECH_ID, self.id)
+        self._agent_turn_span = span
+        self._agent_turn_context = trace.set_span_in_context(span)
+        self._agent_turn_started_at = started_at
+        self._agent_turn_agent_name = agent_name
 
     def _end_agent_turn(self, error: BaseException | None) -> None:
         """Close the speech's ``agent_turn`` span: the speech is done, whatever step it was on."""

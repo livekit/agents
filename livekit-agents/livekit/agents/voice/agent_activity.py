@@ -303,6 +303,16 @@ def _agent_turn(
         yield span
 
 
+def _continue_discarded_turn(discarded: SpeechHandle | None, successor: SpeechHandle) -> None:
+    """A preemptive generation discarded for ``successor`` (a newer attempt, or the real reply
+    after the transcript changed) hands its open ``agent_turn`` over, so one turn shows the
+    wasted generation and the one that answered. Module-level like ``_record_queue_wait``."""
+    if discarded is None or discarded is successor:
+        return
+    if (carry := discarded._take_agent_turn()) is not None:
+        successor._continue_agent_turn(carry, discarded=discarded)
+
+
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
     """Stamp how long the speech sat in the queue on its agent_turn span.
 
@@ -2558,6 +2568,13 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        # a newer attempt supersedes the current one; if one is created below it continues the
+        # discarded attempt's agent_turn (the cancelled speech only ends once the loop runs)
+        discarded = (
+            self._preemptive_generation.speech_handle
+            if self._preemptive_generation is not None
+            else None
+        )
         self._cancel_preemptive_generation()
 
         if (
@@ -2585,6 +2602,7 @@ class AgentActivity(RecognitionHooks):
             schedule_speech=False,
             input_details=InputDetails(modality="audio"),
         )
+        _continue_discarded_turn(discarded, speech_handle)
 
         self._preemptive_generation = _PreemptiveGeneration(
             speech_handle=speech_handle,
@@ -2822,6 +2840,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         speech_handle: SpeechHandle | None = None
+        discarded_preemptive: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
@@ -2851,6 +2870,7 @@ class AgentActivity(RecognitionHooks):
                     "preemptive generation invalidated after `on_user_turn_completed` because "
                     "the transcript, chat context, tools, or tool choice changed",
                 )
+                discarded_preemptive = preemptive.speech_handle
                 preemptive.speech_handle._cancel()
 
             self._preemptive_generation = None
@@ -2863,6 +2883,8 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx=temp_mutable_chat_ctx,
                 input_details=InputDetails(modality="audio"),
             )
+            # the invalidated preemptive attempt answered this same turn: one agent_turn
+            _continue_discarded_turn(discarded_preemptive, speech_handle)
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
