@@ -37,8 +37,6 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, is_given
 
-# Everything comes from the Agent STT SDK now — the plugin no longer depends on the
-# legacy voice SDK for the driver, config, message shapes, or public-API types.
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
@@ -700,7 +698,7 @@ class SpeechStream(stt.RecognizeStream):
         # Parse the singular agent-STT segment
         seg = Segment.from_message(message)
 
-        # Format the text (active formatter only — agent-STT has no passive/active split)
+        # Format the text with the active-speaker formatter
         speaker_id = seg.speaker or "UU"
         format_str = opts.speaker_active_format or "{text}"
         text = format_str.format(speaker_id=speaker_id, text=seg.transcript)
