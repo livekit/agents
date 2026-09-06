@@ -108,8 +108,8 @@ class FunASRSTT(stt.STT):
 
     @property
     def model(self) -> str:
-        """Return the configured FunASR model identifier."""
-        return self._model_name
+        """Return a privacy-safe model label for framework telemetry."""
+        return "FunASR"
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
@@ -181,8 +181,9 @@ class FunASRSTT(stt.STT):
 
         try:
             raw = await asyncio.to_thread(_run)
-        except Exception as e:
-            raise APIConnectionError("failed to run FunASR inference", retryable=False) from e
+        except Exception:
+            # Provider errors may contain credentials or speech-derived content.
+            raise APIConnectionError("failed to run FunASR inference", retryable=False) from None
 
         text = rich_transcription_postprocess(raw).strip()
         m = _LANG_TAG_RE.match(raw)

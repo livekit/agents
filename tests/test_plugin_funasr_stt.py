@@ -5,6 +5,7 @@ import importlib
 import logging
 import sys
 import threading
+import traceback
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, APIConnectOptions
 
 pytestmark = pytest.mark.plugin("funasr")
 
@@ -220,6 +221,29 @@ def test_metrics_metadata_redacts_model_identifier(
     assert stt.metrics_metadata == {"model_name": "FunASR", "model_provider": "FunASR"}
 
 
+async def test_public_recognition_redacts_model_identifier_from_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    funasr_stt = _load_funasr_stt_module(monkeypatch, lambda **kwargs: [{"text": "hello"}])
+    private_model = (
+        "https://private-user:private-password@example.invalid/model?token=private-token"
+    )
+    provider = funasr_stt.FunASRSTT(model=private_model)
+    events: list[Any] = []
+    provider.on("metrics_collected", events.append)
+
+    result = await provider.recognize([_make_audio_frame()])
+
+    assert result.alternatives[0].text == "hello"
+    assert _FakeAutoModel.init_calls[0]["model"] == private_model
+    assert len(events) == 1
+    assert events[0].metadata.model_name == "FunASR"
+    assert events[0].metadata.model_provider == "FunASR"
+    serialized = events[0].model_dump_json()
+    for value in (private_model, "private-user", "private-password", "private-token"):
+        assert value not in serialized
+
+
 def test_plugin_version_matches_livekit_agents_release() -> None:
     from livekit.agents import __version__ as agents_version
     from livekit.plugins.funasr.version import __version__ as plugin_version
@@ -298,4 +322,44 @@ async def test_recognize_marks_local_inference_failures_non_retryable(
         )
 
     assert exc_info.value.retryable is False
-    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert exc_info.value.__cause__ is None
+
+
+@pytest.mark.parametrize("stage", ["load", "generate"])
+@pytest.mark.parametrize("public_api", [False, True])
+async def test_inference_failure_does_not_expose_provider_details(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+    public_api: bool,
+) -> None:
+    private_detail = "model?access_token=private-test-token transcript=private-test-speech"
+
+    def fail(**kwargs: Any) -> list[dict[str, str]]:
+        raise ValueError(private_detail)
+
+    funasr_stt = _load_funasr_stt_module(monkeypatch, fail)
+    if stage == "load":
+        monkeypatch.setattr(funasr_stt, "AutoModel", fail)
+    provider = funasr_stt.FunASRSTT()
+    recognize = provider.recognize if public_api else provider._recognize_impl
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await recognize(
+            [_make_audio_frame()], conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+        )
+
+    error = exc_info.value
+    inference_error = error.__cause__ if public_api else error
+    assert isinstance(inference_error, APIConnectionError)
+    assert str(inference_error) == "failed to run FunASR inference"
+    assert inference_error.retryable is False
+    assert inference_error.__cause__ is None
+    assert inference_error.__suppress_context__ is True
+    formatted = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    logging.getLogger("livekit.plugins.funasr").error(
+        "recognition failed: %s", error, exc_info=(type(error), error, error.__traceback__)
+    )
+    for value in (str(error), repr(error), formatted, caplog.text):
+        assert "private-test-token" not in value
+        assert "private-test-speech" not in value
