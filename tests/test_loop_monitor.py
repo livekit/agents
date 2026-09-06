@@ -652,3 +652,53 @@ def test_constructor_validates_thresholds() -> None:
             EventLoopMonitor(loop, warn_threshold=0.01, tick_interval=0.05)
     finally:
         loop.close()
+
+
+def test_watchdog_gap_survives_the_wake_up_race() -> None:
+    """When a descheduled process resumes, the loop thread may tick before the watchdog has
+    recorded its late wake-up. The gap must still be attributed to this stall, and a record
+    from an earlier stall must not leak into a later one."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        now = time.monotonic()
+        window_start = now - 0.5  # this tick's window: a 0.5 s stall
+
+        # watchdog not yet back on the CPU: its last wake predates the window
+        m._watchdog_late = None
+        m._watchdog_last_wake = window_start - TICK
+        assert m._consume_watchdog_gap(now, window_start=window_start) == pytest.approx(
+            0.5, abs=TICK
+        )
+
+        # watchdog ran first and recorded the late wake inside the window
+        m._watchdog_late = (now - 0.001, 0.48)
+        m._watchdog_last_wake = now - 0.001
+        assert m._consume_watchdog_gap(now, window_start=window_start) == pytest.approx(0.48)
+        assert m._watchdog_late is None  # consumed
+
+        # a stale record from before the window, and a watchdog that has run since: no gap
+        m._watchdog_late = (window_start - 1.0, 0.9)
+        m._watchdog_last_wake = now - 0.002
+        assert m._consume_watchdog_gap(now, window_start=window_start) == 0.0
+    finally:
+        loop.close()
+
+
+def test_session_summary_counts_every_stall_past_the_span_limit() -> None:
+    loop = asyncio.new_event_loop()
+    recorded: list[float] = []
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        root = tracer.start_span("agent_session")
+        session = SimpleNamespace(
+            _root_span_context=trace.set_span_in_context(root),
+            _record_loop_stall=lambda duration, *, timestamp_ns: recorded.append(duration),
+        )
+        m.set_report_context(_job_report_context(_fake_job_context(session=session)))
+        for _ in range(40):
+            m._report(m._build_report(0.1, gc_time=0.0, cpu_time=0.1, watchdog_gap=0.0, samples=[]))
+        root.end()
+    finally:
+        loop.close()
+    assert len(recorded) == 40  # 30 spans were emitted, the summary saw all 40

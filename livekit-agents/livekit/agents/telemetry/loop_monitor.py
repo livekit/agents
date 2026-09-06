@@ -66,7 +66,7 @@ from typing import Any
 from opentelemetry import trace
 
 from ..log import logger
-from . import session_context, otel_metrics, trace_types
+from . import otel_metrics, session_context, trace_types
 from .traces import tracer
 
 DEFAULT_WARN_THRESHOLD = 0.05
@@ -219,7 +219,11 @@ class EventLoopMonitor:
         self._last_thread_cpu: float = 0.0
         # largest late wake-up the watchdog thread itself saw since the last heartbeat: when
         # it stalled along with the loop, the whole process was not being scheduled
-        self._watchdog_max_gap: float = 0.0
+        # the watchdog's worst late wake-up since the last tick, with the time it woke, and the
+        # time it last ran at all: together they say whether the watchdog was starved during a
+        # stall even when the loop thread gets the GIL back first (see _consume_watchdog_gap)
+        self._watchdog_late: tuple[float, float] | None = None  # (woke_at, gap)
+        self._watchdog_last_wake: float = time.monotonic()
 
         self._timer: asyncio.TimerHandle | None = None
         self._watchdog: threading.Thread | None = None
@@ -302,7 +306,7 @@ class EventLoopMonitor:
         self._tick_seq += 1
         self._last_tick_at = now
         self._last_thread_cpu = thread_cpu
-        watchdog_gap, self._watchdog_max_gap = self._watchdog_max_gap, 0.0
+        watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
 
         if lag < self._warn:
@@ -381,6 +385,15 @@ class EventLoopMonitor:
                 otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
             except Exception:
                 logger.exception("failed to record the blocked event loop metric")
+            # likewise the session's own summary (count, total, max, one event per stall):
+            # a burst that trips the span limiter must still be counted in full
+            if (session := session_context.primary_session()) is not None and (
+                session_context.session_root_context() is not None
+            ):
+                session._record_loop_stall(
+                    report.duration,
+                    timestamp_ns=int((report.started_at + report.duration) * 1_000_000_000),
+                )
             if not emit_span and not emit_log:
                 return
             if emit_span and self._emit_spans:
@@ -425,7 +438,6 @@ class EventLoopMonitor:
             # no job, no trace to belong to (a bare loop): a root span here would be a stray
             # one-span trace, so the log carries it
             return
-        session = session_context.primary_session()
         parent = session_context.session_root_context()
         span = tracer.start_span(
             SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes
@@ -438,8 +450,6 @@ class EventLoopMonitor:
                 )
             )
         span.end(end_time=end_ns)
-        if parent is not None and session is not None:
-            session._record_loop_stall(report.duration, timestamp_ns=end_ns)
 
     def _emit_log(self, report: BlockedReport) -> None:
         location = _innermost_location(report.stacks[-1]) if report.stacks else None
@@ -476,14 +486,33 @@ class EventLoopMonitor:
 
     # -- watchdog thread --
 
+    def _consume_watchdog_gap(self, now: float, *, window_start: float) -> float:
+        """How long the watchdog thread was kept from running during this tick's window.
+
+        Two sources, because the two threads race when a descheduled process is resumed:
+        the watchdog's own record of a late wake-up, if that wake-up fell inside the window
+        (an older record is stale, it belongs to a stall already reported), and, when the
+        watchdog has not run at all since before the window opened, the time since it last
+        did. Either way the record is cleared for the next window."""
+        late, self._watchdog_late = self._watchdog_late, None
+        gap = 0.0
+        if late is not None and late[0] >= window_start:
+            gap = late[1]
+        if self._watchdog_last_wake < window_start:
+            gap = max(gap, now - self._watchdog_last_wake - self._tick)
+        return max(gap, 0.0)
+
     def _watchdog_main(self) -> None:
         while True:
             before = time.monotonic()
             if self._stop_event.wait(self._tick):
                 return
-            gap = time.monotonic() - before - self._tick
-            if gap > self._watchdog_max_gap:
-                self._watchdog_max_gap = gap
+            woke_at = time.monotonic()
+            gap = woke_at - before - self._tick
+            late = self._watchdog_late
+            if late is None or gap > late[1]:
+                self._watchdog_late = (woke_at, gap)
+            self._watchdog_last_wake = woke_at
             try:
                 self._watchdog_check()
             except Exception:
