@@ -46,7 +46,7 @@ def test_default_turn_detector_is_described_not_reprd() -> None:
     td = _turn_detection(serialized)
     assert isinstance(td, str)
     assert "object at 0x" not in td
-    assert td.startswith("TurnDetector(")
+    assert td.startswith("livekit.agents.inference.eot.detector.TurnDetector(")
     assert "model=turn-detector-" in td
     assert "provider=livekit" in td
     assert "sample_rate=16000" in td
@@ -90,42 +90,40 @@ def test_mode_strings_pass_through() -> None:
     assert _turn_detection(_serialize_session_options(session.options)) == "manual"
 
 
-def test_plugin_like_detector_uses_model_and_provider() -> None:
+def test_object_implementing_describe_options_is_rendered_with_them() -> None:
     class ThirdPartyDetector:
-        @property
-        def model(self) -> str:
-            return "eou-v9"
-
-        @property
-        def provider(self) -> str:
-            return "acme"
-
-        # a method that happens to share a whitelisted name must never be rendered
-        def label(self) -> str:
-            return "not-an-attribute"
-
-        async def unlikely_threshold(self, language: str | None) -> float | None:
-            return 0.5
+        def describe_options(self) -> dict[str, Any]:
+            return {"model": "eou-v9", "provider": "acme", "thresholds": {"en": 0.7}}
 
     assert _describe_option_object(ThirdPartyDetector()) == (
-        "ThirdPartyDetector(model=eou-v9, provider=acme)"
+        f'{__name__}.ThirdPartyDetector(model=eou-v9, provider=acme, thresholds={{"en": 0.7}})'
     )
 
 
-def test_object_without_descriptors_falls_back_to_class_name() -> None:
+def test_object_without_describe_options_is_its_class_name() -> None:
+    # public attributes are not guessed at: a model-like object that does not opt in is
+    # reported by class alone, however tempting its `model` looks
     class Opaque:
-        pass
-
-    assert _describe_option_object(Opaque()) == "Opaque()"
-
-
-def test_not_given_and_none_attributes_are_skipped() -> None:
-    class Sparse:
         model = "m"
-        provider = None
-        label = NOT_GIVEN
+        provider = "acme"
 
-    assert _describe_option_object(Sparse()) == "Sparse(model=m)"
+    assert _describe_option_object(Opaque()) == f"{__name__}.Opaque"
+
+
+def test_describe_options_skips_none_and_not_given() -> None:
+    class Sparse:
+        def describe_options(self) -> dict[str, Any]:
+            return {"model": "m", "provider": None, "label": NOT_GIVEN}
+
+    assert _describe_option_object(Sparse()) == f"{__name__}.Sparse(model=m)"
+
+
+def test_failing_describe_options_falls_back_to_the_class_name() -> None:
+    class Broken:
+        def describe_options(self) -> dict[str, Any]:
+            raise RuntimeError("not ready")
+
+    assert _describe_option_object(Broken()) == f"{__name__}.Broken"
 
 
 def test_custom_sequence_and_set_values_keep_their_elements() -> None:
@@ -142,7 +140,8 @@ def test_custom_sequence_and_set_values_keep_their_elements() -> None:
             return len(self._items)
 
     class Det:
-        model = "m"
+        def describe_options(self) -> dict[str, Any]:
+            return {"model": "m"}
 
     out = _serialize_option_value(
         {"tts_text_transforms": Transforms("filter_markdown", "filter_emoji"), "s": {2, 1}}
@@ -152,7 +151,7 @@ def test_custom_sequence_and_set_values_keep_their_elements() -> None:
         "s": [1, 2],
     }
     assert _serialize_option_value(Transforms("a")) == ["a"]
-    assert _serialize_option_value([Det()]) == ["Det(model=m)"]
+    assert _serialize_option_value([Det()]) == [f"{__name__}.Det(model=m)"]
     _assert_report_safe(out)
 
 
@@ -180,7 +179,8 @@ def test_customer_prompt_text_is_omitted() -> None:
 
 def test_nested_containers_and_key_aliases() -> None:
     class Det:
-        model = "m"
+        def describe_options(self) -> dict[str, Any]:
+            return {"model": "m"}
 
     value = {
         "keyterms": ["LiveKit", "Acme"],
@@ -189,6 +189,6 @@ def test_nested_containers_and_key_aliases() -> None:
     out = _serialize_option_value(value)
     assert out == {
         "lk.pii.keyterms": ["LiveKit", "Acme"],
-        "nested": {"detector": "Det(model=m)", "flags": [True, 1, 2.5, None]},
+        "nested": {"detector": f"{__name__}.Det(model=m)", "flags": [True, 1, 2.5, None]},
     }
     _assert_report_safe(out)

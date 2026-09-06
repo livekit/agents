@@ -1,5 +1,6 @@
 from . import gen_ai, http_server, metrics, otel_metrics, pii, trace_types, utils
 from .traces import (
+    DescribesOptions,
     _setup_cloud_tracer,
     _upload_session_report,
     set_tracer_provider,
@@ -7,6 +8,7 @@ from .traces import (
 )
 
 __all__ = [
+    "DescribesOptions",
     "tracer",
     "gen_ai",
     "pii",

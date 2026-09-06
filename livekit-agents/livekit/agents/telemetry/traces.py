@@ -12,7 +12,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import aiofiles
 import aiohttp
@@ -95,42 +95,49 @@ _SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
 # interruption detector, ...) appears in the session options. Read in this order; missing,
 # NOT_GIVEN and None values are skipped. Kept to a whitelist so a plugin's credentials or
 # internals never end up in the report.
-_OPTION_OBJECT_DESCRIPTOR_ATTRS = (
-    "model",
-    "provider",
-    "label",
-    "sample_rate",
-    "local_fallback",
-    "threshold_overrides",
-    "backchannel_threshold_overrides",
-)
-
 _OPTION_PRIMITIVES = (str, bool, int, float)
 
 
+@runtime_checkable
+class DescribesOptions(Protocol):
+    """An object that can appear in ``AgentSession`` options (a turn detector, a model) and
+    wants the session report to show its configuration.
+
+    Return the options worth reporting, keyed by name; values can be primitives, mappings
+    or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
+    without this method are reported by class name alone."""
+
+    def describe_options(self) -> Mapping[str, Any]: ...
+
+
 def _describe_option_object(obj: object) -> str:
-    """Render a model-like object from the session options as ``ClassName(k=v, ...)``.
+    """Render an object from the session options as ``module.Class`` or, when it implements
+    :class:`DescribesOptions`, ``module.Class(k=v, ...)``.
 
     The OTel log exporter stringifies anything that is not a primitive, which for these
-    objects yields the default ``<... object at 0x...>`` repr. Build a stable description
-    from whitelisted public attributes instead.
-    """
+    objects yields the default ``<... object at 0x...>`` repr. The class alone is stable and
+    safe; the object itself decides what else is worth showing."""
+    cls = type(obj)
+    name = f"{cls.__module__}.{cls.__name__}"
+    describe = getattr(obj, "describe_options", None)
+    if not callable(describe):
+        return name
+    try:
+        options = describe()
+    except Exception:
+        logger.debug("describe_options() failed on %s", name, exc_info=True)
+        return name
     parts: list[str] = []
-    for name in _OPTION_OBJECT_DESCRIPTOR_ATTRS:
-        try:
-            value = getattr(obj, name)
-        except Exception:
+    for key, value in options.items():
+        if value is None or not is_given(value):
             continue
-        if value is None or not is_given(value) or callable(value):
-            continue
-        if isinstance(value, Mapping):
-            rendered = json.dumps(value, sort_keys=True, default=str)
-        elif isinstance(value, _OPTION_PRIMITIVES):
-            rendered = str(value)
-        else:
-            continue
-        parts.append(f"{name}={rendered}")
-    return f"{type(obj).__name__}({', '.join(parts)})"
+        rendered = (
+            str(value)
+            if isinstance(value, _OPTION_PRIMITIVES)
+            else json.dumps(_serialize_option_value(value), sort_keys=True, default=str)
+        )
+        parts.append(f"{key}={rendered}")
+    return f"{name}({', '.join(parts)})"
 
 
 def _serialize_option_value(value: Any) -> Any:
