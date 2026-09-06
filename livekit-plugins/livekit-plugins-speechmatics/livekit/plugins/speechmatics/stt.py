@@ -79,17 +79,17 @@ BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 class TurnDetectionMode(str, Enum):
     """How turn boundaries (end of speech) are detected.
 
-    `DEFAULT`: the STT service runs its own VAD and closes turns itself.
+    `VAD`: the STT service runs its own VAD and closes turns itself.
 
     `EXTERNAL`: turn boundaries are controlled by the caller — the service does not
     endpoint on its own, and the caller drives turns by calling `finalize()` (for
     example from an external VAD).
 
-    The values mirror the Agent STT SDK's own turn-detection modes so the two never
-    drift; only the member names differ (DEFAULT=VAD)
+    The member names and values mirror the Agent STT SDK's own turn-detection modes so
+    the two never drift.
     """
 
-    DEFAULT = AgentTurnDetectionMode.VAD.value
+    VAD = AgentTurnDetectionMode.VAD.value
     EXTERNAL = AgentTurnDetectionMode.EXTERNAL.value
 
 
@@ -103,7 +103,7 @@ class STTOptions:
     domain: str | None = None
 
     # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.DEFAULT
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
 
     # Output formatting
     speaker_active_format: str | None = None
@@ -136,7 +136,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.DEFAULT,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
         model: NotGivenOr[Model | str] = NOT_GIVEN,
         operating_point: NotGivenOr[Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
@@ -165,10 +165,12 @@ class STT(stt.STT):
                 argument or `SPEECHMATICS_RT_URL` environment variable. Falls back to
                 `DEFAULT_BASE_URL` (the Agent STT endpoint) when neither is set.
 
-            turn_detection_mode: How end-of-speech turns are detected. `DEFAULT` lets
-                the STT service run its own VAD and close turns itself. `EXTERNAL`
-                hands turn control to the caller, who drives it via `finalize()` (e.g.
-                from an external VAD). Defaults to `TurnDetectionMode.DEFAULT`.
+            turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
+                default) hands turn control to the caller, who drives it via `finalize()`
+                — in practice from the `vad` passed below, since LiveKit does not call
+                `finalize()` itself. Without a `vad`, `EXTERNAL` never closes a turn, so
+                nothing is finalized. `VAD` instead lets the STT service run its own VAD
+                and close turns itself. Defaults to `TurnDetectionMode.EXTERNAL`.
 
             model: The transcription model (operating point) to use, e.g. `"linden-1"`.
                 Defaults to the SDK's default model. Preferred over `operating_point`.
@@ -365,7 +367,7 @@ class STT(stt.STT):
     def finalize(self) -> None:
         """Force the current turn to end, flushing buffered words as final segments.
 
-        Only takes effect in `EXTERNAL` turn-detection mode; in `DEFAULT` mode the
+        Only takes effect in `EXTERNAL` turn-detection mode; in `VAD` mode the
         service endpoints on its own and this is a no-op.
         """
 
@@ -532,7 +534,7 @@ class SpeechStream(stt.RecognizeStream):
         logger.debug("Connected to Speechmatics STT service")
 
         # Open external VAD stream (if provided) before tasks start pushing frames.
-        # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in DEFAULT
+        # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in VAD
         # mode the server endpoints itself, so finalizing here would double-endpoint.
         if self._vad is not None and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
             self._vad_stream = self._vad.stream()
@@ -800,7 +802,7 @@ def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | No
 def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:
     """Map the plugin's turn detection mode onto the session driver's.
 
-    - `DEFAULT`  -> the service runs its own VAD and closes turns.
+    - `VAD`      -> the service runs its own VAD and closes turns.
     - `EXTERNAL` -> the caller closes turns by calling `finalize()`.
 
     The plugin's enum values are the SDK's values, so this is a direct lookup — but it
