@@ -215,6 +215,17 @@ class _PausedSpeechInfo:
 
 
 # NOTE: AgentActivity isn't exposed to the public API
+def _record_queue_wait(speech_handle: SpeechHandle) -> None:
+    """Stamp how long the speech sat in the queue on its agent_turn span.
+
+    Module-level on purpose: the reply tasks are also driven with lightweight stand-ins for
+    the activity in tests, which must not need to know about telemetry helpers."""
+    if (queue_wait := speech_handle._queue_wait()) is None:
+        return
+    span = trace.get_current_span(context=speech_handle._agent_turn_context)
+    span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
+
+
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -1830,13 +1841,6 @@ class AgentActivity(RecognitionHooks):
             skip_reply=skip_reply,
         )
 
-    def _record_queue_wait(self, speech_handle: SpeechHandle) -> None:
-        """Stamp how long the speech sat in the queue on its agent_turn span."""
-        if (queue_wait := speech_handle._queue_wait()) is None:
-            return
-        span = trace.get_current_span(context=speech_handle._agent_turn_context)
-        span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
-
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
         # when force=True, we still allow to schedule a new speech even if
         # `pause_speech_scheduling` is waiting for the schedule_task to drain.
@@ -2999,7 +3003,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
-        self._record_queue_wait(speech_handle)
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3494,7 +3498,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
-        self._record_queue_wait(speech_handle)
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3896,7 +3900,7 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
-        self._record_queue_wait(speech_handle)
+        _record_queue_wait(speech_handle)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
             return
@@ -4138,7 +4142,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
-        self._record_queue_wait(speech_handle)
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             # nothing was played, but the response may still be generating server-side
