@@ -122,11 +122,15 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next: the primary before any traffic, then
+        the one that most recently served. Spans and metrics read this, so a failover shows
+        the recognizer that actually answered rather than the adapter."""
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._active_instance.provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:

@@ -126,11 +126,15 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next: the primary before any traffic, then
+        the one that most recently served. Spans and metrics read this, so a failover shows
+        the voice that actually answered rather than the adapter."""
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._active_instance.provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
@@ -172,17 +176,33 @@ class FallbackAdapter(
             t.off("metrics_collected", self._on_metrics_collected)
 
 
+def _fallback_attrs(tts: TTS, index: int) -> dict[str, Any]:
+    """Which instance a fallback event is about: its label, position, model and provider."""
+    attrs: dict[str, Any] = {
+        trace_types.ATTR_FALLBACK_LABEL: tts.label,
+        trace_types.ATTR_FALLBACK_INDEX: index,
+        trace_types.ATTR_GEN_AI_REQUEST_MODEL: tts.model,
+    }
+    if (normalized := trace_types.gen_ai_provider_name(tts.provider)) is not None:
+        attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
+    return attrs
+
+
 def _record_fallback_failure(tts: TTS, index: int) -> None:
-    trace.get_current_span().add_event(
-        "fallback_provider_failed",
-        {trace_types.ATTR_FALLBACK_LABEL: tts.label, trace_types.ATTR_FALLBACK_INDEX: index},
-    )
+    trace.get_current_span().add_event("fallback_provider_failed", _fallback_attrs(tts, index))
 
 
-def _record_fallback_served(tts: TTS, index: int) -> None:
-    trace.get_current_span().set_attributes(
-        {trace_types.ATTR_FALLBACK_LABEL: tts.label, trace_types.ATTR_FALLBACK_INDEX: index}
-    )
+def _record_fallback_served(tts: TTS, index: int, request_span: trace.Span | None = None) -> None:
+    attrs = _fallback_attrs(tts, index)
+    trace.get_current_span().set_attributes(attrs)
+    if request_span is not None:
+        # the request span was stamped with the instance expected to serve; say which one did
+        request_span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model,
+                **{k: v for k, v in attrs.items() if k == trace_types.ATTR_GEN_AI_PROVIDER_NAME},
+            }
+        )
 
 
 class FallbackChunkedStream(ChunkedStream):
@@ -298,7 +318,7 @@ class FallbackChunkedStream(ChunkedStream):
                         for rf in resampler.flush():
                             output_emitter.push(rf.data.tobytes())
 
-                    _record_fallback_served(tts, i)
+                    _record_fallback_served(tts, i, self._tts_request_span)
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
                     _record_fallback_failure(tts, i)
@@ -492,7 +512,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             else:
                                 output_emitter.push(synthesized_audio.frame.data.tobytes())
 
-                        _record_fallback_served(tts, i)
+                        _record_fallback_served(tts, i, self._tts_request_span)
                         return
                     except Exception:
                         _record_fallback_failure(tts, i)

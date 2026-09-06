@@ -119,8 +119,11 @@ async def test_reports_active_instance_model_and_provider() -> None:
             "model_name": "fallback-model",
             "model_provider": "fallback",
         }
-        # the adapter keeps its own stable identity for spans, logs, and error events
-        assert fallback_adapter.model == "FallbackAdapter"
+        # model and provider follow the instance that serves next, so spans and metrics name
+        # the model that answered rather than the adapter; the label stays the adapter's own
+        assert fallback_adapter.model == "fallback-model"
+        assert fallback_adapter.provider == "fallback"
+        assert "FallbackAdapter" in fallback_adapter.label
     finally:
         await fallback_adapter.aclose()
 

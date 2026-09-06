@@ -234,6 +234,15 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     assert (failed.attributes or {})[trace_types.ATTR_FALLBACK_INDEX] == 0
     assert (run.attributes or {})[trace_types.ATTR_FALLBACK_LABEL] == secondary.label
     assert (run.attributes or {})[trace_types.ATTR_FALLBACK_INDEX] == 1
+    # the event names the failed instance's model; the run and the request span name the
+    # one that served: request = expected (the primary), response = who answered
+    assert (failed.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    assert (run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == secondary.model
+    request_attrs = request.attributes or {}
+    assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
+    # and the adapter itself now reports who serves next
+    assert adapter.model == secondary.model and adapter.provider == secondary.provider
 
 
 def test_interrupt_source_first_wins() -> None:

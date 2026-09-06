@@ -88,11 +88,15 @@ class FallbackAdapter(
 
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next: the primary before any traffic, then
+        the one that most recently served. Spans and metrics read this, so a failover shows
+        the model that actually answered rather than the adapter."""
+        return self._active_instance.model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._active_instance.provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
@@ -138,6 +142,21 @@ class FallbackAdapter(
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
+
+
+def _provider_attr(llm: LLM) -> dict[str, str]:
+    normalized = trace_types.gen_ai_provider_name(llm.provider)
+    return {trace_types.ATTR_GEN_AI_PROVIDER_NAME: normalized} if normalized else {}
+
+
+def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
+    """Which instance a fallback event is about: its label, position, model and provider."""
+    return {
+        trace_types.ATTR_FALLBACK_LABEL: llm.label,
+        trace_types.ATTR_FALLBACK_INDEX: index,
+        trace_types.ATTR_GEN_AI_REQUEST_MODEL: llm.model,
+        **_provider_attr(llm),
+    }
 
 
 class FallbackLLMStream(LLMStream):
@@ -289,20 +308,21 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
-                    trace.get_current_span().set_attributes(
-                        {
-                            trace_types.ATTR_FALLBACK_LABEL: llm.label,
-                            trace_types.ATTR_FALLBACK_INDEX: i,
-                        }
-                    )
+                    served = _fallback_attrs(llm, i)
+                    trace.get_current_span().set_attributes(served)
+                    if self._llm_request_span is not None:
+                        # the request span was stamped with the instance expected to serve;
+                        # say which one did (gen_ai.response.model), and whose provider
+                        self._llm_request_span.set_attributes(
+                            {
+                                trace_types.ATTR_GEN_AI_RESPONSE_MODEL: llm.model,
+                                **_provider_attr(llm),
+                            }
+                        )
                     return
                 except Exception:  # exceptions already logged inside _try_generate
                     trace.get_current_span().add_event(
-                        "fallback_provider_failed",
-                        {
-                            trace_types.ATTR_FALLBACK_LABEL: llm.label,
-                            trace_types.ATTR_FALLBACK_INDEX: i,
-                        },
+                        "fallback_provider_failed", _fallback_attrs(llm, i)
                     )
                     if llm_status.available:
                         llm_status.available = False

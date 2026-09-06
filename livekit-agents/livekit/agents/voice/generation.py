@@ -39,6 +39,7 @@ from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
+    from ..tts import TTS
     from .agent import Agent, ModelSettings
     from .agent_session import AgentSession
     from .transcription.text_transforms import TextTransforms
@@ -154,12 +155,15 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
+    llm_instance: llm.LLM | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
+        _llm_inference_task(
+            node, chat_ctx, tool_ctx, model_settings, data, model, provider, llm_instance
+        )
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -183,6 +187,7 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
+    llm_instance: llm.LLM | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     data.started_at = start_time
@@ -345,7 +350,26 @@ async def _llm_inference_task(
     _record_uninstrumented_inference(
         current_span, inference_recorded, chat_ctx, tools, data, model, provider, usage=usage
     )
+    _record_serving_instance(current_span, llm_instance)
     return True
+
+
+def _record_serving_instance(span: trace.Span, instance: Any) -> None:
+    """Name the model that actually served, once the node is done.
+
+    The request attributes were stamped from the configured object when the node started.
+    For a fallback adapter that is the instance expected to serve; if it failed over
+    mid-request the one that answered is only known now, and its ``model`` and ``provider``
+    are dynamic, so read them again and record them as the response side."""
+    if instance is None or not span.is_recording():
+        return
+    served_model = getattr(instance, "model", None)
+    if served_model:
+        span.set_attribute(trace_types.ATTR_GEN_AI_RESPONSE_MODEL, served_model)
+    if (
+        normalized := trace_types.gen_ai_provider_name(getattr(instance, "provider", None))
+    ) is not None:
+        span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
 
 
 def _record_uninstrumented_inference(
@@ -436,13 +460,16 @@ def perform_tts_inference(
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
+    tts_instance: TTS | None = None,
 ) -> tuple[asyncio.Task[bool], _TTSGenerationData]:
     audio_ch = aio.Chan[rtc.AudioFrame]()
     timed_texts_fut = asyncio.Future[aio.Chan[io.TimedString] | None]()
     data = _TTSGenerationData(audio_ch=audio_ch, timed_texts_fut=timed_texts_fut)
 
     tts_task = asyncio.create_task(
-        _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
+        _tts_inference_task(
+            node, input, model_settings, data, text_transforms, model, provider, tts_instance
+        )
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
@@ -466,6 +493,7 @@ async def _tts_inference_task(
     text_transforms: Sequence[TextTransforms] | None,
     model: str | None = None,
     provider: str | None = None,
+    tts_instance: TTS | None = None,
 ) -> bool:
     current_span = trace.get_current_span()
     if model:
@@ -521,6 +549,7 @@ async def _tts_inference_task(
 
             audio_ch.send_nowait(audio_frame)
             audio_duration += audio_frame.duration
+        _record_serving_instance(current_span, tts_instance)
         return audio_duration > 0
     finally:
         await aio.gracefully_cancel(_start_time_task)
