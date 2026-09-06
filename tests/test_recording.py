@@ -1084,6 +1084,101 @@ def test_exporters_only_upload_records_of_registered_jobs() -> None:
     inner.export.assert_called_once_with([recorded_rec])
 
 
+def test_span_gate_holds_spans_of_undecided_jobs() -> None:
+    """A job's first spans end before session.start() decides whether it records. The gate
+    holds them while the job is open, uploads them when the job registers with traces on,
+    drops them when it registers with traces off or ends without registering."""
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from livekit.agents.telemetry.traces import (
+        _MAX_PENDING_SPANS_PER_JOB,
+        _GatedSpanExporter,
+        _JobTelemetry,
+    )
+
+    export_jobs: dict[str, _JobTelemetry] = {}
+    inner = MagicMock()
+    gate = _GatedSpanExporter(inner, export_jobs)
+
+    def _span(job_id: str, name: str = "room_connect") -> SimpleNamespace:
+        return SimpleNamespace(name=name, attributes={"job_id": job_id})
+
+    # not open, not registered: dropped as before
+    assert gate.export([_span("job-unknown")]) is SpanExportResult.SUCCESS
+    inner.export.assert_not_called()
+
+    # open and undecided: held, oldest first, bounded
+    gate.open_job("job-1")
+    early = [_span("job-1", f"early-{i}") for i in range(3)]
+    assert gate.export(early) is SpanExportResult.SUCCESS
+    inner.export.assert_not_called()
+    gate.export([_span("job-1", "overflow") for _ in range(_MAX_PENDING_SPANS_PER_JOB)])
+    assert len(gate._pending["job-1"]) == _MAX_PENDING_SPANS_PER_JOB
+    assert gate._pending["job-1"][:3] == early
+
+    # the decision: traces on -> everything held goes out in order
+    export_jobs["job-1"] = _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+    gate.job_registered("job-1", traces_enabled=True)
+    (flushed,), _ = inner.export.call_args
+    assert flushed[:3] == early and len(flushed) == _MAX_PENDING_SPANS_PER_JOB
+    assert "job-1" not in gate._pending
+    # and later spans of the registered job pass straight through
+    inner.reset_mock()
+    late = _span("job-1", "agent_turn")
+    gate.export([late])
+    inner.export.assert_called_once_with([late])
+
+    # traces off -> dropped
+    inner.reset_mock()
+    gate.open_job("job-2")
+    gate.export([_span("job-2")])
+    export_jobs["job-2"] = _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=True)
+    gate.job_registered("job-2", traces_enabled=False)
+    inner.export.assert_not_called()
+    assert "job-2" not in gate._pending
+
+    # never registered -> dropped at close, and no longer held afterwards
+    gate.open_job("job-3")
+    gate.export([_span("job-3")])
+    gate.close_job("job-3")
+    assert "job-3" not in gate._pending
+    gate.export([_span("job-3")])
+    inner.export.assert_not_called()
+
+
+def test_prepare_cloud_tracer_holds_early_spans_until_the_job_registers() -> None:
+    """The pipeline is prepared when the job starts, so its first spans record; they are
+    uploaded once init_recording registers the job, or dropped if the job never does."""
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _discard_cloud_tracer, _prepare_cloud_tracer
+
+    with _stub_cloud_tracer_deps() as stubs:
+        _prepare_cloud_tracer(
+            room_id="room-1", job_id="job-1", observability_url="https://obs.example.com"
+        )
+        gate = traces_mod._cloud._span_gate
+        assert gate is not None and "job-1" in gate._open_jobs
+        assert "job-1" not in traces_mod._cloud._export_jobs  # prepared, not registered
+
+        held = SimpleNamespace(name="job_entrypoint", attributes={"job_id": "job-1"})
+        gate.export([held])
+        inner = stubs.span_exporter.return_value
+        inner.export.assert_not_called()
+
+        _setup_cloud_tracer_for_job("job-1")
+        inner.export.assert_called_once_with([held])
+
+        # a second job in the same process: same pipeline, its own hold
+        _prepare_cloud_tracer(
+            room_id="room-2", job_id="job-2", observability_url="https://obs.example.com"
+        )
+        assert traces_mod._cloud._span_gate is gate and "job-2" in gate._open_jobs
+        gate.export([SimpleNamespace(name="room_connect", attributes={"job_id": "job-2"})])
+        _discard_cloud_tracer("job-2")  # recording never enabled: cleanup drops it
+        assert "job-2" not in gate._pending and "job-2" not in gate._open_jobs
+        assert inner.export.call_count == 1
+
+
 def test_shutdown_telemetry_is_idempotent_and_safe_without_setup() -> None:
     """_on_cleanup runs for every job, including ones that never initialized
     recording; and a second teardown must not double-flush."""

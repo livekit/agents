@@ -179,6 +179,47 @@ def test_framework_callbacks_are_not_user_callbacks() -> None:
     assert _is_framework_callback(AgentSession.aclose)
 
 
+def test_job_span_is_back_dated_and_carries_the_join_keys(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The job's root span starts at the availability request and is ended by the job
+    runner after shutdown; here only its creation is checked."""
+    from livekit.agents.ipc.job_proc_lazy_main import _start_job_span
+
+    t0 = 1_700_000_000.0
+    info = _info(received_at=t0, accepted_at=t0 + 0.2, assigned_at=t0 + 0.5, launched_at=t0 + 0.6)
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    span = _start_job_span(ctx)
+    assert span.is_recording()
+    # a child created under it (the session, a connect) nests: the root is a real span
+    with tracer.start_as_current_span("agent_session", context=trace.set_span_in_context(span)):
+        pass
+    span.end()
+
+    [root] = _spans(span_exporter, "job_entrypoint")
+    assert root.start_time == pytest.approx(t0 * 1e9, abs=1000)
+    attrs = root.attributes or {}
+    assert attrs[trace_types.ATTR_JOB_ID] == "AJ_1"
+    assert attrs[trace_types.ATTR_DISPATCH_ID] == "AD_1"
+    assert attrs[trace_types.ATTR_WORKER_ID] == "W_1"
+    assert attrs[trace_types.ATTR_JOB_ACCEPT_LATENCY] == pytest.approx(0.2)
+    assert [e.name for e in root.events][:4] == [
+        "job_received",
+        "job_accepted",
+        "job_assigned",
+        "process_assigned",
+    ]
+    [session] = _spans(span_exporter, "agent_session")
+    assert session.parent is not None and session.parent.span_id == root.context.span_id
+
+
 def test_server_timestamp_units() -> None:
     assert _server_timestamp_seconds(1_700_000_000_123_456_789) == pytest.approx(1_700_000_000.123)
     assert _server_timestamp_seconds(1_700_000_000_123) == pytest.approx(1_700_000_000.123)

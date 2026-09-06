@@ -325,37 +325,36 @@ class _JobProc:
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
         self._job_ctx._start_log_buffering()
+        # the trace pipeline must exist before the job's first span, or that span (the job's
+        # root) is a non-recording stub and everything under it starts its own trace
+        self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
+        # the job's root span: from the availability request to the end of the shutdown
+        # sequence, so the whole job reads as one trace (the user entrypoint returning is an
+        # event on it, most entrypoints return right after session.start())
+        job_span = _start_job_span(self._job_ctx)
+        self._entrypoint_span_context = trace.set_span_in_context(job_span)
+
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:
-            job = job_ctx.job
-            info = job_ctx._info
-            entrypoint_started_at = time.time()
-            # back-dated to the availability request so the span covers the whole dispatch
-            start_time_ns = int(info.received_at * 1e9) if info.received_at else None
-            with tracer.start_as_current_span(
-                "job_entrypoint", start_time=start_time_ns
-            ) as current_span:
-                current_span.set_attributes(
-                    {
-                        trace_types.ATTR_JOB_ID: job.id,
-                        trace_types.ATTR_AGENT_NAME: job.agent_name,
-                        trace_types.ATTR_ROOM_NAME: job.room.name,
-                        trace_types.ATTR_ROOM_SID: job.room.sid,
-                        trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
-                        trace_types.ATTR_WORKER_ID: info.worker_id,
-                        trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
-                    }
-                )
-                _record_dispatch_timeline(current_span, info, entrypoint_started_at)
-                self._entrypoint_span_context = otel_context.get_current()
+            with tracer.use_span(
+                job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+            ):
                 # blocked-loop reports emitted from the heartbeat need this job's context (for
-                # attribution) and the job_entrypoint span (as the parent when no session is up)
+                # attribution) and the job span (as the parent when no session is up)
                 if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
                     monitor.set_report_context(contextvars.copy_context())
-                await self._job_entrypoint_fnc(job_ctx)
+                try:
+                    await self._job_entrypoint_fnc(job_ctx)
+                except asyncio.CancelledError:
+                    job_span.add_event("entrypoint_cancelled")
+                    raise
+                except Exception as e:
+                    trace_utils.record_exception(job_span, e)
+                    raise
+                job_span.add_event("entrypoint_returned")
 
         job_entry_task = asyncio.create_task(
             _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
@@ -411,6 +410,8 @@ class _JobProc:
             },
         ):
             await self._shutdown_job(job_entry_task, shutdown_info)
+        # ended before the telemetry release below flushes: the root goes out with the job
+        job_span.end()
 
         if tasks := self._job_ctx._pending_tasks:
             await aio.cancel_and_wait(*tasks)
@@ -561,6 +562,32 @@ def _server_timestamp_seconds(value: int) -> float:
     if value > 1e11:
         return value / 1e3
     return float(value)
+
+
+def _start_job_span(job_ctx: JobContext) -> trace.Span:
+    """The job's root span, ``job_entrypoint``, back-dated to the availability request.
+
+    Never made current by the caller for longer than the user entrypoint runs; ended by
+    ``_run_job_task`` after the shutdown sequence, before the telemetry release."""
+    job = job_ctx.job
+    info = job_ctx._info
+    entrypoint_started_at = time.time()
+    start_time_ns = int(info.received_at * 1e9) if info.received_at else None
+    span = tracer.start_span(
+        "job_entrypoint",
+        start_time=start_time_ns,
+        attributes={
+            trace_types.ATTR_JOB_ID: job.id,
+            trace_types.ATTR_AGENT_NAME: job.agent_name,
+            trace_types.ATTR_ROOM_NAME: job.room.name,
+            trace_types.ATTR_ROOM_SID: job.room.sid,
+            trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
+            trace_types.ATTR_WORKER_ID: info.worker_id,
+            trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
+        },
+    )
+    _record_dispatch_timeline(span, info, entrypoint_started_at)
+    return span
 
 
 def _record_dispatch_timeline(

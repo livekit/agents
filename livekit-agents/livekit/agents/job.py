@@ -48,7 +48,9 @@ from .telemetry import (
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
+    _discard_cloud_tracer,
     _JobTelemetry,
+    _prepare_cloud_tracer,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -282,6 +284,25 @@ class JobContext:
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
 
+    def _prepare_telemetry(self) -> None:
+        """Have the cloud trace pipeline up before the job's first span (see
+        ``_CloudTelemetry.prepare``). Whether anything is uploaded is decided later, in
+        ``init_recording``; until then the job's spans are held."""
+        if self._info.fake_job:
+            return
+        obs_url = _observability_url(self._info.url)
+        if not obs_url:
+            return
+        try:
+            _prepare_cloud_tracer(
+                room_id=self.job.room.sid,
+                job_id=self.job.id,
+                agent_name=self.job.agent_name,
+                observability_url=obs_url,
+            )
+        except Exception:
+            logger.exception("failed to prepare the cloud trace pipeline")
+
     def _stop_log_buffering(self) -> None:
         """Remove the buffering handler without replaying."""
         handler = self._early_log_handler
@@ -382,6 +403,8 @@ class JobContext:
             # remaining telemetry and leaves any concurrent job's export untouched
             if self._telemetry_state is not None:
                 _shutdown_telemetry(self.job.id)
+            # a job that never registered still had spans held for it by the gate
+            _discard_cloud_tracer(self.job.id)
 
         # the telemetry release joins exporter flush threads doing network I/O, and the
         # tempdir may hold large recordings: neither belongs on the event loop (the loop

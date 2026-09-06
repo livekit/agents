@@ -417,24 +417,63 @@ def _job_export_state(
     return export_jobs.get(job_id)
 
 
+_MAX_PENDING_SPANS_PER_JOB = 1024
+
+
 class _GatedSpanExporter(SpanExporter):
     """Wraps the OTLP span exporter so only spans of registered, trace-enabled
-    jobs are uploaded (see ``_job_export_state``)."""
+    jobs are uploaded (see ``_job_export_state``).
+
+    A job decides whether it records in ``session.start()``, but its first spans
+    (``job_entrypoint``, ``room_connect``, a stall while models load) end before
+    that. Spans of a job that has started but not decided yet are held here,
+    oldest first up to a bound, and flushed or dropped with the decision; a job
+    that ends without deciding drops them at cleanup."""
 
     def __init__(self, inner: SpanExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
         self._inner = inner
         self._export_jobs = export_jobs
+        self._lock = threading.Lock()
+        self._open_jobs: set[str] = set()
+        self._pending: dict[str, list[ReadableSpan]] = {}
+
+    def open_job(self, job_id: str) -> None:
+        """The job started; hold its spans until it registers or closes."""
+        with self._lock:
+            self._open_jobs.add(job_id)
+
+    def job_registered(self, job_id: str, *, traces_enabled: bool) -> None:
+        """The job decided: upload what was held if it records traces, else drop it."""
+        with self._lock:
+            self._open_jobs.discard(job_id)
+            held = self._pending.pop(job_id, [])
+        if held and traces_enabled:
+            self._inner.export([pii.restore_pii(s) for s in held])
+
+    def close_job(self, job_id: str) -> None:
+        """The job ended; anything still held was never meant to upload."""
+        with self._lock:
+            self._open_jobs.discard(job_id)
+            self._pending.pop(job_id, None)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        exportable = [
-            # PII filtered for third-party exporters is put back here: what LiveKit Cloud
-            # may receive is the project's setting, applied at its collector. restore_pii
-            # is a no-op once that setting mandates redaction.
-            pii.restore_pii(s)
-            for s in spans
-            if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
-            and state.traces_enabled
-        ]
+        exportable: list[ReadableSpan] = []
+        with self._lock:
+            for s in spans:
+                state = _job_export_state(self._export_jobs, s.attributes)
+                if state is not None:
+                    if state.traces_enabled:
+                        # PII filtered for third-party exporters is put back here: what
+                        # LiveKit Cloud may receive is the project's setting, applied at its
+                        # collector. restore_pii is a no-op once that setting mandates
+                        # redaction.
+                        exportable.append(pii.restore_pii(s))
+                    continue
+                job_id = (s.attributes or {}).get("job_id")
+                if isinstance(job_id, str) and job_id in self._open_jobs:
+                    held = self._pending.setdefault(job_id, [])
+                    if len(held) < _MAX_PENDING_SPANS_PER_JOB:
+                        held.append(s)
         if not exportable:
             return SpanExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -750,6 +789,7 @@ class _CloudTelemetry:
         self._trace_provider_attached: trace_sdk.TracerProvider | None = None
         self._span_metadata_processor: _MetadataSpanProcessor | None = None
         self._span_batch_processor: BatchSpanProcessor | None = None
+        self._span_gate: _GatedSpanExporter | None = None
 
         # logs
         self._logger_provider: LoggerProvider | None = None
@@ -770,6 +810,40 @@ class _CloudTelemetry:
     def log_handler(self) -> _TraceLevelLoggingHandler | None:
         """The framework's own root-logger OTLP handler, if logs were configured."""
         return self._log_handler
+
+    def prepare(
+        self, *, room_id: str, job_id: str, agent_name: str, observability_url: str
+    ) -> None:
+        """Have the trace pipeline up before the job's first span.
+
+        Without a tracer provider every span is a non-recording stub: the job's
+        root (``job_entrypoint``) and everything before ``session.start()`` would
+        be lost, and the spans created after it would have no valid parent and
+        start their own traces (``agent_session`` used to show up as a root for
+        this reason). Called when the job starts, on the process's first job; it
+        creates the provider and the gated exporter but registers nothing: the
+        job's spans are held by the gate until ``configure`` decides."""
+        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        if agent_name:
+            base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
+        with self._lock:
+            if self._observability_url is None:
+                self._observability_url = observability_url
+            if self._session is None:
+                self._session = _AuthRefreshingSession(_AuthHeaderProvider())
+            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+            self._ensure_trace_pipeline(resource, self._observability_url)
+            if self._span_gate is not None:
+                self._span_gate.open_job(job_id)
+            if not self._atexit_registered:
+                self._atexit_registered = True
+                atexit.register(self.shutdown_at_exit)
+
+    def discard(self, job_id: str) -> None:
+        """A job ended without ever registering: drop whatever the gate held for it."""
+        with self._lock:
+            if self._span_gate is not None:
+                self._span_gate.close_job(job_id)
 
     def configure(
         self,
@@ -855,6 +929,10 @@ class _CloudTelemetry:
                 logs_enabled=enable_logs,
             )
             self._export_jobs[job_id] = state
+            if self._span_gate is not None:
+                # the spans that ended before this decision (job_entrypoint's children so
+                # far) go out now, or never
+                self._span_gate.job_registered(job_id, traces_enabled=enable_traces)
 
         return state
 
@@ -911,9 +989,8 @@ class _CloudTelemetry:
             session=self._session,
         )
         self._span_metadata_processor = _MetadataSpanProcessor()
-        self._span_batch_processor = BatchSpanProcessor(
-            _GatedSpanExporter(span_exporter, self._export_jobs)
-        )
+        self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
+        self._span_batch_processor = BatchSpanProcessor(self._span_gate)
         self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
         provider.add_span_processor(self._span_metadata_processor)
         provider.add_span_processor(self._span_batch_processor)
@@ -1024,6 +1101,8 @@ class _CloudTelemetry:
 
         with self._lock:
             self._export_jobs.pop(job_id, None)
+            if self._span_gate is not None:
+                self._span_gate.close_job(job_id)
             if self._export_jobs:
                 # another job is still running in this process; keep exporting
                 return
@@ -1064,6 +1143,18 @@ _cloud = _CloudTelemetry()
 def _cloud_log_handler() -> _TraceLevelLoggingHandler | None:
     """The framework's own root-logger OTLP handler, if configured for this job."""
     return _cloud.log_handler
+
+
+def _prepare_cloud_tracer(
+    *, room_id: str, job_id: str, agent_name: str = "", observability_url: str
+) -> None:
+    _cloud.prepare(
+        room_id=room_id, job_id=job_id, agent_name=agent_name, observability_url=observability_url
+    )
+
+
+def _discard_cloud_tracer(job_id: str) -> None:
+    _cloud.discard(job_id)
 
 
 def _setup_cloud_tracer(
