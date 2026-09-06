@@ -196,7 +196,6 @@ SAFE_KEYS = frozenset(
         "lk.shutdown.reason",
         "lk.shutdown.user_initiated",
         "lk.callback.name",
-        # eot_wait / speech scheduling (timings and enums)
         # eou_wait / speech scheduling (timings and enums)
         "lk.eou.outcome",
         "lk.eou.wait_duration",
