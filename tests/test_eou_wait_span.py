@@ -1,7 +1,7 @@
-"""The ``eot_wait`` span: one per user turn, from the last speech anchor to the turn decision.
+"""The ``eou_wait`` span: one per user turn, from the last speech anchor to the turn decision.
 
-``eot_detection`` (the turn-detector inference) nests under it; the wait itself was previously
-invisible, so a 2.5 s endpointing delay showed up as an empty gap between ``eot_detection`` and
+``eou_detection`` (the turn-detector inference) nests under it; the wait itself was previously
+invisible, so a 2.5 s endpointing delay showed up as an empty gap between ``eou_detection`` and
 ``agent_turn``. Also covers the ``on_user_turn_completed`` span and the queue-wait attribute on
 ``agent_turn`` through a full fake session."""
 
@@ -58,7 +58,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     """Enough of ``AudioRecognition`` to drive ``_run_eou_detection`` with real spans.
 
     ``_hooks.on_end_of_turn`` commits by default. VAD-only turn detection unless
-    ``with_detector`` wires the streaming turn-detector mocks (for ``eot_detection``)."""
+    ``with_detector`` wires the streaming turn-detector mocks (for ``eou_detection``)."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
     ar._session._room_io = None  # keep participant attributes off the user_turn span
@@ -103,9 +103,9 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._last_emitted_prediction = None
     ar._user_turn_span = None
     ar._user_turn_start = None
-    ar._eot_wait_span = None
-    ar._eot_wait_started_at_ns = None
-    ar._eot_wait_rearms = 0
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
     ar._closing = asyncio.Event()
 
     endpointing = MagicMock()
@@ -172,7 +172,7 @@ async def test_wait_span_covers_last_speech_to_commit(span_exporter: InMemorySpa
     ar._run_eou_detection(llm.ChatContext(), trigger="vad")
     await _await_bounce(ar)
 
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     [user_turn] = _spans(span_exporter, "user_turn")
     assert wait.parent is not None
     assert wait.parent.span_id == user_turn.context.span_id
@@ -191,7 +191,7 @@ async def test_wait_span_covers_last_speech_to_commit(span_exporter: InMemorySpa
     assert (wait.end_time - wait.start_time) / 1e9 == wait_duration
     # the wait closes before the turn does
     assert user_turn.end_time is not None and wait.end_time <= user_turn.end_time
-    assert ar._eot_wait_span is None
+    assert ar._eou_wait_span is None
 
 
 async def test_later_trigger_rearms_the_same_span(span_exporter: InMemorySpanExporter) -> None:
@@ -204,7 +204,7 @@ async def test_later_trigger_rearms_the_same_span(span_exporter: InMemorySpanExp
     ar._run_eou_detection(llm.ChatContext(), trigger="stt")
     await _await_bounce(ar)
 
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     attrs = wait.attributes or {}
     assert attrs[trace_types.ATTR_EOU_OUTCOME] == "committed"
     assert attrs[trace_types.ATTR_EOU_REARM_COUNT] == 1
@@ -226,7 +226,7 @@ async def test_resumed_speech_ends_wait_at_speech_start(
     after = time.time()
     await _cancel_bounce(ar)
 
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     attrs = wait.attributes or {}
     assert attrs[trace_types.ATTR_EOU_OUTCOME] == "user_resumed"
     # ended where the resumed speech started, per VAD, clamped to the wait's own start
@@ -249,7 +249,7 @@ async def test_teardown_drops_an_open_wait(span_exporter: InMemorySpanExporter) 
     ar._end_user_turn_span()
     await _cancel_bounce(ar)
 
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     assert (wait.attributes or {})[trace_types.ATTR_EOU_OUTCOME] == "dropped"
     [user_turn] = _spans(span_exporter, "user_turn")
     assert user_turn.end_time is not None and wait.end_time is not None
@@ -264,25 +264,22 @@ async def test_not_committed_turn_keeps_waiting(span_exporter: InMemorySpanExpor
     await _await_bounce(ar)
 
     # the decision is deferred: the span records the rejection and stays open
-    assert _spans(span_exporter, "eot_wait") == []
-    assert ar._eot_wait_span is not None and ar._eot_wait_span.is_recording()
+    assert _spans(span_exporter, "eou_wait") == []
+    assert ar._eou_wait_span is not None and ar._eou_wait_span.is_recording()
     ar._end_user_turn_span()
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     assert len(_events(wait, "not_committed")) == 1
     assert (wait.attributes or {})[trace_types.ATTR_EOU_OUTCOME] == "dropped"
 
 
-async def test_detection_nests_under_wait_with_new_name(
-    span_exporter: InMemorySpanExporter,
-) -> None:
+async def test_detection_nests_under_wait(span_exporter: InMemorySpanExporter) -> None:
     ar = _make_recognition(min_delay=0.01, with_detector=True)
     ar._last_speaking_time = time.time()
     ar._run_eou_detection(llm.ChatContext(), trigger="vad")
     await _await_bounce(ar)
 
-    assert _spans(span_exporter, "eou_detection") == []
-    [detection] = _spans(span_exporter, "eot_detection")
-    [wait] = _spans(span_exporter, "eot_wait")
+    [detection] = _spans(span_exporter, "eou_detection")
+    [wait] = _spans(span_exporter, "eou_wait")
     assert detection.parent is not None
     assert detection.parent.span_id == wait.context.span_id
     assert (detection.attributes or {})[trace_types.ATTR_EOU_PROBABILITY] == 0.9
@@ -309,7 +306,7 @@ async def test_full_session_turn_handoff_spans(span_exporter: InMemorySpanExport
     session = create_session(actions, speed_factor=2.0)
     await asyncio.wait_for(run_session(session, _HookAgent(), drain_delay=1.0), timeout=30)
 
-    [wait] = _spans(span_exporter, "eot_wait")
+    [wait] = _spans(span_exporter, "eou_wait")
     [user_turn] = _spans(span_exporter, "user_turn")
     assert wait.parent is not None and wait.parent.span_id == user_turn.context.span_id
     assert (wait.attributes or {})[trace_types.ATTR_EOU_OUTCOME] == "committed"

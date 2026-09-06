@@ -73,7 +73,7 @@ ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_EOU_SOURCE = "lk.eou.source"
 ATTR_EOU_DETECTION_DELAY = "lk.eou.detection_delay"
 ATTR_EOU_FROM_CACHE = "lk.eou.from_cache"
-# eot_wait span: from the user's last speech to the turn decision
+# eou_wait span: from the user's last speech to the turn decision
 ATTR_EOU_OUTCOME = "lk.eou.outcome"
 """How the wait ended: ``committed``, ``user_resumed``, or ``dropped``."""
 ATTR_EOU_WAIT_DURATION = "lk.eou.wait_duration"
