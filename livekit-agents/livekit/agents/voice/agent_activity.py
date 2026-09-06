@@ -1176,6 +1176,11 @@ class AgentActivity(RecognitionHooks):
             turn_detection=self._turn_detection,
             stt_model=stt_metadata.model_name,
             stt_provider=stt_metadata.model_provider,
+            stt_metadata=lambda: (
+                Metadata(**current_stt.metrics_metadata)
+                if (current_stt := self.stt) is not None
+                else Metadata()
+            ),
             stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
             if self.stt
             else False,

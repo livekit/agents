@@ -59,6 +59,7 @@ class TestUserTurnStartPersistence:
         audio_recognition._stt_pipeline = None
         audio_recognition._stt_model = None
         audio_recognition._stt_provider = None
+        audio_recognition._stt_metadata = None
         audio_recognition._audio_transcript = ""
         audio_recognition._audio_interim_transcript = ""
         audio_recognition._last_speaking_time = None

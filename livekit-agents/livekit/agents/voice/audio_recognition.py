@@ -26,6 +26,7 @@ from ..inference.interruption import (
 )
 from ..language import LanguageCode
 from ..log import logger
+from ..metrics.base import Metadata
 from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -249,6 +250,7 @@ class AudioRecognition:
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
         stt_provider: str | None = None,
+        stt_metadata: Callable[[], Metadata] | None = None,
         stt_aligned_transcript: bool = False,
     ) -> None:
         self._session = session
@@ -264,6 +266,7 @@ class AudioRecognition:
         self._vad = vad
         self._stt_model = stt_model
         self._stt_provider = stt_provider
+        self._stt_metadata = stt_metadata
         self._stt_aligned_transcript = stt_aligned_transcript
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
@@ -1944,14 +1947,19 @@ class AudioRecognition:
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
 
-        # add STT model/provider attributes
-        if self._stt_model:
+        # Resolve at span creation: fallback adapters can switch without an STT hot swap.
+        metadata = (
+            self._stt_metadata()
+            if self._stt_metadata is not None
+            else Metadata(model_name=self._stt_model, model_provider=self._stt_provider)
+        )
+        if metadata.model_name:
             self._user_turn_span.set_attribute(
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._stt_model
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL, metadata.model_name
             )
-        if self._stt_provider:
+        if metadata.model_provider:
             self._user_turn_span.set_attribute(
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME, self._stt_provider
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME, metadata.model_provider
             )
 
         return self._user_turn_span
