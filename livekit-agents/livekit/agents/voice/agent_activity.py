@@ -948,9 +948,10 @@ class AgentActivity(RecognitionHooks):
 
                 # one-shot — not re-run on resume, so toolsets and MCP connections
                 # survive pause/resume
-                with (
-                    tracer.use_span(start_span, end_on_exit=False),
-                    tracer.start_as_current_span("setup_toolsets"),
+                # detached: MCP servers connect here and their tasks live on; a current
+                # span would become the parent of whatever those tasks emit later
+                with tracer.detached_span(
+                    "setup_toolsets", context=trace.set_span_in_context(start_span)
                 ):
                     await self._setup_toolsets()
 

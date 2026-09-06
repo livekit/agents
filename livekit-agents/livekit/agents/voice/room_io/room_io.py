@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import context as otel_context
+
 from livekit import api, rtc
 
 from ... import utils
@@ -101,7 +103,11 @@ class RoomIO:
                     f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
                 )
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
+        """``trace_context`` is the parent for the startup spans (``wait_for_participant``,
+        ``wait_for_audio_track``, ``publish_audio_output``); it is never made current here,
+        since the tasks started below live for the whole session."""
+        self._start_trace_context = trace_context
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
@@ -353,8 +359,9 @@ class RoomIO:
     async def _init_task(self) -> None:
         await self._room_connected_fut
 
-        with tracer.start_as_current_span(
+        with tracer.detached_span(
             "wait_for_participant",
+            context=self._start_trace_context,
             attributes={
                 trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: self._participant_identity is not None
             },
@@ -365,14 +372,25 @@ class RoomIO:
 
             participant = await self._participant_available_fut
             wait_span.set_attributes(telemetry_utils.participant_attributes(participant))
-        self.set_participant(participant.identity)
+
+        # the initial track wait belongs to the startup bar; later participant switches don't
+        for stream in (self._audio_input, self._video_input):
+            if stream is not None:
+                stream.set_trace_context(self._start_trace_context)
+        try:
+            self.set_participant(participant.identity)
+        finally:
+            for stream in (self._audio_input, self._video_input):
+                if stream is not None:
+                    stream.set_trace_context(None)
 
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
-            await self._audio_output.start()
+            await self._audio_output.start(trace_context=self._start_trace_context)
+        self._start_trace_context = None
 
         if not self._ready_fut.done():
             self._ready_fut.set_result(None)

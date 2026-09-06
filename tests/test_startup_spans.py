@@ -8,6 +8,7 @@ events on ``agent_session``."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
@@ -28,7 +29,7 @@ from livekit.agents.ipc.job_proc_lazy_main import (
 )
 from livekit.agents.ipc.proto import StartJobRequest
 from livekit.agents.job import AutoSubscribe, JobAcceptArguments, RunningJobInfo
-from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import session_context, set_tracer_provider, trace_types, tracer
 from livekit.protocol import agent as agent_proto
 
 from .fake_session import FakeActions, create_session, run_session
@@ -355,6 +356,73 @@ async def test_sip_participant_attributes_copied_with_only_the_number_tagged(
     assert "lk.sip.unrelated" not in attrs
     [linked] = [e for e in root.events if e.name == "participant_linked"]
     assert (linked.attributes or {})[trace_types.ATTR_PARTICIPANT_KIND] == "PARTICIPANT_KIND_SIP"
+
+
+# -- startup spans are never current --
+
+
+def _live_session_job(root: trace.Span, start: trace.Span | None) -> MagicMock:
+    """A job whose primary session is running: root span set, startup span while starting."""
+    session = MagicMock()
+    session._root_span_context = trace.set_span_in_context(root)
+    session._session_start_context = trace.set_span_in_context(start) if start else None
+    job = MagicMock()
+    job._primary_agent_session = session
+    return job
+
+
+async def test_detached_span_is_not_current_and_takes_its_parent(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    with tracer.start_as_current_span("agent_session") as root:
+        parent = tracer.start_span("session_start")
+        with tracer.detached_span(
+            "publish_audio_output", context=trace.set_span_in_context(parent)
+        ) as span:
+            # a task spawned here inherits the ambient context, not the detached span
+            assert trace.get_current_span() is root
+            inherited = await asyncio.create_task(_current_span_name())
+            assert inherited == "agent_session"
+        parent.end()
+    [published] = _spans(span_exporter, "publish_audio_output")
+    assert published.parent is not None
+    assert published.parent.span_id == parent.get_span_context().span_id
+    assert span.end_time is not None  # type: ignore[attr-defined]
+
+
+async def _current_span_name() -> str:
+    return getattr(trace.get_current_span(), "name", "<none>")
+
+
+async def test_detached_span_records_the_exception(span_exporter: InMemorySpanExporter) -> None:
+    with pytest.raises(RuntimeError), tracer.detached_span("wait_for_participant"):
+        raise RuntimeError("no one came")
+    [span] = _spans(span_exporter, "wait_for_participant")
+    assert span.status.status_code.name == "ERROR"
+
+
+async def test_room_connect_during_start_nests_under_session_start_without_leaking(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The room's event tasks are created inside room.connect(); whatever is current there
+    becomes the parent of every span those tasks emit for the rest of the session."""
+    with tracer.start_as_current_span("agent_session") as root:
+        start = tracer.start_span("session_start")
+        job = _live_session_job(root, start)
+        with session_context.session_span("room_connect", job_ctx=job):
+            assert trace.get_current_span() is root
+            assert await asyncio.create_task(_current_span_name()) == "agent_session"
+        start.end()
+        # after startup the same call parents to the ambient span
+        with session_context.session_span("room_connect", job_ctx=_live_session_job(root, None)):
+            assert trace.get_current_span() is root
+
+    connects = _spans(span_exporter, "room_connect")
+    assert len(connects) == 2
+    assert connects[0].parent is not None
+    assert connects[0].parent.span_id == start.get_span_context().span_id
+    assert connects[1].parent is not None
+    assert connects[1].parent.span_id == root.get_span_context().span_id
 
 
 # -- session_start / session_close --

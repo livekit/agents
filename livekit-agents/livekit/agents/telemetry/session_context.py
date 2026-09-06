@@ -51,10 +51,15 @@ def session_span(
     attributes: dict[str, Any] | None = None,
     job_ctx: JobContext | None = None,
 ) -> Iterator[trace.Span]:
-    """A span for work that belongs to the session's story wherever it runs: under
-    ``agent_session`` once the session exists, under ``job_entrypoint`` before it. Both are
-    the ambient context at those points, so this is an ordinary current span. ``job_ctx`` is
-    accepted from callers that have it at hand (the ``JobContext`` methods themselves)."""
-    del job_ctx  # the ambient context already carries the right parent
-    with tracer.start_as_current_span(name, attributes=attributes) as span:
+    """A span for work that belongs to the session's story wherever it runs.
+
+    While the primary session is starting it nests under ``session_start`` with the rest of
+    the startup work; otherwise the ambient context is right already: ``agent_session`` once
+    the session exists, ``job_entrypoint`` before it. Never made current: ``room.connect()``
+    spawns the room's event tasks, and a current span here would become the parent of every
+    span they later emit (see ``detached_span``). ``job_ctx`` lets the ``JobContext`` methods
+    resolve the session regardless of which task or thread they run on."""
+    session = primary_session(_current_job(job_ctx))
+    parent = session._session_start_context if session is not None else None
+    with tracer.detached_span(name, context=parent, attributes=attributes) as span:
         yield span

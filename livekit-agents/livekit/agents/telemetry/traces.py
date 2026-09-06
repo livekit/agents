@@ -191,6 +191,30 @@ class _DynamicTracer(Tracer):
             yield span
 
     @_agnosticcontextmanager
+    def detached_span(
+        self,
+        name: str,
+        *,
+        context: otel_context.Context | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> Iterator[Span]:
+        """A span that is never made current.
+
+        For code that spawns long-lived tasks (connecting the room, publishing a track,
+        connecting MCP servers): a *current* span is inherited by every task created under
+        it and becomes the accidental parent of unrelated spans those tasks emit for the rest
+        of the session. The parent is ``context`` when given, else the ambient context; the
+        exception, if any, is recorded redaction-aware and the span is ended."""
+        span = self._tracer.start_span(name, context=context, attributes=attributes)
+        try:
+            yield span
+        except Exception as e:
+            telemetry_utils.record_exception(span, e)
+            raise
+        finally:
+            span.end()
+
+    @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
         if telemetry_utils.redaction_enabled():
             kwargs = {

@@ -1053,8 +1053,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_options.text_output = False
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
-                with tracer.use_span(session_start_span, end_on_exit=False):
-                    await self._room_io.start()
+                # the start context is passed, not made current: RoomIO spawns the tasks that
+                # live for the whole session, and they must not inherit session_start
+                await self._room_io.start(trace_context=self._session_start_context)
 
                 if hosting:
                     # only the primary session can have a session host
@@ -1100,11 +1101,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     }
                 )
                 if self._room_io:
-                    # automatically connect to the room when room io is used
-                    with tracer.use_span(session_start_span, end_on_exit=False):
-                        tasks.append(
-                            asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect")
-                        )
+                    # automatically connect to the room when room io is used; room_connect
+                    # finds session_start through the primary session (telemetry.session_context)
+                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
 
                 # session can be restarted, register the callbacks only once
                 if not self._job_context_cb_registered:

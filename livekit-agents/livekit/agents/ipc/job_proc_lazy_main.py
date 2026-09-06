@@ -224,6 +224,7 @@ class _JobProc:
             user_arguments=self._user_arguments,
             http_proxy=init_req.http_proxy or None,
         )
+        _preload_rtc_ffi()
         self._initialize_process_fnc(self._job_proc)
 
     @log_exceptions(logger=logger)
@@ -498,6 +499,27 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
+
+
+def _preload_rtc_ffi() -> None:
+    """Load the livekit-rtc native library while the process is still warming up.
+
+    The SDK loads it on the first FFI call. Without this that call happens inside the job
+    (creating the AudioProcessingModule at session start) and blocks the event loop for
+    100+ ms: a real stall on the session's timeline that no user code caused."""
+    started = time.perf_counter()
+    try:
+        from livekit.rtc._ffi_client import FfiClient
+
+        _ = FfiClient.instance
+    except Exception:
+        # the first real FFI call will report a proper error; this is only a warm-up
+        logger.debug("could not preload the livekit-rtc native library", exc_info=True)
+        return
+    logger.debug(
+        "preloaded the livekit-rtc native library",
+        extra={"elapsed": round(time.perf_counter() - started, 3)},
+    )
 
 
 def _callback_name(fnc: Any) -> str:

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Generic, TypeVar, cast
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 from typing_extensions import override
 
 import livekit.rtc as rtc
@@ -65,6 +65,11 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track_wait_span_name: str | None = None
         self._track_wait_span: trace.Span | None = None
         self._track_wait_started_at: float | None = None
+        self._trace_context: otel_context.Context | None = None
+
+    def set_trace_context(self, context: otel_context.Context | None) -> None:
+        """Parent for the next track-wait span (the session's startup bar), never current."""
+        self._trace_context = context
 
     async def __anext__(self) -> T:
         return await self._data_ch.__anext__()
@@ -193,6 +198,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track_wait_started_at = time.time()
         self._track_wait_span = tracer.start_span(
             self._track_wait_span_name,
+            context=self._trace_context,
             attributes={trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity},
         )
 
