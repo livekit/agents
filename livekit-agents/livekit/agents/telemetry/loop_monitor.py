@@ -338,7 +338,12 @@ class EventLoopMonitor:
         # descheduled process burns none, a GIL-holding call burns all of it. Only the former
         # is not the agent's fault, and it is never more than a warning.
         watchdog_starved = watchdog_gap >= lag * 0.5
-        process_descheduled = watchdog_starved and cpu_time < lag * 0.5
+        # likewise when the watchdog never caught the loop thread running anything and the
+        # thread burned no CPU: nothing was blocking it, the host simply did not run it (an
+        # idle loop woken late by the scheduler or timer coalescing). A blocking wait in code
+        # releases the GIL and gets sampled; a GIL-holding call burns CPU.
+        unobserved = not any(s.frames for s in samples)
+        process_descheduled = (watchdog_starved or unobserved) and cpu_time < lag * 0.5
         stacks = [
             f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
             + _format_frames(s.frames)
@@ -549,6 +554,7 @@ class EventLoopMonitor:
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
         span_context: trace.SpanContext | None = None
+        task: asyncio.Task[Any] | None = None
         with contextlib.suppress(Exception):
             task = asyncio.current_task(loop=self._loop)
             if task is not None:
@@ -561,11 +567,23 @@ class EventLoopMonitor:
                     span_context = _current_span_in(get_context())
 
         frames: list[traceback.FrameSummary] = []
-        ident = self._loop_thread_ident
-        if ident is not None:
-            frame = sys._current_frames().get(ident)
-            if frame is not None:
-                frames = list(traceback.extract_stack(frame))
+        current_frames = sys._current_frames()
+        frame = current_frames.get(self._loop_thread_ident) if self._loop_thread_ident else None
+        if frame is None and task is not None:
+            # the recorded thread ident did not resolve (the loop is being run by another
+            # thread than the one that armed the heartbeat): find the thread whose stack
+            # contains the blocked task's coroutine frame, and remember it
+            coro_frame = getattr(task.get_coro(), "cr_frame", None)
+            for ident, candidate in current_frames.items():
+                f: Any = candidate
+                while f is not None and f is not coro_frame:
+                    f = f.f_back
+                if f is not None:
+                    frame = candidate
+                    self._loop_thread_ident = ident
+                    break
+        if frame is not None:
+            frames = list(traceback.extract_stack(frame))
         return _StackSample(lag=lag, task_name=task_name, frames=frames, span_context=span_context)
 
 

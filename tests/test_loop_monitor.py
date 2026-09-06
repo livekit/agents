@@ -747,3 +747,44 @@ def test_stack_format_cuts_through_the_job_runner() -> None:
     # a stall entirely inside the runner keeps its frames: there is nothing else to show
     inside = frames[:4]
     assert "job_proc_lazy_main" in loop_monitor._format_frames(inside)
+
+
+def test_unobserved_idle_stall_is_host_caused() -> None:
+    """The watchdog never caught the loop thread running anything and the thread burned no
+    CPU: nothing blocked it, the host woke it late. Not the agent's problem, so no warning."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        idle = m._build_report(0.074, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[])
+        assert idle.process_descheduled and idle.severity == "warning"
+        # a sampled blocking wait (time.sleep releases the GIL) is still blocking code
+        sample = loop_monitor._StackSample(
+            lag=0.06,
+            task_name="t",
+            frames=[__import__("traceback").FrameSummary("/app/a.py", 1, "f")],
+        )
+        waited = m._build_report(
+            0.074, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[sample]
+        )
+        assert not waited.process_descheduled
+    finally:
+        loop.close()
+
+
+async def test_sampler_finds_the_loop_thread_by_the_blocked_task(
+    span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
+) -> None:
+    """A wrong thread ident (the loop run by another thread than the one that armed the
+    monitor) must not lose the stack: the blocked task's coroutine frame identifies the thread."""
+    monitor._loop_thread_ident = -1
+
+    async def handler() -> None:
+        _block_loop_synchronously(0.08)
+
+    await asyncio.create_task(handler(), name="blocked_task")
+    await _settle()
+    [stall] = _blocked_spans(span_exporter)
+    attrs = stall.attributes or {}
+    assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
+    assert attrs[trace_types.ATTR_BLOCKING_TASK] == "blocked_task"
+    assert monitor._loop_thread_ident == __import__("threading").get_ident()
