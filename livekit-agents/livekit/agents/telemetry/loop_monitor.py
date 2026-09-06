@@ -67,6 +67,7 @@ from opentelemetry import trace
 
 from ..log import logger
 from . import session_context, otel_metrics, trace_types
+from .traces import tracer
 
 DEFAULT_WARN_THRESHOLD = 0.05
 """Blocks at or above this many seconds are reported as warnings."""
@@ -414,27 +415,31 @@ class EventLoopMonitor:
         if suppressed:
             attributes[trace_types.ATTR_BLOCKING_SUPPRESSED] = suppressed
 
-        recorded = session_context.RecordedSpan(SPAN_NAME, start_ns=start_ns, attributes=attributes)
+        # during a session the stall is a child of agent_session and summarised on it; the
+        # heartbeat's own context predates the session, so the root is resolved through the
+        # job. Before or after the session it lands in the reporting context, job_entrypoint
+        # in a job process (the worker process emits no spans at all: emit_spans=False).
+        from ..job import get_job_context
+
+        if get_job_context(required=False) is None:
+            # no job, no trace to belong to (a bare loop): a root span here would be a stray
+            # one-span trace, so the log carries it
+            return
+        session = session_context.primary_session()
+        parent = session_context.session_root_context()
+        span = tracer.start_span(
+            SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes
+        )
         if report.severity == "error":
-            recorded.set_status(
+            span.set_status(
                 trace.Status(
                     trace.StatusCode.ERROR,
                     f"event loop blocked for {report.duration * 1000:.0f}ms",
                 )
             )
-        recorded.end(end_time=end_ns)
-
-        # the trace view is organised around agent_session: a stall is only useful there.
-        # During a session it is a child of the root and summarised on it; before the session
-        # it waits for the session to start; with no job at all (the worker) the log is it.
-        session = session_context.primary_session()
-        parent = session_context.session_root_context()
-        if parent is not None:
-            recorded.emit(parent)
-            if session is not None:
-                session._record_loop_stall(report.duration, timestamp_ns=end_ns)
-        else:
-            session_context.defer_to_session(recorded)
+        span.end(end_time=end_ns)
+        if parent is not None and session is not None:
+            session._record_loop_stall(report.duration, timestamp_ns=end_ns)
 
     def _emit_log(self, report: BlockedReport) -> None:
         location = _innermost_location(report.stacks[-1]) if report.stacks else None

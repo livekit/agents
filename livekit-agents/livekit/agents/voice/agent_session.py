@@ -967,12 +967,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._loop_stall_count = 0
             self._loop_stall_total = 0.0
             self._loop_stall_max = 0.0
-            if job_ctx is not None:
-                # what happened before this session existed (room connect, participant wait,
-                # loop stalls) is its opening act: emit it as back-dated children of the root
-                for recorded in job_ctx._flush_pending_session_spans(self._root_span_context):
-                    if recorded.name == loop_monitor.SPAN_NAME and recorded.end_ns is not None:
-                        self._record_loop_stall(recorded.duration, timestamp_ns=recorded.end_ns)
             # the session is the convention's workflow: agent turns (`invoke_agent`),
             # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
             gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")

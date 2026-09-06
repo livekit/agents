@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 from urllib.parse import urlparse
 
 import aiohttp
-from opentelemetry import context as otel_context
 
 from livekit import api, rtc
 from livekit.api.access_token import Claims
@@ -40,7 +39,6 @@ from livekit.protocol import agent, models
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
-from .telemetry.session_context import RecordedSpan
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
@@ -150,8 +148,6 @@ class RunningJobInfo:
     fake_job: bool
 
 
-_MAX_PENDING_SESSION_SPANS = 64
-
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
@@ -254,25 +250,6 @@ class JobContext:
         # OTel providers are shared across possibly-concurrent jobs). None while
         # the job has no registration to release.
         self._telemetry_state: _JobTelemetry | None = None
-        # spans recorded before the primary AgentSession exists (room connect, pre-session
-        # loop stalls), emitted under agent_session when it starts; see telemetry.session_context
-        self._pending_session_spans: list[RecordedSpan] = []
-
-    def _defer_session_span(self, recorded: RecordedSpan) -> None:
-        if len(self._pending_session_spans) >= _MAX_PENDING_SESSION_SPANS:
-            # keep the earliest (connect, participant wait); a pre-session stall storm is
-            # already rate limited and logged by the monitor
-            return
-        self._pending_session_spans.append(recorded)
-
-    def _flush_pending_session_spans(
-        self, parent: otel_context.Context | None
-    ) -> list[RecordedSpan]:
-        """Emit everything recorded before the session as children of ``parent``."""
-        pending, self._pending_session_spans = self._pending_session_spans, []
-        for recorded in pending:
-            recorded.emit(parent)
-        return pending
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()

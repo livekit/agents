@@ -51,23 +51,14 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
 
 
 def _fake_job_context(session: object | None = None) -> SimpleNamespace:
-    """The JobContext surface the monitor and the session-span queue touch."""
-    from livekit.agents.job import JobContext
-
-    ctx = SimpleNamespace(
+    """The JobContext surface the monitor touches."""
+    return SimpleNamespace(
         _primary_agent_session=session,
-        _pending_session_spans=[],
         # read by the span processors main installs (PII stripping, job attribution)
         _redaction_enabled=False,
         _telemetry_state=None,
         job=SimpleNamespace(id="AJ_test", room=SimpleNamespace(sid="RM_test")),
     )
-    ctx._defer_session_span = lambda rec: JobContext._defer_session_span(ctx, rec)  # type: ignore[arg-type]
-    ctx._flush_pending_session_spans = lambda parent: JobContext._flush_pending_session_spans(
-        ctx,  # type: ignore[arg-type]
-        parent,
-    )
-    return ctx
 
 
 def _job_report_context(job_ctx: object) -> contextvars.Context:
@@ -203,32 +194,26 @@ async def test_cooperative_work_is_not_reported(
     assert _loop_blocks(monitor) == []
 
 
-async def test_stall_before_the_session_is_held_then_emitted_under_it(
+async def test_stall_before_the_session_lands_in_the_job_trace(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
-    """The trace view is organised around agent_session; a stall in the entrypoint before
-    session.start() must still end up under it, at its original time."""
+    """Before session.start() there is no session root to resolve; the stall is a child of
+    whatever the job's reporting context holds, job_entrypoint in a job process, at its
+    original time."""
     job_ctx = _fake_job_context(session=None)
-    monitor.set_report_context(_job_report_context(job_ctx))
+    entrypoint = tracer.start_span("job_entrypoint")
+    with tracer.use_span(entrypoint, end_on_exit=False):
+        monitor.set_report_context(_job_report_context(job_ctx))
 
     _block_loop_synchronously(0.07)
     await _settle()
+    entrypoint.end()
 
-    # recorded and held: no span yet, no root to attach it to
-    assert _blocked_spans(span_exporter) == []
-    assert len(job_ctx._pending_session_spans) == 1
-    held = job_ctx._pending_session_spans[0]
-    assert held.name == SPAN_NAME and held.end_ns is not None
-
-    # the session starts later and adopts what happened before it
-    with tracer.start_as_current_span("agent_session") as root:
-        flushed = job_ctx._flush_pending_session_spans(trace.set_span_in_context(root))
-    assert flushed == [held]
     [span] = _blocked_spans(span_exporter)
-    assert span.parent is not None and span.parent.span_id == root.get_span_context().span_id
-    # back-dated to when it happened, which is before the session existed
+    assert span.parent is not None
+    assert span.parent.span_id == entrypoint.get_span_context().span_id
     assert span.start_time is not None and span.end_time is not None
-    assert span.end_time <= root.start_time  # type: ignore[operator]
+    assert span.end_time <= entrypoint.end_time  # type: ignore[operator]
     attrs = span.attributes or {}
     assert attrs[trace_types.ATTR_BLOCKING_SEVERITY] == "warning"
     assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
