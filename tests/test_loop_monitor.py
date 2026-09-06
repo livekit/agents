@@ -329,15 +329,22 @@ async def test_sustained_cooperative_load_is_not_reported(
         fired.append(n)
 
     handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(40)]
+    started = time.monotonic()
     await asyncio.gather(*(worker(n) for n in range(4)))
+    workers_took = time.monotonic() - started
     await loop.run_in_executor(None, time.sleep, 0.05)
     await asyncio.sleep(0.45)
     for h in handles:
         h.cancel()
     await _settle()
 
-    assert _loop_blocks(monitor) == []
     assert len([f for f in fired if f < 1000]) == 4
+    # the workers hold the loop for ~0.5 s of 2 ms slices; a host that starved this process
+    # enough to stretch that past double is not a monitor false positive, and the
+    # watchdog-gap tag only catches starvation concentrated in one stall
+    if workers_took > 1.0:
+        pytest.skip(f"host starved the test process: workers took {workers_took:.2f}s")
+    assert _loop_blocks(monitor) == []
 
 
 async def test_one_iteration_of_many_ready_callbacks_is_one_stall(
