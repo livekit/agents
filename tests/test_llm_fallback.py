@@ -124,6 +124,11 @@ async def test_reports_active_instance_model_and_provider() -> None:
         assert fallback_adapter.model == "fallback-model"
         assert fallback_adapter.provider == "fallback"
         assert "FallbackAdapter" in fallback_adapter.label
+        # once the primary recovers (its recovery task flips it back to available) the next
+        # request goes to it first, so that is what model and provider report
+        fallback_adapter._status[0].available = True
+        assert fallback_adapter.model == "primary-model"
+        assert fallback_adapter.provider == "primary"
     finally:
         await fallback_adapter.aclose()
 

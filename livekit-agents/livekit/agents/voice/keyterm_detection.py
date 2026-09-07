@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
 from typing_extensions import TypedDict
@@ -354,13 +354,11 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
         # its own span, so the LLM call reads as keyterm detection rather than a second
         # inference step of the reply it runs alongside
+        attributes: dict[str, Any] = {trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model}
+        if (provider := trace_types.gen_ai_provider_name(self._llm.provider)) is not None:
+            attributes[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
         with tracer.start_as_current_span(
-            "keyterm_detection",
-            context=parent,
-            attributes={
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
-            },
+            "keyterm_detection", context=parent, attributes=attributes
         ) as span:
             # show static terms as applied too, or the LLM keeps re-proposing them
             current = (

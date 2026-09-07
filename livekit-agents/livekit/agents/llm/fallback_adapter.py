@@ -86,17 +86,27 @@ class FallbackAdapter(
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
 
+    def _next_instance(self) -> LLM:
+        """The instance the next request goes to first: the first one marked available, or
+        the primary once all are down (they are then all retried, primary first). A failed
+        instance's recovery task flips it back to available, so a recovered primary is
+        reported again before it has served."""
+        for instance, status in zip(self._llm_instances, self._status, strict=True):
+            if status.available:
+                return instance
+        return self._llm_instances[0]
+
     @property
     def model(self) -> str:
-        """The model of the instance that serves next: the primary before any traffic, then
-        the one that most recently served. Spans and metrics read this, so a failover shows
-        the model that actually answered rather than the adapter."""
-        return self._active_instance.model
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
 
     @property
     def provider(self) -> str:
         """The provider of the instance that serves next (see :attr:`model`)."""
-        return self._active_instance.provider
+        return self._next_instance().provider
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
