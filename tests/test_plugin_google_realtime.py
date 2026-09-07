@@ -589,3 +589,63 @@ async def test_historical_tool_outputs_are_not_replayed(monkeypatch: pytest.Monk
         assert not [
             m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
         ]
+
+
+async def test_in_flight_tool_result_is_requeued_on_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool response already pulled off the channel still reaches the next session.
+
+    `_send_task` takes `_session_lock` after dequeueing, so a restart can land in that
+    gap; the response is neither on the channel for the carry loop to find nor on the
+    wire, and Gemini would wait on it forever.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        socket = session._active_session
+        assert socket is not None
+
+        # hold the lock so the send task parks right after it dequeues, before it sends
+        await session._session_lock.acquire()
+        send_task = asyncio.create_task(session._send_task(socket))
+        session._send_client_event(
+            types.LiveClientToolResponse(function_responses=[types.FunctionResponse(id="fc_1")])
+        )
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert session._msg_ch.empty(), "the send task should have dequeued the response"
+
+        session._mark_restart_needed()
+        session._session_lock.release()
+        await send_task
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1, "the in-flight response is handed to the new session once"
+        assert responses[0].function_responses[0].id == "fc_1"  # type: ignore[index]
+
+
+async def test_tool_result_is_requeued_when_the_send_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A send that dies with the socket keeps the response for the reconnected session."""
+
+    class _FailingSocket:
+        async def send_tool_response(self, **kwargs: object) -> None:
+            raise ConnectionResetError("socket went away")
+
+    async with _make_connected_session(monkeypatch) as session:
+        socket = _FailingSocket()
+        session._active_session = socket  # type: ignore[assignment]
+        session._send_client_event(
+            types.LiveClientToolResponse(function_responses=[types.FunctionResponse(id="fc_1")])
+        )
+
+        await session._send_task(socket)  # type: ignore[arg-type]
+        assert session._session_should_close.is_set(), "the failure restarts the session"
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1, "the response survives the failed send"
+        assert responses[0].function_responses[0].id == "fc_1"  # type: ignore[index]

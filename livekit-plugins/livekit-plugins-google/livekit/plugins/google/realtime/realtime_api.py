@@ -1076,6 +1076,17 @@ class RealtimeSession(llm.RealtimeSession):
             finally:
                 await self._close_active_session()
 
+    def _requeue_tool_response(self, msg: ClientEvents) -> None:
+        """Hand a dequeued but undelivered tool response back to the next session.
+
+        The model stalls on a call it is never given an answer to, so it must not be lost
+        when the socket goes away mid-send. This lands on the channel the restart swapped
+        in, or -- when the restart has not been marked yet -- on the one it is about to
+        drain in `_mark_restart_needed`.
+        """
+        if isinstance(msg, types.LiveClientToolResponse):
+            self._send_client_event(msg)
+
     async def _send_task(self, session: AsyncSession) -> None:
         try:
             async for msg in self._msg_ch:
@@ -1083,6 +1094,9 @@ class RealtimeSession(llm.RealtimeSession):
                     if self._session_should_close.is_set() or (
                         not self._active_session or self._active_session != session
                     ):
+                        # acquiring the lock yields, so the restart may land after this msg
+                        # was dequeued and before it was sent
+                        self._requeue_tool_response(msg)
                         break
                 if isinstance(msg, types.LiveClientContent):
                     await session.send_client_content(
@@ -1090,7 +1104,11 @@ class RealtimeSession(llm.RealtimeSession):
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
-                    await session.send_tool_response(function_responses=msg.function_responses)
+                    try:
+                        await session.send_tool_response(function_responses=msg.function_responses)
+                    except BaseException:
+                        self._requeue_tool_response(msg)
+                        raise
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
