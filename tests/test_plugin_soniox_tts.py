@@ -26,7 +26,7 @@ from typing import Any
 import aiohttp
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIStatusError, utils
 from livekit.agents.tts import AudioEmitter
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 from livekit.agents.utils import is_given
@@ -733,3 +733,39 @@ async def test_recv_loop_marks_audio_as_produced_output() -> None:
     assert emitter.audio == [_SILENCE_PCM]
     assert data.produced_output is True
     assert emitter.timed_words == []
+
+
+async def test_interrupting_a_reply_keeps_the_last_spoken_word() -> None:
+    """An interruption publishes the word the buffer was still holding.
+
+    ``_to_timed_words`` holds the trailing word back in case more characters
+    complete it. ``aclose`` cancels ``_run`` outright, so the stream never
+    settles - and without a flush on that path the last word the user heard
+    never reaches the transcript.
+    """
+    fake = _FakeConnection(timestamps=True)
+    tts = soniox.TTS(api_key="fake-key")
+
+    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
+        return fake, 0.0, True
+
+    tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
+
+    stream = tts.stream()
+    words: list[TimedString] = []
+
+    async def _drain() -> None:
+        async for ev in stream:
+            words.extend(ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []))
+
+    drain_t = asyncio.create_task(_drain())
+    try:
+        stream.push_text(SENTENCES[0])  # no end_input: the reply is cut short
+        await asyncio.sleep(0.1)
+        await stream.aclose()
+        await drain_t
+    finally:
+        await utils.aio.gracefully_cancel(drain_t)
+        await tts.aclose()
+
+    assert "".join(str(w) for w in words).strip() == SENTENCES[0].strip()

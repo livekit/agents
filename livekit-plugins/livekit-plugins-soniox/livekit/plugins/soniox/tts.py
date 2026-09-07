@@ -432,6 +432,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             if next_task is not None:
                 await utils.aio.gracefully_cancel(next_task)
             if active is not None:
+                # An interruption cancels this task outright, so the stream
+                # never settles: flush here too, or the word held back as
+                # possibly-incomplete is lost even though it was spoken. The
+                # buffer is empty unless the stream produced output, and a
+                # settled stream has already been cleared, so this cannot
+                # publish anything twice. It has to precede end_segment(),
+                # which closes the frame these words ride on.
+                _emit_timed_words(active.data, flush=True)
                 active.connection.unregister_stream(active.stream_id)
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t)
