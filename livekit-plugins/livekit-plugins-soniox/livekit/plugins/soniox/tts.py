@@ -35,8 +35,10 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -93,6 +95,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
+        return_timestamps: bool = True,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
@@ -115,9 +118,16 @@ class TTS(tts.TTS):
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
                 Defaults to 5.0.
+            return_timestamps (bool): Ask Soniox for character-level audio timestamps and
+                forward them as an aligned transcript, so an interrupted turn records the
+                text that was actually spoken instead of a speaking-rate estimate.
+                Defaults to True.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=return_timestamps,
+            ),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -143,6 +153,7 @@ class TTS(tts.TTS):
             websocket_url=websocket_url,
             api_key=api_key,
             stream_idle_timeout=stream_idle_timeout,
+            return_timestamps=return_timestamps,
         )
         self._session = http_session
         self._sentence_tokenizer = (
@@ -444,13 +455,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        connection.register_stream(stream_id, output_emitter, waiter, opts=self._opts)
+        baseline = output_emitter.pushed_duration()
+        connection.register_stream(
+            stream_id, output_emitter, waiter, opts=self._opts, time_offset=baseline
+        )
         return _ActiveStream(
             connection=connection,
             stream_id=stream_id,
             waiter=waiter,
             opened_at=time.monotonic(),
-            baseline=output_emitter.pushed_duration(),
+            baseline=baseline,
             attempt=attempt,
         )
 
@@ -539,6 +553,7 @@ class _TTSOptions:
     websocket_url: str
     api_key: str
     stream_idle_timeout: float
+    return_timestamps: bool
 
 
 @dataclass
@@ -572,6 +587,79 @@ class _StreamData:
     # This flag is how recv loop tells them apart.
     cancel_sent: bool = False
     config_sent: bool = False
+    # Soniox times characters from this stream's own first sample, but the
+    # emitter's timeline spans every stream of the segment, so each timestamp is
+    # shifted by the audio already emitted when this stream opened.
+    time_offset: float = 0.0
+    # Characters received but not yet emitted as a complete word.
+    char_text: str = ""
+    char_starts: list[float] = field(default_factory=list)
+    char_ends: list[float] = field(default_factory=list)
+
+
+def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
+    """Fold one frame's character timings into the stream's aligned transcript."""
+    chars: list[str] | None = timestamps.get("characters")
+    starts: list[float] | None = timestamps.get("character_start_times_seconds")
+    ends: list[float] | None = timestamps.get("character_end_times_seconds")
+    if not (chars and starts and ends and len(chars) == len(starts) == len(ends)):
+        return
+
+    offset = stream.time_offset
+    for char, start, end in zip(chars, starts, ends, strict=False):
+        # Soniox documents one entry per codepoint; pad anyway so the timing
+        # arrays stay index-aligned with char_text whatever arrives.
+        stream.char_starts += [start + offset] * len(char)
+        stream.char_ends += [start + offset] * (len(char) - 1) + [end + offset]
+    stream.char_text += "".join(chars)
+
+    _emit_timed_words(stream)
+
+
+def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
+    """Push every word the buffered characters now complete, keeping the rest."""
+    timed_words, stream.char_text = _to_timed_words(
+        stream.char_text, stream.char_starts, stream.char_ends, flush=flush
+    )
+    if timed_words:
+        stream.emitter.push_timed_transcript(timed_words)
+
+    keep = len(stream.char_text)
+    stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]
+    stream.char_ends = stream.char_ends[len(stream.char_ends) - keep :]
+
+
+def _to_timed_words(
+    text: str,
+    start_times: list[float],
+    end_times: list[float],
+    *,
+    flush: bool = False,
+) -> tuple[list[TimedString], str]:
+    """Split *text* into timed words and return them with the text left over.
+
+    ``start_times`` and ``end_times`` hold one entry per character of *text*.
+    The trailing word is held back until *flush*, since the characters that
+    finish it may still arrive on a later frame.
+    """
+    if not text:
+        return [], ""
+
+    words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not flush:
+        words = words[:-1]
+    if not words:
+        return [], text
+
+    timed_words = [
+        TimedString(
+            text=text[start:end],
+            start_time=start_times[start],
+            end_time=end_times[end - 1],
+        )
+        for _, start, end in words
+    ]
+    return timed_words, "" if flush else text[words[-1][2] :]
 
 
 class _Connection:
@@ -652,6 +740,7 @@ class _Connection:
         waiter: asyncio.Future[None],
         *,
         opts: _TTSOptions,
+        time_offset: float = 0.0,
     ) -> None:
         """Register a new stream and queue its config message."""
         if self._closed:
@@ -663,7 +752,9 @@ class _Connection:
             raise ValueError(f"stream_id {stream_id} already registered")
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
+        self._streams[stream_id] = _StreamData(
+            emitter=emitter, waiter=waiter, opts=opts, time_offset=time_offset
+        )
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -727,6 +818,8 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.return_timestamps:
+                        config["return_timestamps"] = True
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
@@ -807,12 +900,20 @@ class _Connection:
                         )
                     continue
 
+                # Before the audio of the same frame: the emitter attaches
+                # pending timed words to the next frame it emits.
+                if timestamps := resp.get("timestamps"):
+                    _accumulate_timestamps(stream, timestamps)
+
                 audio_b64 = resp.get("audio")
                 if audio_b64:
                     stream.emitter.push(base64.b64decode(audio_b64))
 
                 if resp.get("audio_end"):
                     stream.audio_ended = True
+                    # The stream always ends on a sentence boundary, so the
+                    # trailing word is complete and safe to emit.
+                    _emit_timed_words(stream, flush=True)
                     # end_segment() is called from SynthesizeStream._run's finally
                     # block (covers cancel/error paths too).
 
