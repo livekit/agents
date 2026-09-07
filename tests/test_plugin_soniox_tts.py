@@ -86,7 +86,13 @@ class _FakeConnection:
     whitespace inside the stream survives.
     """
 
-    def __init__(self, *, fail_on_send: int | None = None, timestamps: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_on_send: int | None = None,
+        timestamps: bool = False,
+        emit_before_failure: bool = False,
+    ) -> None:
         self.is_current = True
         self.closed = False
         self.registered_ids: list[str] = []
@@ -97,6 +103,7 @@ class _FakeConnection:
         self._sends = 0
         self._fail_on_send = fail_on_send
         self._timestamps = timestamps
+        self._emit_before_failure = emit_before_failure
 
     def register_stream(
         self,
@@ -106,6 +113,7 @@ class _FakeConnection:
         *,
         opts: Any,
         time_offset: float = 0.0,
+        audio_baseline: float = 0.0,
         timeline: soniox_tts._Timeline | None = None,
     ) -> None:
         self.registered_ids.append(stream_id)
@@ -116,6 +124,7 @@ class _FakeConnection:
                 waiter=waiter,
                 opts=opts,
                 time_offset=time_offset,
+                audio_baseline=audio_baseline,
                 timeline=timeline if timeline is not None else soniox_tts._Timeline(),
             )
         )
@@ -139,6 +148,15 @@ class _FakeConnection:
         self._sends += 1
         if self._sends == self._fail_on_send:
             self._fail_on_send = None
+            if self._emit_before_failure:
+                # One 10ms chunk fits entirely in the tail frame the emitter
+                # holds back, so pushed_duration() still reads the baseline
+                # while the timestamps for it have already been mapped.
+                slot.data.sent_text += text
+                soniox_tts._accumulate_timestamps(
+                    slot.data, _character_timestamps(text.lstrip()[:20], 0.0)
+                )
+                slot.emitter.push(_SILENCE_PCM)
             if not slot.waiter.done():
                 slot.waiter.set_exception(
                     APIStatusError("transient", status_code=429, retryable=True)
@@ -265,12 +283,17 @@ class _FakeWebSocket:
 
 
 class _RecordingEmitter:
+    """Counts pushed audio the way ``AudioEmitter.pushed_duration`` does."""
+
     def __init__(self) -> None:
         self.audio: list[bytes] = []
         self.timed_words: list[TimedString] = []
 
     def push(self, data: bytes) -> None:
         self.audio.append(data)
+
+    def pushed_duration(self, idx: int = -1) -> float:
+        return sum(len(chunk) for chunk in self.audio) / (2 * 24000)
 
     def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None:
         if isinstance(delta_text, list):
@@ -573,4 +596,20 @@ async def test_timed_words_rebuild_the_reply_on_one_stream() -> None:
     await _synthesize(fake, timed_words=words)
 
     assert len(fake.registered_ids) == 1
+    assert "".join(str(w) for w in words) == "".join(SENTENCES)
+
+
+async def test_a_replayed_stream_does_not_duplicate_the_transcript() -> None:
+    """A stream that already mapped timestamps is never replayed in place.
+
+    ``push_timed_transcript`` cannot be taken back, so replaying such a stream
+    onto the same emitter would leave the failed attempt's words queued in front
+    of the replay's and say everything twice. The audio watermark alone does not
+    notice: one 10ms chunk sits in the tail frame the emitter holds back, so
+    ``pushed_duration()`` still equals the baseline.
+    """
+    fake = _FakeConnection(timestamps=True, fail_on_send=1, emit_before_failure=True)
+    words: list[TimedString] = []
+    await _synthesize(fake, timed_words=words)
+
     assert "".join(str(w) for w in words) == "".join(SENTENCES)

@@ -469,6 +469,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             waiter,
             opts=self._opts,
             time_offset=max(baseline, self._timeline.end),
+            audio_baseline=baseline,
             timeline=self._timeline,
         )
         return _ActiveStream(
@@ -525,6 +526,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         The framework never retries once any audio reached the user, so a
         transient failure would otherwise mute the rest of the reply. Replaying
         is safe only while the failed stream itself produced no audio.
+
+        The same watermark keeps the aligned transcript safe to replay: timed
+        words are held back until it moves (see ``_emit_timed_words``), so a
+        stream that can still be replayed has pushed none, and the replacement
+        cannot repeat them.
         """
         can_retry = (
             exc.retryable
@@ -620,6 +626,11 @@ class _StreamData:
     # between two rotated streams is recovered from.
     sent_text: str = ""
     emitted_any: bool = False
+    # Emitter duration when this stream opened, and words not yet handed over.
+    # Until the emitter counts audio past the watermark the stream may still be
+    # replayed on a fresh stream_id, and pushed words cannot be taken back.
+    audio_baseline: float = 0.0
+    pending_words: list[TimedString] = field(default_factory=list)
 
 
 def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
@@ -654,7 +665,12 @@ def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
         if not stream.emitted_any:
             stream.emitted_any = True
             timed_words[0] = _with_leading_separator(timed_words[0], stream.sent_text)
-        stream.emitter.push_timed_transcript(timed_words)
+        stream.pending_words += timed_words
+
+    # flush means the stream reached audio_end, so it will not be replayed
+    if stream.pending_words and (flush or stream.emitter.pushed_duration() > stream.audio_baseline):
+        stream.emitter.push_timed_transcript(stream.pending_words)
+        stream.pending_words = []
 
     keep = len(stream.char_text)
     stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]
@@ -805,6 +821,7 @@ class _Connection:
         *,
         opts: _TTSOptions,
         time_offset: float = 0.0,
+        audio_baseline: float = 0.0,
         timeline: _Timeline | None = None,
     ) -> None:
         """Register a new stream and queue its config message."""
@@ -822,6 +839,7 @@ class _Connection:
             waiter=waiter,
             opts=opts,
             time_offset=time_offset,
+            audio_baseline=audio_baseline,
             timeline=timeline if timeline is not None else _Timeline(),
         )
 
