@@ -1839,6 +1839,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a handoff as one bar: drain and on_exit of the old agent, then start and
             # on_enter of the new one nest under it (the initial start is under session_start)
             handoff_span: trace.Span | None = None
+            handoff_token: Token[otel_context.Context] | None = None
             if self._activity is not None and self._next_activity is not None:
                 handoff_span = tracer.start_span(
                     "update_agent",
@@ -1847,7 +1848,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         trace_types.ATTR_AGENT_LABEL: self._next_activity.agent.label,
                     },
                 )
-                otel_context.attach(trace.set_span_in_context(handoff_span))
+                handoff_token = otel_context.attach(trace.set_span_in_context(handoff_span))
 
             reuse_resources: _ReusableResources | None = None
             try:
@@ -1910,8 +1911,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             finally:
                 if handoff_span is not None:
                     handoff_span.end()
-                    if self._root_span_context is not None:
-                        otel_context.attach(self._root_span_context)
+                if handoff_token is not None:
+                    # back to the root span context attached above: the ended handoff must
+                    # not stay current for whatever this task traces next
+                    otel_context.detach(handoff_token)
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
