@@ -489,7 +489,7 @@ class SpeechStream(stt.RecognizeStream):
             api_key=self._stt._api_key,
             url=self._stt._base_url,
             app=f"livekit/{lk_version}",
-            config=self._config,
+            transcription_config=self._config,
             turn_config=TurnConfig(
                 turn_detection_mode=_handle_turn_detection_mode(self._turn_detection_mode)
             ),
