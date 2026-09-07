@@ -524,6 +524,10 @@ class RealtimeSession(llm.RealtimeSession):
             else None
         )
 
+        # calls this session emitted and has not answered yet. an unanswered call blocks
+        # the model, so their results must survive a session restart.
+        self._pending_tool_call_ids: set[str] = set()
+
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
@@ -544,17 +548,28 @@ class RealtimeSession(llm.RealtimeSession):
     def _mark_restart_needed(self, on_error: bool = False) -> None:
         if not self._session_should_close.is_set():
             self._session_should_close.set()
-            # reset the msg_ch, do not send messages from previous session
-            if not on_error:
-                while not self._msg_ch.empty():
-                    msg = self._msg_ch.recv_nowait()
-                    if isinstance(msg, types.LiveClientContent) and msg.turn_complete is True:
-                        logger.warning(
-                            "discarding client content for turn completion, may cause generate_reply timeout",
-                            extra={"lk.pii.content": str(msg)},
-                        )
+            # reset the msg_ch, do not send messages from previous session. tool responses
+            # are the exception: the model stalls on a call it never gets an answer to, and
+            # the reconnect replays the chat ctx without function calls, so they are moved
+            # over to the new channel and go out once the new session is up.
+            carried: list[ClientEvents] = []
+            while not self._msg_ch.empty():
+                msg = self._msg_ch.recv_nowait()
+                if isinstance(msg, types.LiveClientToolResponse):
+                    carried.append(msg)
+                elif (
+                    not on_error
+                    and isinstance(msg, types.LiveClientContent)
+                    and msg.turn_complete is True
+                ):
+                    logger.warning(
+                        "discarding client content for turn completion, may cause generate_reply timeout",
+                        extra={"lk.pii.content": str(msg)},
+                    )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
+            for msg in carried:
+                self._msg_ch.send_nowait(msg)
 
     def update_options(
         self,
@@ -655,6 +670,18 @@ class RealtimeSession(llm.RealtimeSession):
         )
         async with self._session_lock:
             if not self._active_session:
+                # mid-restart: the reconnect replays the chat ctx without function calls, so
+                # queue the results of the calls we still owe an answer to for the new session.
+                self._send_tool_results(
+                    llm.ChatContext(
+                        [
+                            item
+                            for item in chat_ctx.items
+                            if item.type == "function_call_output"
+                            and item.call_id in self._pending_tool_call_ids
+                        ]
+                    )
+                )
                 self._chat_ctx = chat_ctx
                 return
 
@@ -670,11 +697,7 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
-            supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
-            )
-            if not supports_silent_scheduling and (
+            if not self._supports_silent_scheduling and (
                 silenced := [
                     item.name
                     for item in append_ctx.items
@@ -688,12 +711,6 @@ class RealtimeSession(llm.RealtimeSession):
                     extra={"functions": silenced},
                 )
 
-            tool_results = get_tool_results_for_realtime(
-                append_ctx,
-                vertexai=self._opts.vertexai,
-                tool_response_scheduling=self._opts.tool_response_scheduling,
-                supports_silent_scheduling=supports_silent_scheduling,
-            )
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
                     format="google", inject_dummy_user_message=False
@@ -703,8 +720,7 @@ class RealtimeSession(llm.RealtimeSession):
                     self._send_client_event(
                         types.LiveClientContent(turns=turns, turn_complete=False)
                     )
-            if tool_results:
-                self._send_client_event(tool_results)
+            self._send_tool_results(append_ctx)
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -725,6 +741,11 @@ class RealtimeSession(llm.RealtimeSession):
     @property
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
+
+    @property
+    def _supports_silent_scheduling(self) -> bool:
+        # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
+        return not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
 
     @property
     def _manual_activity_detection(self) -> bool:
@@ -763,6 +784,22 @@ class RealtimeSession(llm.RealtimeSession):
     def _send_client_event(self, event: ClientEvents) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
+
+    def _send_tool_results(self, chat_ctx: llm.ChatContext) -> None:
+        """Queue the tool responses held in `chat_ctx`, marking those calls answered."""
+        tool_results = get_tool_results_for_realtime(
+            chat_ctx,
+            vertexai=self._opts.vertexai,
+            tool_response_scheduling=self._opts.tool_response_scheduling,
+            supports_silent_scheduling=self._supports_silent_scheduling,
+        )
+        if not tool_results:
+            return
+
+        for item in chat_ctx.items:
+            if item.type == "function_call_output":
+                self._pending_tool_call_ids.discard(item.call_id)
+        self._send_client_event(tool_results)
 
     def generate_reply(
         self,
@@ -1488,9 +1525,11 @@ class RealtimeSession(llm.RealtimeSession):
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
 
+            call_id = fnc_call.id or utils.shortuuid("fnc-call-")
+            self._pending_tool_call_ids.add(call_id)
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.id or utils.shortuuid("fnc-call-"),
+                    call_id=call_id,
                     name=fnc_call.name,
                     arguments=arguments,
                 )

@@ -527,3 +527,65 @@ def test_gemini_api_scheduling_does_not_warn(
         RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
 
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+
+async def test_tool_result_survives_a_session_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`update_tools()` restarts the socket; the answer owed must reach the new session.
+
+    Gemini holds the turn open until every call it emitted is answered, and the reconnect
+    replays the chat ctx without function calls, so a result dropped here hangs the turn
+    for good (issue #6479).
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        # the restart swaps the channel out from under the queued, not-yet-sent response
+        session._mark_restart_needed()
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1, "the queued tool response is carried to the new channel"
+        assert responses[0].function_responses[0].id == "fc_1"  # type: ignore[index]
+
+
+async def test_tool_result_produced_while_disconnected_is_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result finishing between the two sockets still goes out on the new one."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
+
+        session._active_session = None  # the old socket is closed, the new one is not up yet
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1, "the answer we owe is queued for the reconnected session"
+        assert responses[0].function_responses[0].id == "fc_1"  # type: ignore[index]
+
+
+async def test_historical_tool_outputs_are_not_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only calls this session emitted and left unanswered are replayed while disconnected."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._active_session = None
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id="fc_old"))
+        await session.update_chat_ctx(chat_ctx)
+
+        assert not [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
