@@ -69,8 +69,9 @@ from ..log import logger
 from . import otel_metrics, session_context, trace_types
 from .traces import tracer
 
-DEFAULT_WARN_THRESHOLD = 0.05
-"""Blocks at or above this many seconds are reported as warnings."""
+DEFAULT_WARN_THRESHOLD = 0.1
+"""Blocks at or above this many seconds are reported as warnings. 50 ms proved too sensitive
+in practice: ordinary work (a model load, an SDK import) tripped it constantly."""
 DEFAULT_ERROR_THRESHOLD = 0.5
 """Blocks at or above this many seconds are reported as errors (span status ERROR)."""
 DEFAULT_TICK_INTERVAL = 0.01

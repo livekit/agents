@@ -599,7 +599,7 @@ def test_thresholds_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENV_WARN_THRESHOLD_MS, raising=False)
     monkeypatch.delenv(ENV_ERROR_THRESHOLD_MS, raising=False)
     t = LoopMonitorThresholds.from_env()
-    assert t == LoopMonitorThresholds(warn=0.05, error=0.5)
+    assert t == LoopMonitorThresholds(warn=0.1, error=0.5)
 
     monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, "100")
     monkeypatch.setenv(ENV_ERROR_THRESHOLD_MS, "1000")
@@ -611,12 +611,12 @@ def test_thresholds_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # garbage falls back to the default rather than disabling
     monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, "fast")
-    assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.05, error=1.0)
+    assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.1, error=1.0)
 
     # so do NaN and infinity: NaN compares false against every lag and would report each tick
     for bad in ("NaN", "inf", "-inf"):
         monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, bad)
-        assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.05, error=1.0)
+        assert LoopMonitorThresholds.from_env() == LoopMonitorThresholds(warn=0.1, error=1.0)
 
     # error below warn is clamped up to warn
     monkeypatch.setenv(ENV_WARN_THRESHOLD_MS, "200")
