@@ -36,7 +36,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
@@ -45,27 +44,19 @@ from speechmatics.agent_stt import (
     AudioEncoding,
     AudioFormat,
     ClientMessageType,
+    ConnectionError as SMConnectionError,
     Model,
     Segment,
     ServerMessageType,
+    SessionError,
     SpeakerDiarizationConfig,
     SpeakerIdentifier,
+    TimeoutError as SMTimeoutError,
     TranscriptionConfig,
-    TurnConfig,
-)
-from speechmatics.agent_stt import (
-    TurnDetectionMode as AgentTurnDetectionMode,
-)
-from speechmatics.agent_stt import (
-    ConnectionError as SMConnectionError,
-)
-from speechmatics.agent_stt import (
-    SessionError,
     TranscriptionError,
     TransportError,
-)
-from speechmatics.agent_stt import (
-    TimeoutError as SMTimeoutError,
+    TurnConfig,
+    TurnDetectionMode as AgentTurnDetectionMode,
 )
 
 from .log import logger
@@ -76,6 +67,7 @@ from .version import __version__ as lk_version
 # `base_url` argument overrides both.
 DEFAULT_BASE_URL = "wss://global.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
+
 
 class TurnDetectionMode(str, Enum):
     """How turn boundaries (end of speech) are detected.
@@ -555,9 +547,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             await self._client.connect()
         except (TranscriptionError, SessionError) as e:
-            raise APIError(
-                f"Speechmatics rejected the session: {e}", retryable=False
-            ) from e
+            raise APIError(f"Speechmatics rejected the session: {e}", retryable=False) from e
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
         logger.debug("Connected to Speechmatics STT service")
