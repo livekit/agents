@@ -886,6 +886,10 @@ class AudioRecognition:
         self._vad = vad
         self._check_vad_silence_requirement()
 
+        # If VAD is being replaced or disabled mid-speech, close the active
+        # segment explicitly before the stale task is cancelled. The generation
+        # bump below still protects us from a late callback overwriting newer
+        # state, but the current speech state must be reconciled first.
         if self._speaking:
             with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_vad_reset()

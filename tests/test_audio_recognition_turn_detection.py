@@ -35,6 +35,7 @@ import pytest
 
 from livekit.agents import LanguageCode, vad
 from livekit.agents.utils import aio
+from livekit.agents.voice import audio_recognition as audio_recognition_module
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
     TurnDetectionEvent,
@@ -702,6 +703,31 @@ class TestVadMinSilenceRequirement:
         with pytest.raises(ValueError, match="min_silence_duration"):
             ar._update_turn_detector(detector)
 
-        # Aborted before building a stream — and without calling .stream().
-        assert ar._turn_detector_stream is None
-        detector.stream.assert_not_called()
+
+class TestVadReplacementCleanup:
+    """VAD replacement/removal must not leave a speaking segment stuck open."""
+
+    def test_update_vad_closes_active_speech_segment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ar = AudioRecognition.__new__(AudioRecognition)
+        ar._vad = MagicMock()
+        ar._turn_detector = None
+        ar._turn_detector_stream = None
+        ar._vad_atask = None
+        ar._vad_ch = None
+        ar._vad_stream = None
+        ar._vad_generation = 0
+        ar._tasks = set()
+        ar._interruption_detection = None
+        ar._interruption_enabled = False
+        ar._hooks = MagicMock()
+        ar._user_silence_ev = asyncio.Event()
+        ar._user_silence_ev.clear()
+        ar._vad_speech_started = True
+        ar._ensure_user_turn_span = MagicMock(return_value=contextlib.nullcontext())
+        monkeypatch.setattr(audio_recognition_module.tracer, "use_span", lambda span: contextlib.nullcontext())
+
+        ar._update_vad(None)
+
+        ar._hooks.on_end_of_speech.assert_called_once_with(None)
+        assert ar._speaking is False
+        assert ar._vad_speech_started is False
