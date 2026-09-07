@@ -19,7 +19,7 @@ import dataclasses
 import os
 import warnings
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -364,10 +364,17 @@ class STT(stt.STT):
 
         return TranscriptionConfig(
             language=language if is_given(language) else opts.language,
-            model=opts.model,
+            # The SDK types `model` as the `Model` enum, but the proxy resolves any model
+            # string (see its docstring), and `opts.model` is the resolved wire string.
+            model=cast(Model, opts.model),
             diarization="speaker" if opts.enable_diarization else None,
             speaker_diarization_config=_build_diarization_config(opts),
-            additional_vocab=opts.additional_vocab or None,
+            # `additional_vocab` accepts entries or raw dicts; our list is entries only, and
+            # list invariance makes the narrower type not assignable — widen it for the SDK.
+            additional_vocab=cast(
+                "list[AdditionalVocabEntry | dict[str, Any]] | None",
+                opts.additional_vocab or None,
+            ),
             output_locale=opts.output_locale,
             domain=opts.domain,
             enable_partials=opts.include_partials,
