@@ -72,11 +72,6 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
-```bash
-cd examples
-uv run voice_agents/phonic_realtime_agent.py dev
-```
-
 ### Reusing tools with Phonic Responses
 
 Convert an existing LiveKit `ToolContext` into the schema-only definitions
