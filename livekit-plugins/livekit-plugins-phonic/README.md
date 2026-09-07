@@ -77,7 +77,10 @@ if __name__ == "__main__":
 Convert an existing LiveKit `ToolContext` into the schema-only definitions
 accepted by Phonic's Responses API:
 
+```python
+from livekit.plugins.phonic.realtime import to_phonic_tool_definitions
 
+tool_definitions = to_phonic_tool_definitions(tool_context)
 Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `RealtimeModel`. All other options are optional.
 
 | Option | Type | Description |
