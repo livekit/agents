@@ -93,6 +93,12 @@ class ConnectionPool(Generic[T]):
                 await self._maybe_close_connection(conn)
             except Exception as e:
                 logger.warning("error closing connection %s: %s", conn, e)
+            except BaseException:
+                # the connection has already left _to_close and is not in _connections,
+                # so nothing else owns it. put it back before unwinding, otherwise a
+                # cancelled drain strands an open connection for good.
+                self._to_close.add(conn)
+                raise
 
     @asynccontextmanager
     async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:

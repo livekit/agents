@@ -342,3 +342,35 @@ async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
     assert sorted(c.id for c in closed) == [1, 2], (
         "Expected both the discarded and the replacement connection to be closed."
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_drain_leaves_the_connection_queued_for_a_later_close():
+    """A cancelled close must not strand a connection nothing else owns."""
+    closing = asyncio.Event()
+    finish = asyncio.Event()
+    closed: list[DummyConnection] = []
+
+    async def close_cb(conn: DummyConnection) -> None:
+        closing.set()
+        await finish.wait()
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=dummy_connect_factory(), close_cb=close_cb)
+
+    doomed = await pool.get(timeout=10.0)
+    pool.put(doomed)
+    pool.invalidate()  # idle, so it goes straight to the close queue
+
+    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    await closing.wait()  # inside _maybe_close_connection, popped from _to_close
+    acquiring.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await acquiring
+
+    assert doomed in pool._to_close, "A cancelled drain dropped the connection entirely."
+    assert doomed not in closed
+
+    finish.set()
+    await pool.aclose()
+    assert doomed in closed, "Expected the requeued connection to be closed later."
