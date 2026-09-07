@@ -77,8 +77,11 @@ class ConnectionPool(Generic[T]):
             connection = await self._connect_cb(timeout)
             if invalidations == self._invalidations:
                 break
-            # options changed during the handshake, so this socket carries the old ones
+            # options changed during the handshake, so this socket carries the old ones.
+            # close it here rather than leaving it queued: the drain at the top of get()
+            # has already run, so nothing else would reach it until the next acquisition.
             self._to_close.add(connection)
+            await self._drain_to_close()
         self._connections[connection] = time.time()
         return connection
 

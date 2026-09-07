@@ -302,9 +302,9 @@ async def test_invalidate_during_a_handshake_discards_the_stale_connection():
     assert all(c.id != 1 for c in pool._available), "The stale connection was pooled."
     assert conn in pool._connections
 
-    pool.put(conn)
-    await pool.get(timeout=10.0)  # drains the close queue
-    assert [c.id for c in closed] == [1], "Expected only the stale connection to be closed."
+    # closed on the way out of _connect, not left queued until some later acquisition
+    assert [c.id for c in closed] == [1], "The discarded socket was left open."
+    assert not pool._to_close, "The discarded socket is still queued rather than closed."
 
 
 @pytest.mark.asyncio
