@@ -278,12 +278,13 @@ class LLMStream(ABC):
             stream=True,
             output_type=trace_types.GenAIOutputType.TEXT,
         )
-        gen_ai_telemetry.set_content_attributes(
-            span,
-            system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
-            tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
-        )
+        if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+            gen_ai_telemetry.set_content_attributes(
+                span,
+                system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
+                input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
+                tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
+            )
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
@@ -430,14 +431,15 @@ class LLMStream(ABC):
                 finish_reasons=[finish_reason],
                 time_to_first_chunk=ttft if ttft >= 0 else None,
             )
-            gen_ai_telemetry.set_content_attributes(
-                self._llm_request_span,
-                output_messages=gen_ai_telemetry.to_output_messages(
-                    text=response_content,
-                    function_calls=tool_calls,
-                    finish_reason=finish_reason,
-                ),
-            )
+            if self._llm_request_span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+                gen_ai_telemetry.set_content_attributes(
+                    self._llm_request_span,
+                    output_messages=gen_ai_telemetry.to_output_messages(
+                        text=response_content,
+                        function_calls=tool_calls,
+                        finish_reason=finish_reason,
+                    ),
+                )
             if completion_start_time:
                 self._llm_request_span.set_attribute(
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
