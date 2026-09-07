@@ -288,6 +288,13 @@ async def _llm_inference_task(
                         data.generated_functions.append(fnc_call)
                         function_ch.send_nowait(fnc_call)
 
+                    # Flush the in-progress TTS segment as soon as we know a tool call
+                    # is starting. Without this, the TTS channel stays open until the
+                    # entire LLM task finishes (including tool execution), delaying
+                    # playback of any text the model already generated before the call.
+                    if data.generated_text:
+                        text_ch.send_nowait(FlushSentinel())
+
                 if chunk.delta.extra:
                     data.generated_extra.update(chunk.delta.extra)
 
