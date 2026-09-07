@@ -570,9 +570,10 @@ class Agent:
 
             expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
+            temporary_adapter: tts.StreamAdapter | None = None
 
             if not activity.tts.capabilities.streaming:
-                wrapped_tts = tts.StreamAdapter(
+                temporary_adapter = tts.StreamAdapter(
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
@@ -580,29 +581,34 @@ class Agent:
                         xml_aware=expressive_active,
                     ),
                 )
+                wrapped_tts = temporary_adapter
 
-            # Mark whether expressive is active for this synthesis, synchronously
-            # just before stream() snapshots it. Doing it here (the single synthesis
-            # choke point for both generate_reply and say()) scopes it to this turn
-            # rather than leaving stale state on the instance. The provider's chunk
-            # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(expressive_active)
+            try:
+                # Mark whether expressive is active for this synthesis, synchronously
+                # just before stream() snapshots it. Doing it here (the single synthesis
+                # choke point for both generate_reply and say()) scopes it to this turn
+                # rather than leaving stale state on the instance. The provider's chunk
+                # defaults then drive the TTS's input tokenizer.
+                activity.tts._set_expressive(expressive_active)
 
-            conn_options = activity.session.conn_options.tts_conn_options
-            async with wrapped_tts.stream(conn_options=conn_options) as stream:
+                conn_options = activity.session.conn_options.tts_conn_options
+                async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                async def _forward_input() -> None:
-                    async for chunk in text:
-                        stream.push_text(chunk)
+                    async def _forward_input() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
 
-                    stream.end_input()
+                        stream.end_input()
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for ev in stream:
-                        yield ev.frame
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for ev in stream:
+                            yield ev.frame
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def transcription_node(
