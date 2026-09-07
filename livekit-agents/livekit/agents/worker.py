@@ -1294,7 +1294,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
-        task = self._loop.create_task(self._answer_availability(msg))
+        # stamp receipt here: the task below runs only when the loop gets to it, and on a
+        # busy worker that delay is part of the dispatch latency being measured
+        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1349,11 +1351,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # before either job appears in active_jobs.
         return self._get_effective_load() < load_threshold
 
-    async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
+    async def _answer_availability(
+        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+    ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
-        received_at = time.time()
+        if received_at is None:
+            received_at = time.time()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()

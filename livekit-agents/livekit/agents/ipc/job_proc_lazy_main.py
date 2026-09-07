@@ -402,26 +402,30 @@ class _JobProc:
 
         shutdown_info = await self._shutdown_fut
 
-        # a child of job_entrypoint, like the session was: the job's trace tells the whole
-        # story from dispatch to teardown, and a viewer keyed to agent_session zooms out to it
-        with tracer.start_as_current_span(
-            "job_shutdown",
-            context=self._entrypoint_span_context,
-            attributes={
-                trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
-                trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
-            },
-        ):
-            await self._shutdown_job(job_entry_task, shutdown_info)
-        # ended before the telemetry release below flushes: the root goes out with the job
-        job_span.end()
+        try:
+            # a child of job_entrypoint, like the session was: the job's trace tells the whole
+            # story from dispatch to teardown, and a viewer keyed to agent_session zooms out
+            with tracer.start_as_current_span(
+                "job_shutdown",
+                context=self._entrypoint_span_context,
+                attributes={
+                    trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
+                    trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
+                },
+            ):
+                await self._shutdown_job(job_entry_task, shutdown_info)
+        finally:
+            # whatever the shutdown raised (a session or room close failing), the job still
+            # ends: the root span goes out with the job's telemetry, the temp dir is removed
+            # and the per-job telemetry state is released (thread workers reuse the process)
+            job_span.end()
 
-        if tasks := self._job_ctx._pending_tasks:
-            await aio.cancel_and_wait(*tasks)
+            if tasks := self._job_ctx._pending_tasks:
+                await aio.cancel_and_wait(*tasks)
 
-        await self._job_ctx._on_cleanup()
-        await http_context._close_http_ctx()
-        _JobContextVar.reset(job_ctx_token)
+            await self._job_ctx._on_cleanup()
+            await http_context._close_http_ctx()
+            _JobContextVar.reset(job_ctx_token)
 
     async def _shutdown_job(
         self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
