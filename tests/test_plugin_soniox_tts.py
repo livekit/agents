@@ -114,7 +114,6 @@ class _FakeConnection:
         *,
         opts: Any,
         time_offset: float = 0.0,
-        audio_baseline: float = 0.0,
         timeline: soniox_tts._Timeline | None = None,
     ) -> soniox_tts._StreamData:
         self.registered_ids.append(stream_id)
@@ -124,7 +123,6 @@ class _FakeConnection:
             waiter=waiter,
             opts=opts,
             time_offset=time_offset,
-            audio_baseline=audio_baseline,
             timeline=timeline if timeline is not None else soniox_tts._Timeline(),
         )
         self._streams[stream_id] = _StreamSlot(data)
@@ -133,6 +131,11 @@ class _FakeConnection:
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
+
+    def _push_audio(self, slot: _StreamSlot, audio: bytes) -> None:
+        # mirrors _recv_loop: audio handed over is audio the user will hear
+        slot.data.produced_output = True
+        slot.emitter.push(audio)
 
     def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
         self.send_calls.append((stream_id, text, text_end))
@@ -151,13 +154,14 @@ class _FakeConnection:
             self._fail_on_send = None
             if self._emit_before_failure:
                 # One 10ms chunk fits entirely in the tail frame the emitter
-                # holds back, so pushed_duration() still reads the baseline
-                # while the timestamps for it have already been mapped.
+                # holds back, so pushed_duration() still reads the value it had
+                # when the stream opened, even though the audio is spoken for.
                 slot.data.sent_text += text
-                soniox_tts._accumulate_timestamps(
-                    slot.data, _character_timestamps(text.lstrip()[:20], 0.0)
-                )
-                slot.emitter.push(_SILENCE_PCM)
+                if self._timestamps:
+                    soniox_tts._accumulate_timestamps(
+                        slot.data, _character_timestamps(text.lstrip()[:20], 0.0)
+                    )
+                self._push_audio(slot, _SILENCE_PCM)
             if not slot.waiter.done():
                 slot.waiter.set_exception(
                     APIStatusError("transient", status_code=429, retryable=True)
@@ -165,7 +169,7 @@ class _FakeConnection:
             return
         if not self._timestamps:
             slot.data.sent_text += text
-            slot.emitter.push(_SILENCE_PCM)
+            self._push_audio(slot, _SILENCE_PCM)
             return
 
         # the server strips the separator that opens a stream, keeps the rest
@@ -174,7 +178,7 @@ class _FakeConnection:
 
         soniox_tts._accumulate_timestamps(slot.data, _character_timestamps(spoken, slot.cursor))
         slot.cursor += len(spoken) * _SECONDS_PER_CHAR
-        slot.emitter.push(_SILENCE_PCM * len(spoken))
+        self._push_audio(slot, _SILENCE_PCM * len(spoken))
 
     def cancel_stream(self, stream_id: str) -> None:
         slot = self._streams.get(stream_id)
@@ -558,9 +562,9 @@ async def test_rotation_offset_outruns_a_lagging_pushed_duration() -> None:
         active = await stream._open_stream(emitter, "req-1")  # type: ignore[arg-type]
 
         assert fake.time_offsets[-1] == pytest.approx(2.134)
-        # the retry watermark still tracks the emitter, not the timeline: it
-        # answers "has any audio been emitted since this stream opened?"
-        assert active.baseline == pytest.approx(2.090)
+        # replay is gated on what the stream handed the emitter, not on either
+        # clock, so a fresh stream starts replayable
+        assert active.data.produced_output is False
     finally:
         await stream.aclose()
         await tts.aclose()
@@ -605,20 +609,24 @@ async def test_timed_words_rebuild_the_reply_on_one_stream() -> None:
     assert "".join(str(w) for w in words) == "".join(SENTENCES)
 
 
-async def test_a_replayed_stream_does_not_duplicate_the_transcript() -> None:
-    """A stream that already mapped timestamps is never replayed in place.
+async def test_a_stream_that_published_words_is_never_replayed() -> None:
+    """A stream that handed the emitter anything is not replayed in place.
 
     ``push_timed_transcript`` cannot be taken back, so replaying such a stream
     onto the same emitter would leave the failed attempt's words queued in front
-    of the replay's and say everything twice. The audio watermark alone does not
-    notice: one 10ms chunk sits in the tail frame the emitter holds back, so
-    ``pushed_duration()`` still equals the baseline.
+    of the replay's and say everything twice. The emitter's own duration does
+    not notice in time: one 10ms chunk sits entirely in the tail frame it holds
+    back, so ``pushed_duration()`` still reads the value it had at open.
     """
     fake = _FakeConnection(timestamps=True, fail_on_send=1, emit_before_failure=True)
     words: list[TimedString] = []
-    await _synthesize(fake, timed_words=words)
+    with pytest.raises(APIStatusError):
+        await _synthesize(fake, timed_words=words)
 
-    assert "".join(str(w) for w in words) == "".join(SENTENCES)
+    # exactly one stream: the failure was not replayed
+    assert len(fake.registered_ids) == 1
+    spoken = "".join(str(w) for w in words)
+    assert spoken and spoken in "".join(SENTENCES)
 
 
 async def test_words_for_unreplayable_audio_are_released() -> None:
@@ -636,3 +644,92 @@ async def test_words_for_unreplayable_audio_are_released() -> None:
 
     # the first sentence was spoken before the failure, so it must be reported
     assert "".join(str(w) for w in words).strip() == SENTENCES[0].strip()
+
+
+async def test_cancelling_a_stream_keeps_the_words_it_spoke() -> None:
+    """An interruption publishes what the stream said, including the last word.
+
+    Cancellation rules out a replay, so the characters buffered as a
+    possibly-incomplete word are as complete as they will get and describe
+    audio the emitter already has. Dropping them with the stream would leave
+    that speech out of the interrupted turn's history.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    fake = _FakeConnection(timestamps=True)
+    stream = tts.stream()
+    waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+
+    try:
+        data = fake.register_stream("s1", emitter, waiter, opts=tts._opts)  # type: ignore[arg-type]
+        spoken = SENTENCES[0].strip()
+        data.sent_text = SENTENCES[0]
+        soniox_tts._accumulate_timestamps(data, _character_timestamps(spoken, 0.0))
+        assert data.produced_output is True
+
+        active = soniox_tts._ActiveStream(
+            connection=fake,  # type: ignore[arg-type]
+            stream_id="s1",
+            waiter=waiter,
+            data=data,
+            opened_at=0.0,
+        )
+        stream._cancelled.set()
+        waiter.set_result(None)
+
+        assert await stream._settle_stream(active, emitter, "req-1") is None  # type: ignore[arg-type]
+        assert "".join(str(w) for w in emitter.timed_words) == spoken
+    finally:
+        await stream.aclose()
+        await tts.aclose()
+
+
+async def test_a_stream_that_pushed_audio_is_never_replayed() -> None:
+    """Audio alone makes a stream unreplayable, before any word is complete.
+
+    A frame can carry too few characters to finish a word, so nothing is
+    published yet - but the audio is already the emitter's, and replaying the
+    stream would speak it twice.
+    """
+    fake = _FakeConnection(fail_on_send=1, emit_before_failure=True)
+    with pytest.raises(APIStatusError):
+        await _synthesize(fake)
+
+    assert len(fake.registered_ids) == 1
+
+
+async def test_recv_loop_marks_audio_as_produced_output() -> None:
+    """Audio handed to the emitter marks the stream, before any word completes.
+
+    This is what makes a stream unreplayable, and it has to be recorded on
+    receipt: the emitter's own duration will not show the audio until it turns
+    into frames, by which time a replay decision may already have been made.
+    """
+    stream_id = "stream-1"
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    conn = soniox_tts._Connection(tts._opts, session=None)  # type: ignore[arg-type]
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+    conn._streams[stream_id] = data
+    conn._ws = _FakeWebSocket(  # type: ignore[assignment]
+        [
+            _text_message(
+                {
+                    "stream_id": stream_id,
+                    "audio": base64.b64encode(_SILENCE_PCM).decode("ascii"),
+                }
+            ),
+            _text_message({"stream_id": stream_id, "terminated": True}),
+        ]
+    )
+
+    await conn._recv_loop()
+    await conn.aclose()
+
+    assert emitter.audio == [_SILENCE_PCM]
+    assert data.produced_output is True
+    assert emitter.timed_words == []

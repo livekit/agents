@@ -299,7 +299,6 @@ class _ActiveStream:
     waiter: asyncio.Future[None]
     data: _StreamData
     opened_at: float
-    baseline: float  # emitter duration at open; audio beyond it belongs to this stream
     attempt: int = 0
     texts: list[str] = field(default_factory=list)
 
@@ -460,17 +459,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        # baseline is the "no audio emitted yet" watermark the retry check
-        # compares against; the timeline may already run past it, so the
-        # timestamp offset takes whichever is further along.
-        baseline = output_emitter.pushed_duration()
+        # The emitter's duration lags the audio it has been handed, so the
+        # timeline - which counts every timestamp received - can already run
+        # past it; this stream starts from whichever is further along.
         data = connection.register_stream(
             stream_id,
             output_emitter,
             waiter,
             opts=self._opts,
-            time_offset=max(baseline, self._timeline.end),
-            audio_baseline=baseline,
+            time_offset=max(output_emitter.pushed_duration(), self._timeline.end),
             timeline=self._timeline,
         )
         return _ActiveStream(
@@ -479,7 +476,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             waiter=waiter,
             data=data,
             opened_at=time.monotonic(),
-            baseline=baseline,
             attempt=attempt,
         )
 
@@ -501,14 +497,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         spoken), or a fresh stream with the batch replayed when it failed
         transiently.
 
-        Whether the stream may be replayed and whether its held-back words must
-        be released are the same question, answered once, here. A stream that
-        will not be replayed has said its piece: the audio the emitter accepted
-        is what the user hears, and dropping the words for it would leave that
-        speech out of the aligned transcript and out of an interrupted turn's
-        history. A replayable one has published nothing, so the replacement
-        cannot repeat it. Reading the watermark a second time could let the two
-        answers disagree, which is how words go missing.
+        A stream is replayable only while it has handed the emitter nothing.
+        ``produced_output`` says so exactly, where the emitter's own duration
+        only says so eventually: audio sits in the emitter unaccounted until it
+        becomes frames, and a stream judged replayable on that lag would repeat
+        speech the user is about to hear, and repeat the words already published
+        for it. Neither can be taken back.
         """
         failure: APIError | None = None
         replayable = False
@@ -522,11 +516,15 @@ class SynthesizeStream(tts.SynthesizeStream):
             replayable = (
                 failure is not None
                 and failure.retryable
-                and output_emitter.pushed_duration() == active.baseline
+                and not active.data.produced_output
                 and active.attempt < self._conn_options.max_retry
                 and not self._cancelled.is_set()
             )
             if not replayable:
+                # No more characters are coming, so the word held back as
+                # possibly-incomplete is as complete as it will get, and it
+                # describes audio already handed to the emitter. A replayable
+                # stream has nothing buffered to flush.
                 _emit_timed_words(active.data, flush=True)
             # release before any replay so only one stream is ever registered
             active.connection.unregister_stream(active.stream_id)
@@ -637,11 +635,11 @@ class _StreamData:
     # between two rotated streams is recovered from.
     sent_text: str = ""
     emitted_any: bool = False
-    # Emitter duration when this stream opened, and words not yet handed over.
-    # Until the emitter counts audio past the watermark the stream may still be
-    # replayed on a fresh stream_id, and pushed words cannot be taken back.
-    audio_baseline: float = 0.0
-    pending_words: list[TimedString] = field(default_factory=list)
+    # Audio or timed words handed to the emitter. Neither can be taken back, so
+    # this is what makes a stream unreplayable - and unlike the emitter's own
+    # duration it is exact, counting output the emitter has accepted but not yet
+    # turned into frames.
+    produced_output: bool = False
 
 
 def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
@@ -676,12 +674,8 @@ def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
         if not stream.emitted_any:
             stream.emitted_any = True
             timed_words[0] = _with_leading_separator(timed_words[0], stream.sent_text)
-        stream.pending_words += timed_words
-
-    # flush means the stream reached audio_end, so it will not be replayed
-    if stream.pending_words and (flush or stream.emitter.pushed_duration() > stream.audio_baseline):
-        stream.emitter.push_timed_transcript(stream.pending_words)
-        stream.pending_words = []
+        stream.produced_output = True
+        stream.emitter.push_timed_transcript(timed_words)
 
     keep = len(stream.char_text)
     stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]
@@ -832,7 +826,6 @@ class _Connection:
         *,
         opts: _TTSOptions,
         time_offset: float = 0.0,
-        audio_baseline: float = 0.0,
         timeline: _Timeline | None = None,
     ) -> _StreamData:
         """Register a new stream and queue its config message."""
@@ -841,7 +834,6 @@ class _Connection:
             waiter=waiter,
             opts=opts,
             time_offset=time_offset,
-            audio_baseline=audio_baseline,
             timeline=timeline if timeline is not None else _Timeline(),
         )
         if self._closed:
@@ -1008,6 +1000,7 @@ class _Connection:
 
                 audio_b64 = resp.get("audio")
                 if audio_b64:
+                    stream.produced_output = True
                     stream.emitter.push(base64.b64decode(audio_b64))
 
                 if resp.get("audio_end"):
