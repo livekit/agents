@@ -81,7 +81,9 @@ class _FakeConnection:
 
     Audio and character timestamps are kept consistent at ``_SECONDS_PER_CHAR``
     per character, and, like the real server, timestamps restart at zero on
-    every new ``stream_id``.
+    every new ``stream_id`` and are reported against preprocessed text: the
+    leading whitespace of a stream's first text is normalised away, while
+    whitespace inside the stream survives.
     """
 
     def __init__(self, *, fail_on_send: int | None = None, timestamps: bool = False) -> None:
@@ -104,12 +106,17 @@ class _FakeConnection:
         *,
         opts: Any,
         time_offset: float = 0.0,
+        timeline: soniox_tts._Timeline | None = None,
     ) -> None:
         self.registered_ids.append(stream_id)
         self.time_offsets.append(time_offset)
         self._streams[stream_id] = _StreamSlot(
             soniox_tts._StreamData(
-                emitter=emitter, waiter=waiter, opts=opts, time_offset=time_offset
+                emitter=emitter,
+                waiter=waiter,
+                opts=opts,
+                time_offset=time_offset,
+                timeline=timeline if timeline is not None else soniox_tts._Timeline(),
             )
         )
         self.max_open_streams = max(self.max_open_streams, len(self._streams))
@@ -138,12 +145,17 @@ class _FakeConnection:
                 )
             return
         if not self._timestamps:
+            slot.data.sent_text += text
             slot.emitter.push(_SILENCE_PCM)
             return
 
-        soniox_tts._accumulate_timestamps(slot.data, _character_timestamps(text, slot.cursor))
-        slot.cursor += len(text) * _SECONDS_PER_CHAR
-        slot.emitter.push(_SILENCE_PCM * len(text))
+        # the server strips the separator that opens a stream, keeps the rest
+        spoken = text.lstrip() if not slot.data.sent_text else text
+        slot.data.sent_text += text
+
+        soniox_tts._accumulate_timestamps(slot.data, _character_timestamps(spoken, slot.cursor))
+        slot.cursor += len(spoken) * _SECONDS_PER_CHAR
+        slot.emitter.push(_SILENCE_PCM * len(spoken))
 
     def cancel_stream(self, stream_id: str) -> None:
         slot = self._streams.get(stream_id)
@@ -318,11 +330,13 @@ async def test_recv_loop_maps_character_timestamps() -> None:
     tts = soniox.TTS(api_key="fake-key")
     conn = soniox_tts._Connection(tts._opts, session=None)  # type: ignore[arg-type]
     waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+    timeline = soniox_tts._Timeline(end=1.5)
     conn._streams[stream_id] = soniox_tts._StreamData(
         emitter=emitter,  # type: ignore[arg-type]
         waiter=waiter,
         opts=tts._opts,
         time_offset=1.5,  # this stream started 1.5s into the segment
+        timeline=timeline,
     )
     conn._ws = _FakeWebSocket(  # type: ignore[assignment]
         [
@@ -348,7 +362,7 @@ async def test_recv_loop_maps_character_timestamps() -> None:
     await conn._recv_loop()
     await conn.aclose()
 
-    assert [str(w) for w in emitter.timed_words] == ["Hi", "there"]
+    assert [str(w) for w in emitter.timed_words] == ["Hi ", "there"]
     hi, there = emitter.timed_words
     # every timestamp shifted onto the segment timeline by time_offset
     assert hi.start_time == pytest.approx(1.50)
@@ -357,6 +371,9 @@ async def test_recv_loop_maps_character_timestamps() -> None:
     assert there.end_time == pytest.approx(1.58)
     assert len(emitter.audio) == 2
     assert waiter.done() and waiter.result() is None
+    # the timeline advanced to the last character, so the next stream after a
+    # rotation starts from here rather than from a lagging pushed_duration()
+    assert timeline.end == pytest.approx(1.58)
 
 
 async def test_aligned_transcript_reaches_frames_on_one_timeline() -> None:
@@ -400,7 +417,7 @@ async def test_aligned_transcript_offset_across_stream_rotation() -> None:
     # "And" opens the second sentence, i.e. the second stream; sentence one is
     # ~40 characters of speech, so its words cannot start back near zero.
     first_sentence_duration = len(SENTENCES[0]) * _SECONDS_PER_CHAR
-    second_stream_start, _ = _span(next(w for w in words if str(w) == "And"))
+    second_stream_start, _ = _span(next(w for w in words if str(w).strip() == "And"))
     assert second_stream_start > first_sentence_duration * 0.8
 
 
@@ -434,12 +451,126 @@ def test_to_timed_words_holds_back_the_trailing_word() -> None:
     ends = [s + 0.1 for s in starts]
 
     timed, remaining = soniox_tts._to_timed_words(text, starts, ends)
-    assert [str(w) for w in timed] == ["one"]
-    # the separator stays with the remainder so its characters keep their timings
-    assert remaining == " two"
+    # the separator rides with the word before it, so the chunks concatenate
+    assert [str(w) for w in timed] == ["one "]
+    assert remaining == "two"
 
     timed, remaining = soniox_tts._to_timed_words(text, starts, ends, flush=True)
-    assert [str(w) for w in timed] == ["one", "two"]
+    assert [str(w) for w in timed] == ["one ", "two"]
     assert remaining == ""
+    # timings describe the word, not the separator: "one" ends at 0.3, not 0.4
+    assert timed[0].start_time == pytest.approx(0.0)
+    assert timed[0].end_time == pytest.approx(0.3)
     assert timed[1].start_time == pytest.approx(0.4)
     assert timed[1].end_time == pytest.approx(0.7)
+
+
+async def test_timed_words_reconstruct_the_spoken_text() -> None:
+    """The SDK concatenates these chunks into chat history, so they must tile the text.
+
+    ``perform_text_forwarding`` builds the reply with ``out.text += delta``; a
+    chunk set that dropped the separators would store "Hellothere" as the text
+    the agent spoke.
+    """
+    spoken = "Hello there, this is what the agent said."
+    stream_id = "stream-1"
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    conn = soniox_tts._Connection(tts._opts, session=None)  # type: ignore[arg-type]
+    conn._streams[stream_id] = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+    # split mid-word, the way audio frames land
+    conn._ws = _FakeWebSocket(  # type: ignore[assignment]
+        [
+            _text_message(
+                {"stream_id": stream_id, "timestamps": _character_timestamps(spoken[:17], 0.0)}
+            ),
+            _text_message(
+                {
+                    "stream_id": stream_id,
+                    "timestamps": _character_timestamps(spoken[17:], 17 * _SECONDS_PER_CHAR),
+                    "audio_end": True,
+                }
+            ),
+            _text_message({"stream_id": stream_id, "terminated": True}),
+        ]
+    )
+
+    await conn._recv_loop()
+    await conn.aclose()
+
+    assert "".join(str(w) for w in emitter.timed_words) == spoken
+
+
+async def test_rotation_offset_outruns_a_lagging_pushed_duration() -> None:
+    """A rotated stream starts from the timeline, not from ``pushed_duration()``.
+
+    ``pushed_duration()`` counts neither audio still queued in the emitter nor
+    the tail frame it holds back, so at rotation time it can sit behind words
+    that were already emitted. Taking it alone would start the new stream early
+    and overlap them.
+    """
+    fake = _FakeConnection(timestamps=True)
+    tts = soniox.TTS(api_key="fake-key")
+
+    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
+        return fake, 0.0, True
+
+    tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
+
+    stream = tts.stream()
+    try:
+        # words emitted so far reach 2.134s, but the emitter only admits to 2.090s
+        stream._timeline.end = 2.134
+        emitter = SimpleNamespace(pushed_duration=lambda: 2.090)
+        active = await stream._open_stream(emitter, "req-1")  # type: ignore[arg-type]
+
+        assert fake.time_offsets[-1] == pytest.approx(2.134)
+        # the retry watermark still tracks the emitter, not the timeline: it
+        # answers "has any audio been emitted since this stream opened?"
+        assert active.baseline == pytest.approx(2.090)
+    finally:
+        await stream.aclose()
+        await tts.aclose()
+
+
+def test_to_timed_words_keeps_a_leading_separator() -> None:
+    """Text before the first word still reaches the transcript."""
+    text = " hi"
+    starts = [i * 0.1 for i in range(len(text))]
+    ends = [s + 0.1 for s in starts]
+
+    timed, remaining = soniox_tts._to_timed_words(text, starts, ends, flush=True)
+    assert "".join(str(w) for w in timed) + remaining == text
+
+
+async def test_timed_words_rebuild_the_reply_across_a_rotation() -> None:
+    """The reply survives a stream rotation intact, separator included.
+
+    The sentence tokenizer hands each stream its leading separator and Soniox
+    normalises it away, so without restoring it the chunks concatenate to
+    "one sentence.And here comes" in chat history.
+    """
+    fake = _FakeConnection(timestamps=True)
+    words: list[TimedString] = []
+    await _synthesize(
+        fake,
+        timed_words=words,
+        chunk_delays=[3.0, 0.01, 0.01],
+        stream_idle_timeout=1.0,
+    )
+
+    assert len(fake.registered_ids) == 2
+    assert "".join(str(w) for w in words) == "".join(SENTENCES)
+
+
+async def test_timed_words_rebuild_the_reply_on_one_stream() -> None:
+    fake = _FakeConnection(timestamps=True)
+    words: list[TimedString] = []
+    await _synthesize(fake, timed_words=words)
+
+    assert len(fake.registered_ids) == 1
+    assert "".join(str(w) for w in words) == "".join(SENTENCES)

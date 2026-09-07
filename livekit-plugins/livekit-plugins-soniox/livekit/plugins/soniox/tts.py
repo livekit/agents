@@ -313,6 +313,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id: str = ""
         self._connection: _Connection | None = None
         self._cancelled = asyncio.Event()
+        self._timeline = _Timeline()
 
     async def aclose(self) -> None:
         """Close the stream, signalling cancel to the server if still active.
@@ -345,6 +346,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         sentences are ever sent, so every rotation lands on a natural boundary.
         """
         request_id = utils.shortuuid()
+        # a retry restarts _run against a brand new emitter, so the timeline
+        # starts over with it
+        self._timeline = _Timeline()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -455,9 +459,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+        # baseline is the "no audio emitted yet" watermark the retry check
+        # compares against; the timeline may already run past it, so the
+        # timestamp offset takes whichever is further along.
         baseline = output_emitter.pushed_duration()
         connection.register_stream(
-            stream_id, output_emitter, waiter, opts=self._opts, time_offset=baseline
+            stream_id,
+            output_emitter,
+            waiter,
+            opts=self._opts,
+            time_offset=max(baseline, self._timeline.end),
+            timeline=self._timeline,
         )
         return _ActiveStream(
             connection=connection,
@@ -578,6 +590,13 @@ _OutboundMsg = _StartConfig | _SendText | _CancelStream
 
 
 @dataclass
+class _Timeline:
+    """How far this segment's aligned transcript has reached, across streams."""
+
+    end: float = 0.0
+
+
+@dataclass
 class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
@@ -595,6 +614,12 @@ class _StreamData:
     char_text: str = ""
     char_starts: list[float] = field(default_factory=list)
     char_ends: list[float] = field(default_factory=list)
+    timeline: _Timeline = field(default_factory=_Timeline)
+    # Text handed to this stream. Soniox times its own preprocessed text, which
+    # has the leading whitespace normalised away; this is where the separator
+    # between two rotated streams is recovered from.
+    sent_text: str = ""
+    emitted_any: bool = False
 
 
 def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
@@ -612,6 +637,10 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
         stream.char_starts += [start + offset] * len(char)
         stream.char_ends += [start + offset] * (len(char) - 1) + [end + offset]
     stream.char_text += "".join(chars)
+    # Where the next stream has to start from: pushed_duration() alone would
+    # place it too early, since it counts neither audio still queued in the
+    # emitter nor the tail frame the emitter holds back.
+    stream.timeline.end = max(stream.timeline.end, ends[-1] + offset)
 
     _emit_timed_words(stream)
 
@@ -622,11 +651,35 @@ def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
         stream.char_text, stream.char_starts, stream.char_ends, flush=flush
     )
     if timed_words:
+        if not stream.emitted_any:
+            stream.emitted_any = True
+            timed_words[0] = _with_leading_separator(timed_words[0], stream.sent_text)
         stream.emitter.push_timed_transcript(timed_words)
 
     keep = len(stream.char_text)
     stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]
     stream.char_ends = stream.char_ends[len(stream.char_ends) - keep :]
+
+
+def _with_leading_separator(word: TimedString, sent_text: str) -> TimedString:
+    """Restore the whitespace that opened *sent_text* but not the aligned transcript.
+
+    A reply is spread over several streams, and the sentence tokenizer hands
+    each one its leading separator (" Then, after a long pause..."), which
+    Soniox normalises away before timing the text. Without it the last word of
+    one stream runs into the first word of the next - "one sentence.Then". The
+    separator comes from the text this stream was actually given, so scripts
+    that do not space their sentences are left alone.
+    """
+    separator = sent_text[: len(sent_text) - len(sent_text.lstrip())]
+    if not separator or str(word).startswith(separator):
+        return word
+
+    return TimedString(
+        text=separator + str(word),
+        start_time=word.start_time,
+        end_time=word.end_time,
+    )
 
 
 def _to_timed_words(
@@ -641,25 +694,36 @@ def _to_timed_words(
     ``start_times`` and ``end_times`` hold one entry per character of *text*.
     The trailing word is held back until *flush*, since the characters that
     finish it may still arrive on a later frame.
+
+    The returned strings tile *text* without gaps - each one runs to the start
+    of the next word, so separators ride along with the word before them. The
+    SDK concatenates these chunks back into the reply that reaches chat history
+    and the transcript sinks, so dropping the separators would run the words
+    together. Timings still describe the word itself, not the separator.
     """
     if not text:
         return [], ""
 
     words = split_words(text, ignore_punctuation=False, split_character=True)
-    if not flush:
-        words = words[:-1]
-    if not words:
+    emitted = len(words) if flush else len(words) - 1
+    if emitted <= 0:
         return [], text
 
-    timed_words = [
-        TimedString(
-            text=text[start:end],
-            start_time=start_times[start],
-            end_time=end_times[end - 1],
+    timed_words: list[TimedString] = []
+    cursor = 0
+    for index in range(emitted):
+        _, start, end = words[index]
+        stop = words[index + 1][1] if index + 1 < len(words) else len(text)
+        timed_words.append(
+            TimedString(
+                text=text[cursor:stop],
+                start_time=start_times[start],
+                end_time=end_times[end - 1],
+            )
         )
-        for _, start, end in words
-    ]
-    return timed_words, "" if flush else text[words[-1][2] :]
+        cursor = stop
+
+    return timed_words, text[cursor:]
 
 
 class _Connection:
@@ -741,6 +805,7 @@ class _Connection:
         *,
         opts: _TTSOptions,
         time_offset: float = 0.0,
+        timeline: _Timeline | None = None,
     ) -> None:
         """Register a new stream and queue its config message."""
         if self._closed:
@@ -753,7 +818,11 @@ class _Connection:
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
         self._streams[stream_id] = _StreamData(
-            emitter=emitter, waiter=waiter, opts=opts, time_offset=time_offset
+            emitter=emitter,
+            waiter=waiter,
+            opts=opts,
+            time_offset=time_offset,
+            timeline=timeline if timeline is not None else _Timeline(),
         )
 
     def unregister_stream(self, stream_id: str) -> None:
@@ -779,6 +848,7 @@ class _Connection:
                 self._streams.pop(stream_id, None)
                 return
 
+        stream.sent_text += text
         if not stream.config_sent:
             stream.config_sent = True
             self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=stream.opts))
