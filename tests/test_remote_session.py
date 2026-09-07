@@ -157,6 +157,14 @@ async def test_cancelled_request_is_removed_from_pending_requests():
 
 
 @pytest.mark.asyncio
+async def test_request_before_start_reports_session_not_started():
+    client = RemoteSession(_ControllableTransport())
+
+    with pytest.raises(RuntimeError, match="remote session not started"):
+        await client.run("hello")
+
+
+@pytest.mark.asyncio
 async def test_transport_eof_fails_pending_request_immediately():
     transport = _ControllableTransport()
     client = RemoteSession(transport)

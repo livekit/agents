@@ -1036,7 +1036,9 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
-        if self._recv_task is None or self._recv_task.done():
+        if self._recv_task is None:
+            raise RuntimeError("remote session not started")
+        if self._recv_task.done():
             raise RuntimeError("remote session transport closed")
 
         req_type = request.WhichOneof("request")
