@@ -746,13 +746,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                # `livekit.agents.inference._warmup` is a side-effect module:
-                # importing it from the forkserver process calls `init_vad()` and
-                # `init_eot()`, paging the native model weights into the
-                # forkserver. Forked job processes inherit those pages via COW.
+                # `livekit.agents.ipc._preload` is a side-effect module holding the
+                # framework's own warm-up (native libraries, model weights, SDK imports).
+                # Imported by the forkserver it runs once, and forked job processes
+                # inherit the result via COW; under `spawn` each job process imports it
+                # itself while warming up.
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
-                    "av",
-                    "livekit.agents.inference._warmup",
+                    "livekit.agents.ipc._preload",
                     # Must remain last; it freezes objects imported by earlier preloads.
                     "livekit.agents.ipc._preload_freeze",
                 ]

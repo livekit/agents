@@ -224,7 +224,10 @@ class _JobProc:
             user_arguments=self._user_arguments,
             http_proxy=init_req.http_proxy or None,
         )
-        _preload_for_jobs()
+        # the framework's warm-up, once per process image: a no-op under a forkserver, which
+        # already imported it (see the module docstring)
+        from . import _preload  # noqa: F401
+
         self._initialize_process_fnc(self._job_proc)
 
     @log_exceptions(logger=logger)
@@ -506,62 +509,6 @@ class _JobProc:
             await asyncio.gather(*shutdown_tasks)
         except Exception:
             logger.exception("error while shutting down the job")
-
-
-def _preload_for_jobs() -> None:
-    """Do the framework's own lazy one-time work while the process is still warming up.
-
-    Each of these otherwise happens inside the first job, on the event loop, and shows up
-    as a 100-300 ms ``event_loop_blocked`` at session start that no user code caused:
-
-    - the livekit-rtc native library loads on the first FFI call (the AudioProcessingModule
-      created at session start);
-    - the openai SDK, which ``livekit.agents.inference`` is built on, imports its whole
-      ``resources`` tree on the first client attribute access (the LLM prewarm);
-    - httpx builds the process's SSL context from the CA bundle on the first client (the
-      inference LLM, STT and TTS each construct one);
-    - the turn detector's local fallback model loads on the first stream (creating the
-      stream is part of starting the agent activity).
-
-    Failures are logged at debug level only: the first real use reports a proper error."""
-
-    def _step(name: str, fnc: Callable[[], Any]) -> None:
-        started = time.perf_counter()
-        try:
-            fnc()
-        except Exception:
-            logger.debug("could not preload %s", name, exc_info=True)
-            return
-        logger.debug(
-            "preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)}
-        )
-
-    def _rtc_ffi() -> None:
-        from livekit.rtc._ffi_client import FfiClient
-
-        _ = FfiClient.instance
-
-    def _openai_resources() -> None:
-        import openai.resources  # noqa: F401
-
-    def _httpx_client() -> None:
-        # the first AsyncClient builds the process's SSL context from the CA bundle (~50 ms,
-        # GIL held); later clients reuse it. The inference LLM, STT and TTS each build one.
-        import httpx
-
-        httpx.AsyncClient()
-
-    def _local_eot_model() -> None:
-        # the turn detector's local fallback model: the first construction in a process
-        # loads the native library and the model (~50 ms of GIL-held CPU), later ones are free
-        from livekit.local_inference import EOT
-
-        EOT()
-
-    _step("the livekit-rtc native library", _rtc_ffi)
-    _step("the openai SDK resources", _openai_resources)
-    _step("the httpx client and its SSL context", _httpx_client)
-    _step("the local end-of-turn model", _local_eot_model)
 
 
 def _is_framework_callback(fnc: Any) -> bool:

@@ -153,19 +153,24 @@ def test_unknown_dispatch_stages_are_skipped(span_exporter: InMemorySpanExporter
     assert not any(k.startswith("lk.job.") and k.endswith("_latency") for k in attrs)
 
 
-def test_preload_for_jobs_imports_the_lazy_sdk_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preload_module_does_the_lazy_one_time_work(monkeypatch: pytest.MonkeyPatch) -> None:
     """The openai SDK imports its resources tree on first client use; inside a job that was a
-    300 ms stall at session start. The warm-up does it before any job exists."""
+    300 ms stall at session start. The warm-up module does it before any job exists, once per
+    process image: importing it again is a no-op."""
+    import importlib
     import sys
 
-    from livekit.agents.ipc.job_proc_lazy_main import _preload_for_jobs
-
-    for name in [m for m in sys.modules if m.startswith("openai.resources")]:
+    for name in [
+        m
+        for m in sys.modules
+        if m.startswith("openai.resources") or m == "livekit.agents.ipc._preload"
+    ]:
         monkeypatch.delitem(sys.modules, name)
     assert "openai.resources" not in sys.modules
-    _preload_for_jobs()
+    importlib.import_module("livekit.agents.ipc._preload")
     assert "openai.resources" in sys.modules
-    assert "livekit.local_inference" in sys.modules  # the local end-of-turn model is loaded
+    assert "livekit.local_inference" in sys.modules  # the local models are loaded
+    assert "livekit.rtc._ffi_client" in sys.modules  # the native library is mapped
 
 
 def test_framework_callbacks_are_not_user_callbacks() -> None:
