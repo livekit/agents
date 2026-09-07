@@ -188,8 +188,6 @@ class RoomIO:
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
         if self._room.isconnected():
-            # a room connected outside JobContext.connect() (which installs it itself)
-            rpc_tracing.install(self._room.local_participant)
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
         self._init_atask = asyncio.create_task(self._init_task())
@@ -424,8 +422,14 @@ class RoomIO:
             "connection_state_changed",
             {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
         )
-        if self._room.isconnected() and not self._room_connected_fut.done():
-            self._room_connected_fut.set_result(None)
+        if self._room.isconnected():
+            # trace RPCs whenever the room is (or becomes) connected: already up at start(),
+            # connected later by JobContext.connect() or by the user, or reconnected. install
+            # is idempotent (one interceptor instance, the SDK dedups by identity), so a room
+            # that JobContext.connect() already instrumented is left as is.
+            rpc_tracing.install(self._room.local_participant)
+            if not self._room_connected_fut.done():
+                self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
