@@ -474,6 +474,18 @@ class SpeechStream(stt.RecognizeStream):
         self._speaker_result_event: asyncio.Event = asyncio.Event()
         self._speaker_result: list[SpeakerIdentifier] | None = None
 
+    @property
+    def session_id(self) -> str | None:
+        """The service-assigned session id, set once `RecognitionStarted` arrives.
+
+        Read from the client's `session_info`. Returns `None` before the session starts
+        and after the stream is closed (which drops the client).
+        """
+        if self._client is None:
+            return None
+        info = self._client.session_info
+        return info.session_id if info is not None else None
+
     async def _run(self) -> None:
         """Run the STT stream."""
         logger.debug("Connecting to Speechmatics STT service")
