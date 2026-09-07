@@ -519,6 +519,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._mark_started()
                 await ws.send_str(payload)
                 await self._receive_chunk(ws, output_emitter, progress)
+            except asyncio.CancelledError:
+                # Drop it, and let the cancellation propagate 
+                # catching it alongside the retry logic below would swallow the
+                # interruption and keep the agent talking.
+                self._tts._pool.remove(ws)
+                raise
             except Exception as e:
                 self._tts._pool.remove(ws)
                 # An error the server explicitly refused (a bad key, say) will
