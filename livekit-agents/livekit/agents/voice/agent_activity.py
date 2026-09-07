@@ -2693,9 +2693,11 @@ class AgentActivity(RecognitionHooks):
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
+            # name the cause first: cancelling the pause interrupts the paused handle and
+            # waits for its generation, which records the interruption event on the way
+            current_speech._set_interrupt_source("user_turn")
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
-            current_speech._set_interrupt_source("user_turn")
             await current_speech.interrupt()
 
             if self._rt_session is not None:
@@ -3146,7 +3148,6 @@ class AgentActivity(RecognitionHooks):
                     text_transforms=self._session.options.tts_text_transforms,
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
-                    tts_instance=self.tts,
                 )
                 if (
                     self.use_tts_aligned_transcript
@@ -3452,7 +3453,6 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
-            llm_instance=self.llm if isinstance(self.llm, llm.LLM) else None,
         )
         tasks.append(llm_task)
 
@@ -3501,7 +3501,6 @@ class AgentActivity(RecognitionHooks):
                         text_transforms=self._session.options.tts_text_transforms,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
-                        tts_instance=self.tts,
                     )
                     tasks.append(prev_tts_task)
                 seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
@@ -4324,7 +4323,6 @@ class AgentActivity(RecognitionHooks):
                         text_transforms=self._session.options.tts_text_transforms,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
-                        tts_instance=self.tts,
                     )
 
                     if (
@@ -4904,6 +4902,9 @@ class AgentActivity(RecognitionHooks):
             and not self._paused_speech.handle.interrupted
             and self._paused_speech.handle.allow_interruptions
         ):
+            # a final transcript or a committed turn ended the pause: the user did this
+            # (first cause wins, so audio_activity stays if the pause already named it)
+            self._paused_speech.handle._set_interrupt_source("user_turn")
             self._paused_speech.handle.interrupt()
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never

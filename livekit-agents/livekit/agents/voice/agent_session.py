@@ -1896,9 +1896,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
                 if new_activity == "start":
+                    # startup spans are never current: give the start its parent explicitly,
+                    # the handoff span here, session_start for the initial agent
                     await self._activity.start(
                         reuse_resources=reuse_resources,
-                        trace_context=self._session_start_context,
+                        trace_context=(
+                            trace.set_span_in_context(handoff_span)
+                            if handoff_span is not None
+                            else self._session_start_context
+                        ),
                     )
                 elif new_activity == "resume":
                     await self._activity.resume(reuse_resources=reuse_resources)

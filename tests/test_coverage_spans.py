@@ -210,9 +210,12 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="user", content="hi")
     try:
-        stream = adapter.chat(chat_ctx=chat_ctx)
-        chunks = [chunk async for chunk in stream]
-        await stream.aclose()
+        # the span the request is made under (llm_node in the pipeline, open until the
+        # stream is consumed) is told who served
+        with tracer.start_as_current_span("caller") as caller:
+            stream = adapter.chat(chat_ctx=chat_ctx)
+            chunks = [chunk async for chunk in stream]
+            await stream.aclose()
     finally:
         await adapter.aclose()
         await primary.aclose()
@@ -241,6 +244,12 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     request_attrs = request.attributes or {}
     assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
+    # the caller's span gets the same response side, per request: a concurrent request on
+    # the same adapter may be served by a different instance, so this is not read back from
+    # the adapter's shared state once the node finishes
+    assert isinstance(caller, ReadableSpan)
+    caller_attrs = caller.attributes or {}
+    assert caller_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
     # and the adapter itself now reports who serves next
     assert adapter.model == secondary.model and adapter.provider == secondary.provider
 

@@ -192,17 +192,20 @@ def _record_fallback_failure(tts: TTS, index: int) -> None:
     trace.get_current_span().add_event("fallback_provider_failed", _fallback_attrs(tts, index))
 
 
-def _record_fallback_served(tts: TTS, index: int, request_span: trace.Span | None = None) -> None:
+def _record_fallback_served(tts: TTS, index: int, *spans: trace.Span | None) -> None:
+    """The instance that served: on the current (attempt) span, and as the response side of
+    ``spans`` (the adapter's request span and the caller's span, typically tts_node), which
+    were stamped with the instance expected to serve. Read from ``tts``, not the adapter:
+    concurrent requests may be served by different instances."""
     attrs = _fallback_attrs(tts, index)
     trace.get_current_span().set_attributes(attrs)
-    if request_span is not None:
-        # the request span was stamped with the instance expected to serve; say which one did
-        request_span.set_attributes(
-            {
-                trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model,
-                **{k: v for k, v in attrs.items() if k == trace_types.ATTR_GEN_AI_PROVIDER_NAME},
-            }
-        )
+    response_attrs = {
+        trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model,
+        **{k: v for k, v in attrs.items() if k == trace_types.ATTR_GEN_AI_PROVIDER_NAME},
+    }
+    for span in spans:
+        if span is not None:
+            span.set_attributes(response_attrs)
 
 
 class FallbackChunkedStream(ChunkedStream):
@@ -213,6 +216,8 @@ class FallbackChunkedStream(ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
+        # the span this request was made under (tts_node, typically); see _record_fallback_served
+        self._caller_span = trace.get_current_span()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
@@ -318,7 +323,7 @@ class FallbackChunkedStream(ChunkedStream):
                         for rf in resampler.flush():
                             output_emitter.push(rf.data.tobytes())
 
-                    _record_fallback_served(tts, i, self._tts_request_span)
+                    _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
                     _record_fallback_failure(tts, i)
@@ -348,6 +353,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._fallback_adapter = tts
+        self._caller_span = trace.get_current_span()
         self._pushed_tokens: list[str] = []
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
@@ -512,7 +518,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                             else:
                                 output_emitter.push(synthesized_audio.frame.data.tobytes())
 
-                        _record_fallback_served(tts, i, self._tts_request_span)
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return
                     except Exception:
                         _record_fallback_failure(tts, i)
