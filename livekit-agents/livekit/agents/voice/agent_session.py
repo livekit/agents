@@ -698,6 +698,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
+        # Metrics for the user turn that triggered an in-flight agent handoff.
+        # The next activity consumes this when its on_enter callback generates a reply.
+        self._handoff_user_metrics: MetricsReport | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -1621,6 +1624,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def update_agent(self, agent: Agent) -> None:
         self._agent = agent
+
+        from .agent_activity import _UserMetricsContextVar
+
+        if (user_metrics := _UserMetricsContextVar.get()) is not None:
+            self._handoff_user_metrics = user_metrics
 
         if self._started:
             # immediately block the old activity from accepting new user turns

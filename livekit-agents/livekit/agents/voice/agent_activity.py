@@ -115,6 +115,9 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+_UserMetricsContextVar = contextvars.ContextVar[llm.MetricsReport | None](
+    "agents_user_metrics", default=None
+)
 
 
 async def _aligned_transcript_or_text(
@@ -1624,6 +1627,9 @@ class AgentActivity(RecognitionHooks):
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
 
+        handoff_user_metrics = self._session._handoff_user_metrics
+        self._session._handoff_user_metrics = None
+
         task = asyncio.current_task()
         if not is_given(tool_choice) and task is not None:
             if task_info := _get_activity_task_info(task):
@@ -1684,6 +1690,7 @@ class AgentActivity(RecognitionHooks):
                     tools=resolved_tools if is_given(resolved_tools) else all_tools,
                     new_message=user_message if is_given(user_message) else None,
                     instructions=instructions or None,
+                    _previous_user_metrics=handoff_user_metrics,
                     model_settings=ModelSettings(
                         tool_choice=tool_choice
                         if utils.is_given(tool_choice) or self._tool_choice is None
@@ -3494,15 +3501,19 @@ class AgentActivity(RecognitionHooks):
             speech_handle._item_added([out.fnc_call_out])
 
         # start to execute tools (only after play())
-        exe_task, tool_output = perform_tool_executions(
-            session=self._session,
-            speech_handle=speech_handle,
-            tool_ctx=tool_ctx,
-            tool_choice=model_settings.tool_choice,
-            function_stream=llm_gen_data.function_ch,
-            tool_execution_started_cb=_tool_execution_started_cb,
-            tool_execution_completed_cb=_tool_execution_completed_cb,
-        )
+        user_metrics_token = _UserMetricsContextVar.set(user_metrics)
+        try:
+            exe_task, tool_output = perform_tool_executions(
+                session=self._session,
+                speech_handle=speech_handle,
+                tool_ctx=tool_ctx,
+                tool_choice=model_settings.tool_choice,
+                function_stream=llm_gen_data.function_ch,
+                tool_execution_started_cb=_tool_execution_started_cb,
+                tool_execution_completed_cb=_tool_execution_completed_cb,
+            )
+        finally:
+            _UserMetricsContextVar.reset(user_metrics_token)
 
         # use the TTS-aligned timing for the transcript instead of the raw text, when
         # the TTS supports it (resolved per segment below)
@@ -3722,6 +3733,7 @@ class AgentActivity(RecognitionHooks):
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
+                self._session._handoff_user_metrics = user_metrics
                 self._session.update_agent(new_agent_task)
                 draining = True
 

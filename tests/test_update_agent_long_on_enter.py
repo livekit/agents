@@ -8,6 +8,7 @@ from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -146,3 +147,54 @@ async def test_update_agent_long_on_enter_no_deadlock():
         # the next turn completes the task
         second_result = await asyncio.wait_for(sess.run(user_input="Bob"), timeout=5.0)
         second_result.expect.contains_function_call(name="record_name")
+
+
+@pytest.mark.asyncio
+async def test_handoff_reply_preserves_user_metrics() -> None:
+    class HandoffTarget(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="handoff target")
+
+        async def on_enter(self) -> None:
+            await self.session.generate_reply(instructions="handoff_reply")
+
+    class HandoffSource(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="handoff source")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> None:
+            """Hand the current turn to the next agent."""
+            target = HandoffTarget()
+            self.session.update_agent(target)
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm(
+        content="",
+        tool_calls=[FunctionToolCall(name="handoff", arguments="{}", call_id="call_1")],
+    )
+    actions.add_llm("hello from the new agent", input="handoff_reply")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    conversation_events = []
+    session.on("conversation_item_added", conversation_events.append)
+
+    await run_session(session, HandoffSource(), drain_delay=1.0)
+
+    assistant_messages = [
+        event.item
+        for event in conversation_events
+        if event.item.type == "message" and event.item.role == "assistant"
+    ]
+    user_messages = [
+        event.item
+        for event in conversation_events
+        if event.item.type == "message" and event.item.role == "user"
+    ]
+    assert len(user_messages) == 1
+    assert "stopped_speaking_at" in user_messages[0].metrics
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0].text_content == "hello from the new agent"
+    assert "e2e_latency" in assistant_messages[0].metrics
