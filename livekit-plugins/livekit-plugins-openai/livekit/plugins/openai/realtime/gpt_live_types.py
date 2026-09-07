@@ -289,9 +289,14 @@ class Usage(BaseModel):
     seconds: float = 0.0
 
 
+class ContextWindow(BaseModel):
+    usage_ratio: float | None = None
+
+
 class SessionUsageUpdatedEvent(BaseModel):
     type: Literal["session.usage.updated"] = "session.usage.updated"
     usage: Usage = Usage()
+    context_window: ContextWindow | None = None
 
 
 class SessionClosedEvent(BaseModel):

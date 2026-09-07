@@ -208,6 +208,25 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         await model.aclose()
 
 
+async def test_instructions_cannot_change_once_the_session_has_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent.update_instructions promises a RealtimeError when the session cannot apply it."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.")
+        await asyncio.sleep(0.05)
+        await session._update_instructions("Be concise.")  # the same text is not a change
+        with pytest.raises(llm.RealtimeError, match="immutable"):
+            await session._update_instructions("Be verbose.")
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_custom_voice_is_sent_as_an_object(monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _connect_hook(monkeypatch)
 
@@ -527,7 +546,13 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
     try:
         await session._update_session()
         await asyncio.sleep(0.05)
-        session._handle_event({"type": "session.usage.updated", "usage": {"seconds": 14.0}})
+        session._handle_event(
+            {
+                "type": "session.usage.updated",
+                "usage": {"seconds": 14.0},
+                "context_window": {"usage_ratio": 0.2},
+            }
+        )
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         session._handle_event(
             {"type": "session.closed", "reason": "client_request", "usage": {"seconds": 27.0}}
@@ -698,15 +723,26 @@ async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_sai
         sent_before = len(ws.sent)
 
         await session._append_items(
-            [llm.ChatMessage(role="user", content=["What is the weather in Paris?"], id="typed_1")]
+            [
+                llm.ChatMessage(role="system", content=["Answer in French."], id="rule_1"),
+                llm.ChatMessage(
+                    role="user", content=["What is the weather in Paris?"], id="typed_1"
+                ),
+            ]
         )
         session._generate_reply()
         await asyncio.sleep(0.05)
 
+        # a system message is a standing rule, everything else is context
         new = ws.sent[sent_before:]
-        assert [e["type"] for e in new] == ["session.thinking.append", "session.commentary.append"]
-        assert new[0]["content"] == "user: What is the weather in Paris?"
-        assert new[1]["content"] == f"{gpt_live_model._ASK_TYPED}\n\nWhat is the weather in Paris?"
+        assert [e["type"] for e in new] == [
+            "session.instructions.append",
+            "session.thinking.append",
+            "session.commentary.append",
+        ]
+        assert new[0]["content"] == "Answer in French."
+        assert new[1]["content"] == "user: What is the weather in Paris?"
+        assert new[2]["content"] == f"{gpt_live_model._ASK_TYPED}\n\nWhat is the weather in Paris?"
 
         session._generate_reply()  # the same message is not asked about twice
         await asyncio.sleep(0.05)

@@ -134,7 +134,6 @@ class _DelegatedResponse:
 class _LiveOptions:
     model: str
     voice: str | dict[str, Any]
-    instructions: str | None
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
     api_key: str
@@ -151,7 +150,6 @@ class GPTLiveModel(llm.DuplexModel):
         *,
         model: str = DEFAULT_MODEL,
         voice: str | dict[str, Any] = DEFAULT_VOICE,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         api_key: str | None = None,
@@ -165,7 +163,6 @@ class GPTLiveModel(llm.DuplexModel):
             model: GPT-Live voice model slug.
             voice: Output voice: a name such as ``marin``, or ``{"id": "voice_..."}`` for an
                 authorized custom voice. Immutable after the session starts.
-            instructions: Voice-model system instructions, immutable after the session starts.
             delegation: Where delegated work goes, fixed for the life of the session.
                 ``responses`` runs it on a backend model, so ``@function_tool`` works as usual;
                 ``client`` hands it to the application as a ``delegation_created`` event, which
@@ -200,7 +197,6 @@ class GPTLiveModel(llm.DuplexModel):
         self._opts = _LiveOptions(
             model=model,
             voice=voice,
-            instructions=instructions if is_given(instructions) else None,
             delegation=delegation,
             responses=(
                 responses_options if is_given(responses_options) else ResponsesDelegationOptions()
@@ -259,7 +255,8 @@ class GPTLiveSession(
         self._live_model = duplex_model
         self._opts = replace(duplex_model._opts, responses=duplex_model._opts.responses.copy())
         self._tools = llm.ToolContext.empty()
-        self._instructions = self._opts.instructions
+        # the agent's instructions, set by _update_session before session.start and immutable after
+        self._instructions: str | None = None
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -786,6 +783,11 @@ class GPTLiveSession(
     # metrics and errors
 
     def _handle_session_usage_updated(self, event: types.SessionUsageUpdatedEvent) -> None:
+        if event.context_window is not None and event.context_window.usage_ratio is not None:
+            logger.debug(
+                "gpt-live context window utilization",
+                extra={"usage_ratio": event.context_window.usage_ratio},
+            )
         self._handle_usage(event.usage)
 
     def _handle_session_closed(self, event: types.SessionClosedEvent) -> None:
@@ -931,12 +933,11 @@ class GPTLiveSession(
     # framework hooks
 
     async def _update_instructions(self, instructions: str) -> None:
-        if self._session_start_sent:
-            if instructions != self._instructions:
-                logger.debug(
-                    "gpt-live voice instructions are immutable after session start; ignoring update"
-                )
-            return
+        if self._session_start_sent and instructions != self._instructions:
+            raise llm.RealtimeError(
+                "gpt-live voice instructions are immutable after session start; use "
+                "append_instructions for a standing rule"
+            )
         self._instructions = instructions
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
@@ -958,12 +959,16 @@ class GPTLiveSession(
         if not self._session_start_sent:
             return  # startup history, rendered into session.start
 
-        # a tool result answering a call the backend delegated goes back on the backend's channel;
-        # everything else is context for the voice model, as one append
+        # a system or developer message is a standing rule for the voice model, a tool result
+        # answering a call the backend delegated goes back on the backend's channel, and everything
+        # else is context for the voice model, as one append
         backend_outputs: list[tuple[llm.FunctionCallOutput, str | None]] = []
         lines: list[str] = []
         for item in items:
-            if (
+            if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
+                if text := item.text_content:
+                    self.append_instructions(text)
+            elif (
                 isinstance(item, llm.FunctionCallOutput)
                 and item.call_id in self._fnc_call_to_delegation
             ):
