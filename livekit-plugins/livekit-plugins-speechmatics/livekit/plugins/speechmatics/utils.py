@@ -1,6 +1,6 @@
 from urllib.parse import urlencode
 
-from speechmatics.voice import __version__ as sdk_version
+from speechmatics.agent_stt import __version__ as sdk_version
 
 from .version import __version__ as lk_version
 

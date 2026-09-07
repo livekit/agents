@@ -15,11 +15,10 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
-from speechmatics.voice import (
+from speechmatics.agent_stt import (
     AdditionalVocabEntry,
     AudioEncoding,
-    OperatingPoint,
-    SpeakerFocusMode,
+    Model,
     SpeakerIdentifier,
 )
 
@@ -34,8 +33,7 @@ __all__ = [
     "SpeechStream",
     "AdditionalVocabEntry",
     "AudioEncoding",
-    "OperatingPoint",
-    "SpeakerFocusMode",
+    "Model",
     "SpeakerIdentifier",
     "logger",
     "__version__",

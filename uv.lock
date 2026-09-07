@@ -3454,13 +3454,13 @@ name = "livekit-plugins-speechmatics"
 source = { editable = "livekit-plugins/livekit-plugins-speechmatics" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "speechmatics-voice", extra = ["smart"] },
+    { name = "speechmatics-agent-stt" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "speechmatics-voice", extras = ["smart"], specifier = ">=0.2.8" },
+    { name = "speechmatics-agent-stt", specifier = ">=0.1.0" },
 ]
 
 [[package]]
@@ -5810,37 +5810,28 @@ wheels = [
 ]
 
 [[package]]
+name = "speechmatics-agent-stt"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "speechmatics-rt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/52/fdc366b34c77aef07b5af89e764c2a40457f125bbcba9df825cfad24bb56/speechmatics_agent_stt-0.1.0.tar.gz", hash = "sha256:ca17027d43aab73df16ce757600027f107b07de60aa2434274a0fe0bc0889452", size = 16798, upload-time = "2026-09-07T08:58:17.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/0b/71650f93c1328a6a96313b26c60830c9903d01177f8821aaec4b8c45d097/speechmatics_agent_stt-0.1.0-py3-none-any.whl", hash = "sha256:0e87e1a954660515763834ff268b509a0025cd5484aef092e13a047621d11d5b", size = 17896, upload-time = "2026-09-07T08:58:16.158Z" },
+]
+
+[[package]]
 name = "speechmatics-rt"
-version = "1.1.0"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/63/96d8fc26077f393487e7160ff33790392a6071cbfa38bf5bbba43ca3e218/speechmatics_rt-1.1.0.tar.gz", hash = "sha256:9fbf948b93212dfbf698026533126c472a67098f1f0e3d97ed6e2f1201b10712", size = 28438, upload-time = "2026-06-17T10:32:07.191Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/2b/2270997af25f5e5a288fe8887d434683eb25c0486e6a51654d228f851285/speechmatics_rt-1.1.1.tar.gz", hash = "sha256:c560df8edcf0af3a565310f1a744feee9a9c0bb35e665225305ae7e7343a390f", size = 29797, upload-time = "2026-08-26T08:21:14.822Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/2e/1ba7289cc93b20fc3c91c0d225d4b9bdf6fcdb5ca1c6ada384bffa8c2e45/speechmatics_rt-1.1.0-py3-none-any.whl", hash = "sha256:3d73a8f530ac6810320584bdb443971c28d074ef3167399a6365c8b0e6ca5db9", size = 34507, upload-time = "2026-06-17T10:32:06.109Z" },
-]
-
-[[package]]
-name = "speechmatics-voice"
-version = "0.2.8"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pydantic" },
-    { name = "speechmatics-rt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/b2/72b5b2203bbefbd22e7692adaca0dd7c2feebed1aaea5599ec579f74fbbf/speechmatics_voice-0.2.8.tar.gz", hash = "sha256:b2d9cbf773fd94400c744734662e2b16b5bdc4271d0dafde46ac032c438fe000", size = 61419, upload-time = "2026-01-26T16:26:09.082Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/2d/a2ab215a7a31fad5ef9267420dc9ced96d6d52e5b80b131ef41424607849/speechmatics_voice-0.2.8-py3-none-any.whl", hash = "sha256:423ac7620ae8c98f175faace2184ac4ab1fe448ffb41af57aae05ec655326f79", size = 57629, upload-time = "2026-01-26T16:26:07.59Z" },
-]
-
-[package.optional-dependencies]
-smart = [
-    { name = "certifi" },
-    { name = "onnxruntime" },
-    { name = "transformers" },
+    { url = "https://files.pythonhosted.org/packages/3e/f4/45fec42d4d7356f611c66491537ca6d8c003bcc6ad7c3b21b103ba1e0da4/speechmatics_rt-1.1.1-py3-none-any.whl", hash = "sha256:4c1154d8862c838e307861207fcd590477b3f473c9084ef30ee2b65419adbcd6", size = 36258, upload-time = "2026-08-26T08:21:13.776Z" },
 ]
 
 [[package]]
