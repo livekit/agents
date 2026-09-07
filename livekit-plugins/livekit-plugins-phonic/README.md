@@ -81,6 +81,13 @@ accepted by Phonic's Responses API:
 from livekit.plugins.phonic.realtime import to_phonic_tool_definitions
 
 tool_definitions = to_phonic_tool_definitions(tool_context)
+```
+
+The executable functions remain in the `ToolContext`; only their names,
+descriptions, and parameter schemas are returned.
+
+## Configuration
+
 Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `RealtimeModel`. All other options are optional.
 
 | Option | Type | Description |
