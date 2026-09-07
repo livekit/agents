@@ -117,6 +117,7 @@ def _validate_options(
     voice: str,
     user_id: str | None,
     custom_audio_id: str | None,
+    enable_server_pronunciation_overrides: bool,
 ) -> None:
     if not model or not model.strip():
         raise ValueError("model must be a non-empty string")
@@ -126,6 +127,13 @@ def _validate_options(
         raise ValueError(
             "user_id is required when custom_audio_id is set; "
             "find your user id at https://app.silma.ai/api-keys"
+        )
+    if enable_server_pronunciation_overrides and not user_id:
+        # Overrides are stored per account, so without a user_id the server has
+        # no way to know whose to apply and the flag silently does nothing.
+        raise ValueError(
+            "user_id is required when enable_server_pronunciation_overrides is "
+            "set; find your user id at https://app.silma.ai/api-keys"
         )
 
 
@@ -204,6 +212,7 @@ class TTS(tts.TTS):
             voice=voice,
             user_id=user_id,
             custom_audio_id=custom_audio_id,
+            enable_server_pronunciation_overrides=enable_server_pronunciation_overrides,
         )
 
         self._opts = _TTSOptions(
@@ -334,6 +343,7 @@ class TTS(tts.TTS):
             voice=updated.voice,
             user_id=updated.user_id,
             custom_audio_id=updated.custom_audio_id,
+            enable_server_pronunciation_overrides=(updated.enable_server_pronunciation_overrides),
         )
         self._opts = updated
 
@@ -508,6 +518,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         for attempt in range(2):
             ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+            # These are shared on the pool, not returned by get(). Reading them
+            # on the very next lines is safe because asyncio only switches tasks
+            # at an await, and there is none in between -- a concurrent stream
+            # cannot overwrite them in this window. Keep it that way: an await
+            # inserted here would make the values another stream's.
             reused = self._tts._pool.last_connection_reused
             self._acquire_time = self._tts._pool.last_acquire_time
             self._connection_reused = reused
@@ -520,7 +535,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await ws.send_str(payload)
                 await self._receive_chunk(ws, output_emitter, progress)
             except asyncio.CancelledError:
-                # Drop it, and let the cancellation propagate 
+                # Drop it, and let the cancellation propagate --
                 # catching it alongside the retry logic below would swallow the
                 # interruption and keep the agent talking.
                 self._tts._pool.remove(ws)
