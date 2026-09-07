@@ -58,6 +58,33 @@ class PairedTransport(SessionTransport):
             raise StopAsyncIteration from None
 
 
+class _ControllableTransport(SessionTransport):
+    """A transport whose receive side terminates when the test asks it to."""
+
+    def __init__(self) -> None:
+        self.sent = asyncio.Event()
+        self.disconnect = asyncio.Event()
+        self.receive_error: Exception | None = None
+
+    async def start(self) -> None:
+        pass
+
+    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self.sent.set()
+
+    async def close(self) -> None:
+        self.disconnect.set()
+
+    def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]:
+        return self
+
+    async def __anext__(self) -> agent_pb.AgentSessionMessage:
+        await self.disconnect.wait()
+        if self.receive_error is not None:
+            raise self.receive_error
+        raise StopAsyncIteration
+
+
 def _make_mock_session() -> MagicMock:
     session = MagicMock()
     session.on = MagicMock()
@@ -96,6 +123,82 @@ def _make_mock_session() -> MagicMock:
     session.usage = usage
 
     return session
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_is_removed_from_pending_requests():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    request_task.cancel()
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await request_task
+
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transport_eof_fails_pending_request_immediately():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    transport.disconnect.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed"):
+            await asyncio.wait_for(request_task, timeout=1.0)
+
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_after_transport_eof_fails_immediately():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    transport.disconnect.set()
+    assert client._recv_task is not None
+    await client._recv_task
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed"):
+            await asyncio.wait_for(client.run("hello"), timeout=1.0)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_receive_error_fails_pending_request_immediately():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    transport.receive_error = RuntimeError("receive failed")
+    transport.disconnect.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed") as exc_info:
+            await asyncio.wait_for(request_task, timeout=1.0)
+
+        assert exc_info.value.__cause__ is transport.receive_error
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio

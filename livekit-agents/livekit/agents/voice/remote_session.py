@@ -980,6 +980,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         self._started = False
         self._pending_requests: dict[str, asyncio.Future[agent_pb.SessionResponse]] = {}
         self._recv_task: asyncio.Task[None] | None = None
+        self._recv_error: Exception | None = None
 
     @classmethod
     def from_room(cls, room: rtc.Room, agent_identity: str) -> RemoteSession:
@@ -990,6 +991,7 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         if self._started:
             return
         self._started = True
+        self._recv_error = None
         await self._transport.start()
         self._recv_task = asyncio.create_task(self._recv_loop())
 
@@ -1018,8 +1020,16 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                         self.emit(event_field, msg.event)
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception as e:
             logger.warning("error processing session message", exc_info=True)
+            self._recv_error = e
+        finally:
+            for future in self._pending_requests.values():
+                if not future.done():
+                    error = RuntimeError("remote session transport closed")
+                    error.__cause__ = self._recv_error
+                    future.set_exception(error)
+            self._pending_requests.clear()
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
         future = self._pending_requests.pop(response.request_id, None)
@@ -1031,6 +1041,9 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
+        if self._recv_task is None or self._recv_task.done():
+            raise RuntimeError("remote session transport closed") from self._recv_error
+
         req_type = request.WhichOneof("request")
         future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
         self._pending_requests[request.request_id] = future
@@ -1040,15 +1053,13 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             await self._transport.send_message(msg)
             resp = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            self._pending_requests.pop(request.request_id, None)
             logger.warning(
                 "remote session request timed out",
                 extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
             )
             raise
-        except Exception:
+        finally:
             self._pending_requests.pop(request.request_id, None)
-            raise
 
         if resp.error:
             raise RuntimeError(f"session request {req_type} failed: {resp.error}")
