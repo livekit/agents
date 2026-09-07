@@ -297,6 +297,7 @@ class _ActiveStream:
     connection: _Connection
     stream_id: str
     waiter: asyncio.Future[None]
+    data: _StreamData
     opened_at: float
     baseline: float  # emitter duration at open; audio beyond it belongs to this stream
     attempt: int = 0
@@ -463,7 +464,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # compares against; the timeline may already run past it, so the
         # timestamp offset takes whichever is further along.
         baseline = output_emitter.pushed_duration()
-        connection.register_stream(
+        data = connection.register_stream(
             stream_id,
             output_emitter,
             waiter,
@@ -476,6 +477,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection=connection,
             stream_id=stream_id,
             waiter=waiter,
+            data=data,
             opened_at=time.monotonic(),
             baseline=baseline,
             attempt=attempt,
@@ -498,8 +500,18 @@ class SynthesizeStream(tts.SynthesizeStream):
         Returns None when the stream ended cleanly (everything sent was
         spoken), or a fresh stream with the batch replayed when it failed
         transiently.
+
+        Whether the stream may be replayed and whether its held-back words must
+        be released are the same question, answered once, here. A stream that
+        will not be replayed has said its piece: the audio the emitter accepted
+        is what the user hears, and dropping the words for it would leave that
+        speech out of the aligned transcript and out of an interrupted turn's
+        history. A replayable one has published nothing, so the replacement
+        cannot repeat it. Reading the watermark a second time could let the two
+        answers disagree, which is how words go missing.
         """
         failure: APIError | None = None
+        replayable = False
         try:
             await active.waiter
         except APIError as e:
@@ -507,11 +519,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
+            replayable = (
+                failure is not None
+                and failure.retryable
+                and output_emitter.pushed_duration() == active.baseline
+                and active.attempt < self._conn_options.max_retry
+                and not self._cancelled.is_set()
+            )
+            if not replayable:
+                _emit_timed_words(active.data, flush=True)
             # release before any replay so only one stream is ever registered
             active.connection.unregister_stream(active.stream_id)
 
         if failure is None:
             return None
+        if not replayable:
+            raise failure
         return await self._retry_stream(active, output_emitter, request_id, failure)
 
     async def _retry_stream(
@@ -524,23 +547,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Replay the failed stream's sentences on a fresh stream_id.
 
         The framework never retries once any audio reached the user, so a
-        transient failure would otherwise mute the rest of the reply. Replaying
-        is safe only while the failed stream itself produced no audio.
-
-        The same watermark keeps the aligned transcript safe to replay: timed
-        words are held back until it moves (see ``_emit_timed_words``), so a
-        stream that can still be replayed has pushed none, and the replacement
-        cannot repeat them.
+        transient failure would otherwise mute the rest of the reply. Only
+        ``_settle_stream`` judges whether replaying is safe; by the time this
+        runs the stream is known to have produced no audio, and to have
+        published no timed words that the replacement could repeat.
         """
-        can_retry = (
-            exc.retryable
-            and output_emitter.pushed_duration() == active.baseline
-            and active.attempt < self._conn_options.max_retry
-            and not self._cancelled.is_set()
-        )
-        if not can_retry:
-            raise exc
-
         retry_interval = self._conn_options._interval_for_retry(active.attempt)
         logger.warning(
             "Soniox TTS stream failed: %s, retrying in %ss",
@@ -823,18 +834,9 @@ class _Connection:
         time_offset: float = 0.0,
         audio_baseline: float = 0.0,
         timeline: _Timeline | None = None,
-    ) -> None:
+    ) -> _StreamData:
         """Register a new stream and queue its config message."""
-        if self._closed:
-            if not waiter.done():
-                waiter.set_exception(APIConnectionError("Soniox TTS connection is closed"))
-            return
-
-        if stream_id in self._streams:
-            raise ValueError(f"stream_id {stream_id} already registered")
-
-        # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(
+        data = _StreamData(
             emitter=emitter,
             waiter=waiter,
             opts=opts,
@@ -842,6 +844,17 @@ class _Connection:
             audio_baseline=audio_baseline,
             timeline=timeline if timeline is not None else _Timeline(),
         )
+        if self._closed:
+            if not waiter.done():
+                waiter.set_exception(APIConnectionError("Soniox TTS connection is closed"))
+            return data
+
+        if stream_id in self._streams:
+            raise ValueError(f"stream_id {stream_id} already registered")
+
+        # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
+        self._streams[stream_id] = data
+        return data
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)

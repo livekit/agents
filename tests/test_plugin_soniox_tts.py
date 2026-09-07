@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -115,20 +116,20 @@ class _FakeConnection:
         time_offset: float = 0.0,
         audio_baseline: float = 0.0,
         timeline: soniox_tts._Timeline | None = None,
-    ) -> None:
+    ) -> soniox_tts._StreamData:
         self.registered_ids.append(stream_id)
         self.time_offsets.append(time_offset)
-        self._streams[stream_id] = _StreamSlot(
-            soniox_tts._StreamData(
-                emitter=emitter,
-                waiter=waiter,
-                opts=opts,
-                time_offset=time_offset,
-                audio_baseline=audio_baseline,
-                timeline=timeline if timeline is not None else soniox_tts._Timeline(),
-            )
+        data = soniox_tts._StreamData(
+            emitter=emitter,
+            waiter=waiter,
+            opts=opts,
+            time_offset=time_offset,
+            audio_baseline=audio_baseline,
+            timeline=timeline if timeline is not None else soniox_tts._Timeline(),
         )
+        self._streams[stream_id] = _StreamSlot(data)
         self.max_open_streams = max(self.max_open_streams, len(self._streams))
+        return data
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -206,12 +207,17 @@ async def _synthesize(
 
     push_t = asyncio.create_task(_push())
     frames = 0
-    async for ev in stream:
-        frames += 1
-        if timed_words is not None:
-            timed_words += ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
-    await push_t
-    await stream.aclose()
+    try:
+        async for ev in stream:
+            frames += 1
+            if timed_words is not None:
+                timed_words += ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
+    finally:
+        # the stream may raise, so tear down either way
+        push_t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await push_t
+        await stream.aclose()
     return frames
 
 
@@ -613,3 +619,20 @@ async def test_a_replayed_stream_does_not_duplicate_the_transcript() -> None:
     await _synthesize(fake, timed_words=words)
 
     assert "".join(str(w) for w in words) == "".join(SENTENCES)
+
+
+async def test_words_for_unreplayable_audio_are_released() -> None:
+    """Words held for audio the emitter accepted are not dropped with the stream.
+
+    Once the emitter counts a stream's audio the stream can no longer be
+    replayed, so the words held back for it describe speech the user hears.
+    Discarding them with the stream would drop that text from the aligned
+    transcript, and from the history of a turn interrupted right there.
+    """
+    fake = _FakeConnection(timestamps=True, fail_on_send=2)
+    words: list[TimedString] = []
+    with pytest.raises(APIStatusError):
+        await _synthesize(fake, timed_words=words)
+
+    # the first sentence was spoken before the failure, so it must be reported
+    assert "".join(str(w) for w in words).strip() == SENTENCES[0].strip()
