@@ -273,8 +273,8 @@ async def test_invalidate_mid_stream_lets_the_stream_finish_then_reconnects():
 
 
 @pytest.mark.asyncio
-async def test_invalidate_during_a_handshake_retires_the_new_connection():
-    """A connection negotiated with the old options must not be pooled for reuse."""
+async def test_invalidate_during_a_handshake_discards_the_stale_connection():
+    """A socket negotiated with the old options is never handed to a caller."""
     started = asyncio.Event()
     release = asyncio.Event()
     counter = 0
@@ -296,18 +296,15 @@ async def test_invalidate_during_a_handshake_retires_the_new_connection():
     await started.wait()
     pool.invalidate()  # options changed while the socket was still being negotiated
     release.set()
-    stale = await acquiring
+    conn = await acquiring
 
-    # the caller asked before the change and still gets its connection
-    assert stale is not None
-    pool.put(stale)
-    assert stale not in pool._available, "A connection negotiated with stale options was pooled."
+    assert conn.id == 2, "Expected the caller to get a connection negotiated after the change."
+    assert all(c.id != 1 for c in pool._available), "The stale connection was pooled."
+    assert conn in pool._connections
 
-    started.clear()
-    release.set()
-    fresh = await pool.get(timeout=10.0)
-    assert fresh is not stale, "Expected a connection negotiated after the option change."
-    assert stale in closed, "Expected the stale connection to be closed once returned."
+    pool.put(conn)
+    await pool.get(timeout=10.0)  # drains the close queue
+    assert [c.id for c in closed] == [1], "Expected only the stale connection to be closed."
 
 
 @pytest.mark.asyncio
@@ -337,12 +334,8 @@ async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
     assert task is not None
     await task
 
-    stale = DummyConnection(1)
-    assert all(c.id != stale.id for c in pool._available), (
-        "A prewarmed connection with stale options stayed available."
-    )
-    # the discarded attempt must not leave the pool cold
-    assert len(pool._available) == 1, "Expected prewarm to retry after a mid-handshake invalidate."
+    # the discarded attempt must not leave the pool cold, and must not be reusable
+    assert len(pool._available) == 1, "Expected prewarm to end with a usable connection."
     assert next(iter(pool._available)).id == 2
 
     await pool.aclose()

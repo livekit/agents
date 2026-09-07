@@ -53,7 +53,7 @@ class ConnectionPool(Generic[T]):
 
         # bumped by invalidate() so a connection whose handshake was already in
         # flight can be recognised as stale once it completes.
-        self._generation: int = 0
+        self._invalidations: int = 0
 
         self._prewarm_task: weakref.ref[asyncio.Task[None]] | None = None
 
@@ -72,15 +72,13 @@ class ConnectionPool(Generic[T]):
         """
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
-        generation = self._generation
-        connection = await self._connect_cb(timeout)
-        if generation != self._generation:
-            # invalidated while the handshake was in flight, so this connection was
-            # negotiated with settings that are already stale. the caller asked for it
-            # before the change and still gets it, but it is retired so nothing reuses
-            # it afterwards.
-            self._retired.add(connection)
-            return connection
+        while True:
+            invalidations = self._invalidations
+            connection = await self._connect_cb(timeout)
+            if invalidations == self._invalidations:
+                break
+            # options changed during the handshake, so this socket carries the old ones
+            self._to_close.add(connection)
         self._connections[connection] = time.time()
         return connection
 
@@ -151,8 +149,7 @@ class ConnectionPool(Generic[T]):
             conn: The connection to make available
         """
         if conn in self._retired:
-            self._retired.discard(conn)
-            self._to_close.add(conn)
+            self.remove(conn)
             return
 
         if conn in self._connections:
@@ -193,10 +190,11 @@ class ConnectionPool(Generic[T]):
         working for whoever holds them and are queued for closing when returned via
         :meth:`put` or :meth:`remove`. Closing them here would sever a connection that
         is still streaming, so a caller changing options mid-session would interrupt
-        the request in flight. A connection whose handshake is still in flight is
-        retired too, once it completes, since it was negotiated with the old settings.
+        the request in flight. A handshake that was already in flight is discarded
+        and retried by :meth:`_connect`, since the socket it produced carries the old
+        settings and no caller has been handed it yet.
         """
-        self._generation += 1
+        self._invalidations += 1
         for conn in list(self._connections.keys()):
             if conn in self._available:
                 self._to_close.add(conn)
@@ -222,22 +220,10 @@ class ConnectionPool(Generic[T]):
 
         async def _prewarm_impl() -> None:
             try:
-                # an invalidation landing mid-handshake discards the connection being
-                # warmed. retry once so the pool does not stay cold just because
-                # options changed while it was warming up; bounded so repeated
-                # invalidations cannot spin here.
-                for _ in range(2):
-                    async with self._connect_lock:
-                        if self._connections:
-                            return
+                async with self._connect_lock:
+                    if not self._connections:
                         conn = await self._connect(timeout=self._connect_timeout)
-                        if conn in self._connections:
-                            self._available.add(conn)
-                            return
-                        # retired mid-handshake; nothing ever used it, so it can
-                        # go straight to the close queue.
-                        self._retired.discard(conn)
-                        self._to_close.add(conn)
+                        self._available.add(conn)
             except Exception as e:
                 # exception details can contain request headers or URL credentials.
                 logger.warning(
