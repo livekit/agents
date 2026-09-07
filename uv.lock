@@ -3314,12 +3314,14 @@ source = { editable = "livekit-plugins/livekit-plugins-rime" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs"] },
     { name = "protobuf" },
+    { name = "rime-api" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "rime-api", specifier = ">=0.0.1" },
 ]
 
 [[package]]
@@ -5399,6 +5401,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
+]
+
+[[package]]
+name = "rime-api"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/65/b56e9f8f2215cc5f53a5240debc76c6bc4b2a919a5950dd3699c4ef78814/rime_api-0.0.1.tar.gz", hash = "sha256:399985b3cfd0346f2c710a12a5ff609a7584a0e42443a690d75449958e5b6065", size = 17110, upload-time = "2026-09-07T23:08:31.894Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/91/a90aaab25be635286ac79d2fa6b83940ea284485d83b30bb88fd66d84497/rime_api-0.0.1-py3-none-any.whl", hash = "sha256:75d4244a8fa3a5a828774fea853968376baa514756d779e47fb2c0a84b9d5ffe", size = 21307, upload-time = "2026-09-07T23:08:30.83Z" },
 ]
 
 [[package]]

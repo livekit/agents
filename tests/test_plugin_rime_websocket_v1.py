@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from aiohttp import web
 from google.protobuf import json_format
+from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import (
     APIConnectionError,
@@ -22,7 +23,6 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
 )
-from livekit.plugins.rime._proto import websocket_v1_pb2 as proto
 
 pytestmark = pytest.mark.unit
 

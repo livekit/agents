@@ -28,6 +28,7 @@ import aiohttp
 import numpy as np
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
+from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import (
     APIConnectionError,
@@ -37,7 +38,6 @@ from livekit.agents import (
     tts,
 )
 
-from ._proto import websocket_v1_pb2 as proto
 from .models import is_mist_model
 
 WebSocketProtocol = Literal["binary", "json"]
