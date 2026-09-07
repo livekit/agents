@@ -71,7 +71,7 @@ function aws-creds() {
 # Usage: aws-creds your-profile-name
 ```
 
-## Quick Start Example
+## Features
 
 ### Nova 2 Sonic Capabilities
 
