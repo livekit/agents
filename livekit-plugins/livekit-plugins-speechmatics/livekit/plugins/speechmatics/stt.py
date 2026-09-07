@@ -228,6 +228,19 @@ class STT(stt.STT):
         # An external VAD, if provided, drives finalize(); none is auto-loaded.
         self._vad = vad if is_given(vad) else None
 
+        # EXTERNAL mode needs something to close turns. The service does not endpoint on its own,
+        # and LiveKit never calls STT.finalize() itself, so with no `vad` turns close only if the
+        # caller drives finalize() by hand — otherwise nothing is ever finalized. Warn loudly
+        # instead of silently producing no transcripts.
+        if turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None:
+            logger.warning(
+                "Speechmatics STT is in EXTERNAL turn-detection mode with no `vad`: the service "
+                "will not endpoint on its own and LiveKit does not call finalize() for you, so "
+                "turns close only if you call STT.finalize() yourself. Pass a `vad` to drive "
+                "finalize() from end-of-speech, or use turn_detection_mode=VAD for service-side "
+                "endpointing."
+            )
+
         # Set default values for optional parameters
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -625,11 +638,18 @@ class SpeechStream(stt.RecognizeStream):
                         self._vad_stream.push_frame(data)
                     frames = audio_bstream.write(data.data.tobytes())
 
-                # Send audio frames
+                # Send audio frames. A transport drop mid-session surfaces as a (retryable)
+                # APIConnectionError so the base stream retries/reports instead of dying on a
+                # raw SDK error — matching how connect() failures are wrapped.
                 if self._client:
                     for frame in frames:
                         self._speech_duration += frame.duration
-                        await self._client.send_audio(frame.data.tobytes())
+                        try:
+                            await self._client.send_audio(frame.data.tobytes())
+                        except (SMConnectionError, SMTimeoutError, TransportError) as e:
+                            raise APIConnectionError(
+                                f"lost connection to Speechmatics while sending audio: {e}"
+                            ) from e
 
             # No more input — let the VAD flush any pending event
             if self._vad_stream is not None:
@@ -721,9 +741,11 @@ class SpeechStream(stt.RecognizeStream):
         format_str = opts.speaker_active_format or "{text}"
         text = format_str.format(speaker_id=speaker_id, text=seg.transcript)
 
-        # Create speech event
+        # Create speech event. Label with the stream's own configured language (which honors a
+        # per-stream `stream(language=...)` override), not the constructor default, so the labeled
+        # language matches the one recognition actually ran with.
         speech_data = stt.SpeechData(
-            language=LanguageCode(opts.language),
+            language=LanguageCode(self._config.language),
             text=text,
             speaker_id=speaker_id,
             start_time=seg.start_time + self.start_time_offset,
