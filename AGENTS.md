@@ -49,7 +49,7 @@ it.
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
 
 ```bash
-uv run pytest --unit                    # the CI unit gate (no cloud accounts)
+uv run pytest --unit --audio_eot        # the CI unit gate (no cloud accounts)
 uv run pytest --plugin openai           # only the openai provider tests
 uv run pytest --list-categories         # list every module grouped by category, then exit
 ```

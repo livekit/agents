@@ -628,6 +628,30 @@ async def test_interruption(
         check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
 
 
+async def test_interrupted_say_uses_speech_start_timestamp() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("I saw your application for a Honda")
+
+    actions = FakeActions()
+    actions.add_tts(10.0, input="I saw your application for a Honda")
+    actions.add_user_speech(1.0, 1.2, "Who is this?")
+    actions.add_llm("This is John.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [message.role for message in messages] == ["system", "assistant", "user", "assistant"]
+    assert messages[1].interrupted is True
+    assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
+    assert messages[2].text_content == "Who is this?"
+    assert messages[3].text_content == "This is John."
+
+
 async def test_interruption_options() -> None:
     speed = 1
     actions = FakeActions()
@@ -1295,7 +1319,6 @@ async def test_backchannel_boundary_suppresses_start_boundary_backchannel() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -1334,7 +1357,6 @@ async def _make_stt_eos_recognition() -> AudioRecognition:
         endpointing=BaseEndpointing(min_delay=0.0, max_delay=0.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1391,7 +1413,6 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1781,7 +1802,6 @@ async def test_flush_held_transcripts_emits_buffered_events() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1807,7 +1827,6 @@ async def test_held_final_transcript_cancels_timeout_on_arrival() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1844,7 +1863,6 @@ async def test_true_verdict_releases_late_transcripts() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1888,7 +1906,6 @@ async def test_preflight_transcript_does_not_cancel_transcription_timeout() -> N
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="manual",
     )
@@ -1917,7 +1934,6 @@ async def test_transcription_timeout_accounts_for_vad_endpointing_delay() -> Non
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )
@@ -1954,7 +1970,6 @@ async def test_late_vad_eos_after_committed_turn_does_not_arm_transcription_time
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="stt",
     )
@@ -1987,7 +2002,6 @@ async def test_clear_user_turn_resets_transcription_timeout() -> None:
         endpointing=BaseEndpointing(min_delay=0.1, max_delay=1.0),
         stt=None,
         vad=None,
-        using_default_vad=False,
         interruption_detection=None,
         turn_detection="vad",
     )

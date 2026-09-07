@@ -1,4 +1,4 @@
-# Copyright 2023 LiveKit, Inc.
+# Copyright 2025 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,24 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Vakyam AI plugin for LiveKit Agents
 
-from .avatar import AvatarSession, HedraException
+Support for text-to-speech with [Vakyam AI](https://vakyam.ai/) Raaga 1.
+
+See https://docs.vakyam.ai/guides/realtime-websocket for protocol details.
+"""
+
+from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-__all__ = [
-    "HedraException",
-    "AvatarSession",
-    "__version__",
-]
+__all__ = ["TTS", "ChunkedStream", "SynthesizeStream", "__version__"]
 
 from livekit.agents import Plugin
 
 from .log import logger
 
 
-class HedraPlugin(Plugin):
+class VakyamPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(HedraPlugin())
+Plugin.register_plugin(VakyamPlugin())
+
+_module = dir()
+NOT_IN_ALL = [m for m in _module if m not in __all__]
+
+__pdoc__ = {}
+
+for n in NOT_IN_ALL:
+    __pdoc__[n] = False

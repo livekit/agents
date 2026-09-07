@@ -982,7 +982,7 @@ def make_function_call_output(
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output="" if output is None else str(output),
             is_error=False,
         ),
         raw_output=output,

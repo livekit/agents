@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import utils
+from livekit.agents import NOT_GIVEN, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -20,7 +20,11 @@ from livekit.agents.voice.room_io._output import (
     _ParticipantTranscriptionOutput,
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
-from livekit.agents.voice.room_io.types import NoiseCancellationParams
+from livekit.agents.voice.room_io.types import (
+    AudioInputOptions,
+    NoiseCancellationParams,
+    RoomOptions,
+)
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -308,6 +312,56 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room_io._tr_synchronizer.aclose.assert_awaited_once()
     room_io._user_tr_output.aclose.assert_awaited_once()
     room_io._agent_tr_output.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("noise_cancellation", "auto_gain_control", "expected_auto_gain_control"),
+    [
+        (None, NOT_GIVEN, True),
+        (rtc.NoiseCancellationOptions(module_id="bvc", options={}), NOT_GIVEN, False),
+        (lambda _params: None, NOT_GIVEN, True),
+        (lambda _params: None, False, False),
+        (rtc.NoiseCancellationOptions(module_id="bvc", options={}), True, True),
+        (None, False, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_roomio_resolves_auto_gain_control(
+    noise_cancellation,
+    auto_gain_control,
+    expected_auto_gain_control: bool,
+) -> None:
+    room = _FakeRoom()
+    agent_session = SimpleNamespace(
+        on=MagicMock(),
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(
+        agent_session,
+        room,
+        options=RoomOptions(
+            audio_input=AudioInputOptions(
+                noise_cancellation=noise_cancellation,
+                auto_gain_control=auto_gain_control,
+                pre_connect_audio=False,
+            ),
+            video_input=False,
+            audio_output=False,
+            text_output=False,
+        ),
+    )
+    audio_input = SimpleNamespace(aclose=AsyncMock())
+
+    with patch(
+        "livekit.agents.voice.room_io.room_io._ParticipantAudioInputStream",
+        return_value=audio_input,
+    ) as create_audio_input:
+        await room_io.start()
+
+    assert create_audio_input.call_args.kwargs["auto_gain_control"] is expected_auto_gain_control
+    await room_io.aclose()
 
 
 # -- frame processor lifecycle tests ------------------------------------------

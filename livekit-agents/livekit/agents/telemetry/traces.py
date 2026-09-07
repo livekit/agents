@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import random
 import threading
 import time
-from collections.abc import Callable, Iterator
+import weakref
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import aiofiles
 import aiohttp
@@ -22,14 +25,25 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.metrics import NoOpMeterProvider
+
+# _ProxyMeterProvider is what get_meter_provider() returns before anyone calls
+# set_meter_provider; there is no public alias for it (opentelemetry-api is
+# pinned <1.45, where this import is stable).
+from opentelemetry.metrics._internal import _ProxyMeterProvider
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
     LoggerProvider,
     LoggingHandler,
     LogRecordProcessor,
+    ReadableLogRecord,
     ReadWriteLogRecord,
 )
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs.export import (
+    BatchLogRecordProcessor,
+    LogRecordExporter,
+    LogRecordExportResult,
+)
 from opentelemetry.sdk.metrics import (
     Counter as SdkCounter,
     Histogram as SdkHistogram,
@@ -41,11 +55,11 @@ from opentelemetry.sdk.metrics import (
 )
 from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
@@ -57,10 +71,11 @@ from ..types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     recording_enabled,
 )
-from . import trace_types, utils as telemetry_utils
+from ..utils import is_given
+from . import pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
-    from ..llm import ChatContext, ChatItem
+    from ..llm import ChatItem
     from ..observability import Tagger
     from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
@@ -70,17 +85,82 @@ _SESSION_OPTION_KEY_ALIASES = {
     "keyterms": "lk.pii.keyterms",
 }
 
+# Option keys never written to the report: prompt text authored by the customer
+# (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
+# business or users, and the report has no use for it.
+_SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
+
+
+# Public, non-callable attributes worth showing when a model-like object (turn detector,
+# interruption detector, ...) appears in the session options. Read in this order; missing,
+# NOT_GIVEN and None values are skipped. Kept to a whitelist so a plugin's credentials or
+# internals never end up in the report.
+_OPTION_PRIMITIVES = (str, bool, int, float)
+
+
+@runtime_checkable
+class DescribesOptions(Protocol):
+    """An object that can appear in ``AgentSession`` options (a turn detector, a model) and
+    wants the session report to show its configuration.
+
+    Return the options worth reporting, keyed by name; values can be primitives, mappings
+    or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
+    without this method are reported by class name alone."""
+
+    def describe_options(self) -> Mapping[str, Any]: ...
+
+
+def _describe_option_object(obj: object) -> str:
+    """Render an object from the session options as ``module.Class`` or, when it implements
+    :class:`DescribesOptions`, ``module.Class(k=v, ...)``.
+
+    The OTel log exporter stringifies anything that is not a primitive, which for these
+    objects yields the default ``<... object at 0x...>`` repr. The class alone is stable and
+    safe; the object itself decides what else is worth showing."""
+    cls = type(obj)
+    name = f"{cls.__module__}.{cls.__name__}"
+    describe = getattr(obj, "describe_options", None)
+    if not callable(describe):
+        return name
+    try:
+        options = describe()
+    except Exception:
+        logger.debug("describe_options() failed on %s", name, exc_info=True)
+        return name
+    parts: list[str] = []
+    for key, value in options.items():
+        if value is None or not is_given(value):
+            continue
+        rendered = (
+            str(value)
+            if isinstance(value, _OPTION_PRIMITIVES)
+            else json.dumps(_serialize_option_value(value), sort_keys=True, default=str)
+        )
+        parts.append(f"{key}={rendered}")
+    return f"{name}({', '.join(parts)})"
+
+
+def _serialize_option_value(value: Any) -> Any:
+    if value is None or isinstance(value, _OPTION_PRIMITIVES):
+        return value
+    if isinstance(value, Mapping):
+        return {
+            _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
+            for k, v in value.items()
+            if k not in _SESSION_OPTION_OMITTED_KEYS
+        }
+    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
+        # any Sequence is a valid option value (tts_text_transforms accepts one), so
+        # serialize the elements rather than collapsing the container to its class name
+        items = sorted(value, key=str) if isinstance(value, Set) else value
+        return [_serialize_option_value(v) for v in items]
+    return _describe_option_object(value)
+
 
 def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
-    def _serialize(value: dict[str, Any]) -> dict[str, Any]:
-        return {
-            _SESSION_OPTION_KEY_ALIASES.get(key, key): (
-                _serialize(nested_value) if isinstance(nested_value, dict) else nested_value
-            )
-            for key, nested_value in value.items()
-        }
-
-    return _serialize(vars(options))
+    serialized = _serialize_option_value(vars(options))
+    assert isinstance(serialized, dict)
+    return serialized
 
 
 class _DynamicTracer(Tracer):
@@ -101,7 +181,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -112,7 +192,7 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils._redaction_enabled():
+        if telemetry_utils.redaction_enabled():
             kwargs = {
                 **kwargs,
                 "record_exception": False,
@@ -198,25 +278,91 @@ class _AuthRefreshingSession(requests.Session):
         return resp
 
 
+@dataclass(frozen=True)
+class _JobTelemetry:
+    """A job's cloud-telemetry registration, built by
+    ``_CloudTelemetry.configure`` and kept on the ``JobContext``. Spans, logs,
+    and metric measurements created by the job resolve their attribution and
+    upload gating through this object, which stays correct when jobs run
+    concurrently on the shared providers (THREAD executor)."""
+
+    # the job's identity and session metadata, stamped on every span/log/metric
+    attributes: dict[str, AttributeValue]
+    traces_enabled: bool
+    logs_enabled: bool
+
+
+def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
+    """The attributes stamped on telemetry created by the job on this context,
+    or None outside any job context.
+
+    Stamping is pure attribution and applies regardless of the job's recording
+    options — every exporter on a shared provider (an integrator's included)
+    sees the same attributes. Whether LiveKit Cloud uploads a record is decided
+    separately, by the exportable-jobs registry (``_job_export_state``)."""
+
+    from ..job import get_job_context  # local import: job.py imports this module
+
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return None
+    if (state := ctx._telemetry_state) is not None:
+        return state.attributes
+    # recording not (or not yet) initialized: still attribute the telemetry
+    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+
+
 class _MetadataSpanProcessor(SpanProcessor):
-    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
-        self._metadata = metadata
+    """Stamps per-job metadata on every span, resolved from the originating
+    job's context. The process-wide slot remains as a fallback for spans created
+    outside a job context (worker-level telemetry) while a job is running."""
+
+    def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
+        self._metadata = dict(metadata) if metadata else {}
+
+    def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
+        # rebind rather than mutate: on_start may read it from another thread
+        self._metadata = dict(metadata)
+
+    def clear_metadata(self) -> None:
+        self._metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        span.set_attributes(self._metadata)
+        if (attributes := _job_stamp_attributes()) is not None:
+            span.set_attributes(attributes)
+            return
+        if self._metadata:
+            span.set_attributes(self._metadata)
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    def __init__(self, metadata: dict[str, AttributeValue]) -> None:
-        self._metadata = metadata
+    """Log counterpart of :class:`_MetadataSpanProcessor` — same per-job
+    resolution with the process-wide slot as fallback."""
+
+    def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
+        self._metadata = dict(metadata) if metadata else {}
+
+    def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
+        self._metadata = dict(metadata)
+
+    def clear_metadata(self) -> None:
+        self._metadata = {}
 
     def on_emit(self, log_data: ReadWriteLogRecord) -> None:
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(self._metadata)  # type: ignore
+        stamped: dict[str, AttributeValue]
+        if (attributes := _job_stamp_attributes()) is not None:
+            stamped = dict(attributes)
         else:
-            log_data.log_record.attributes = dict(self._metadata)
+            stamped = dict(self._metadata)
+
+        if log_data.log_record.attributes:
+            log_data.log_record.attributes.update(stamped)  # type: ignore
+        elif stamped:
+            log_data.log_record.attributes = stamped
 
         if log_data.instrumentation_scope:
+            if log_data.log_record.attributes is None:
+                log_data.log_record.attributes = {}
             log_data.log_record.attributes.update(  # type: ignore
                 {"logger.name": log_data.instrumentation_scope.name}
             )
@@ -226,6 +372,80 @@ class _MetadataLogProcessor(LogRecordProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
+
+
+def _job_export_state(
+    export_jobs: Mapping[str, _JobTelemetry], attributes: Mapping[str, Any] | None
+) -> _JobTelemetry | None:
+    """Look up a record's originating job in the exportable-jobs registry.
+
+    Upload to LiveKit Cloud is explicit policy, decoupled from attribution: a
+    record is uploaded only while its stamped job_id (globally unique) is
+    registered — jobs register in ``configure()`` and are removed after their
+    final flush in ``release()`` — and only for the signals that job enabled.
+    Records of a job that disabled recording, and records emitted between jobs,
+    keep their attributes on every destination but never reach Cloud."""
+    if not attributes:
+        return None
+    job_id = attributes.get("job_id")
+    if not isinstance(job_id, str):
+        return None
+    return export_jobs.get(job_id)
+
+
+class _GatedSpanExporter(SpanExporter):
+    """Wraps the OTLP span exporter so only spans of registered, trace-enabled
+    jobs are uploaded (see ``_job_export_state``)."""
+
+    def __init__(self, inner: SpanExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
+        self._inner = inner
+        self._export_jobs = export_jobs
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        exportable = [
+            # PII filtered for third-party exporters is put back here: what LiveKit Cloud
+            # may receive is the project's setting, applied at its collector. restore_pii
+            # is a no-op once that setting mandates redaction.
+            pii.restore_pii(s)
+            for s in spans
+            if (state := _job_export_state(self._export_jobs, s.attributes)) is not None
+            and state.traces_enabled
+        ]
+        if not exportable:
+            return SpanExportResult.SUCCESS
+        return self._inner.export(exportable)
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+
+class _GatedLogExporter(LogRecordExporter):
+    """Log counterpart of :class:`_GatedSpanExporter`."""
+
+    def __init__(self, inner: LogRecordExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
+        self._inner = inner
+        self._export_jobs = export_jobs
+
+    def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
+        exportable = [
+            r
+            for r in batch
+            if (state := _job_export_state(self._export_jobs, r.log_record.attributes)) is not None
+            and state.logs_enabled
+        ]
+        if not exportable:
+            return LogRecordExportResult.SUCCESS
+        return self._inner.export(exportable)
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        # LogRecordExporter.shutdown is untyped in the OTel SDK
+        self._inner.shutdown()  # type: ignore[no-untyped-call]
 
 
 class _BufferingHandler(logging.Handler):
@@ -248,14 +468,16 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
-        if telemetry_utils._redaction_enabled() and log_record.attributes:
+        if telemetry_utils.redaction_enabled() and log_record.attributes:
             attributes = dict(log_record.attributes)
             if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:
                 attributes[trace_types.ATTR_EXCEPTION_MESSAGE] = (
                     telemetry_utils.REDACTED_EXCEPTION_MESSAGE
                 )
             attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
-            log_record.attributes = attributes
+            # callers pass user data through `extra={"lk.pii.<name>": ...}` precisely
+            # because a log body cannot be redacted; drop those before export
+            log_record.attributes = pii.filter_attributes(attributes)
 
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
@@ -264,19 +486,560 @@ class _TraceLevelLoggingHandler(LoggingHandler):
         return log_record
 
 
+def _prepend_span_processor(provider: trace_sdk.TracerProvider, processor: SpanProcessor) -> None:
+    """Attach ``processor`` ahead of every processor already on ``provider``.
+
+    ``on_end`` is dispatched in registration order over a single shared span snapshot,
+    so a processor that rewrites the snapshot only protects the exporters registered
+    after it. Redaction has to come first, including ahead of exporters the integrator
+    attached before handing us their provider.
+    """
+    provider.add_span_processor(processor)
+
+    multi = getattr(provider, "_active_span_processor", None)
+    processors = getattr(multi, "_span_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        # a provider shape we don't recognise: the plain append above still covers
+        # every exporter the framework attaches itself
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._span_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._span_processors = reordered  # type: ignore[union-attr]
+
+
+_pii_redaction_installed: weakref.WeakSet[trace_sdk.TracerProvider] = weakref.WeakSet()
+
+
+def _prepend_log_processor(provider: LoggerProvider, processor: LogRecordProcessor) -> None:
+    """Log counterpart of :func:`_prepend_span_processor` — same dispatch-order reasoning."""
+    provider.add_log_record_processor(processor)
+
+    multi = getattr(provider, "_multi_log_record_processor", None)
+    processors = getattr(multi, "_log_record_processors", None)
+    if not isinstance(processors, tuple) or processor not in processors:
+        return
+
+    lock = getattr(multi, "_lock", None)
+    reordered = (processor, *(p for p in processors if p is not processor))
+    if lock is not None:
+        with lock:
+            multi._log_record_processors = reordered  # type: ignore[union-attr]
+    else:
+        multi._log_record_processors = reordered  # type: ignore[union-attr]
+
+
+def _install_pii_redaction(
+    tracer_provider: trace_api.TracerProvider, *, allow_pii: bool | None = None
+) -> None:
+    """Install in-process PII stripping on an SDK provider, at most once per provider."""
+    if not isinstance(tracer_provider, trace_sdk.TracerProvider):
+        # processors can only be attached to an SDK provider; a no-op/proxy provider
+        # exports nothing, so there is nothing to strip
+        return
+    if tracer_provider in _pii_redaction_installed:
+        return
+    _pii_redaction_installed.add(tracer_provider)
+    if allow_pii is None:
+        allow_pii = telemetry_utils.allow_pii_from_env()
+    _prepend_span_processor(
+        tracer_provider,
+        # PII flows to every exporter unless withheld: the GenAI conventions are only
+        # useful to a backend that can render the conversation
+        pii._PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
+    )
+
+
 def set_tracer_provider(
-    tracer_provider: trace_api.TracerProvider, *, metadata: dict[str, AttributeValue] | None = None
+    tracer_provider: trace_api.TracerProvider,
+    *,
+    metadata: dict[str, AttributeValue] | None = None,
+    allow_pii: bool | None = None,
 ) -> None:
     """Set the tracer provider for the livekit-agents.
 
     Args:
         tracer_provider (TracerProvider): The tracer provider to set.
         metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
+        allow_pii (bool | None, optional): Whether the exporters on this provider *other
+            than LiveKit Cloud's* may receive conversational content, tool payloads and
+            other user data. What LiveKit Cloud receives is the project's PII setting in
+            the dashboard, which this cannot widen or narrow. Defaults to
+            ``True`` (or ``LIVEKIT_TELEMETRY_ALLOW_PII``, when set), since a GenAI
+            backend can only render the conversation if it receives it. Pass ``False``
+            to strip PII in-process before every exporter but LiveKit Cloud's, leaving
+            them the non-content attributes. Ignored when the project mandates redaction
+            — that setting is not weakened from here.
     """
     if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
         tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
 
+    _install_pii_redaction(tracer_provider, allow_pii=allow_pii)
     tracer.set_provider(tracer_provider)
+
+
+_TOKEN_TTL = timedelta(hours=6)
+_TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+class _AuthHeaderProvider:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._auth_header = ""
+        self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        access_token = (
+            api.AccessToken()
+            .with_observability_grants(api.ObservabilityGrants(write=True))
+            .with_ttl(_TOKEN_TTL)
+        )
+        self._auth_header = f"Bearer {access_token.to_jwt()}"
+        self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
+
+    def __call__(self) -> dict[str, str]:
+        now = datetime.now(timezone.utc)
+        if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
+            with self._lock:
+                if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
+                    self._refresh()
+        return {"Authorization": self._auth_header}
+
+
+_TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
+
+
+def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], timeout: float) -> None:
+    """Run each target on its own daemon thread with a hard wall-clock bound.
+
+    ``provider.shutdown()`` internally joins its exporter worker with a 30s
+    default timeout per provider (and ``force_flush`` ignores its timeout arg
+    in the current SDK — see #4623). Across tracer/logger/meter that's up to
+    ~90s, enough to stall the caller's event loop past the supervisor's 60s
+    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
+
+    Each target runs in its *own* daemon thread, in parallel. That matters for
+    two reasons:
+      1) Main-thread wait is bounded by ``max`` of the targets, not the ``sum``.
+      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
+         action; running in parallel guarantees that flag gets set on every
+         processor within milliseconds, even if one hangs in
+         ``worker_thread.join``. Any later re-entry (e.g. Python's
+         ``logging.shutdown()`` may spawn a *non-daemon* thread via
+         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
+         PR #4636) then short-circuits instead of hanging process exit.
+
+    Any unfinished work stays on the daemon threads and is discarded at
+    process exit.
+
+    Upstream context:
+    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
+      (TracerProvider.shutdown() has no configurable timeout — still open)
+    """
+    if not targets:
+        return
+
+    def _run_one(name: str, fn: Callable[[], Any]) -> None:
+        try:
+            fn()
+        except Exception:
+            logger.exception("telemetry %s failed (%s)", action, name)
+
+    threads = [
+        threading.Thread(
+            target=_run_one,
+            args=(name, fn),
+            name=f"livekit-telemetry-{action}-{name}",
+            daemon=True,
+        )
+        for name, fn in targets
+    ]
+    for t in threads:
+        t.start()
+
+    deadline = time.monotonic() + timeout
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+    if any(t.is_alive() for t in threads):
+        logger.warning("telemetry %s exceeded %.1fs; continuing", action, timeout)
+
+
+class _CloudTelemetry:
+    """Process-lifetime LiveKit Cloud telemetry infrastructure.
+
+    ``configure()`` and ``release()`` run once per job (from
+    ``JobContext.init_recording`` and ``JobContext._on_cleanup``), but worker
+    processes outlive jobs: the THREAD executor runs every job of the worker in
+    one shared process — possibly several concurrently — and an integrator's
+    OTel providers (e.g. the Langfuse setup in the tracing docs, Logfire,
+    dd-trace) are configured once at process start. State is therefore split by
+    lifetime:
+
+    * **process** — the OTLP exporters, the framework's batch and metadata
+      processors, any provider the framework itself creates, and the
+      root-logger handler instance. Created lazily on first use and shut down
+      exactly once, at process exit (bounded, via atexit). A provider supplied
+      by the integrator is *adopted*: the framework attaches its own processors
+      to it and never shuts it down.
+    * **job** — attribution and upload policy, kept independent of each other.
+      Every span/log/metric is stamped with its originating job's attributes,
+      resolved through the job contextvar, regardless of the job's recording
+      options — every destination on a shared provider sees consistent
+      attribution. Whether LiveKit Cloud uploads a record is decided by the
+      exportable-jobs registry (``_export_jobs``): the gated exporters upload a
+      record only while its stamped job_id is registered with that signal
+      enabled. ``release()`` flushes the batch processors (bounded) while the
+      job is still registered, then unregisters it.
+
+    The ``Resource`` on a framework-created tracer/logger provider is built by
+    the first configuring job; the meter provider's resource carries only
+    process-stable identity, with per-job attribution on each measurement.
+    Telemetry emitted outside any job context is stamped from a fallback slot
+    holding the most recently configured job's attributes, cleared once no job
+    remains registered.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # the exportable-jobs registry: job_id (globally unique) -> the job's
+        # telemetry state, registered by configure() and removed after the final
+        # flush in release(). The gated exporters hold a reference to this exact
+        # dict, so it is mutated in place, never rebound.
+        self._export_jobs: dict[str, _JobTelemetry] = {}
+        self._atexit_registered = False
+        self._session: _AuthRefreshingSession | None = None
+        self._observability_url: str | None = None
+
+        # everything the framework created, shut down once at process exit:
+        # providers it built (constructed with shutdown_on_exit=False) and every
+        # batch processor it attached — appended at each creation site. A
+        # provider supplied by the integrator is never in this list.
+        self._exit_targets: list[tuple[str, Callable[[], Any]]] = []
+
+        # traces
+        self._trace_provider_attached: trace_sdk.TracerProvider | None = None
+        self._span_metadata_processor: _MetadataSpanProcessor | None = None
+        self._span_batch_processor: BatchSpanProcessor | None = None
+
+        # logs
+        self._logger_provider: LoggerProvider | None = None
+        self._log_metadata_processor: _MetadataLogProcessor | None = None
+        self._log_batch_processor: BatchLogRecordProcessor | None = None
+        self._log_handler: _TraceLevelLoggingHandler | None = None
+
+        # metrics
+        self._owned_meter_provider: SdkMeterProvider | None = None
+        self._metrics_unavailable = False
+
+    @property
+    def logger_provider(self) -> LoggerProvider | None:
+        """The logger provider the framework exports through (ours or adopted)."""
+        return self._logger_provider
+
+    @property
+    def log_handler(self) -> _TraceLevelLoggingHandler | None:
+        """The framework's own root-logger OTLP handler, if logs were configured."""
+        return self._log_handler
+
+    def configure(
+        self,
+        *,
+        room_id: str,
+        job_id: str,
+        agent_name: str = "",
+        observability_url: str,
+        enable_traces: bool = True,
+        enable_logs: bool = True,
+        metadata: dict[str, AttributeValue] | None = None,
+    ) -> _JobTelemetry:
+        """Set up (or reuse) the pipelines for a job. Returns the job's
+        telemetry state, for the caller to keep on the JobContext — per-record
+        stamping and upload gating resolve it from there."""
+        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        if agent_name:
+            # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
+            # only; the default dispatch has no agent name). Included in both the
+            # resource (traces) and the session metadata (spans + logs).
+            base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
+        # cloud agent id and deployment provided by LiveKit Cloud via env vars.
+        # Included in both the resource and the session metadata like agent_name;
+        # omitted when unset.
+        if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
+            base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
+        if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
+            base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
+        session_metadata = dict(base_metadata)
+        if metadata:
+            session_metadata.update(metadata)
+
+        with self._lock:
+            if self._observability_url is None:
+                self._observability_url = observability_url
+            elif observability_url != self._observability_url:
+                logger.warning(
+                    "observability endpoint changed across jobs; keeping %s",
+                    self._observability_url,
+                )
+            url = self._observability_url
+
+            if self._session is None:
+                self._session = _AuthRefreshingSession(_AuthHeaderProvider())
+
+            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+
+            if enable_traces:
+                self._ensure_trace_pipeline(resource, url)
+                if self._span_metadata_processor is not None:
+                    self._span_metadata_processor.set_metadata(session_metadata)
+
+            # Always set up the logger provider — it's needed for session reports,
+            # evaluations, and chat history, not just Python log export.
+            self._ensure_logger_provider()
+
+            if enable_logs:
+                self._ensure_log_pipeline(url)
+                if self._log_metadata_processor is not None:
+                    self._log_metadata_processor.set_metadata(session_metadata)
+                if self._log_handler is not None:
+                    root = logging.getLogger()
+                    if self._log_handler not in root.handlers:
+                        root.addHandler(self._log_handler)
+
+            # the meter provider outlives the job (the OTel metrics global is
+            # set-once), so its resource carries only process-stable identity;
+            # per-job room_id/job_id ride on each measurement instead
+            # (otel_metrics._job_attrs)
+            process_metadata = {
+                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
+            }
+            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
+            self._ensure_meter_provider(meter_resource, url)
+
+            if not self._atexit_registered:
+                self._atexit_registered = True
+                atexit.register(self.shutdown_at_exit)
+
+            state = _JobTelemetry(
+                attributes=session_metadata,
+                traces_enabled=enable_traces,
+                logs_enabled=enable_logs,
+            )
+            self._export_jobs[job_id] = state
+
+        return state
+
+    def _ensure_trace_pipeline(self, resource: Resource, url: str) -> None:
+        # Check if a tracer provider is not set and set one up
+        # below shows how the ProxyTracerProvider is returned when none have been setup
+        # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
+        provider: trace_api.TracerProvider
+        if isinstance(
+            tracer._tracer_provider,
+            (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
+        ):
+            owned = trace_sdk.TracerProvider(resource=resource, shutdown_on_exit=False)
+            # shutting the provider down also shuts down every processor attached
+            # to it (processor shutdown is idempotent, so overlap is harmless)
+            self._exit_targets.append(("TracerProvider", owned.shutdown))
+            set_tracer_provider(owned)
+            provider = owned
+        else:
+            # the integrator's provider (or ours, from an earlier job)
+            provider = tracer._tracer_provider
+
+        if not isinstance(provider, trace_sdk.TracerProvider):
+            # processors can only be attached to an SDK provider
+            return
+
+        _install_pii_redaction(provider)
+
+        if provider is self._trace_provider_attached:
+            return
+
+        if self._trace_provider_attached is not None:
+            # the tracer provider was replaced mid-process (set_tracer_provider
+            # called after a job already exported); re-attach to the new one and
+            # retire the old pipeline
+            logger.warning("tracer provider changed; re-attaching LiveKit Cloud span exporter")
+            if self._span_metadata_processor is not None:
+                self._span_metadata_processor.clear_metadata()
+            if self._span_batch_processor is not None:
+                # shut the old pipeline down in the background: shutdown drains
+                # its queue, exporting the prior jobs' remaining stamped spans,
+                # then goes quiet. shutdown() is idempotent, so shutting it down
+                # again at process exit is harmless.
+                threading.Thread(
+                    target=self._span_batch_processor.shutdown,
+                    name="livekit-telemetry-retire-BatchSpanProcessor",
+                    daemon=True,
+                ).start()
+
+        assert self._session is not None
+        span_exporter = OTLPSpanExporter(
+            endpoint=f"{url}/observability/traces/otlp/v0",
+            compression=Compression.Gzip,
+            session=self._session,
+        )
+        self._span_metadata_processor = _MetadataSpanProcessor()
+        self._span_batch_processor = BatchSpanProcessor(
+            _GatedSpanExporter(span_exporter, self._export_jobs)
+        )
+        self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
+        provider.add_span_processor(self._span_metadata_processor)
+        provider.add_span_processor(self._span_batch_processor)
+        self._trace_provider_attached = provider
+
+    def _ensure_logger_provider(self) -> None:
+        if self._logger_provider is not None:
+            return
+        current = get_logger_provider()
+        if isinstance(current, LoggerProvider):
+            # an SDK provider the integrator set up — adopt it
+            self._logger_provider = current
+        else:
+            owned = LoggerProvider(shutdown_on_exit=False)
+            self._exit_targets.append(("LoggerProvider", owned.shutdown))
+            set_logger_provider(owned)
+            self._logger_provider = owned
+
+        # ahead of any exporter already on the provider, as for spans
+        _prepend_log_processor(self._logger_provider, pii._PIIFilteringLogProcessor())
+
+    def _ensure_log_pipeline(self, url: str) -> None:
+        if self._log_batch_processor is not None or self._logger_provider is None:
+            return
+        assert self._session is not None
+        log_exporter = OTLPLogExporter(
+            endpoint=f"{url}/observability/logs/otlp/v0",
+            compression=Compression.Gzip,
+            session=self._session,
+        )
+        self._log_metadata_processor = _MetadataLogProcessor()
+        self._log_batch_processor = BatchLogRecordProcessor(
+            _GatedLogExporter(log_exporter, self._export_jobs)
+        )
+        self._exit_targets.append(("BatchLogRecordProcessor", self._log_batch_processor.shutdown))
+        self._logger_provider.add_log_record_processor(self._log_metadata_processor)
+        self._logger_provider.add_log_record_processor(self._log_batch_processor)
+        self._log_handler = _TraceLevelLoggingHandler(
+            level=logging.NOTSET, logger_provider=self._logger_provider
+        )
+
+    def _ensure_meter_provider(self, resource: Resource, url: str) -> None:
+        if self._owned_meter_provider is not None or self._metrics_unavailable:
+            return
+        current = metrics_api.get_meter_provider()
+        if not isinstance(current, (_ProxyMeterProvider, NoOpMeterProvider)):
+            # the integrator configured their own meter provider; the metrics API
+            # has no way to attach a reader to it, so Cloud metrics are skipped
+            self._metrics_unavailable = True
+            return
+        assert self._session is not None
+        metric_exporter = OTLPMetricExporter(
+            endpoint=f"{url}/observability/metrics/otlp/v0",
+            compression=Compression.Gzip,
+            session=self._session,
+            preferred_temporality={
+                SdkCounter: AggregationTemporality.DELTA,
+                SdkUpDownCounter: AggregationTemporality.DELTA,
+                SdkHistogram: AggregationTemporality.DELTA,
+                SdkObservableCounter: AggregationTemporality.DELTA,
+                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+                SdkObservableGauge: AggregationTemporality.DELTA,
+            },
+        )
+        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
+        provider = SdkMeterProvider(
+            resource=resource, metric_readers=[reader], shutdown_on_exit=False
+        )
+        metrics_api.set_meter_provider(provider)
+        if metrics_api.get_meter_provider() is not provider:
+            # the set-once global was already consumed (e.g. by a NoOp provider):
+            # no instrument would ever reach our provider, so don't leave its
+            # periodic reader running
+            threading.Thread(
+                target=provider.shutdown,
+                name="livekit-telemetry-orphan-meter-shutdown",
+                daemon=True,
+            ).start()
+            self._metrics_unavailable = True
+            return
+        self._exit_targets.append(("MeterProvider", provider.shutdown))
+        self._owned_meter_provider = provider
+
+    def release(self, job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+        """Per-job teardown: flush the framework's exporters (bounded) while the
+        job is still registered, then remove it from the exportable-jobs
+        registry — records stamped with its id no longer upload. When no job
+        remains, the fallback stamp is cleared and the log handler detached.
+
+        Nothing is shut down here: providers (ours or the integrator's) and the
+        batch processors keep running for the next job in the process. Final
+        shutdown happens once, at process exit (:meth:`shutdown_at_exit`).
+        """
+        with self._lock:
+            if job_id not in self._export_jobs:
+                return  # never configured, or already released
+
+            flush_targets: list[tuple[str, Callable[[], Any]]] = []
+            if self._span_batch_processor is not None:
+                flush_targets.append(("spans", self._span_batch_processor.force_flush))
+            if self._log_batch_processor is not None:
+                flush_targets.append(("logs", self._log_batch_processor.force_flush))
+            if self._owned_meter_provider is not None:
+                flush_targets.append(("metrics", self._owned_meter_provider.force_flush))
+
+        # flush before unregistering, so the job's remaining telemetry is exported
+        _run_bounded("flush", flush_targets, timeout)
+
+        with self._lock:
+            self._export_jobs.pop(job_id, None)
+            if self._export_jobs:
+                # another job is still running in this process; keep exporting
+                return
+            if self._span_metadata_processor is not None:
+                self._span_metadata_processor.clear_metadata()
+            if self._log_metadata_processor is not None:
+                self._log_metadata_processor.clear_metadata()
+            handler = self._log_handler
+
+        if handler is not None:
+            # detach only our own handler — the integrator may have their own
+            # OTel LoggingHandler on the root logger
+            logging.getLogger().removeHandler(handler)
+
+    def shutdown_at_exit(self, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+        """Shut down what the framework created — once, at process exit, bounded.
+
+        ``_exit_targets`` is appended at each creation site: providers the
+        framework created (built with ``shutdown_on_exit=False``, so this is the
+        only shutdown they get) and every batch processor the framework attached.
+        Processor shutdown is idempotent, so a processor also covered by its
+        owned provider is harmless — and a provider the integrator supplied is
+        never in the list.
+        """
+        with self._lock:
+            targets = list(self._exit_targets)
+            handler = self._log_handler
+
+        if handler is not None:
+            logging.getLogger().removeHandler(handler)
+
+        _run_bounded("shutdown", targets, timeout)
+
+
+_cloud = _CloudTelemetry()
+
+
+def _cloud_log_handler() -> _TraceLevelLoggingHandler | None:
+    """The framework's own root-logger OTLP handler, if configured for this job."""
+    return _cloud.log_handler
 
 
 def _setup_cloud_tracer(
@@ -288,170 +1051,17 @@ def _setup_cloud_tracer(
     enable_traces: bool = True,
     enable_logs: bool = True,
     metadata: dict[str, AttributeValue] | None = None,
-) -> None:
+) -> _JobTelemetry:
     _upload_gate.reset()
-
-    token_ttl = timedelta(hours=6)
-    refresh_margin = timedelta(minutes=5)
-
-    class _AuthHeaderProvider:
-        def __init__(self) -> None:
-            self._lock = threading.Lock()
-            self._auth_header = ""
-            self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
-            self._refresh()
-
-        def _refresh(self) -> None:
-            access_token = (
-                api.AccessToken()
-                .with_observability_grants(api.ObservabilityGrants(write=True))
-                .with_ttl(token_ttl)
-            )
-            self._auth_header = f"Bearer {access_token.to_jwt()}"
-            self._expires_at = datetime.now(timezone.utc) + token_ttl
-
-        def __call__(self) -> dict[str, str]:
-            now = datetime.now(timezone.utc)
-            if now >= self._expires_at - refresh_margin:
-                with self._lock:
-                    if now >= self._expires_at - refresh_margin:
-                        self._refresh()
-            return {"Authorization": self._auth_header}
-
-    header_provider = _AuthHeaderProvider()
-    session = _AuthRefreshingSession(header_provider)
-    otlp_compression = Compression.Gzip
-    base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
-    if agent_name:
-        # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
-        # only; the default dispatch has no agent name). Included in both the
-        # resource (traces) and the session metadata (spans + logs).
-        base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
-    # cloud agent id and deployment provided by LiveKit Cloud via env vars.
-    # Included in both the resource and the session metadata like agent_name;
-    # omitted when unset.
-    if cloud_agent_id := os.environ.get("LIVEKIT_AGENT_ID"):
-        base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
-    if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
-        base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
-    session_metadata = dict(base_metadata)
-    if metadata:
-        session_metadata.update(metadata)
-
-    resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
-
-    if enable_traces:
-        # Check if a tracer provider is not set and set one up
-        # below shows how the ProxyTracerProvider is returned when none have been setup
-        # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
-        tracer_provider: trace_api.TracerProvider
-        if isinstance(
-            tracer._tracer_provider,
-            (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
-        ):
-            tracer_provider = trace_sdk.TracerProvider(resource=resource)
-            set_tracer_provider(tracer_provider)
-        else:
-            # attach the processor to the existing tracer provider
-            tracer_provider = tracer._tracer_provider
-            if isinstance(tracer_provider, trace_sdk.TracerProvider):
-                tracer_provider.resource.merge(resource)
-
-        span_exporter = OTLPSpanExporter(
-            endpoint=f"{observability_url}/observability/traces/otlp/v0",
-            compression=otlp_compression,
-            session=session,
-        )
-
-        if isinstance(tracer_provider, trace_sdk.TracerProvider):
-            tracer_provider.add_span_processor(_MetadataSpanProcessor(session_metadata))
-            tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
-
-    # Always set up the logger provider — it's needed for session reports,
-    # evaluations, and chat history, not just Python log export.
-    logger_provider = get_logger_provider()
-    if not isinstance(logger_provider, LoggerProvider):
-        logger_provider = LoggerProvider()
-        set_logger_provider(logger_provider)
-
-    if enable_logs:
-        log_exporter = OTLPLogExporter(
-            endpoint=f"{observability_url}/observability/logs/otlp/v0",
-            compression=otlp_compression,
-            session=session,
-        )
-        logger_provider.add_log_record_processor(_MetadataLogProcessor(session_metadata))
-        logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
-
-        handler = _TraceLevelLoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
-
-        root = logging.getLogger()
-        root.addHandler(handler)
-
-    # Set up the MeterProvider for OTEL metrics export
-    current_meter_provider = metrics_api.get_meter_provider()
-    if not isinstance(current_meter_provider, SdkMeterProvider):
-        metric_exporter = OTLPMetricExporter(
-            endpoint=f"{observability_url}/observability/metrics/otlp/v0",
-            compression=otlp_compression,
-            session=session,
-            preferred_temporality={
-                SdkCounter: AggregationTemporality.DELTA,
-                SdkUpDownCounter: AggregationTemporality.DELTA,
-                SdkHistogram: AggregationTemporality.DELTA,
-                SdkObservableCounter: AggregationTemporality.DELTA,
-                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
-                SdkObservableGauge: AggregationTemporality.DELTA,
-            },
-        )
-        reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
-        meter_provider = SdkMeterProvider(resource=resource, metric_readers=[reader])
-        metrics_api.set_meter_provider(meter_provider)
-
-
-def _chat_ctx_to_otel_events(chat_ctx: ChatContext) -> list[tuple[str, Attributes]]:
-    role_to_event = {
-        "system": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        # OpenAI's `developer` role is the successor to `system` on the
-        # Chat Completions API and carries equivalent instructional content,
-        # so surface it as the system-message span event rather than dropping
-        # it on the floor.
-        "developer": trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
-        "user": trace_types.EVENT_GEN_AI_USER_MESSAGE,
-        "assistant": trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-    }
-
-    events: list[tuple[str, Attributes]] = []
-    for item in chat_ctx.items:
-        if item.type == "message" and (event_name := role_to_event.get(item.role)):
-            # only support text content for now
-            events.append((event_name, {"content": item.raw_text_content or ""}))
-        elif item.type == "function_call":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            json.dumps(
-                                {
-                                    "function": {"name": item.name, "arguments": item.arguments},
-                                    "id": item.call_id,
-                                    "type": "function",
-                                }
-                            )
-                        ],
-                    },
-                )
-            )
-        elif item.type == "function_call_output":
-            events.append(
-                (
-                    trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
-                    {"content": item.output, "name": item.name, "id": item.call_id},
-                )
-            )
-    return events
+    return _cloud.configure(
+        room_id=room_id,
+        job_id=job_id,
+        agent_name=agent_name,
+        observability_url=observability_url,
+        enable_traces=enable_traces,
+        enable_logs=enable_logs,
+        metadata=metadata,
+    )
 
 
 def _chat_item_span_attribute(item: ChatItem) -> dict:
@@ -498,7 +1108,10 @@ async def _upload_session_report(
     metadata = metadata or {}
 
     def _get_logger(name: str) -> Any:
-        return get_logger_provider().get_logger(
+        # prefer the provider the framework exports through; the OTel global may
+        # have been claimed by an integrator provider we could not adopt
+        provider = _cloud.logger_provider or get_logger_provider()
+        return provider.get_logger(
             name=name,
             attributes={
                 "room_id": report.room_id,
@@ -729,72 +1342,17 @@ async def _upload_session_report(
     logger.debug("finished uploading")
 
 
-_TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
+def _shutdown_telemetry(job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
+    """Per-job telemetry teardown, with a hard wall-clock bound.
 
-
-def _shutdown_telemetry(timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
-    """Shut down OTel providers with a hard wall-clock bound.
-
-    ``provider.shutdown()`` internally joins its exporter worker with a 30s
-    default timeout per provider (and ``force_flush`` ignores its timeout arg
-    in the current SDK — see #4623). Across tracer/logger/meter that's up to
-    ~90s, enough to stall the caller's event loop past the supervisor's 60s
-    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
-
-    Each provider is shut down in its *own* daemon thread, run in parallel.
-    That matters for two reasons:
-      1) Main-thread wait is bounded by ``max`` of the three, not the ``sum``.
-      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
-         action; running in parallel guarantees that flag gets set on every
-         provider within milliseconds, even if one hangs in ``worker_thread.join``.
-         Any later atexit re-entry (OTel registers one, and Python's
-         ``logging.shutdown()`` may spawn a *non-daemon* thread via
-         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
-         PR #4636) then short-circuits instead of hanging process exit.
-
-    Any unfinished work stays on existing daemon threads and is discarded at
-    process exit.
-
-    Upstream context:
-    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
-      (TracerProvider.shutdown() has no configurable timeout — still open)
+    This flushes the exporters the framework attached, so LiveKit Cloud receives
+    the job's telemetry at job end, and unregisters the job from the export
+    registry — it does NOT shut providers down. Worker processes are reused
+    across jobs (the THREAD executor runs every job in one shared process), and
+    a provider configured by the integrator at process start (Langfuse, Logfire,
+    dd-trace) must keep running for later jobs; the framework's own providers
+    likewise stay alive because the OTel logger/meter globals are set-once. See
+    :class:`_CloudTelemetry` for the ownership model; final shutdown happens
+    once at process exit.
     """
-    # Detach the OTLP LoggingHandler from the root logger — belt to the
-    # suspenders of the parallel shutdown below.
-    root = logging.getLogger()
-    for h in list(root.handlers):
-        if isinstance(h, LoggingHandler):
-            root.removeHandler(h)
-
-    providers: list[Any] = []
-    if isinstance(lp := get_logger_provider(), LoggerProvider):
-        providers.append(lp)
-    if isinstance(tp := tracer._tracer_provider, trace_sdk.TracerProvider):
-        providers.append(tp)
-    if isinstance(mp := metrics_api.get_meter_provider(), SdkMeterProvider):
-        providers.append(mp)
-
-    def _shutdown_one(provider: Any) -> None:
-        try:
-            provider.shutdown()
-        except Exception:
-            logger.exception("failed to shut down telemetry provider")
-
-    threads = [
-        threading.Thread(
-            target=_shutdown_one,
-            args=(p,),
-            name=f"livekit-telemetry-shutdown-{type(p).__name__}",
-            daemon=True,
-        )
-        for p in providers
-    ]
-    for t in threads:
-        t.start()
-
-    deadline = time.monotonic() + timeout
-    for t in threads:
-        t.join(max(0.0, deadline - time.monotonic()))
-
-    if any(t.is_alive() for t in threads):
-        logger.warning("telemetry shutdown exceeded %.1fs; continuing", timeout)
+    _cloud.release(job_id, timeout)

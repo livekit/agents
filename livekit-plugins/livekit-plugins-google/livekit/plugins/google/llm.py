@@ -43,7 +43,17 @@ from .version import __version__
 
 def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    return "gemini-3" in model.lower()
+
+
+def _is_gemma_4_model(model: str) -> bool:
+    """Check if model is Gemma 4 series"""
+    return "gemma-4-" in model.lower()
+
+
+def _supports_thinking_level(model: str) -> bool:
+    """Check if model configures thinking with a level instead of a token budget"""
+    return _is_gemini_3_model(model) or _is_gemma_4_model(model)
 
 
 def _function_calling_config(
@@ -70,7 +80,7 @@ def _function_calling_config(
 def _is_gemini_3_flash_model(model: str) -> bool:
     """Check if model is Gemini 3 Flash"""
     m = model.lower()
-    return m.startswith("gemini-3") and "flash" in m
+    return "gemini-3" in m and "flash" in m
 
 
 def _requires_thought_signatures(model: str) -> bool:
@@ -228,11 +238,25 @@ class LLM(llm.LLM):
                 _thinking_level = thinking_config.get("thinking_level")
             elif isinstance(thinking_config, types.ThinkingConfig):
                 _thinking_budget = thinking_config.thinking_budget
-                _thinking_level = getattr(thinking_config, "thinking_level", None)
+                _thinking_level = thinking_config.thinking_level
 
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
                     raise ValueError("thinking_budget inside thinking_config must be an integer")
+
+            # gemma 4 toggles thinking on and off with nothing in between, and answers any other
+            # level with 400 INVALID_ARGUMENT
+            # https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api
+            if (
+                _thinking_level is not None
+                and _is_gemma_4_model(model)
+                and _thinking_level.upper()
+                not in (types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH)
+            ):
+                raise ValueError(
+                    f"Model {model} only supports thinking_level 'minimal' (thinking off) "
+                    f"or 'high' (thinking on), got {_thinking_level!r}."
+                )
 
         self._opts = _LLMOptions(
             model=model,
@@ -364,35 +388,35 @@ class LLM(llm.LLM):
 
         # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
-            is_gemini_3 = _is_gemini_3_model(self._opts.model)
-            is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
-            # Extract both parameters
+            # Extract the parameters
             _budget = None
             _level: str | types.ThinkingLevel | None = None
+            _include_thoughts: bool | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
+                _include_thoughts = thinking_cfg.get("include_thoughts")
             elif isinstance(thinking_cfg, types.ThinkingConfig):
                 _budget = thinking_cfg.thinking_budget
-                _level = getattr(thinking_cfg, "thinking_level", None)
+                _level = thinking_cfg.thinking_level
+                _include_thoughts = thinking_cfg.include_thoughts
 
-            if is_gemini_3:
-                # Gemini 3: only support thinking_level
+            if _supports_thinking_level(self._opts.model):
+                # Gemini 3 and Gemma 4 configure thinking with a level, not a token budget
                 if _budget is not None and _level is None:
                     logger.warning(
-                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
-                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
+                        f"Model {self._opts.model} does not support thinking_budget. "
+                        "Please use thinking_level instead. Ignoring thinking_budget."
                     )
-                if _level is None:
-                    # If no thinking_level is provided, use the fastest thinking level
-                    if is_gemini_3_flash:
-                        _level = "minimal"
-                    else:
-                        _level = "low"
-                # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                extra["thinking_config"] = {"thinking_level": _level}
+                if _level is None and _is_gemini_3_model(self._opts.model):
+                    # only default the level where the accepted levels are known
+                    _level = "minimal" if _is_gemini_3_flash_model(self._opts.model) else "low"
+                # the level passes through as given, checked against the model in __init__
+                extra["thinking_config"] = types.ThinkingConfig(
+                    thinking_level=_level, include_thoughts=_include_thoughts
+                )
 
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget

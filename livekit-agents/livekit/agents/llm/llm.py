@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
@@ -10,7 +9,6 @@ from types import TracebackType
 from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
-from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
@@ -20,7 +18,12 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import _chat_ctx_to_otel_events, trace_types, tracer, utils as telemetry_utils
+from ..telemetry import (
+    gen_ai as gen_ai_telemetry,
+    trace_types,
+    tracer,
+    utils as telemetry_utils,
+)
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -43,6 +46,12 @@ class CompletionUsage(BaseModel):
     """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
     """The number of tokens read from the cache."""
+    reasoning_tokens: int = 0
+    """The number of completion tokens spent on hidden reasoning.
+    Already counted in ``completion_tokens``; do not add it to totals. Only reported by
+    providers that break reasoning out separately (e.g. OpenAI-compatible responses
+    carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
+    """
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
     service_tier: str | None = None
@@ -240,12 +249,15 @@ class LLMStream(ABC):
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
 
+        # tells an enclosing `llm_node` span that this call is instrumented, so it does
+        # not record the convention's attributes a second time
+        gen_ai_telemetry.mark_inference_span_recorded()
+
         async def _traceable_main_task() -> None:
             with tracer.start_as_current_span(
                 self._llm_request_span_name, end_on_exit=False
             ) as span:
-                for name, attributes in _chat_ctx_to_otel_events(self._chat_ctx):
-                    span.add_event(name, attributes)
+                self._record_genai_request(span)
                 await self._main_task()
 
         self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
@@ -256,15 +268,25 @@ class LLMStream(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
+    def _record_genai_request(self, span: trace.Span) -> None:
+        """The GenAI inference span's request side, per the OTel GenAI conventions."""
+        gen_ai_telemetry.set_request_attributes(
+            span,
+            operation=trace_types.GenAIOperationName.CHAT,
+            provider=self._llm.provider,
+            model=self._llm.model,
+            stream=True,
+            output_type=trace_types.GenAIOutputType.TEXT,
+        )
+        gen_ai_telemetry.set_content_attributes(
+            span,
+            system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
+            input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
+            tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
+        )
+
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
-        self._llm_request_span.set_attributes(
-            {
-                trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
-            }
-        )
 
         for i in range(self._conn_options.max_retry + 1):
             try:
@@ -382,6 +404,7 @@ class LLMStream(ABC):
             prompt_tokens=usage.prompt_tokens if usage else 0,
             prompt_cached_tokens=usage.prompt_cached_tokens if usage else 0,
             cache_creation_tokens=usage.cache_creation_tokens if usage else 0,
+            reasoning_tokens=usage.reasoning_tokens if usage else 0,
             total_tokens=usage.total_tokens if usage else 0,
             tokens_per_second=usage.completion_tokens / duration if usage else 0.0,
             metadata=Metadata(
@@ -395,39 +418,30 @@ class LLMStream(ABC):
                 trace_types.ATTR_LLM_METRICS, metrics.model_dump_json()
             )
 
-            # set gen_ai attributes
-            self._llm_request_span.set_attributes(
-                {
-                    trace_types.ATTR_GEN_AI_OPERATION_NAME: "chat",
-                    trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model,
-                    trace_types.ATTR_GEN_AI_PROVIDER_NAME: self._llm.provider,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: metrics.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: (
-                        metrics.prompt_cached_tokens
-                    ),
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: metrics.completion_tokens,
-                },
+            # the GenAI response side; the request side was recorded at span creation
+            gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
+            finish_reason = gen_ai_telemetry.finish_reason_for(
+                function_calls=tool_calls, interrupted=metrics.cancelled
+            )
+            gen_ai_telemetry.set_response_attributes(
+                self._llm_request_span,
+                response_id=request_id or None,
+                model=self._llm.model,
+                finish_reasons=[finish_reason],
+                time_to_first_chunk=ttft if ttft >= 0 else None,
+            )
+            gen_ai_telemetry.set_content_attributes(
+                self._llm_request_span,
+                output_messages=gen_ai_telemetry.to_output_messages(
+                    text=response_content,
+                    function_calls=tool_calls,
+                    finish_reason=finish_reason,
+                ),
             )
             if completion_start_time:
                 self._llm_request_span.set_attribute(
                     trace_types.ATTR_LANGFUSE_COMPLETION_START_TIME, f'"{completion_start_time}"'
                 )
-
-            completion_event_body: dict[str, AttributeValue] = {"role": "assistant"}
-            if response_content:
-                completion_event_body["content"] = response_content
-            if tool_calls:
-                completion_event_body["tool_calls"] = [
-                    json.dumps(
-                        {
-                            "function": {"name": tool_call.name, "arguments": tool_call.arguments},
-                            "id": tool_call.call_id,
-                            "type": "function",
-                        }
-                    )
-                    for tool_call in tool_calls
-                ]
-            self._llm_request_span.add_event(trace_types.EVENT_GEN_AI_CHOICE, completion_event_body)
 
         self._llm.emit("metrics_collected", metrics)
 

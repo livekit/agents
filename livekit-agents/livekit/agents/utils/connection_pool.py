@@ -173,7 +173,13 @@ class ConnectionPool(Generic[T]):
         This method starts a background task that creates a new connection if none exist.
         The task automatically cleans itself up when the connection pool is closed.
         """
-        if self._prewarm_task is not None or self._connections:
+        if self._prewarm_task is not None:
+            task = self._prewarm_task()
+            if task is not None and not task.done():
+                return
+            self._prewarm_task = None
+
+        if self._connections:
             return
 
         async def _prewarm_impl() -> None:

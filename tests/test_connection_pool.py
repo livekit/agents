@@ -142,3 +142,32 @@ async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
     ]
     assert warning_records
     assert warning_records[0].exception_type == "ConnectionError"
+
+
+@pytest.mark.asyncio
+async def test_prewarm_retries_after_failure():
+    attempts = 0
+
+    async def flaky_connect(timeout: float):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("temporary prewarm failure")
+        return DummyConnection(attempts)
+
+    pool = ConnectionPool(connect_cb=flaky_connect)
+    pool.prewarm()
+    task = pool._prewarm_task()
+    assert task is not None
+    await task
+
+    assert attempts == 1
+    assert not pool._connections
+
+    pool.prewarm()
+    task = pool._prewarm_task()
+    assert task is not None
+    await task
+
+    assert attempts == 2
+    assert len(pool._available) == 1
