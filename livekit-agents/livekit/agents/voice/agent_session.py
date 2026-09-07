@@ -1263,10 +1263,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             | None
         ) = None,
     ) -> None:
+        # make `activity.drain` and `on_exit` under the root span. aclose() may run in the
+        # caller's task (the entrypoint, a shutdown callback), so the context is restored on
+        # the way out: nothing the caller traces afterwards should nest under this session.
+        root_token: Token[otel_context.Context] | None = None
         if self._root_span_context:
-            # make `activity.drain` and `on_exit` under the root span
-            otel_context.attach(self._root_span_context)
+            root_token = otel_context.attach(self._root_span_context)
+        try:
+            await self._aclose_locked(reason=reason, drain=drain, error=error)
+        finally:
+            if root_token is not None:
+                otel_context.detach(root_token)
 
+    async def _aclose_locked(
+        self,
+        *,
+        reason: CloseReason,
+        drain: bool,
+        error: (
+            llm.LLMError
+            | stt.STTError
+            | tts.TTSError
+            | llm.RealtimeModelError
+            | inference.InterruptionDetectionError
+            | None
+        ),
+    ) -> None:
         async with self._lock:
             if not self._started:
                 return
@@ -1281,88 +1303,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
             if error is not None:
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
-            otel_context.attach(trace.set_span_in_context(close_span))
+            close_token = otel_context.attach(trace.set_span_in_context(close_span))
+            try:
+                await self._teardown_activity(reason=reason, drain=drain)
+            finally:
+                close_span.end()
+                # the rest of the teardown (close event, room io) is under agent_session
+                otel_context.detach(close_token)
 
-            self._closing = True
-            self._cancel_user_away_timer()
-            self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
-
-            if self._amd is not None:
-                await self._amd.aclose()
-                self._amd = None
-
-            activity = self._activity
-            while activity and isinstance(agent_task := activity.agent, AgentTask):
-                # notify AgentTask to complete and wait it to resume the parent agent
-                agent_task.cancel()
-                await agent_task._wait_for_inactive()
-
-                if old_agent := agent_task._old_agent:
-                    activity = old_agent._activity
-                else:
-                    break
-
-            if activity is not None:
-                if not drain:
-                    try:
-                        # force interrupt speeches when closing the session
-                        await activity.interrupt(force=True)
-                    except RuntimeError:
-                        # uninterruptible speech
-                        pass
-                await activity.drain()
-
-                # wait any uninterruptible speech to finish
-                if activity.current_speech:
-                    await activity.current_speech
-
-                # detach the inputs and outputs
-                self.input.audio = None
-                self.input.video = None
-                self.output.audio = None
-                self.output.transcription = None
-
-                if (
-                    reason != CloseReason.ERROR
-                    and (audio_recognition := activity._audio_recognition) is not None
-                ):
-                    # wait for the user transcript to be committed
-                    audio_recognition._commit_user_turn(
-                        audio_detached=True,
-                        transcript_timeout=self._opts.session_close_transcript_timeout,
-                    )
-
-                await activity.aclose()
-            self._activity = None
-
-            if self._agent_speaking_span:
-                self._agent_speaking_span.end()
-                self._agent_speaking_span = None
-
-            if self._user_speaking_span:
-                self._user_speaking_span.end()
-                self._user_speaking_span = None
-
-            if self._forward_audio_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_audio_atask)
-
-            if self._forward_video_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_video_atask)
-
-            if self._recorder_io:
-                await self._recorder_io.aclose()
-
-            if self._ivr_activity is not None:
-                await self._ivr_activity.aclose()
-
-            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
-            if toolsets:
-                await asyncio.gather(
-                    *(toolset.aclose() for toolset in toolsets),
-                    return_exceptions=True,
-                )
-
-            close_span.end()
             if self._session_span:
                 self._session_span.end()
                 self._session_span = None
@@ -1394,6 +1342,87 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
+
+    async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
+        """The part of closing that runs under the ``session_close`` span."""
+        self._closing = True
+        self._cancel_user_away_timer()
+        self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
+
+        if self._amd is not None:
+            await self._amd.aclose()
+            self._amd = None
+
+        activity = self._activity
+        while activity and isinstance(agent_task := activity.agent, AgentTask):
+            # notify AgentTask to complete and wait it to resume the parent agent
+            agent_task.cancel()
+            await agent_task._wait_for_inactive()
+
+            if old_agent := agent_task._old_agent:
+                activity = old_agent._activity
+            else:
+                break
+
+        if activity is not None:
+            if not drain:
+                try:
+                    # force interrupt speeches when closing the session
+                    await activity.interrupt(force=True)
+                except RuntimeError:
+                    # uninterruptible speech
+                    pass
+            await activity.drain()
+
+            # wait any uninterruptible speech to finish
+            if activity.current_speech:
+                await activity.current_speech
+
+            # detach the inputs and outputs
+            self.input.audio = None
+            self.input.video = None
+            self.output.audio = None
+            self.output.transcription = None
+
+            if (
+                reason != CloseReason.ERROR
+                and (audio_recognition := activity._audio_recognition) is not None
+            ):
+                # wait for the user transcript to be committed
+                audio_recognition._commit_user_turn(
+                    audio_detached=True,
+                    transcript_timeout=self._opts.session_close_transcript_timeout,
+                )
+
+            await activity.aclose()
+        self._activity = None
+
+        if self._agent_speaking_span:
+            self._agent_speaking_span.end()
+            self._agent_speaking_span = None
+
+        if self._user_speaking_span:
+            self._user_speaking_span.end()
+            self._user_speaking_span = None
+
+        if self._forward_audio_atask is not None:
+            await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+        if self._forward_video_atask is not None:
+            await utils.aio.cancel_and_wait(self._forward_video_atask)
+
+        if self._recorder_io:
+            await self._recorder_io.aclose()
+
+        if self._ivr_activity is not None:
+            await self._ivr_activity.aclose()
+
+        toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+        if toolsets:
+            await asyncio.gather(
+                *(toolset.aclose() for toolset in toolsets),
+                return_exceptions=True,
+            )
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)

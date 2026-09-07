@@ -1098,7 +1098,8 @@ def test_span_gate_holds_spans_of_undecided_jobs() -> None:
 
     export_jobs: dict[str, _JobTelemetry] = {}
     inner = MagicMock()
-    gate = _GatedSpanExporter(inner, export_jobs)
+    requeue = MagicMock()  # the batch processor's on_end
+    gate = _GatedSpanExporter(inner, export_jobs, requeue=requeue)
 
     def _span(job_id: str, name: str = "room_connect") -> SimpleNamespace:
         return SimpleNamespace(name=name, attributes={"job_id": job_id})
@@ -1116,14 +1117,20 @@ def test_span_gate_holds_spans_of_undecided_jobs() -> None:
     assert len(gate._pending["job-1"]) == _MAX_PENDING_SPANS_PER_JOB
     assert gate._pending["job-1"][:3] == early
 
-    # the decision: traces on -> everything held goes out in order
+    # the decision: traces on -> everything held goes back on the processor's queue, in
+    # order, and nothing is exported on the (event loop) thread that decided
     export_jobs["job-1"] = _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
     gate.job_registered("job-1", traces_enabled=True)
-    (flushed,), _ = inner.export.call_args
+    inner.export.assert_not_called()
+    flushed = [c.args[0] for c in requeue.call_args_list]
     assert flushed[:3] == early and len(flushed) == _MAX_PENDING_SPANS_PER_JOB
     assert "job-1" not in gate._pending
+    # the processor's export thread brings them back; the job is registered now
+    gate.export(flushed)
+    inner.export.assert_called_once_with(flushed)
     # and later spans of the registered job pass straight through
     inner.reset_mock()
+    requeue.reset_mock()
     late = _span("job-1", "agent_turn")
     gate.export([late])
     inner.export.assert_called_once_with([late])
@@ -1135,6 +1142,7 @@ def test_span_gate_holds_spans_of_undecided_jobs() -> None:
     export_jobs["job-2"] = _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=True)
     gate.job_registered("job-2", traces_enabled=False)
     inner.export.assert_not_called()
+    requeue.assert_not_called()
     assert "job-2" not in gate._pending
 
     # never registered -> dropped at close, and no longer held afterwards
@@ -1165,7 +1173,13 @@ def test_prepare_cloud_tracer_holds_early_spans_until_the_job_registers() -> Non
         inner = stubs.span_exporter.return_value
         inner.export.assert_not_called()
 
+        # registering (on the event loop) re-queues the held span on the batch processor
+        # instead of exporting inline; the processor's thread then exports it
         _setup_cloud_tracer_for_job("job-1")
+        processor = stubs.span_batch.return_value
+        processor.on_end.assert_called_once_with(held)
+        inner.export.assert_not_called()
+        gate.export([held])
         inner.export.assert_called_once_with([held])
 
         # a second job in the same process: same pipeline, its own hold

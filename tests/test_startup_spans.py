@@ -481,6 +481,12 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     drains = _spans(span_exporter, "drain_agent_activity")
     assert any(d.parent is not None and d.parent.span_id == close.context.span_id for d in drains)
 
+    # aclose() ran in this task and must not leave session_close current: the caller's later
+    # spans (a shutdown callback's work, say) would nest under the ended close. start() leaves
+    # agent_session current in the caller's task by design, so that is what is current now.
+    current = trace.get_current_span().get_span_context()
+    assert current.span_id == root.context.span_id
+
     # state timeline on the root span
     agent_states = [e for e in root.events if e.name == "agent_state_changed"]
     transitions = [

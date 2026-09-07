@@ -430,9 +430,18 @@ class _GatedSpanExporter(SpanExporter):
     oldest first up to a bound, and flushed or dropped with the decision; a job
     that ends without deciding drops them at cleanup."""
 
-    def __init__(self, inner: SpanExporter, export_jobs: Mapping[str, _JobTelemetry]) -> None:
+    def __init__(
+        self,
+        inner: SpanExporter,
+        export_jobs: Mapping[str, _JobTelemetry],
+        *,
+        requeue: Callable[[ReadableSpan], None] | None = None,
+    ) -> None:
         self._inner = inner
         self._export_jobs = export_jobs
+        # hands a held span back to the batch processor so it is uploaded from the export
+        # thread; job_registered runs on the event loop and must not call the exporter
+        self._requeue = requeue
         self._lock = threading.Lock()
         self._open_jobs: set[str] = set()
         self._pending: dict[str, list[ReadableSpan]] = {}
@@ -443,11 +452,22 @@ class _GatedSpanExporter(SpanExporter):
             self._open_jobs.add(job_id)
 
     def job_registered(self, job_id: str, *, traces_enabled: bool) -> None:
-        """The job decided: upload what was held if it records traces, else drop it."""
+        """The job decided: upload what was held if it records traces, else drop it.
+
+        Called from ``init_recording`` on the event loop, so the held spans are put back
+        on the batch processor's queue rather than exported here: the OTLP exporter blocks
+        on the network (with retries) and a slow collector must not stall session start.
+        They come back through ``export`` on the export thread, where the job is now
+        registered and they pass through in their original order."""
         with self._lock:
             self._open_jobs.discard(job_id)
             held = self._pending.pop(job_id, [])
-        if held and traces_enabled:
+        if not held or not traces_enabled:
+            return
+        if self._requeue is not None:
+            for s in held:
+                self._requeue(s)
+        else:
             self._inner.export([pii.restore_pii(s) for s in held])
 
     def close_job(self, job_id: str) -> None:
@@ -991,6 +1011,7 @@ class _CloudTelemetry:
         self._span_metadata_processor = _MetadataSpanProcessor()
         self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
         self._span_batch_processor = BatchSpanProcessor(self._span_gate)
+        self._span_gate._requeue = self._span_batch_processor.on_end
         self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
         provider.add_span_processor(self._span_metadata_processor)
         provider.add_span_processor(self._span_batch_processor)
