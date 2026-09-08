@@ -423,10 +423,8 @@ class RoomIO:
             {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
         )
         if self._room.isconnected():
-            # trace RPCs whenever the room is (or becomes) connected: already up at start(),
-            # connected later by JobContext.connect() or by the user, or reconnected. install
-            # is idempotent (one interceptor instance, the SDK dedups by identity), so a room
-            # that JobContext.connect() already instrumented is left as is.
+            # on every connect and reconnect; install is idempotent (one interceptor
+            # instance, deduped by the SDK), so JobContext.connect() installing too is fine
             rpc_tracing.install(self._room.local_participant)
             if not self._room_connected_fut.done():
                 self._room_connected_fut.set_result(None)

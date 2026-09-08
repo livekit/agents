@@ -5,28 +5,29 @@ call made through ``LocalParticipant.perform_rpc`` and every invocation dispatch
 registered handler. This module installs one interceptor per local participant that turns
 each call into a span following the OpenTelemetry RPC semantic conventions:
 
-* ``rpc_call`` (``SpanKind.CLIENT``) for outgoing calls, parented to whatever span is current
-  where the call is made, so an RPC issued from a tool nests under ``function_tool``;
-* ``rpc_handler`` (``SpanKind.SERVER``) for incoming invocations, parented to the primary agent
-  session's root span so it lands on the session timeline.
+* ``rpc_call`` (``SpanKind.CLIENT``) for outgoing calls, under whatever span is current where
+  the call is made (an RPC issued from a tool nests under ``function_tool``);
+* ``rpc_handler`` (``SpanKind.SERVER``) for incoming invocations, under the primary agent
+  session's root span.
 
-Request and response payloads are recorded truncated under ``lk.pii`` keys so the cloud
-collector can redact them. Participant identities are application identifiers, not end-user
-data, and are recorded as is. On an SDK without the hook, ``install`` is a
-no-op and logs once at debug level.
+Payloads are recorded truncated under ``lk.pii`` keys. Participant identities are application
+identifiers, not end-user data, and are recorded as is. On an SDK without the hook,
+``install`` is a no-op.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from opentelemetry import context as otel_context, trace
+from opentelemetry import trace
 
 from livekit import rtc
 
 from ..log import logger
-from . import trace_types
+from . import session_context, trace_types
 from .traces import tracer
 
 MAX_PAYLOAD_ATTR_LEN = 1024
@@ -38,7 +39,7 @@ _warned_unsupported = False
 
 
 def _truncate(payload: str) -> str:
-    return payload if len(payload) <= MAX_PAYLOAD_ATTR_LEN else payload[:MAX_PAYLOAD_ATTR_LEN]
+    return payload[:MAX_PAYLOAD_ATTR_LEN]
 
 
 def _payload_attributes(payload: str) -> dict[str, Any]:
@@ -54,19 +55,6 @@ def _response_attributes(response: str | None) -> dict[str, Any]:
     if response:
         attrs[trace_types.ATTR_RPC_RESPONSE] = _truncate(response)
     return attrs
-
-
-def _handler_parent_context() -> otel_context.Context | None:
-    """The primary session's root span when a job is running, else the current context."""
-    from ..job import get_job_context
-
-    job_ctx = get_job_context(required=False)
-    if job_ctx is None:
-        return None
-    session = job_ctx._primary_agent_session
-    if session is not None and session._root_span_context is not None:
-        return session._root_span_context
-    return None
 
 
 class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
@@ -103,9 +91,10 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             trace_types.ATTR_RPC_HANDLER_REGISTERED: True,
             **_payload_attributes(invocation.payload),
         }
+        started = time.monotonic()
         with tracer.start_as_current_span(
             "rpc_handler",
-            context=_handler_parent_context(),
+            context=session_context.session_root_context(),
             kind=trace.SpanKind.SERVER,
             attributes=attributes,
         ) as span:
@@ -116,6 +105,24 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
                 if e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD:
                     # a client called a method this agent never registered
                     span.set_attribute(trace_types.ATTR_RPC_HANDLER_REGISTERED, False)
+                raise
+            except asyncio.CancelledError:
+                # the SDK cancels the chain when the caller's deadline passes or the room
+                # disconnects, and only maps it to an RpcError after this interceptor has
+                # unwound; a CancelledError is not an Exception, so the span would end UNSET
+                timed_out = time.monotonic() - started >= invocation.response_timeout
+                code = (
+                    rtc.RpcError.ErrorCode.RESPONSE_TIMEOUT
+                    if timed_out
+                    else rtc.RpcError.ErrorCode.RECIPIENT_DISCONNECTED
+                )
+                span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(code))
+                span.set_status(
+                    trace.Status(
+                        trace.StatusCode.ERROR,
+                        "response timeout" if timed_out else "cancelled: caller disconnected",
+                    )
+                )
                 raise
             span.set_attributes(_response_attributes(response))
             return response

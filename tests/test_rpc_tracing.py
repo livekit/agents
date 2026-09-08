@@ -7,6 +7,7 @@ a no-op, which is also covered."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -189,6 +190,33 @@ async def test_incoming_handler_exception_is_recorded(span_exporter: InMemorySpa
     [span] = _spans(span_exporter, "rpc_handler")
     assert span.status.status_code == trace.StatusCode.ERROR
     assert (span.attributes or {})[trace_types.ATTR_RPC_HANDLER_REGISTERED] is True
+
+
+@pytest.mark.parametrize("timed_out", [True, False])
+async def test_incoming_cancellation_records_the_code_the_caller_gets(
+    timed_out: bool, span_exporter: InMemorySpanExporter
+) -> None:
+    """The SDK cancels the chain when the caller's deadline passes or the room disconnects,
+    and maps it to RESPONSE_TIMEOUT or RECIPIENT_DISCONNECTED only after the interceptor has
+    unwound. CancelledError is not an Exception, so without handling the span ends UNSET."""
+    interceptor = rpc_tracing.TracingRpcInterceptor()
+
+    async def next_(invocation: object) -> str | None:
+        if timed_out:
+            await asyncio.sleep(0.03)
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await interceptor.intercept_incoming(_invocation(response_timeout=0.02), next_)
+
+    [span] = _spans(span_exporter, "rpc_handler")
+    expected = (
+        rtc.RpcError.ErrorCode.RESPONSE_TIMEOUT
+        if timed_out
+        else rtc.RpcError.ErrorCode.RECIPIENT_DISCONNECTED
+    )
+    assert (span.attributes or {})[trace_types.ATTR_RPC_ERROR_CODE] == int(expected)
+    assert span.status.status_code == trace.StatusCode.ERROR
 
 
 def test_install_registers_once_or_degrades() -> None:
