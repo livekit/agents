@@ -977,9 +977,8 @@ async def test_text_from_a_skipped_frame_is_published_without_timings() -> None:
     soniox_tts._emit_timed_words(data, flush=True)
 
     assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox jumps high"
-    # the gap's words carry no timings; everything else does
-    untimed = [str(w) for w in emitter.timed_words if not is_given(w.start_time)]
-    assert untimed == ["brown fox jumps "]
+    # the gap's words arrive as one chunk spanning the region, not as words
+    assert "brown fox jumps " in [str(w) for w in emitter.timed_words]
 
 
 async def test_untimed_text_survives_a_stream_that_ends_inside_a_gap() -> None:
@@ -1025,3 +1024,49 @@ async def test_untimed_text_first_keeps_the_separator_in_place() -> None:
     soniox_tts._emit_timed_words(data, flush=True)
 
     assert "".join(str(w) for w in emitter.timed_words) == " Then, after all"
+
+
+async def test_an_untimed_tail_is_bounded_so_captions_reach_it() -> None:
+    """The last untimed region is closed off, since nothing timed follows it.
+
+    The synchronizer builds its rate curve from timed points and reveals text
+    only as far as that curve goes. A tail left unbounded would sit past the
+    end of it, and the caption would stop short of words the agent spoke.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    emitter.push(_SILENCE_PCM * 50)  # 500ms of audio has reached the emitter
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox")})  # malformed
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    tail = emitter.timed_words[-1]
+    assert str(tail) == "brown fox"
+    # opens where the last timed word ended, closes on the audio produced
+    assert tail.start_time == pytest.approx(0.09)
+    assert tail.end_time == pytest.approx(0.5)
+
+
+async def test_an_untimed_region_mid_reply_opens_where_timing_stopped() -> None:
+    """A region followed by timed words needs no end: the next word closes it."""
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox jum")})  # malformed
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("ps high up", 0.23))
+
+    untimed = next(w for w in emitter.timed_words if str(w) == "brown fox jumps ")
+    assert untimed.start_time == pytest.approx(0.09)
+    assert not is_given(untimed.end_time)
