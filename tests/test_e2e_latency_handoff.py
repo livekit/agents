@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentTask, RunContext, function_tool
+from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 
 from .fake_session import FakeActions, create_session, run_session
@@ -293,8 +293,8 @@ async def test_nested_handoff_in_on_enter_reports_e2e_latency() -> None:
     _assert_answers(question, go)
 
 
-async def test_task_spawned_in_on_enter_reports_e2e_latency() -> None:
-    """A speech from a task on_enter spawned without awaiting still runs in on_enter's context."""
+async def test_task_spawned_in_on_enter_speaks_after_the_turn() -> None:
+    """on_enter returned without speaking; a speech from a task it spawned is a new utterance."""
 
     class LateGreeter(Agent):
         def __init__(self) -> None:
@@ -323,9 +323,8 @@ async def test_task_spawned_in_on_enter_reports_e2e_latency() -> None:
     actions.add_tts(1.0)
 
     messages = await _messages(actions, Router())
-    (user,) = _by_role(messages, "user")
     (greeting,) = _by_role(messages, "assistant")
-    _assert_answers(greeting, user)
+    assert "e2e_latency" not in greeting.metrics
 
 
 async def test_new_user_turn_supersedes_the_handoff_turn() -> None:
@@ -416,3 +415,113 @@ async def test_inline_task_in_tool_answers_each_turn() -> None:
     _assert_answers(question, book)
     assert confirmation.text_content == "your room is booked"
     _assert_answers(confirmation, email)
+
+
+def _handoff_later(session: AgentSession, delay: float) -> None:
+    """A handoff nothing in the conversation caused, like a timer or an external event."""
+    asyncio.get_event_loop().call_later(delay, session.update_agent, Greeter())
+
+
+async def test_silent_tool_ends_the_turn() -> None:
+    """A tool with no reply and no handoff ends the chain; a later unrelated handoff answers nothing."""
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> None:
+            _handoff_later(self.session, 2.0)
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_llm("hello from the greeter", input="greet")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router(), drain_delay=4.0)
+    (greeting,) = _by_role(messages, "assistant")
+    assert "e2e_latency" not in greeting.metrics
+
+
+async def test_silent_on_enter_ends_the_turn() -> None:
+    """An on_enter that returns without speaking declines the turn; a later handoff answers nothing."""
+
+    class Silent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="silent")
+
+        async def on_enter(self) -> None:
+            _handoff_later(self.session, 2.0)
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return Silent()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_llm("hello from the greeter", input="greet")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router(), drain_delay=4.0)
+    (greeting,) = _by_role(messages, "assistant")
+    assert "e2e_latency" not in greeting.metrics
+
+
+async def test_reply_after_awaited_task_in_on_enter_answers_the_last_turn() -> None:
+    """on_enter awaits a task, then replies: the reply answers the turn the task left open."""
+
+    class AskName(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="ask name")
+
+        async def on_enter(self) -> None:
+            self.session.generate_reply(instructions="ask_name")
+
+        @function_tool
+        async def record_name(self, ctx: RunContext, name: str) -> None:
+            """Called when the user provides their name."""
+            self.complete(name)
+
+    class Survey(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="survey")
+
+        async def on_enter(self) -> None:
+            name = await AskName()
+            self.session.generate_reply(instructions=f"thank {name}")
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return Survey()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_llm("what is your name?", input="ask_name")
+    actions.add_tts(1.0)
+    actions.add_user_speech(6.0, 7.0, "Bob")
+    actions.add_llm(
+        "",
+        tool_calls=[
+            FunctionToolCall(name="record_name", arguments='{"name": "Bob"}', call_id="c2")
+        ],
+    )
+    actions.add_llm("thanks Bob", input="thank Bob")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router(), drain_delay=4.0)
+    go, bob = _by_role(messages, "user")
+    question, thanks = _by_role(messages, "assistant")
+    _assert_answers(question, go)
+    assert thanks.text_content == "thanks Bob"
+    _assert_answers(thanks, bob)

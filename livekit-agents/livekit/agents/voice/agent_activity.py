@@ -47,6 +47,7 @@ from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
+    AgentTask,
     ModelSettings,
     _get_activity_task_info,
     _set_activity_task_info,
@@ -909,6 +910,9 @@ class AgentActivity(RecognitionHooks):
                         await self._agent.on_enter()
                     finally:
                         _OnEnterContextVar.reset(tk)
+                        # an on_enter that returns without speaking has declined to answer the
+                        # user turn; speeches it created already took their copy
+                        self._session._unanswered_user_metrics = None
 
                 self._on_enter_task = task = self._create_speech_task(
                     _traceable_on_enter(), name="AgentTask_on_enter"
@@ -1564,7 +1568,7 @@ class AgentActivity(RecognitionHooks):
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
-        user_metrics = self._on_enter_user_metrics()
+        user_metrics = self._take_on_enter_user_metrics()
 
         if (
             self._rt_session is not None
@@ -1661,7 +1665,7 @@ class AgentActivity(RecognitionHooks):
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
-        user_metrics = self._on_enter_user_metrics()
+        user_metrics = self._take_on_enter_user_metrics()
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._create_speech_task(
@@ -3116,19 +3120,11 @@ class AgentActivity(RecognitionHooks):
             if started_forwarding_at is not None:
                 assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
 
-            # the audio answers the borrowed user turn, stored or not, unless another speech
-            # reported it first
-            if (
-                _previous_user_metrics is not None
-                and self._session._unanswered_user_metrics is _previous_user_metrics
-            ):
-                if "stopped_speaking_at" in _previous_user_metrics:
-                    e2e_latency = (
-                        started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
-                    )
-                    assistant_metrics["e2e_latency"] = e2e_latency
-                    current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
-                self._session._unanswered_user_metrics = None
+            # the audio answers the user turn, stored message or not
+            if _previous_user_metrics and "stopped_speaking_at" in _previous_user_metrics:
+                e2e_latency = started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
+                assistant_metrics["e2e_latency"] = e2e_latency
+                current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
 
         if forwarded_text and add_to_chat_ctx:
             msg = self._agent._chat_ctx.add_message(
@@ -3168,8 +3164,8 @@ class AgentActivity(RecognitionHooks):
             and tool.info.flags & ToolFlag.IGNORE_ON_ENTER
         ]
 
-    def _on_enter_user_metrics(self) -> llm.MetricsReport | None:
-        """The user turn still unanswered, when this speech comes from on_enter."""
+    def _take_on_enter_user_metrics(self) -> llm.MetricsReport | None:
+        """Claim the unanswered user turn for a speech created inside on_enter."""
         on_enter_data = _OnEnterContextVar.get(None)
         if (
             on_enter_data is None
@@ -3177,7 +3173,9 @@ class AgentActivity(RecognitionHooks):
             or on_enter_data.session != self._session
         ):
             return None
-        return self._session._unanswered_user_metrics
+        metrics = self._session._unanswered_user_metrics
+        self._session._unanswered_user_metrics = None
+        return metrics
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -3420,15 +3418,11 @@ class AgentActivity(RecognitionHooks):
 
         # add new message to chat context if the speech is scheduled
 
-        # a reply to its own user message owns that turn; a tool reply or an on_enter reply
-        # borrows the unanswered one and keeps it only if no other speech reports it first
         user_metrics: llm.MetricsReport | None = _previous_user_metrics
-        owns_turn = False
         if new_message is not None and speech_handle.scheduled:
             self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
             user_metrics = new_message.metrics
-            owns_turn = True
             self._session._unanswered_user_metrics = user_metrics
 
         if speech_handle.interrupted:
@@ -3626,9 +3620,6 @@ class AgentActivity(RecognitionHooks):
             if started_forwarding_at is not None:
                 assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
 
-            if not owns_turn and self._session._unanswered_user_metrics is not user_metrics:
-                user_metrics = None
-
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
@@ -3723,6 +3714,9 @@ class AgentActivity(RecognitionHooks):
 
         # important: no agent output should be used after this point
 
+        # the reply chain goes on through a tool reply, a handoff, or an inline task handing
+        # back to the tool that awaited it; otherwise it ends here and nothing answers the turn
+        chain_continues = False
         if len(tool_output.output) > 0:
             max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
 
@@ -3765,6 +3759,12 @@ class AgentActivity(RecognitionHooks):
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
                 self._session.update_agent(new_agent_task)
                 draining = True
+
+            chain_continues = (
+                fnc_executed_ev.has_tool_reply
+                or self._session._agent is not self._agent
+                or (isinstance(self._agent, AgentTask) and self._agent.done())
+            )
 
             tool_messages = new_calls + new_fnc_outputs
             # commit now so results survive even if the reply speech never runs (#3702)
@@ -3823,6 +3823,9 @@ class AgentActivity(RecognitionHooks):
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
+
+        if not chain_continues:
+            self._session._unanswered_user_metrics = None
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(
