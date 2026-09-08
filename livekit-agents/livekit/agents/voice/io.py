@@ -346,7 +346,8 @@ class _AudioSinkProxy(AudioOutput):
         self._pushed_duration: float = 0.0
         # the current sink counts from its own zero; these place its runs in the segment
         self._offset_base: float = 0.0
-        self._sink_reported = False
+        # how far the current sink said it played, None while it has reported nothing
+        self._sink_played: float | None = None
         self._sink_started_at: float | None = None
 
         self.set_next_in_chain(next_in_chain)
@@ -372,6 +373,7 @@ class _AudioSinkProxy(AudioOutput):
             return
 
         old = self._next_in_chain
+        played = 0.0
         if old is not None:
             # a clear can finish a segment that is not over, and that call is the proxy's
             old.off("playback_finished", self._forward_next_playback_finished)
@@ -385,25 +387,27 @@ class _AudioSinkProxy(AudioOutput):
             # progress only observes, so the clear is still the sink's last word
             old.off("playback_progressed", self._forward_next_playback_progressed)
 
-            # it cannot be asked once detached: what it was given counts as played, capped by
-            # how long it played, unless the recorder has the whole segment to place
-            if (
-                self._pending_playback_count > 0
-                and not self._sink_reported
-                and (self._capturing or self._offset_base)
-                and self._sink_started_at is not None
-            ):
-                self._report_run(
+            # where the old sink got to: what it reported, else what it was given capped by how
+            # long it has been playing; a sink that never said playback started played nothing
+            if self._sink_played is not None:
+                played = self._sink_played
+            elif self._sink_started_at is not None:
+                played = max(
+                    0.0,
                     min(
                         self._pushed_duration - self._offset_base,
                         time.time() - self._sink_started_at,
-                    )
+                    ),
                 )
+                # it cannot be asked once detached, so the assumed run is placed for it, unless
+                # the recorder has the whole segment to place
+                if self._pending_playback_count > 0 and (self._capturing or self._offset_base):
+                    self._report_run(played)
 
             if self._capturing:
                 # the new sink counts from its own zero, this far into the segment
                 self._offset_base = self._pushed_duration
-                self._sink_reported = False
+                self._sink_played = None
                 self._sink_started_at = None
 
             if self._attached:
@@ -420,7 +424,9 @@ class _AudioSinkProxy(AudioOutput):
         # a segment already flushed to the old sink will never be reported by the
         # new one; finish it as interrupted so wait_for_playout() doesn't hang
         if old is not None and self._pending_playback_count > 0 and not self._capturing:
-            self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
+            self.on_playback_finished(
+                playback_position=self._offset_base + played, interrupted=True
+            )
 
     def _report_run(self, duration: float) -> None:
         """Report a run the current sink played but never reported itself.
@@ -439,11 +445,11 @@ class _AudioSinkProxy(AudioOutput):
         super()._forward_next_playback_started(ev)
 
     def _forward_next_playback_progressed(self, ev: PlaybackProgressedEvent) -> None:
-        self._sink_reported = True
+        self._sink_played = ev.offset + ev.duration
         super()._forward_next_playback_progressed(replace(ev, offset=self._offset_base + ev.offset))
 
     def _forward_next_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
-        if self._offset_base and not self._sink_reported:
+        if self._offset_base and self._sink_played is None:
             # all it said is how much played; the offset is the segment's to supply
             self._report_run(ev.playback_position)
 
@@ -462,7 +468,7 @@ class _AudioSinkProxy(AudioOutput):
             self._capturing = True
             self._pushed_duration = 0.0
             self._offset_base = 0.0
-            self._sink_reported = False
+            self._sink_played = None
             self._sink_started_at = None
 
         await super().capture_frame(frame)

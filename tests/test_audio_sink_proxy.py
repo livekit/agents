@@ -507,17 +507,39 @@ async def test_swap_finishes_pending_segment_as_interrupted() -> None:
     # a flushed segment still playing out on leaf_a (frames are pushed faster than realtime)
     await wrapper.capture_frame(_silence(duration_s=1.0))
     wrapper.flush()
+    assert leaf_a._started_at is not None
 
     received: list[PlaybackFinishedEvent] = []
     wrapper.on("playback_finished", received.append)
 
-    proxy.set_next_in_chain(leaf_b)
+    with patch("livekit.agents.voice.io.time.time", return_value=leaf_a._started_at + 0.4):
+        proxy.set_next_in_chain(leaf_b)  # given 1s, but only 0.4s has played
 
-    # the pending segment must be finished as interrupted so wait_for_playout() doesn't hang
+    # the pending segment must be finished as interrupted so wait_for_playout() doesn't hang,
+    # and where the old sink got to, not with all it was given
     ev = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=0.5)
     assert ev.interrupted is True
-    assert ev.playback_position == pytest.approx(1.0)
+    assert ev.playback_position == pytest.approx(0.4)
     assert len(received) == 1
+
+
+async def test_a_swap_finishes_a_flushed_segment_where_the_sink_said_it_got_to() -> None:
+    """The clock overstates a sink that paused or ran dry; its own playhead wins."""
+    leaf_a, leaf_b = _ReportingSink(played=0.4), FakeAudioOutput()
+    wrapper = _PassthroughWrapper(next_in_chain=leaf_a)
+    proxy = wrapper.next_in_chain
+    assert isinstance(proxy, _AudioSinkProxy)
+
+    await wrapper.capture_frame(_silence(duration_s=1.0))
+    leaf_a.on_playback_started(created_at=100.0)
+    wrapper.flush()
+
+    with patch("livekit.agents.voice.io.time.time", return_value=100.9):
+        proxy.set_next_in_chain(leaf_b)  # 0.9s on the clock, but the clear reports 0.4s played
+
+    ev = await asyncio.wait_for(wrapper.wait_for_playout(), timeout=0.5)
+    assert ev.interrupted is True
+    assert ev.playback_position == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio
