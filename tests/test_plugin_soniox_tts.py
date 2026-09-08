@@ -1001,3 +1001,27 @@ async def test_untimed_text_survives_a_stream_that_ends_inside_a_gap() -> None:
     soniox_tts._emit_timed_words(data, flush=True)
 
     assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox"
+
+
+async def test_untimed_text_first_keeps_the_separator_in_place() -> None:
+    """When the gap opens a stream, the untimed text carries its separator.
+
+    The separator belongs to whatever the stream publishes first. Leaving it for
+    the first timed word instead moves the whitespace: the reply loses it here
+    and grows a second one further along.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+    # a rotated stream is handed its leading separator by the tokenizer
+    data.sent_text = " Then, after all"
+
+    soniox_tts._accumulate_timestamps(data, {"characters": list("Then,")})  # malformed
+    soniox_tts._accumulate_timestamps(data, _character_timestamps(" after all", 0.05))
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    assert "".join(str(w) for w in emitter.timed_words) == " Then, after all"

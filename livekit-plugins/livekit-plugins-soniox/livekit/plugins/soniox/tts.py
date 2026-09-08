@@ -674,18 +674,15 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     starts: list[float] | None = timestamps.get("character_start_times_seconds")
     ends: list[float] | None = timestamps.get("character_end_times_seconds")
     if not (chars and starts and ends and len(chars) == len(starts) == len(ends)):
-        # These characters cannot be trusted, so they are skipped - but the gap
-        # falls in the middle of a word. Publish what is already whole, drop the
-        # prefix left in the buffer, and wait for a word boundary: joining the
-        # two sides would invent a word ("bro" + "ps" reads as "brops"), and
-        # keeping either side alone would publish a fragment as a word of its
-        # own. The word the gap swallowed is lost either way.
+        # Only the timings are unusable here - these characters were still
+        # spoken, so none of the text is dropped. They are kept with the word
+        # they interrupted and handed over untimed once a boundary closes the
+        # region: joining the two sides of the gap would invent a word ("bro" +
+        # "ps" reads as "brops") and publishing either side alone would make a
+        # word of a fragment, but carrying the whole stretch untimed does
+        # neither. The synchronizer estimates across untimed text, so this
+        # stretch loses its precision and the reply keeps its words.
         logger.warning("Soniox TTS sent malformed timestamps for a frame, timing its text by rate")
-        # Only the timings are unusable - the characters were still spoken. Keep
-        # them, along with the word they were breaking, and hand them over
-        # untimed once the region closes: the synchronizer estimates across
-        # untimed text, so the reply stays whole and only this stretch of it
-        # loses precision.
         _emit_timed_words(stream)
         stream.pending_untimed += stream.char_text + "".join(chars or [])
         stream.char_text = ""
@@ -731,7 +728,13 @@ def _publish_untimed(stream: _StreamData) -> None:
         return
 
     stream.produced_output = True
-    stream.emitter.push_timed_transcript(TimedString(text=stream.pending_untimed))
+    untimed = TimedString(text=stream.pending_untimed)
+    if not stream.emitted_any:
+        # this is the stream's first text, so it carries the separator that
+        # opened it - leaving it for a later word would move the whitespace
+        stream.emitted_any = True
+        untimed = _with_leading_separator(untimed, stream.sent_text)
+    stream.emitter.push_timed_transcript(untimed)
     stream.pending_untimed = ""
 
 
