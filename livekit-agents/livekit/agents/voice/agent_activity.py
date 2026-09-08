@@ -214,12 +214,10 @@ class _PausedSpeechInfo:
     timeout: float
 
 
-# NOTE: AgentActivity isn't exposed to the public API
-def _end_user_turn(info: _EndOfTurnInfo) -> None:
-    """End the ``user_turn`` span the activity adopted from recognition: the turn is over once
-    ``on_user_turn_completed`` has run (or the turn was skipped), just before any reply.
+def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
+    """End the ``user_turn`` span the activity adopted from recognition (see ``_EndOfTurnInfo``).
 
-    Module-level for the same reason as ``_record_queue_wait``."""
+    Module-level: tests drive the reply tasks with stand-in activities."""
     if info.user_turn_span_adopted and info.user_turn_span is not None:
         if info.user_turn_span.is_recording():
             info.user_turn_span.end()
@@ -229,14 +227,14 @@ def _end_user_turn(info: _EndOfTurnInfo) -> None:
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
     """Stamp how long the speech sat in the queue on its agent_turn span.
 
-    Module-level on purpose: the reply tasks are also driven with lightweight stand-ins for
-    the activity in tests, which must not need to know about telemetry helpers."""
+    Module-level: tests drive the reply tasks with stand-in activities."""
     if (queue_wait := speech_handle._queue_wait()) is None:
         return
     span = trace.get_current_span(context=speech_handle._agent_turn_context)
     span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
 
 
+# NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -2571,7 +2569,7 @@ class AgentActivity(RecognitionHooks):
             self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask
-        # the turn is not over until the user hook has run: take the span and end it there
+        # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
         self._user_turn_completed_atask = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
@@ -2586,7 +2584,7 @@ class AgentActivity(RecognitionHooks):
         try:
             await self._user_turn_completed_impl(old_task, info)
         finally:
-            _end_user_turn(info)
+            _end_user_turn_span(info)
 
     async def _user_turn_completed_impl(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
@@ -2671,8 +2669,7 @@ class AgentActivity(RecognitionHooks):
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
         start_time = time.perf_counter()
-        # user code that gates the reply: a slow hook here is a gap between user_turn and
-        # agent_turn that nothing else explains
+        # user code that gates the reply; without a span a slow hook is an unexplained gap
         with tracer.start_as_current_span(
             "on_user_turn_completed",
             context=(
@@ -2690,8 +2687,7 @@ class AgentActivity(RecognitionHooks):
                 hook_span.add_event("stop_response")
                 return  # ignore this turn
             except Exception as e:
-                # the hook is user code and its message can quote the transcript; honour a
-                # redaction switched on for this session alone as well as the job's
+                # the message may quote the transcript: honour the session's redaction too
                 trace_utils.record_exception(
                     hook_span,
                     e,
@@ -2700,7 +2696,6 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("error occurred during on_user_turn_completed")
                 return
 
-        _end_user_turn(info)
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 

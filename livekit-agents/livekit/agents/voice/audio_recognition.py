@@ -77,9 +77,8 @@ class _EndOfTurnInfo:
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
     user_turn_span: trace.Span | None = None
-    """The turn's open ``user_turn`` span. The activity that schedules ``on_user_turn_completed``
-    takes ownership (``user_turn_span_adopted``) and ends it after the hook, so the hook nests
-    under the turn and the turn covers the wait for it; otherwise recognition ends it here."""
+    """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
+    ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
     user_turn_span_adopted: bool = False
 
 
@@ -340,7 +339,7 @@ class AudioRecognition:
         self._eou_wait_span: trace.Span | None = None
         self._eou_wait_started_at_ns: int | None = None
         self._eou_wait_rearms: int = 0
-        # nothing recorded inside the wait (a re-arm, a detection) may fall after its end
+        # latest timestamp recorded inside the wait; the span must not end before it
         self._eou_wait_floor_ns: int | None = None
         self._eou_detection_span: trace.Span | None = None
         self._stt_request_ids: list[str] = []
@@ -392,8 +391,7 @@ class AudioRecognition:
                         if not self._end_of_turn_task.done():
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
-                    # the pending decision is abandoned with the mode; the user turn stays
-                    # open for whatever the new mode does with the speech that follows
+                    # the pending decision is abandoned with the mode; the user turn stays open
                     self._end_eou_wait_span("dropped")
                     self._user_turn_committed = False
                     if self._turn_detector_stream is not None:
@@ -1543,8 +1541,7 @@ class AudioRecognition:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
-                    # ended by hand: when the user resumes mid-inference the wait closes
-                    # first (see _end_eou_wait_span) and the child must not outlive it
+                    # ended explicitly: _end_eou_wait_span closes it early if the user resumes
                     with (
                         tracer.use_span(eou_wait_span),
                         tracer.start_as_current_span(
@@ -2006,13 +2003,9 @@ class AudioRecognition:
         trigger: str,
         last_speaking_time: float | None,
     ) -> trace.Span:
-        """The turn's ``eou_wait`` span, created on the first end-of-turn trigger.
-
-        The span is back-dated to ``last_speaking_time`` so it starts where the user stopped
-        talking. Later triggers for the same turn (a late STT final, another VAD end of
-        speech) re-arm the wait rather than start a new span; each re-arm is an event, so the
-        bar stays whole and the reason for a long wait is readable off it.
-        """
+        """The turn's ``eou_wait`` span, created on the first end-of-turn trigger and back-dated
+        to ``last_speaking_time``. Later triggers for the same turn (a late STT final, another
+        VAD end of speech) re-arm the wait as an event rather than start a new span."""
         span = self._eou_wait_span
         if span is not None and span.is_recording():
             self._eou_wait_rearms += 1
@@ -2027,8 +2020,7 @@ class AudioRecognition:
 
         now = time.time()
         started_at = min(last_speaking_time, now) if last_speaking_time is not None else now
-        # the span's own start; lk.eou.wait_duration is derived from this same value at the end
-        # so the attribute and the bar are exactly the same length
+        # lk.eou.wait_duration is computed from this same value, so it equals the span's length
         started_at_ns = int(started_at * 1_000_000_000)
         with tracer.use_span(user_turn_span):
             span = tracer.start_span(
@@ -2070,24 +2062,20 @@ class AudioRecognition:
 
         detection, self._eou_detection_span = self._eou_detection_span, None
         if detection is not None and detection.is_recording():
-            # the user resumed while the detector was still running: the inference is moot,
-            # and the wait ends when it does so the child stays inside the parent
+            # the detector is still running: end it first so the child stays inside the parent
             self._eou_wait_floor_ns = time.time_ns()
             detection.add_event("superseded", {trace_types.ATTR_EOU_OUTCOME: outcome})
             detection.end(end_time=self._eou_wait_floor_ns)
         floor_ns, self._eou_wait_floor_ns = self._eou_wait_floor_ns, None
         if floor_ns is not None:
-            # a re-arm or a detection recorded after the requested end (VAD reports the
-            # resumed speech's start after the fact): the bar covers what it contains
+            # VAD reports a resume after the fact: never end before what the span contains
             ended_at_ns = max(ended_at_ns, floor_ns)
         if outcome == "user_resumed":
-            # where the speech actually resumed, even when the bar had to run past it
             span.add_event("user_resumed", timestamp=max(requested_ns, started_at_ns or 0))
         span.set_attributes(
             {
                 trace_types.ATTR_EOU_OUTCOME: outcome,
-                # from the same two integers the span is bounded by, so the attribute equals
-                # the bar's length exactly
+                # same integers as the span bounds, so the attribute equals the span's length
                 trace_types.ATTR_EOU_WAIT_DURATION: (
                     (ended_at_ns - started_at_ns) / 1_000_000_000
                     if started_at_ns is not None
