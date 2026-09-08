@@ -648,9 +648,11 @@ class _StreamData:
     # duration it is exact, counting output the emitter has accepted but not yet
     # turned into frames.
     produced_output: bool = False
-    # Set when a frame had to be skipped: characters are dropped until a word
-    # boundary, so the tail of the word the gap broke is never published alone.
+    # Set when a frame had to be skipped. Its characters are still spoken, so
+    # they are held here with the broken word either side of them and published
+    # without timings once a word boundary makes the region safe to close.
     resync_pending: bool = False
+    pending_untimed: str = ""
 
 
 def _is_word_boundary(char: str) -> bool:
@@ -678,12 +680,14 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
         # two sides would invent a word ("bro" + "ps" reads as "brops"), and
         # keeping either side alone would publish a fragment as a word of its
         # own. The word the gap swallowed is lost either way.
-        logger.warning("Soniox TTS sent malformed timestamps, skipping the frame's characters")
-        # The word held back is complete after all when nothing could have
-        # continued it - one CJK character is already a word - so publish it
-        # rather than lose it; otherwise it is the broken half and is dropped.
-        held = stream.char_text
-        _emit_timed_words(stream, flush=bool(held) and _is_word_boundary(held[-1]))
+        logger.warning("Soniox TTS sent malformed timestamps for a frame, timing its text by rate")
+        # Only the timings are unusable - the characters were still spoken. Keep
+        # them, along with the word they were breaking, and hand them over
+        # untimed once the region closes: the synchronizer estimates across
+        # untimed text, so the reply stays whole and only this stretch of it
+        # loses precision.
+        _emit_timed_words(stream)
+        stream.pending_untimed += stream.char_text + "".join(chars or [])
         stream.char_text = ""
         stream.char_starts.clear()
         stream.char_ends.clear()
@@ -693,10 +697,13 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     if stream.resync_pending:
         boundary = next((i for i, char in enumerate(chars) if _is_word_boundary(char)), None)
         if boundary is None:
-            return  # still inside the word the gap broke
-        # A separator is consumed, since the last published word already carries
-        # one; a character that is a word in itself is kept.
+            stream.pending_untimed += "".join(chars)  # still inside the broken word
+            return
+        # A separator closes the untimed region and goes with it; a character
+        # that is a word in itself starts the timed text again.
         resume = boundary + 1 if chars[boundary].isspace() else boundary
+        stream.pending_untimed += "".join(chars[:resume])
+        _publish_untimed(stream)
         chars, starts, ends = chars[resume:], starts[resume:], ends[resume:]
         stream.resync_pending = False
         if not chars:
@@ -713,8 +720,26 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     _emit_timed_words(stream)
 
 
+def _publish_untimed(stream: _StreamData) -> None:
+    """Hand over text whose timings were lost, so the reply itself stays whole.
+
+    ``TimedString`` carries no timings here, which the synchronizer reads as
+    "estimate across this" - the behaviour aligned transcripts replace, applied
+    to the stretch that has no timings rather than to the whole turn.
+    """
+    if not stream.pending_untimed:
+        return
+
+    stream.produced_output = True
+    stream.emitter.push_timed_transcript(TimedString(text=stream.pending_untimed))
+    stream.pending_untimed = ""
+
+
 def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
     """Push every word the buffered characters now complete, keeping the rest."""
+    if flush:
+        _publish_untimed(stream)
+
     timed_words, stream.char_text = _to_timed_words(
         stream.char_text, stream.char_starts, stream.char_ends, flush=flush
     )

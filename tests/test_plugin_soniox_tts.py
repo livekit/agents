@@ -896,7 +896,7 @@ async def test_resync_waits_for_a_boundary_across_frames() -> None:
     soniox_tts._accumulate_timestamps(data, _character_timestamps(" high up", 0.25))
     assert data.resync_pending is False
     soniox_tts._emit_timed_words(data, flush=True)
-    assert "".join(str(w) for w in emitter.timed_words) == "The quick high up"
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox jumps high up"
 
 
 async def test_a_gap_costs_only_the_frame_in_a_spaceless_script() -> None:
@@ -920,8 +920,8 @@ async def test_a_gap_costs_only_the_frame_in_a_spaceless_script() -> None:
 
     published = "".join(str(w) for w in emitter.timed_words)
     assert data.resync_pending is False
-    # only the skipped frame's character is missing; the rest survives
-    assert published == "\u4eca\u5929\u5929\u5f88\u597d"
+    # nothing is lost: the skipped frame's characters come back untimed
+    assert published == "\u4eca\u5929\u5929\u6c14\u5f88\u597d"
 
 
 def test_word_boundary_follows_the_tokenizer() -> None:
@@ -953,4 +953,51 @@ async def test_a_gap_ending_on_a_boundary_costs_no_extra_word() -> None:
     soniox_tts._accumulate_timestamps(data, _character_timestamps(" high up", 0.25))
     soniox_tts._emit_timed_words(data, flush=True)
 
-    assert "".join(str(w) for w in emitter.timed_words) == "The quick high up"
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox jumps high up"
+
+
+async def test_text_from_a_skipped_frame_is_published_without_timings() -> None:
+    """A frame's timings can be unusable while its characters were still spoken.
+
+    Dropping them would leave the turn's history missing words the agent said.
+    They are published untimed instead, which the synchronizer estimates
+    across - the old behaviour, confined to the stretch that lost its timings.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox jum")})  # malformed
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("ps high", 0.23))
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox jumps high"
+    # the gap's words carry no timings; everything else does
+    untimed = [str(w) for w in emitter.timed_words if not is_given(w.start_time)]
+    assert untimed == ["brown fox jumps "]
+
+
+async def test_untimed_text_survives_a_stream_that_ends_inside_a_gap() -> None:
+    """A stream can end before a boundary closes the untimed region.
+
+    The held text is the tail of the reply, so losing it here would cut the
+    transcript short exactly where an interruption is most likely.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox")})  # malformed
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick brown fox"
