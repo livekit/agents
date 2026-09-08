@@ -491,6 +491,7 @@ class Agent:
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
+            temporary_adapter: stt.StreamAdapter | None = None
 
             if not activity.stt.capabilities.streaming:
                 if not activity.vad:
@@ -499,36 +500,41 @@ class Agent:
                         "Or manually wrap your STT in a stt.StreamAdapter"
                     )
 
-                wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                temporary_adapter = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                wrapped_stt = temporary_adapter
 
-            conn_options = activity.session.conn_options.stt_conn_options
-            async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                _audio_input_started_at: float = (
-                    activity._audio_recognition._input_started_at
-                    if activity._audio_recognition is not None
-                    and activity._audio_recognition._input_started_at is not None
-                    else (
-                        activity.session._recorder_io.recording_started_at
-                        if activity.session._recorder_io
-                        and activity.session._recorder_io.recording_started_at
-                        else activity.session._started_at
-                        if activity.session._started_at
-                        else time.time()
+            try:
+                conn_options = activity.session.conn_options.stt_conn_options
+                async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                    _audio_input_started_at: float = (
+                        activity._audio_recognition._input_started_at
+                        if activity._audio_recognition is not None
+                        and activity._audio_recognition._input_started_at is not None
+                        else (
+                            activity.session._recorder_io.recording_started_at
+                            if activity.session._recorder_io
+                            and activity.session._recorder_io.recording_started_at
+                            else activity.session._started_at
+                            if activity.session._started_at
+                            else time.time()
+                        )
                     )
-                )
-                stream.start_time_offset = time.time() - _audio_input_started_at
+                    stream.start_time_offset = time.time() - _audio_input_started_at
 
-                @utils.log_exceptions(logger=logger)
-                async def _forward_input() -> None:
-                    async for frame in audio:
-                        stream.push_frame(frame)
+                    @utils.log_exceptions(logger=logger)
+                    async def _forward_input() -> None:
+                        async for frame in audio:
+                            stream.push_frame(frame)
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for event in stream:
-                        yield event
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for event in stream:
+                            yield event
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def llm_node(

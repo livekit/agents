@@ -325,16 +325,17 @@ class FallbackSynthesizeStream(SynthesizeStream):
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
+        temporary_adapter: StreamAdapter | None = None
         if tts.capabilities.streaming:
             stream = tts.stream(conn_options=conn_options)
         else:
             from .. import tokenize
 
-            wrapped_tts = StreamAdapter(
+            temporary_adapter = StreamAdapter(
                 tts=tts,
                 sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
             )
-            stream = wrapped_tts.stream(conn_options=conn_options)
+            stream = temporary_adapter.stream(conn_options=conn_options)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
@@ -382,7 +383,11 @@ class FallbackSynthesizeStream(SynthesizeStream):
             raise
         finally:
             _capture_started_time()
-            await utils.aio.cancel_and_wait(input_task)
+            try:
+                await utils.aio.cancel_and_wait(input_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         start_time = time.time()
