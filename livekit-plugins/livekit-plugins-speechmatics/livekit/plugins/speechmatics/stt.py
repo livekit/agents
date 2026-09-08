@@ -105,7 +105,7 @@ class STTOptions:
     turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
 
     # Output formatting
-    speaker_active_format: str | None = None
+    speaker_format: str | None = None
 
     # Speakers
     known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
@@ -146,7 +146,7 @@ class STT(stt.STT):
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
-        speaker_active_format: NotGivenOr[str] = NOT_GIVEN,
+        speaker_format: NotGivenOr[str] = NOT_GIVEN,
         prefer_current_speaker: NotGivenOr[bool] = NOT_GIVEN,
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
         sample_rate: int = 16000,
@@ -205,9 +205,9 @@ class STT(stt.STT):
             max_speakers: Upper bound on the number of distinct speakers (2–100).
                 Optional.
 
-            speaker_active_format: Formatter for speaker-attributed text, with `text`
-                and `speaker_id` placeholders, e.g. `@{speaker_id}: {text}`. Defaults to
-                the raw transcript.
+            speaker_format: Formatter for speaker-attributed text, with `text` and
+                `speaker_id` placeholders, e.g. `@{speaker_id}: {text}`. Replaces the
+                deprecated `speaker_active_format`. Defaults to the raw transcript.
 
             prefer_current_speaker: Bias closely-spaced words toward the same speaker.
                 Optional.
@@ -268,7 +268,7 @@ class STT(stt.STT):
             output_locale=_set(output_locale),
             domain=_set(domain),
             turn_detection_mode=turn_detection_mode,
-            speaker_active_format=_set(speaker_active_format),
+            speaker_format=_set(speaker_format),
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_set(additional_vocab) or [],
             model=_resolve_model(model, operating_point),
@@ -759,9 +759,9 @@ class SpeechStream(stt.RecognizeStream):
         # Parse the singular agent-STT segment
         seg = Segment.from_message(message)
 
-        # Format the text with the active-speaker formatter
+        # Segments the service did not attribute are labelled UU
         speaker_id = seg.speaker or "UU"
-        format_str = opts.speaker_active_format or "{text}"
+        format_str = opts.speaker_format or "{text}"
         text = format_str.format(speaker_id=speaker_id, text=seg.transcript)
 
         # Create speech event. Label with the stream's own configured language (which honors a
@@ -970,6 +970,7 @@ _DROPPED_ARGS = (
 _MIGRATED_ARGS: dict[str, tuple[str, Callable[[Any], Any]]] = {
     "diarization_sensitivity": ("speaker_sensitivity", float),
     "enable_partials": ("include_partials", bool),
+    "speaker_active_format": ("speaker_format", str),
 }
 
 

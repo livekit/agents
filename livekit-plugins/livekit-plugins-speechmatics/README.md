@@ -65,7 +65,7 @@ agent = AgentSession(
     stt=speechmatics.STT(
         # EXTERNAL is the default; a VAD passed here drives finalize() on end-of-speech.
         vad=vad,
-        speaker_active_format="[Speaker {speaker_id}] {text}",
+        speaker_format="[Speaker {speaker_id}] {text}",
     ),
     vad=vad,
     ...
@@ -86,10 +86,10 @@ stt = speechmatics.STT(include_partials=False)
 Speechmatics attributes each transcript segment to a speaker. Diarization is enabled by default
 (`enable_diarization=True`); the segment is the unit of attribution, so each result carries a single
 `speaker_id` and there is no per-word speaker data. To fold the speaker label into the transcript
-text, set `speaker_active_format` using the `{speaker_id}` and `{text}` placeholders:
+text, set `speaker_format` using the `{speaker_id}` and `{text}` placeholders:
 
-- `speaker_active_format="<{speaker_id}>{text}</{speaker_id}>"` -> `<S1>Hello</S1>`
-- `speaker_active_format="[Speaker {speaker_id}] {text}"` -> `[Speaker S1] Hello`
+- `speaker_format="<{speaker_id}>{text}</{speaker_id}>"` -> `<S1>Hello</S1>`
+- `speaker_format="[Speaker {speaker_id}] {text}"` -> `[Speaker S1] Hello`
 
 Segments the service did not attribute — including every segment when diarization is off — are
 labelled `UU`.
@@ -104,7 +104,7 @@ agent = AgentSession(
     stt=speechmatics.STT(
         enable_diarization=True,
         max_speakers=4,
-        speaker_active_format="[Speaker {speaker_id}] {text}",
+        speaker_format="[Speaker {speaker_id}] {text}",
         additional_vocab=[
             speechmatics.AdditionalVocabEntry(
                 content="LiveKit",
