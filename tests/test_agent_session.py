@@ -1688,6 +1688,43 @@ async def test_stt_pipeline_does_not_recreate_on_non_retryable_api_error(
         await pipeline.aclose()
 
 
+async def test_stt_pipeline_closes_audio_input_after_non_retryable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts > 2:
+            # end the stream rather than raise, so a pump that keeps recreating
+            # reaches the assertion instead of looping forever
+            return
+
+        raise APIStatusError("invalid request", status_code=400)
+        yield  # pragma: no cover - makes this an async generator
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        # wait for the pump to finish, which closes event_ch
+        async def _drain() -> None:
+            async for _ in pipeline.event_ch:
+                pass
+
+        await asyncio.wait_for(_drain(), timeout=5)
+
+        # the pump owns the only reader, so leaving audio_ch open would let the
+        # caller keep filling an unbounded queue for the rest of the session
+        assert pipeline.audio_ch.closed
+    finally:
+        await pipeline.aclose()
+
+
 async def test_stt_pipeline_recreates_stream_after_retryable_status_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
