@@ -21,9 +21,7 @@ Expect noisy voice transcription: digits read aloud ('four' -> 4, 'oh'/'zero' ->
 
 Never read the full card number or the security code back to the caller; refer to the card by its last four digits only. If a tool rejects a value, ask the caller to repeat just that detail - don't start the whole card over. If the caller switches cards mid-way, just record the new values; recording a field again replaces it.
 
-If the caller refuses to provide the card, call decline_card_capture.
-
-Caller has no usable card right now (their card is expired or keeps failing and they have no other card to give): don't keep asking for another card. Reassure them there's no pressure - the booking stays held - and call decline_card_capture with the reason; the receptionist arranges the retry from there.
+If the caller refuses to provide the card, or has no other card to give after theirs came back expired, don't keep asking - call decline_card_capture with the reason.
 """
 
 
@@ -125,8 +123,9 @@ class GetCardTask(AgentTask[GetCardResult]):
             raise ToolError("that expiration year is invalid - ask the caller to repeat it")
         if (2000 + year, month) < (TODAY.year, TODAY.month):
             raise ToolError(
-                "that date is in the past, the card is expired - ask if they have another "
-                "card; if they have no other card right now, call decline_card_capture"
+                f"the date I have is {month:02d}/{year:02d}, which is in the past - confirm the "
+                "expiration with the caller; if the card really is expired and they have no "
+                "other card, call decline_card_capture"
             )
         self._expiration = f"{month:02d}/{year:02d}"
         return f"expiration recorded | {self._status()}"
@@ -185,7 +184,7 @@ class GetCardTask(AgentTask[GetCardResult]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_card_capture(self, reason: str) -> None:
-        """End the card capture without a card: the caller explicitly refuses to provide one, or cannot provide a usable card right now (their only card is expired or won't validate and they have no other card to give).
+        """End the card capture without a card: the caller refuses to provide one, or has no other card after theirs came back expired.
 
         Args:
             reason: A short explanation of why no card could be taken.
