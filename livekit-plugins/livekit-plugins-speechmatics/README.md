@@ -10,6 +10,18 @@ See [https://docs.livekit.io/agents/integrations/stt/speechmatics/](https://docs
 pip install livekit-plugins-speechmatics
 ```
 
+## Model
+
+`model` selects the transcription model and defaults to `linden-1`, currently the only Agent STT
+model:
+
+```python
+stt = speechmatics.STT(model="linden-1")
+```
+
+`operating_point` is a deprecated alias for `model` and warns when used. The RT operating points
+`enhanced` and `standard` are not Agent STT models and are rejected by the service.
+
 ## Turn detection modes
 
 The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is detected:
@@ -57,10 +69,10 @@ agent = AgentSession(
 
 ## Diarization
 
-Speechmatics can attribute words to individual speakers. Diarization is enabled by default
-(`enable_diarization=True`); the recognized speaker is available on each result. To fold the speaker
-label into the transcript text, set `speaker_active_format` using the `{speaker_id}` and `{text}`
-placeholders:
+Speechmatics attributes each transcript segment to a speaker. Diarization is enabled by default
+(`enable_diarization=True`); the segment is the unit of attribution, so each result carries a single
+`speaker_id` and there is no per-word speaker data. To fold the speaker label into the transcript
+text, set `speaker_active_format` using the `{speaker_id}` and `{text}` placeholders:
 
 - `speaker_active_format="<{speaker_id}>{text}</{speaker_id}>"` -> `<S1>Hello</S1>`
 - `speaker_active_format="[Speaker {speaker_id}] {text}"` -> `[Speaker S1] Hello`
