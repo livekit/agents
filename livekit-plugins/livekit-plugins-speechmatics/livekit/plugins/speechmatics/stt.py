@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, cast
 
@@ -928,49 +929,55 @@ def _resolve_model(
     return resolved
 
 
-def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
-    """Warn about deprecated kwargs and migrate values where possible."""
+# Deprecated arguments with no agent-STT equivalent. Accepted so upgrading does not break
+# construction, but they reach neither the config nor the wire.
+_DROPPED_ARGS = (
+    "audio_settings",
+    "chunk_size",
+    "end_of_utterance_max_delay",
+    "end_of_utterance_mode",
+    "end_of_utterance_silence_trigger",
+    "focus_mode",
+    "focus_speakers",
+    "http_session",
+    "ignore_speakers",
+    "max_delay",
+    "punctuation_overrides",
+    "speaker_passive_format",
+    "transcription_config",
+)
 
-    # Removed — no replacement
-    for name in (
-        "end_of_utterance_mode",
-        "end_of_utterance_silence_trigger",
-        "end_of_utterance_max_delay",
-        "max_delay",
-        "punctuation_overrides",
-        "speaker_passive_format",
-        "focus_speakers",
-        "ignore_speakers",
-        "focus_mode",
-        "chunk_size",
-        "transcription_config",
-        "audio_settings",
-        "http_session",
-    ):
+# Deprecated arguments that were renamed: old name -> (STTOptions field, value coercion).
+_MIGRATED_ARGS: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    "diarization_sensitivity": ("speaker_sensitivity", float),
+    "enable_partials": ("include_partials", bool),
+}
+
+
+def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
+    """Warn about deprecated kwargs, and migrate the ones that still have an equivalent.
+
+    Anything in `_DROPPED_ARGS` is reported and discarded; anything in `_MIGRATED_ARGS`
+    is carried over to the option that replaced it.
+    """
+
+    for name in _DROPPED_ARGS:
         if name in kwargs:
             logger.warning(f"`{name}` is deprecated and no longer used")
 
-    # Partials
-    if "enable_partials" in kwargs:
-        if opts.include_partials is None:
-            logger.warning("`enable_partials` is deprecated, migrated to `include_partials`")
-            opts.include_partials = bool(kwargs["enable_partials"])
-        else:
-            logger.warning(
-                "Both `enable_partials` and `include_partials` provided; using `include_partials`"
-            )
+    for name, (replacement, coerce) in _MIGRATED_ARGS.items():
+        if name not in kwargs:
+            continue
 
-    # Diarization
-    if "diarization_sensitivity" in kwargs and isinstance(
-        kwargs["diarization_sensitivity"], (int, float)
-    ):
-        if opts.speaker_sensitivity is None:
-            logger.warning(
-                "`diarization_sensitivity` is deprecated, migrated to `speaker_sensitivity`"
-            )
-            opts.speaker_sensitivity = kwargs["diarization_sensitivity"]
-        else:
-            logger.warning(
-                "Both `diarization_sensitivity` and `speaker_sensitivity` provided;"
-                " using `speaker_sensitivity`"
-            )
+        # An explicit new-style argument always wins over the deprecated alias.
+        if getattr(opts, replacement) is not None:
+            logger.warning(f"Both `{name}` and `{replacement}` provided; using `{replacement}`")
+            continue
+
+        try:
+            value = coerce(kwargs[name])
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"`{name}` has an invalid value: {e}") from e
+
+        logger.warning(f"`{name}` is deprecated, migrated to `{replacement}`")
+        setattr(opts, replacement, value)
