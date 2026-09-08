@@ -17,6 +17,7 @@ from livekit.agents import (
     AgentSession,
     AgentStateChangedEvent,
     APIConnectionError,
+    APIStatusError,
     ConversationItemAddedEvent,
     FlushSentinel,
     LanguageCode,
@@ -1644,6 +1645,80 @@ async def test_stt_pipeline_does_not_recreate_on_non_connection_error(
         await asyncio.wait_for(_collect(), timeout=5)
         assert events == []
         assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_does_not_recreate_on_non_retryable_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts > 2:
+            # end the stream rather than raise, so a pump that keeps recreating
+            # fails this test on the assertion instead of looping forever
+            return
+
+        # a bad request cannot succeed on a new stream; APIStatusError forces
+        # retryable=False for a 4xx outside 408/429/499
+        raise APIStatusError("invalid request", status_code=400)
+        yield  # pragma: no cover - makes this an async generator
+
+    # recreating cannot help: the same request fails the same way on every stream
+    pipeline = _STTPipeline(stt_node)
+    try:
+        events: list[SpeechEvent] = []
+
+        async def _collect() -> None:
+            async for ev in pipeline.event_ch:
+                events.append(ev)
+
+        await asyncio.wait_for(_collect(), timeout=5)
+        assert events == []
+        assert attempts == 1
+    finally:
+        await pipeline.aclose()
+
+
+async def test_stt_pipeline_recreates_stream_after_retryable_status_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice import audio_recognition
+    from livekit.agents.voice.audio_recognition import _STTPipeline
+
+    monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
+
+    attempts = 0
+
+    async def stt_node(audio, model_settings):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            # a 5xx stays retryable, unlike a 4xx outside 408/429/499
+            raise APIStatusError("stt upstream failure", status_code=503)
+
+        yield SpeechEvent(
+            type=SpeechEventType.FINAL_TRANSCRIPT,
+            alternatives=[SpeechData(text="recovered", language="en")],
+        )
+        # stay open like a live stream until the pipeline is closed
+        async for _ in audio:
+            pass
+
+    pipeline = _STTPipeline(stt_node)
+    try:
+        ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        assert ev.alternatives[0].text == "recovered"
+        assert attempts == 2
     finally:
         await pipeline.aclose()
 
