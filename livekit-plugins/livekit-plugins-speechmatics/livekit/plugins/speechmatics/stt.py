@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
-import warnings
 from enum import Enum
 from typing import Any, cast
 
@@ -170,11 +169,14 @@ class STT(stt.STT):
                 `AgentSession`, which otherwise ignores the end-of-speech events this
                 plugin emits. Defaults to `TurnDetectionMode.EXTERNAL`.
 
-            model: The transcription model to use, e.g. `"linden-1"`.
-                Defaults to the SDK's default model. Preferred over `operating_point`.
+            model: The transcription model to use, e.g. `"linden-1"`. A model agent-STT
+                does not support raises a `ValueError`. Defaults to the SDK's default
+                model. Preferred over `operating_point`.
 
             operating_point: Deprecated alias for `model`. If both are given they must
-                name the same value, otherwise a `ValueError` is raised. Optional.
+                name the same value, otherwise a `ValueError` is raised. Note the old
+                `enhanced` / `standard` operating points are not agent-STT models and
+                are rejected. Optional.
 
             domain: Domain to use. Optional.
 
@@ -881,16 +883,20 @@ def _resolve_model(
 
     Rules:
         - neither given          -> the SDK's default model
-        - only `operating_point` -> use it, with a `DeprecationWarning`
+        - only `operating_point` -> use it, with a deprecation warning
         - only `model`           -> use it
         - both given             -> they must name the same value; if they differ a
                                     `ValueError` is raised, otherwise `model` is used
+
+    The resolved name is checked against the models agent-STT accepts, so a value the
+    service would reject fails here rather than on the wire mid-session.
 
     Returns:
         The resolved model name as a string.
 
     Raises:
-        ValueError: if `model` and `operating_point` are both given but differ.
+        ValueError: if `model` and `operating_point` are both given but differ, or if
+            the resolved name is not a supported model.
     """
     resolved_model = _model_name(model) if is_given(model) else None
     resolved_op = _model_name(operating_point) if is_given(operating_point) else None
@@ -901,21 +907,25 @@ def _resolve_model(
                 f"`model` ({resolved_model!r}) and `operating_point` ({resolved_op!r}) name "
                 "different options. Pass only `model` (`operating_point` is deprecated)."
             )
-        return resolved_model
-
-    if resolved_op is not None:
-        warnings.warn(
+        resolved = resolved_model
+    elif resolved_op is not None:
+        logger.warning(
             "`operating_point` is deprecated and will be removed in a future release; "
-            "use `model` instead.",
-            DeprecationWarning,
-            stacklevel=3,
+            "use `model` instead"
         )
-        return resolved_op
+        resolved = resolved_op
+    elif resolved_model is not None:
+        resolved = resolved_model
+    else:
+        return DEFAULT_MODEL.value
 
-    if resolved_model is not None:
-        return resolved_model
+    supported = [m.value for m in Model]
+    if resolved not in supported:
+        raise ValueError(
+            f"Unsupported model {resolved!r}; agent-STT accepts {', '.join(supported)}"
+        )
 
-    return DEFAULT_MODEL.value
+    return resolved
 
 
 def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
