@@ -506,6 +506,11 @@ async def test_fatal_reports_a_finished_segment_only_once() -> None:
     await sink.write_audio(make_audio_frame())
     sink.note_input_segment_end()
     sink.on_bot_stopped_speaking()
+
+    # The runner drains the marker and reports it; that is what makes the
+    # segment finished rather than merely decided.
+    while sink.pending:
+        await sink.next_frame()
     assert not sink.owes_segment_end
 
     reports = 0
@@ -569,3 +574,72 @@ async def test_render_deadline_is_polled_on_its_own_interval() -> None:
 async def _until(predicate) -> None:  # type: ignore[no-untyped-def]
     while not predicate():
         await asyncio.sleep(0.01)
+
+
+async def test_fatal_completes_a_marker_the_runner_never_drained() -> None:
+    """The marker is decided when it is queued, reported when it is drained.
+
+    A fatal in between loses it: the tracker has already cleared its flag, and
+    cancelling the runner discards the queue it was sitting in.
+    """
+    s = session()
+    s._client = FakeSTVClient()
+    sink = _FrameSink()
+    s._sink = sink
+    audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    s._audio_output = audio_output
+
+    await audio_output.capture_frame(_frame(100))
+    audio_output.flush()
+    sink.note_input_segment_open()
+    sink.note_input_audio()
+    async for item in audio_output:
+        if isinstance(item, AudioSegmentEnd):
+            sink.note_input_segment_end()
+            break
+    await sink.write_audio(make_audio_frame())
+    sink.on_bot_stopped_speaking()
+
+    assert any(isinstance(f, AudioSegmentEnd) for f in sink.pending), "marker queued"
+    assert not sink._segments.owes_segment_end, "and the tracker already let go of it"
+
+    await s._degrade()
+
+    ev = await asyncio.wait_for(audio_output.wait_for_playout(), 2)
+    assert ev.interrupted is False
+    await s.aclose()
+
+
+async def test_fatal_between_the_first_frame_and_the_runner_fails_the_start() -> None:
+    """_on_fatal cannot schedule a degrade before a runner exists to tear down."""
+    s = session()
+    s._client = FakeSTVClient()
+    sink = _FrameSink()
+    s._sink = sink
+    agent_session = SimpleNamespace(output=SimpleNamespace(replace_audio_tail=_unreachable))
+
+    real_runner = avatar_mod.AvatarRunner
+
+    class FatalOnStart(real_runner):  # type: ignore[misc, valid-type]
+        async def start(self) -> None:
+            s._on_fatal("server went away")
+
+        async def aclose(self) -> None:
+            return
+
+    avatar_mod.AvatarRunner = FatalOnStart
+    try:
+        with pytest.raises(OjinException, match="server went away"):
+            await s._start_runner(
+                agent_session,  # type: ignore[arg-type]
+                SimpleNamespace(),  # type: ignore[arg-type]
+                sink,
+                make_video_frame(),
+            )
+    finally:
+        avatar_mod.AvatarRunner = real_runner
+    await s.aclose()
+
+
+def _unreachable(*_: object, **__: object) -> None:
+    raise AssertionError("installed the audio output despite a fatal during startup")
