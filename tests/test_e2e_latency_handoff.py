@@ -176,6 +176,72 @@ async def test_say_in_on_enter_answers_the_turn() -> None:
     assert "e2e_latency" not in reply.metrics
 
 
+async def test_concurrent_on_enter_speeches_answer_once() -> None:
+    """say() and generate_reply() queued together from on_enter: only the first reports."""
+
+    class DoubleGreeter(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="double greeter")
+
+        async def on_enter(self) -> None:
+            self.session.say("welcome")
+            self.session.generate_reply(instructions="greet")
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return DoubleGreeter()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_tts(1.0, input="welcome")
+    actions.add_llm("how can I help", input="greet")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router())
+    (user,) = _by_role(messages, "user")
+    welcome, reply = _by_role(messages, "assistant")
+    assert welcome.text_content == "welcome"
+    _assert_answers(welcome, user)
+    assert "e2e_latency" not in reply.metrics
+
+
+async def test_unstored_say_in_on_enter_still_answers_the_turn() -> None:
+    """say(add_to_chat_ctx=False) plays the answer; the reply after it reports nothing."""
+
+    class QuietGreeter(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="quiet greeter")
+
+        async def on_enter(self) -> None:
+            await self.session.say("welcome", add_to_chat_ctx=False)
+            self.session.generate_reply(instructions="greet")
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return QuietGreeter()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_tts(1.0, input="welcome")
+    actions.add_llm("how can I help", input="greet")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router())
+    (reply,) = _by_role(messages, "assistant")
+    assert reply.text_content == "how can I help"
+    assert "e2e_latency" not in reply.metrics
+
+
 async def test_nested_handoff_in_on_enter_reports_e2e_latency() -> None:
     """on_enter awaits an AgentTask: the task's own on_enter reply answers the user turn."""
 

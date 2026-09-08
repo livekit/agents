@@ -3104,31 +3104,33 @@ class AgentActivity(RecognitionHooks):
                 forwarded_text = ""
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
-        if forwarded_text and add_to_chat_ctx:
-            assistant_metrics: llm.MetricsReport = {}
+        assistant_metrics: llm.MetricsReport = {}
 
-            if tts_gen_data and tts_gen_data.ttfb is not None:
-                assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
+        if tts_gen_data and tts_gen_data.ttfb is not None:
+            assistant_metrics["tts_node_ttfb"] = tts_gen_data.ttfb
 
-            if stopped_speaking_at and started_speaking_at:
-                assistant_metrics["started_speaking_at"] = started_speaking_at
-                assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
+        if stopped_speaking_at and started_speaking_at:
+            assistant_metrics["started_speaking_at"] = started_speaking_at
+            assistant_metrics["stopped_speaking_at"] = stopped_speaking_at
 
-                if started_forwarding_at is not None:
-                    assistant_metrics["playback_latency"] = (
-                        started_speaking_at - started_forwarding_at
-                    )
+            if started_forwarding_at is not None:
+                assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
 
-                if _previous_user_metrics and "stopped_speaking_at" in _previous_user_metrics:
+            # the audio answers the borrowed user turn, stored or not, unless another speech
+            # reported it first
+            if (
+                _previous_user_metrics is not None
+                and self._session._unanswered_user_metrics is _previous_user_metrics
+            ):
+                if "stopped_speaking_at" in _previous_user_metrics:
                     e2e_latency = (
                         started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
                     )
                     assistant_metrics["e2e_latency"] = e2e_latency
                     current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                self._session._unanswered_user_metrics = None
 
-                if self._session._unanswered_user_metrics is _previous_user_metrics:
-                    self._session._unanswered_user_metrics = None
-
+        if forwarded_text and add_to_chat_ctx:
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -3418,11 +3420,15 @@ class AgentActivity(RecognitionHooks):
 
         # add new message to chat context if the speech is scheduled
 
+        # a reply to its own user message owns that turn; a tool reply or an on_enter reply
+        # borrows the unanswered one and keeps it only if no other speech reports it first
         user_metrics: llm.MetricsReport | None = _previous_user_metrics
+        owns_turn = False
         if new_message is not None and speech_handle.scheduled:
             self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
             user_metrics = new_message.metrics
+            owns_turn = True
             self._session._unanswered_user_metrics = user_metrics
 
         if speech_handle.interrupted:
@@ -3619,6 +3625,9 @@ class AgentActivity(RecognitionHooks):
 
             if started_forwarding_at is not None:
                 assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
+
+            if not owns_turn and self._session._unanswered_user_metrics is not user_metrics:
+                user_metrics = None
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
