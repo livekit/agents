@@ -51,18 +51,23 @@ agent = AgentSession(
 
 ## Usage — caller-driven endpointing (`EXTERNAL`, default)
 
-Pass a `vad` to the plugin; its end-of-speech drives `finalize()`:
+Pass a `vad` to the plugin; its end-of-speech drives `finalize()`. `AgentSession` loads its own VAD
+when none is given, so pass the same instance to both and a single VAD serves the session and the
+plugin:
 
 ```python
-from livekit.agents import AgentSession
-from livekit.plugins import silero, speechmatics
+from livekit.agents import AgentSession, inference
+from livekit.plugins import speechmatics
+
+vad = inference.VAD()
 
 agent = AgentSession(
     stt=speechmatics.STT(
         # EXTERNAL is the default; a VAD passed here drives finalize() on end-of-speech.
-        vad=silero.VAD.load(),
+        vad=vad,
         speaker_active_format="[Speaker {speaker_id}] {text}",
     ),
+    vad=vad,
     ...
 )
 ```
