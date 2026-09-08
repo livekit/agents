@@ -313,19 +313,21 @@ async def test_sustained_cooperative_load_is_not_reported(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     """Heavy but cooperative work: many callbacks each well under the threshold, timers,
-    executor round trips, and tasks yielding to each other, for ~0.6 s of wall time."""
+    executor round trips, and tasks yielding to each other, for ~0.6 s of wall time. One loop
+    iteration runs every ready worker back to back, so the slices are sized to keep an
+    iteration far under WARN even with sleep overshoot."""
     loop = asyncio.get_running_loop()
     fired: list[int] = []
 
     async def worker(n: int) -> None:
-        for _ in range(60):
-            time.sleep(0.002)  # a small synchronous slice, well under WARN
+        for _ in range(120):
+            time.sleep(0.001)  # a small synchronous slice, well under WARN
             await asyncio.sleep(0)
         fired.append(n)
 
     handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(40)]
     started = time.monotonic()
-    await asyncio.gather(*(worker(n) for n in range(4)))
+    await asyncio.gather(*(worker(n) for n in range(2)))
     workers_took = time.monotonic() - started
     await loop.run_in_executor(None, time.sleep, 0.05)
     await asyncio.sleep(0.45)
@@ -333,7 +335,7 @@ async def test_sustained_cooperative_load_is_not_reported(
         h.cancel()
     await _settle()
 
-    assert len([f for f in fired if f < 1000]) == 4
+    assert len([f for f in fired if f < 1000]) == 2
     # the workers hold the loop for ~0.5 s of 2 ms slices; a host that starved this process
     # enough to stretch that past double is not a monitor false positive, and the
     # watchdog-gap tag only catches starvation concentrated in one stall
@@ -504,7 +506,11 @@ async def test_gil_holding_native_call_is_reported_end_to_end(
     [report] = reports
     assert report.cpu_time >= report.duration * 0.5
     [span] = _blocked_spans(span_exporter)
-    assert "held the GIL" in str((span.attributes or {})[trace_types.ATTR_BLOCKING_STACK])
+    # the watchdog usually cannot run at all and the report says so; it can also get the GIL
+    # in the instant the call returns and sample the frame still on that line. Either names
+    # the cause; what must not happen is a silent or host-attributed report.
+    stack = str((span.attributes or {})[trace_types.ATTR_BLOCKING_STACK])
+    assert "held the GIL" in stack or "sum(range(20_000_000))" in stack, stack
 
 
 def test_metric_is_recorded_for_every_stall_past_the_rate_limits(
@@ -780,18 +786,18 @@ def test_a_block_the_watchdog_missed_is_still_blocking_code() -> None:
         loop.close()
 
 
-def test_watchdog_samples_halfway_to_the_threshold() -> None:
-    """The first sample is taken once the lag reaches half the warn threshold, so a block that
-    only just crosses the threshold has a stack instead of ending before the watchdog looks;
-    a lag under that leaves no incident."""
+def test_watchdog_samples_one_tick_before_the_threshold() -> None:
+    """The first sample is taken once the lag is within one heartbeat of the warn threshold,
+    so a block that only just crosses the threshold has a stack instead of ending before the
+    watchdog looks; a smaller lag (ordinary jitter) is never sampled."""
     loop = asyncio.new_event_loop()
     try:
         m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
-        m._last_tick_at = time.monotonic() - TICK - WARN * 0.3
+        m._last_tick_at = time.monotonic() - TICK - (WARN - TICK) * 0.6
         m._watchdog_check()
         assert m._incident is None
 
-        m._last_tick_at = time.monotonic() - TICK - WARN * 0.6
+        m._last_tick_at = time.monotonic() - TICK - (WARN - TICK) - TICK * 0.2
         m._watchdog_check()
         assert m._incident is not None and len(m._incident.samples) == 1
         m._watchdog_check()  # the same incident is not sampled twice before the late sample

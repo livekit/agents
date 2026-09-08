@@ -11,7 +11,7 @@ This module observes a single loop without patching asyncio:
   When the loop is blocked, the tick fires late by the length of the block (to within one
   interval);
 * a **watchdog thread** wakes on the same interval and compares now against the last tick. Once
-  the gap reaches half the warn threshold it samples the loop thread's stack through
+  the gap is within one interval of the warn threshold it samples the loop thread's stack through
   ``sys._current_frames()`` (the same call ``faulthandler`` relies on), so the report can say
   *where* the loop was stuck, not just for how long;
 * when the late tick finally runs, the block has ended: the tick measures the lag and, if it
@@ -81,10 +81,7 @@ ENV_ERROR_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"
 MAX_SPANS_PER_MINUTE = 30
 MAX_LOGS_PER_MINUTE = 5
 MAX_STACK_FRAMES = 20
-# the watchdog samples the loop thread's stack halfway to the warn threshold, so a block that
-# only just crosses it has a sample rather than ending before the watchdog looks, and again
-# once a block has lasted this many warn thresholds
-_FIRST_SAMPLE_FRACTION = 0.5
+# a second stack sample once a block has lasted this many warn thresholds
 _LATE_SAMPLE_FACTOR = 10
 
 SPAN_NAME = "event_loop_blocked"
@@ -202,6 +199,10 @@ class EventLoopMonitor:
         self._warn = warn_threshold
         self._error = error_threshold
         self._tick = tick_interval
+        # the watchdog samples one interval before the threshold, so a block that only just
+        # crosses it has a sample rather than ending before the watchdog looks; a lag under
+        # that is never sampled, so ordinary sub-threshold jitter costs nothing
+        self._first_sample_lag = max(warn_threshold - tick_interval, tick_interval)
         self._name = name
         self._emit_spans = emit_spans  # False on the worker loop: no job to attach spans to
 
@@ -506,7 +507,7 @@ class EventLoopMonitor:
         # make the lag look smaller for one iteration
         seq = self._tick_seq
         lag = time.monotonic() - (self._last_tick_at + self._tick)
-        if lag < self._warn * _FIRST_SAMPLE_FRACTION:
+        if lag < self._first_sample_lag:
             return
 
         with self._lock:
@@ -554,7 +555,12 @@ class EventLoopMonitor:
                     self._loop_thread_ident = ident
                     break
         if frame is not None:
-            frames = list(traceback.extract_stack(frame))
+            # no source lookup here: the watchdog holds the GIL while it samples, and the loop
+            # thread is what it is taking it from. Lines load lazily when a report is formatted.
+            frames = list(
+                traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
+            )
+            frames.reverse()  # outermost first, like extract_stack
         return _StackSample(lag=lag, task_name=task_name, frames=frames, span_context=span_context)
 
 
