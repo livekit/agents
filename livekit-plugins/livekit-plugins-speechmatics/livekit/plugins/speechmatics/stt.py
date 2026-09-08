@@ -191,9 +191,8 @@ class STT(stt.STT):
 
             output_locale: Output locale for the STT model, e.g. `en-GB`. Optional.
 
-            include_partials: Ask the service for partial segments, emitted as interim
-                transcripts. The service does not send them unless this is set, so
-                interim transcripts are off by default. Optional.
+            include_partials: Whether the service sends partial segments, emitted as
+                interim transcripts. Defaults to True.
 
             enable_diarization: Attribute words to distinct speakers. Defaults to True.
 
@@ -252,9 +251,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                # The service withholds partial segments unless asked, so interim results
-                # are only available when `include_partials` is set.
-                interim_results=include_partials if is_given(include_partials) else False,
+                interim_results=include_partials if is_given(include_partials) else True,
                 diarization=enable_diarization if is_given(enable_diarization) else True,
                 aligned_transcript="chunk",
                 offline_recognize=False,

@@ -74,11 +74,11 @@ agent = AgentSession(
 
 ## Interim transcripts
 
-The service withholds partial segments unless you ask for them, so interim transcripts are off by
-default. Set `include_partials=True` to receive them:
+The service sends partial segments by default, emitted as interim transcripts. Set
+`include_partials=False` to receive final segments only:
 
 ```python
-stt = speechmatics.STT(include_partials=True)
+stt = speechmatics.STT(include_partials=False)
 ```
 
 ## Diarization
