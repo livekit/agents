@@ -18,7 +18,6 @@ identifiers, not end-user data, and are recorded as is. On an SDK without the ho
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -57,6 +56,27 @@ def _response_attributes(response: str | None) -> dict[str, Any]:
     return attrs
 
 
+_CANCEL_DESCRIPTIONS = {
+    "RESPONSE_TIMEOUT": "response timeout",
+    "RECIPIENT_DISCONNECTED": "caller disconnected",
+    "APPLICATION_ERROR": "handler cancelled",
+}
+
+
+def _cancellation_outcome(invocation: Any) -> tuple[Any, str]:
+    """The RPC error code the caller receives for a cancelled handler chain, and a status text.
+
+    ``cancel_reason`` is set by the SDK before it cancels the chain; ``None`` there means the
+    cancellation came from inside the chain, which the SDK answers as ``APPLICATION_ERROR``.
+    An SDK without the field gives no code."""
+    if not hasattr(invocation, "cancel_reason"):
+        return None, "cancelled"
+    code = invocation.cancel_reason
+    if code is None:
+        code = rtc.RpcError.ErrorCode.APPLICATION_ERROR
+    return code, _CANCEL_DESCRIPTIONS.get(getattr(code, "name", ""), "cancelled")
+
+
 class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
     """An ``rtc.RpcInterceptor`` emitting ``rpc_call`` / ``rpc_handler`` spans."""
 
@@ -91,7 +111,6 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
             trace_types.ATTR_RPC_HANDLER_REGISTERED: True,
             **_payload_attributes(invocation.payload),
         }
-        started = time.monotonic()
         with tracer.start_as_current_span(
             "rpc_handler",
             context=session_context.session_root_context(),
@@ -107,22 +126,13 @@ class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
                     span.set_attribute(trace_types.ATTR_RPC_HANDLER_REGISTERED, False)
                 raise
             except asyncio.CancelledError:
-                # the SDK cancels the chain when the caller's deadline passes or the room
-                # disconnects, and only maps it to an RpcError after this interceptor has
-                # unwound; a CancelledError is not an Exception, so the span would end UNSET
-                timed_out = time.monotonic() - started >= invocation.response_timeout
-                code = (
-                    rtc.RpcError.ErrorCode.RESPONSE_TIMEOUT
-                    if timed_out
-                    else rtc.RpcError.ErrorCode.RECIPIENT_DISCONNECTED
-                )
-                span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(code))
-                span.set_status(
-                    trace.Status(
-                        trace.StatusCode.ERROR,
-                        "response timeout" if timed_out else "cancelled: caller disconnected",
-                    )
-                )
+                # the SDK maps a cancellation to an RpcError only after this interceptor has
+                # unwound, and a CancelledError is not an Exception, so the span would end
+                # UNSET; invocation.cancel_reason says what the caller gets (livekit>=1.1.19)
+                code, description = _cancellation_outcome(invocation)
+                if code is not None:
+                    span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(code))
+                span.set_status(trace.Status(trace.StatusCode.ERROR, description))
                 raise
             span.set_attributes(_response_attributes(response))
             return response
