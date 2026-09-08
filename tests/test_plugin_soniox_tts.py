@@ -769,3 +769,25 @@ async def test_interrupting_a_reply_keeps_the_last_spoken_word() -> None:
         await tts.aclose()
 
     assert "".join(str(w) for w in words).strip() == SENTENCES[0].strip()
+
+
+async def test_advancing_the_timeline_spends_the_stream() -> None:
+    """Characters that finish no word still make a stream unreplayable.
+
+    They move the segment timeline, and a replacement would start from the
+    advanced value - past audio the failed attempt never produced.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    # "Hel" completes no word, so nothing is published
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("Hel", 0.0))
+
+    assert emitter.timed_words == []
+    assert data.timeline.end > 0.0
+    assert data.produced_output is True

@@ -668,6 +668,12 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     # Where the next stream has to start from: pushed_duration() alone would
     # place it too early, since it counts neither audio still queued in the
     # emitter nor the tail frame the emitter holds back.
+    #
+    # Moving the shared timeline is as unrepeatable as publishing a word, even
+    # when these characters finish none: a replacement would start from the
+    # advanced value, past audio this attempt never produced. Either way the
+    # stream is spent and must not be replayed.
+    stream.produced_output = True
     stream.timeline.end = max(stream.timeline.end, ends[-1] + offset)
 
     _emit_timed_words(stream)
