@@ -1026,12 +1026,14 @@ async def test_untimed_text_first_keeps_the_separator_in_place() -> None:
     assert "".join(str(w) for w in emitter.timed_words) == " Then, after all"
 
 
-async def test_an_untimed_tail_is_bounded_so_captions_reach_it() -> None:
-    """The last untimed region is closed off, since nothing timed follows it.
+async def test_an_untimed_tail_claims_no_end_it_cannot_know() -> None:
+    """The last region stays open, because nothing here knows where it ends.
 
-    The synchronizer builds its rate curve from timed points and reveals text
-    only as far as that curve goes. A tail left unbounded would sit past the
-    end of it, and the caption would stop short of words the agent spoke.
+    The synchronizer stops trusting annotations once playback passes the last
+    one, estimates from there, and releases the rest when playback completes,
+    so the tail still reaches the viewer. Closing it on the emitter's duration
+    would claim an end earlier than the speech, spreading the tail over too
+    short an interval and running the captions ahead of the voice.
     """
     emitter = _RecordingEmitter()
     tts = soniox.TTS(api_key="fake-key")
@@ -1048,9 +1050,9 @@ async def test_an_untimed_tail_is_bounded_so_captions_reach_it() -> None:
 
     tail = emitter.timed_words[-1]
     assert str(tail) == "brown fox"
-    # opens where the last timed word ended, closes on the audio produced
+    # opens where the last timed word ended, and claims no end
     assert tail.start_time == pytest.approx(0.09)
-    assert tail.end_time == pytest.approx(0.5)
+    assert not is_given(tail.end_time)
 
 
 async def test_an_untimed_region_mid_reply_opens_where_timing_stopped() -> None:

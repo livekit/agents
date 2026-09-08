@@ -717,30 +717,28 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     _emit_timed_words(stream)
 
 
-def _publish_untimed(stream: _StreamData, *, final: bool = False) -> None:
+def _publish_untimed(stream: _StreamData) -> None:
     """Hand over text whose timings were lost, so the reply itself stays whole.
 
-    The characters have no timings of their own, but the region does: it opens
-    where the last published word ended. The synchronizer spreads text across
-    such an interval at an estimated rate - the behaviour aligned transcripts
-    replace, applied to the stretch that lost its timings rather than to the
-    whole turn.
+    The characters have no timings of their own, but the region's start is
+    known: it opens where the last published word ended. That anchors the text
+    before it, and the synchronizer spreads this text at an estimated rate up
+    to whatever timed word comes next.
 
-    It only spreads text it can bound, though, and text left unbounded is never
-    reached: ``accumulate_to`` stops where the rate curve stops, so captions
-    would halt there. Nothing timed follows a *final* region, so that one is
-    closed off with the audio emitted by the time the stream ends.
+    Nothing is claimed about where the region ends, because nothing here knows.
+    The synchronizer stops trusting annotations once playback passes the last
+    one and estimates from there, then releases whatever is left when playback
+    completes - so an unbounded tail still reaches the viewer. Closing it on a
+    guess would be worse than leaving it open: the guess would have to come
+    from the emitter's duration, which lags the audio it has been handed, and
+    the tail would be spread over an interval shorter than the speech it
+    describes - captions running ahead of the voice.
     """
     if not stream.pending_untimed:
         return
 
     stream.produced_output = True
-    start = stream.timeline.end
-    untimed = TimedString(
-        text=stream.pending_untimed,
-        start_time=start,
-        end_time=max(stream.emitter.pushed_duration(), start) if final else NOT_GIVEN,
-    )
+    untimed = TimedString(text=stream.pending_untimed, start_time=stream.timeline.end)
     if not stream.emitted_any:
         # this is the stream's first text, so it carries the separator that
         # opened it - leaving it for a later word would move the whitespace
@@ -753,7 +751,7 @@ def _publish_untimed(stream: _StreamData, *, final: bool = False) -> None:
 def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
     """Push every word the buffered characters now complete, keeping the rest."""
     if flush:
-        _publish_untimed(stream, final=True)
+        _publish_untimed(stream)
 
     timed_words, stream.char_text = _to_timed_words(
         stream.char_text, stream.char_starts, stream.char_ends, flush=flush
