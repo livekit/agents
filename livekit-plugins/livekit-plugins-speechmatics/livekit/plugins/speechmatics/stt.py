@@ -68,6 +68,12 @@ from .version import __version__ as lk_version
 DEFAULT_BASE_URL = "wss://eu2.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 
+# Audio format we can actually send. The service fixes the sample rate at 16 kHz, and
+# LiveKit frames are 16-bit PCM which we forward unconverted, so declaring any other
+# encoding would describe the bytes wrongly rather than change them.
+SUPPORTED_SAMPLE_RATE = 16000
+SUPPORTED_AUDIO_ENCODINGS = (AudioEncoding.PCM_S16LE,)
+
 
 class TurnDetectionMode(str, Enum):
     """How turn boundaries (end of speech) are detected.
@@ -210,9 +216,13 @@ class STT(stt.STT):
             known_speakers: Known speaker identifiers, used to attribute words to the
                 same speakers across sessions. Defaults to [].
 
-            sample_rate: Audio sample rate in Hz. Defaults to 16000.
+            sample_rate: Audio sample rate in Hz. The service accepts 16000 only, so any
+                other value raises a `ValueError`. Defaults to 16000.
 
-            audio_encoding: Audio encoding format. Defaults to `AudioEncoding.PCM_S16LE`.
+            audio_encoding: Audio encoding format. LiveKit frames are 16-bit PCM and are
+                forwarded unconverted, so `AudioEncoding.PCM_S16LE` is the only value that
+                describes what is actually sent; anything else raises a `ValueError`.
+                Defaults to `AudioEncoding.PCM_S16LE`.
 
             vad: External Voice Activity Detector, used only in `EXTERNAL` turn-detection
                 mode where its end-of-speech drives `finalize()`. Ignored otherwise;
@@ -292,7 +302,14 @@ class STT(stt.STT):
         if not self._base_url:
             raise ValueError("Missing Speechmatics base URL")
 
-        # Set audio parameters
+        # Set audio parameters. Neither is a free choice: an unsupported rate is rejected
+        # by the service, and an encoding we do not actually send would mislabel the audio.
+        if sample_rate != SUPPORTED_SAMPLE_RATE:
+            raise ValueError(f"sample_rate must be {SUPPORTED_SAMPLE_RATE}")
+        if audio_encoding not in SUPPORTED_AUDIO_ENCODINGS:
+            supported = ", ".join(e.value for e in SUPPORTED_AUDIO_ENCODINGS)
+            raise ValueError(f"audio_encoding must be one of: {supported}")
+
         self._sample_rate = sample_rate
         self._audio_encoding = audio_encoding
 
