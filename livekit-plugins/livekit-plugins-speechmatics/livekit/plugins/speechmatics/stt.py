@@ -642,18 +642,21 @@ class SpeechStream(stt.RecognizeStream):
                         self._vad_stream.push_frame(data)
                     frames = audio_bstream.write(data.data.tobytes())
 
-                # Send audio frames. A transport drop mid-session surfaces as a (retryable)
-                # APIConnectionError so the base stream retries/reports instead of dying on a
-                # raw SDK error — matching how connect() failures are wrapped.
                 if self._client:
                     for frame in frames:
                         self._speech_duration += frame.duration
-                        try:
-                            await self._client.send_audio(frame.data.tobytes())
-                        except (SMConnectionError, SMTimeoutError, TransportError) as e:
+                        await self._client.send_audio(frame.data.tobytes())
+
+                        # send_audio never raises: it closes the audio gate and drops
+                        # later frames. A session error is already raised as fatal in
+                        # _handle_message, so only a clean gate close is a lost connection.
+                        if (
+                            not self._client.is_ready_for_audio
+                            and self._client.session_error is None
+                        ):
                             raise APIConnectionError(
-                                f"lost connection to Speechmatics while sending audio: {e}"
-                            ) from e
+                                "lost connection to Speechmatics while sending audio"
+                            )
 
             # No more input — let the VAD flush any pending event
             if self._vad_stream is not None:
